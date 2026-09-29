@@ -1,3 +1,7 @@
+<p align="center">
+  <img src="logo.png" alt=" " height="108">
+</p>
+
 # 云朵输入法
 （基于青简 https://github.com/qingjian-team/qingjian 修改）
 
