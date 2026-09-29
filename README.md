@@ -1,12 +1,13 @@
 
-# 特别鸣谢 - Panic~大佬 https://github.com/yenharvey 
+# 特别鸣谢 - Panic~大佬 
+访问Panic~大佬的Github主页：![yenharvey](https://github.com/yenharvey)
 
 <p align="center">
   <img src="logo.png" alt=" " height="108">
 </p>
 
 <h1 align="center">云朵输入法</h1>
-（基于青简 https://github.com/qingjian-team/qingjian 修改）
+（基于 ![青简](https://github.com/qingjian-team/qingjian)  修改）
 
 
 #### 为什么要做云朵输入法？
