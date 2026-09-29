@@ -1,14 +1,13 @@
+
+# 特别鸣谢 - Panic~大佬 https://github.com/yenharvey 
+
 <p align="center">
   <img src="logo.png" alt=" " height="108">
 </p>
 
-# 云朵输入法
+## 云朵输入法
 （基于青简 https://github.com/qingjian-team/qingjian 修改）
 
-## 特别鸣谢 - Panic~大佬 https://github.com/yenharvey 
-
-### 输入法的本质
-将键盘的字母转为汉字、符号等看得见的东西。
 
 ### 为什么要做云朵输入法？
 青简输入法功能强悍，但是太过臃肿——不是所有用户都需要候选项翻译、不是所有用户都需要配置在线AI模型。
