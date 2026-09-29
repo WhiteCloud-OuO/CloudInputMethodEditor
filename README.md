@@ -4,8 +4,6 @@
 
 访问Panic~ 大佬的 [Github主页](https://github.com/yenharvey)
 
-访问Panic~ 大佬的 [个人网站](https://yenharvey.com)
-
 <p align="center">
   <img src="logo.png" alt=" " height="108">
 </p>
@@ -13,8 +11,9 @@
 
 <h1 align="center">云朵输入法</h1>
 
-本输入法基于 [青简](https://github.com/qingjian-team/qingjian) 修改
+本输入法基于 [青简](https://github.com/qingjian-team/qingjian) 修改。
 
+云朵输入法是从青简输入法中独立出来的一个分支，不过同时欢迎进入 [青简官网](https://qingjian.app) 
 
 
 #### 为什么要做云朵输入法？
