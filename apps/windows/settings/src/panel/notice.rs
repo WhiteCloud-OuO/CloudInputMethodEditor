@@ -11,18 +11,6 @@ pub(crate) struct Notice {
 }
 
 impl Notice {
-    /// 记下一次成功：写说明、清掉上一次的错误。
-    pub(crate) fn succeed(&mut self, note: String) {
-        self.note = Some(note);
-        self.error = None;
-    }
-
-    /// 记下一次失败：写错误、清掉上一次的说明。
-    pub(crate) fn fail(&mut self, error: String) {
-        self.error = Some(error);
-        self.note = None;
-    }
-
     /// 清空两行（换页、成功的设置改动都调）。
     pub(crate) fn clear(&mut self) {
         self.note = None;

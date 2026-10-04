@@ -1,0 +1,26 @@
+[package]
+name = "cloudime-render"
+description = "自绘渲染器：把候选窗一帧画成位图，壳只负责贴图"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+tiny-skia.workspace = true
+# 状态条 SVG 图标：usvg 解析 + resvg 光栅化（借它的 tiny-skia 与上面同一版本）
+resvg.workspace = true
+cosmic-text.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+
+[target.'cfg(windows)'.dependencies]
+# 字体登记走 DirectWrite（按字族名找文件、列字族）
+windows = { version = "0.62.2", features = ["Win32_Graphics_DirectWrite"] }
+
+[dev-dependencies]
+clap.workspace = true
+tracing-subscriber.workspace = true
+
+[lints]
+workspace = true

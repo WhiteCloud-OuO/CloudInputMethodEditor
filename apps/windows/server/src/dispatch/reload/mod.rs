@@ -1,5 +1,5 @@
-//! 配置热加载：空闲时看 `config.toml` 的 mtime，改了就重读并应用（与 macOS 壳对齐）。
-//! 便宜的设置无条件重设；云联想 / 释义表按配置变化重建，附加词库也检查文件增删与更新。热加载状态在 [`ConfigReload`]。
+//! 配置热加载：空闲时看 `config.toml` 的 mtime，改了就重读并应用。
+//! 便宜的设置无条件重设；附加词库也检查文件增删与更新。热加载状态在 [`ConfigReload`]。
 
 mod state;
 
@@ -9,9 +9,7 @@ mod tests;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
-use qingjian_core::{Engine, Language, NoGlossFiller, NoPredictor, NoTranslator};
-use qingjian_platform::{Config, code_tables};
-use qingjian_predict::{CloudGlossFiller, CloudPredictor, PredictConfig};
+use cloudime_platform::{Config, PhraseStore};
 
 pub(super) use self::state::ConfigReload;
 pub use self::state::DataDirs;
@@ -19,75 +17,15 @@ pub use self::state::DataDirs;
 /// 看配置文件 mtime 的最短间隔；工人循环空闲时按它等，重排的短节拍来得更勤时按这个节流。
 pub(super) const CONFIG_POLL_INTERVAL: Duration = Duration::from_secs(1);
 
-/// 检查更新的结果文件名，在用户数据目录下（见 `qingjian-update::UpdateState`）。
+/// 检查更新的结果文件名，在用户数据目录下（见 `cloudime-update::UpdateState`）。
 const UPDATE_STATE_FILE: &str = "update.json";
+
 use super::{Router, RouterConfig};
-use crate::assembly;
 
 fn mtime(path: &Path) -> Option<SystemTime> {
     std::fs::metadata(path)
         .and_then(|meta| meta.modified())
         .ok()
-}
-
-/// 按 `[predict]` 接云联想与释义兜底；关着或缺密钥就退回本地实现。启动与热加载共用。
-pub fn attach_cloud(engine: &mut Engine, predict: &PredictConfig) {
-    if !predict.enabled {
-        tracing::info!("云联想未开启（[predict] enabled = false）");
-        engine.set_predictor(Box::new(NoPredictor));
-        engine.set_gloss_filler(Box::new(NoGlossFiller));
-        return;
-    }
-    match CloudPredictor::new(predict) {
-        Ok(predictor) => {
-            engine.set_predictor(Box::new(predictor));
-            tracing::info!(model = %predict.model, "云联想已接入");
-        }
-        Err(error) => {
-            tracing::warn!(%error, "云联想接入失败（缺 API key？），退回本地候选");
-            engine.set_predictor(Box::new(NoPredictor));
-        }
-    }
-    match CloudGlossFiller::new(predict) {
-        Ok(filler) => engine.set_gloss_filler(Box::new(filler)),
-        Err(error) => {
-            tracing::warn!(%error, "释义兜底未启用");
-            engine.set_gloss_filler(Box::new(NoGlossFiller));
-        }
-    }
-}
-
-/// 学习语言变了就换释义表：关是不翻译；换语言重装随包 + 个人释义表，没有这门语言的表或装不上就保持原样。
-/// 换成功（或关掉）返回 true。
-fn swap_translator(
-    engine: &mut Engine,
-    language: Option<Language>,
-    root: &Path,
-    user_dir: Option<&Path>,
-) -> bool {
-    let Some(language) = language else {
-        engine.set_translator(Box::new(NoTranslator));
-        tracing::info!("学习语言已关，不显示译文");
-        return true;
-    };
-    let Some(path) = assembly::glossary_file(root, language) else {
-        tracing::warn!(
-            language = language.code(),
-            "没有这门语言的释义表，学习语言不变"
-        );
-        return false;
-    };
-    match assembly::load_glossary(language, &path, user_dir) {
-        Ok(glossary) => {
-            tracing::info!(language = language.code(), "释义表已切换");
-            engine.set_translator(Box::new(glossary));
-            true
-        }
-        Err(error) => {
-            tracing::warn!(%error, "释义表加载失败，学习语言不变");
-            false
-        }
-    }
 }
 
 impl Router {
@@ -108,40 +46,28 @@ impl Router {
             .map(|reload| reload.config_path.as_path())
     }
 
-    /// 开启热加载：记下路径与当前已应用的 predict / dictionaries / aux_code / 学习语言，
-    /// 以及启动用的那批数据目录。目录必须与启动同款语义（`dicts/` / `codes/`），
-    /// 热加载才找得到文件。
-    pub fn watch_config(
-        &mut self,
-        config: &Config,
-        config_path: PathBuf,
-        root: PathBuf,
-        dirs: DataDirs,
-    ) {
+    /// 开启热加载：记下路径与当前已应用的词库快照，
+    /// 以及启动用的那批数据目录。目录必须与启动同款语义（WordBank），热加载才找得到文件。
+    pub fn watch_config(&mut self, config: &Config, config_path: PathBuf, dirs: DataDirs) {
         let last_mtime = mtime(&config_path);
-        let code_files = dirs.code_snapshot();
         let dictionary_files = dirs.dict_snapshot();
+        let phrase_files = dirs.phrase_snapshot();
         let updates = dirs.user_root.as_deref().map(|dir| {
-            qingjian_update::Checker::new(dir.join(UPDATE_STATE_FILE), env!("CARGO_PKG_VERSION"))
+            cloudime_update::Checker::new(dir.join(UPDATE_STATE_FILE), env!("CARGO_PKG_VERSION"))
         });
         self.reload = Some(ConfigReload {
             config_path,
             last_check: Instant::now(),
-            root,
             dirs,
-            code_files,
             last_mtime,
-            applied_predict: config.predict.clone(),
-            applied_dictionaries: config.dictionaries.clone(),
-            applied_aux_code: config.aux_code.clone(),
             dictionary_files,
-            applied_language: assembly::learning_language(config),
+            phrase_files,
             update: config.update.clone(),
             updates,
         });
     }
 
-    /// 空闲时调；一秒内只真正看一次。配置文件或用户 `codes/` 下的文件变了就重装；
+    /// 空闲时调；一秒内只真正看一次。配置文件或词库目录变了就重装；
     /// 解析失败保持原配置，mtime 照记（不每秒重试同一个坏文件）。
     pub fn poll_config_reload(&mut self) {
         let Some(reload) = &mut self.reload else {
@@ -154,7 +80,7 @@ impl Router {
         if let Some(updates) = &reload.updates {
             updates.poll(&reload.update);
         }
-        // 用户 `dicts/` 目录文件增删或更新：与配置改动无关，下一拍就生效
+        // 词库目录文件增删、同名更新：与配置改动无关，下一拍就生效
         let files = reload.dirs.dict_snapshot();
         if files != reload.dictionary_files {
             // 配置损坏也继续使用上次有效的词库开关；文件变化不触发配置重试。
@@ -162,107 +88,99 @@ impl Router {
                 .set_extra_dictionaries(reload.load_dictionaries());
             reload.dictionary_files = files;
         }
+        // 短语库改了（「设置 → 短语」页存过）：重读短语，配置没动也能生效
+        let phrases = reload.dirs.phrase_snapshot();
+        let phrases_changed = phrases != reload.phrase_files;
+        if phrases_changed {
+            reload.phrase_files = phrases;
+        }
         let config_changed = {
             let current = mtime(&reload.config_path);
             let changed = current != reload.last_mtime;
             reload.last_mtime = current;
             changed
         };
-        // 用户 `codes/` 下的文件增删或更新（设置页刚导入 / 移除一张码表）：不必等配置改动，下一拍就生效
-        let codes_changed = {
-            let current = reload.dirs.code_snapshot();
-            let changed = current != reload.code_files;
-            reload.code_files = current;
-            changed
-        };
         let path = reload.config_path.clone();
-        if codes_changed {
-            self.reload_aux_codes();
-        }
-        if !config_changed {
-            return;
-        }
-        match Config::load(&path) {
-            Ok(config) => {
-                self.apply_config(&config);
-                tracing::info!("配置已热加载");
+        if config_changed {
+            match Config::load(&path) {
+                Ok(config) => {
+                    self.apply_config(&config);
+                    tracing::info!("配置已热加载");
+                }
+                Err(error) => tracing::error!(%error, "配置热加载解析失败，保持原配置"),
             }
-            Err(error) => tracing::error!(%error, "配置热加载解析失败，保持原配置"),
+        }
+        if phrases_changed {
+            self.reload_phrases();
         }
     }
 
-    /// 应用新配置。学习语言变了换释义表（词汇等级表启动时已全装，不用换）。
+    /// 应用新配置。
     fn apply_config(&mut self, config: &Config) {
-        self.engine.set_fuzzy(config.fuzzy);
-        // 拼音侧与形码侧一起装配（双拼 / 注音 / 混输都在里面）
-        self.reload_code_table(config.general.scheme(), config.general.wubi());
-        self.engine.set_traditional_mode(config.general.traditional);
+        self.engine.set_fuzzy(config.input.fuzzy_rules());
+        self.engine.set_use_jian_pin(config.input.use_jian_pin);
+        self.engine.set_mixture_input(config.input.mixture_input);
+        self.engine
+            .set_punctuation_mapping(config.input.punctuation_mapping());
+        self.engine
+            .set_half_wide_after_digit(config.input.use_half_wide_punctuation_marks_after_digital);
+        self.engine
+            .set_association_counts(config.candidate.association_counts());
+        self.engine.set_traditional_mode(
+            config.input.simp_trad_chinese_chars_toggle == cloudime_platform::SimpTrad::Traditional,
+        );
         self.engine.set_learning(config.general.learning);
-        self.engine.set_mode_keys(config.shortcut.mode);
-        self.engine
-            .set_aux_code_key(config.general.aux_code_key(), config.general.page_keys());
-        self.engine
-            .set_aux_keep_empty(config.general.aux_code_keep_empty);
-        self.engine.set_aux_enabled(config.aux_code.enabled);
-        self.engine.set_aux_show(config.general.aux_code_show);
-        self.engine.set_chinese_first(config.general.chinese_first);
-        self.engine
-            .set_shift_letter_compose(config.general.shift_letter.compose());
-        self.engine
-            .set_shuangpin_raw_preedit(config.general.shuangpin_raw_preedit);
+        self.engine.set_rare_enabled(config.word_bank.rare_items);
         let previous = self.config.render_settings();
+        // 全角 / 半角是会话内状态（不进配置文件）：重建配置时沿用当前值，用户刚切的不被热加载冲掉
+        let full_width_punctuation = self.config.full_width_punctuation;
+        let english_full_width_punctuation = self.config.english_full_width_punctuation;
+        let full_width_chars = self.config.full_width_chars;
         self.config = RouterConfig::from(config);
+        self.config.full_width_punctuation = full_width_punctuation;
+        self.config.english_full_width_punctuation = english_full_width_punctuation;
+        self.config.full_width_chars = full_width_chars;
         let settings = self.config.render_settings();
         if settings != previous {
             self.candidates.configure(settings);
         }
         self.reconcile_status();
-        self.apply_model_config(&config.model);
+        self.apply_model_config(config.candidate.use_local_sentence_organization_model);
 
         let Some(reload) = &mut self.reload else {
             return;
         };
         reload.update = config.update.clone();
-        if config.predict != reload.applied_predict {
-            attach_cloud(&mut self.engine, &config.predict);
-            reload.applied_predict = config.predict.clone();
-        }
-        let language = assembly::learning_language(config);
-        if language != reload.applied_language
-            && swap_translator(
-                &mut self.engine,
-                language,
-                &reload.root,
-                reload.dirs.user_root.as_deref(),
-            )
+        // `[phrase] file` 可能换了位置：按新配置重新定位，再从短语库重读一遍
+        if let Some(user) = self
+            .reload
+            .as_ref()
+            .and_then(|reload| reload.dirs.user_root.clone())
         {
-            reload.applied_language = language;
-        }
-        if config.dictionaries != reload.applied_dictionaries {
-            reload.applied_dictionaries = config.dictionaries.clone();
-            self.engine
-                .set_extra_dictionaries(reload.load_dictionaries());
-        }
-        if config.aux_code != reload.applied_aux_code {
-            reload.applied_aux_code = config.aux_code.clone();
-            self.reload_aux_codes();
+            if let Some(reload) = &mut self.reload {
+                reload.dirs.phrase = Some(PhraseStore::locate(&user, &config.phrase));
+                reload.phrase_files = reload.dirs.phrase_snapshot();
+            }
+            self.reload_phrases();
         }
     }
 
-    /// 按当前配置重装辅码码表：`codes/` 目录变了或 `[aux_code]` 变了都走这里。
-    fn reload_aux_codes(&mut self) {
-        let Some(reload) = &self.reload else {
+    /// 从短语库重装短语；读不出来或内容不合法时保持原短语。
+    pub(super) fn reload_phrases(&mut self) {
+        let Some(store) = self
+            .reload
+            .as_ref()
+            .and_then(|reload| reload.dirs.phrase.clone())
+        else {
             return;
         };
-        let tables = code_tables::load(
-            reload.dirs.bundled_codes.as_deref(),
-            reload.dirs.user_codes.as_deref(),
-            &reload.applied_aux_code,
-        );
-        if let Some(reload) = &mut self.reload {
-            reload.code_files = reload.dirs.code_snapshot();
+        match store.load() {
+            Ok(phrases) => {
+                if let Err(error) = self.engine.set_custom_phrases(phrases) {
+                    tracing::warn!(%error, "短语库内容不合法，保持原短语");
+                }
+            }
+            Err(error) => tracing::warn!(%error, "短语库读不出来，保持原短语"),
         }
-        tracing::info!(count = tables.len(), "辅码码表已重装");
-        self.engine.set_aux_codes(tables);
     }
 }

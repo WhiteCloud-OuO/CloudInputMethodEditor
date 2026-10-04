@@ -1,5 +1,5 @@
-//! DLL 自己的文件日志：按天一个文件 `%LOCALAPPDATA%\Qingjian\logs\tsf.<YYYY-MM-DD>.log`，与 Server / 设置程序同目录，
-//! 只留最近 [`KEEP_DAYS`] 天（命名与清理规则在 `qingjian_platform::logs::daily`）。
+//! DLL 自己的文件日志：按天一个文件 `%LOCALAPPDATA%\CloudIME\logs\tsf.<YYYY-MM-DD>.log`，与 Server / 设置程序同目录，
+//! 只留最近 [`KEEP_DAYS`] 天（命名与清理规则在 `cloudime_platform::logs::daily`）。
 //! 不走 tracing 全局订阅器（宿主进程可能已装了自己的）；任何失败都吞掉，日志不能拖垮宿主。
 //! 每次都开文件追加一行：DLL 被加载进每个应用进程，多进程同时追加同一天的文件，这样最省事也最稳。
 //! 日期用 `GetLocalTime` 而不是时区库：这份代码跑在每一个有文本框的进程里，越轻越好。
@@ -8,7 +8,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use qingjian_platform::logs::daily::{self, KEEP_DAYS};
+use cloudime_platform::logs::daily::{self, KEEP_DAYS};
 use windows::Win32::Foundation::SYSTEMTIME;
 use windows::Win32::System::SystemInformation::GetLocalTime;
 
@@ -52,7 +52,7 @@ fn now(t: &SYSTEMTIME) -> String {
 }
 
 fn dir() -> Option<PathBuf> {
-    qingjian_platform::dirs::log_dir()
+    cloudime_platform::dirs::log_dir()
 }
 
 /// 自 1970-01-01 起的天数，日期比较用。

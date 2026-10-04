@@ -1,9 +1,9 @@
 #!/usr/bin/env bash
-# publish job：把各平台传上来的 SHA256SUMS-<平台> / build-info-<平台>.json 合成一份 SHA256SUMS 与 build-info.json，删掉片段，草稿转正。
+# publish job：把 Windows job 传上来的 SHA256SUMS / build-info.json 片段合成一份 SHA256SUMS 与 build-info.json，删掉片段，草稿转正。
 #
 #   tools/release/finish-release.sh <标签> <版本> <输出目录>
 #
-# build-info.json 顶层的 commit / built_at / toolchain / data_* 是 releases_json.py 读的（built_at 取最晚的平台），各平台的构建机在 platforms 里。
+# build-info.json 顶层的 commit / built_at / toolchain / data_* 是 releases_json.py 读的（built_at 取最晚的一份片段），构建机记录在 platforms 里。
 set -euo pipefail
 
 TAG="$1"
@@ -21,6 +21,6 @@ gh release upload "$TAG" "$OUT/SHA256SUMS" "$OUT/build-info.json" --clobber
 for fragment in "$OUT"/SHA256SUMS-* "$OUT"/build-info-*.json; do
   gh release delete-asset "$TAG" "$(basename "$fragment")" --yes
 done
-# 预发布（0.1.4-beta.1）不抢 GitHub 的 latest
+# 预发布（0.0.1-beta.1）不抢 GitHub 的 latest
 LATEST=(--latest); [[ "$VERSION" == *-* ]] && LATEST=(--latest=false)
 gh release edit "$TAG" --draft=false "${LATEST[@]}"

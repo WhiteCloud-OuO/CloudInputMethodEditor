@@ -5,8 +5,8 @@
 # 照新版核对一遍。少一项设置程序在 Windows 10 上就起不来——自包含部署不再依赖机器上装的框架包，
 # 见 apps\windows\settings\build.rs 与 docs\notes\windows-win10.md。
 #
-# build.ps1 按本清单从 target\release 挑进 target\installer\settings-runtime，qingjian.iss 再整个目录装进 {app}
-# （必须与 qingjian-settings.exe 同级：Reactor 认的就是 exe 旁边有没有 Microsoft.WindowsAppRuntime.dll）。
+# build.ps1 按本清单从 target\release 挑进 target\installer\settings-runtime，cloudime.iss 再整个目录装进 {app}
+# （必须与 cloudime-settings.exe 同级：Reactor 认的就是 exe 旁边有没有 Microsoft.WindowsAppRuntime.dll）。
 coremessagingxp.dll
 dcompi.dll
 dwmcorei.dll
@@ -40,90 +40,6 @@ sessionhandleipcproxystub.dll
 winuiedit.dll
 wuceffectsi.dll
 
-# 各语言的 WinUI 资源目录（Resources.pri 按语言取）。
-af-za
-am-et
-ar-sa
-as-in
-az-latn-az
-bg-bg
-bn-in
-bs-latn-ba
-ca-es
-ca-es-valencia
-cs-cz
-cy-gb
-da-dk
-de-de
-el-gr
-en-gb
-en-us
-es-es
-es-mx
-et-ee
-eu-es
-fa-ir
-fi-fi
-fil-ph
-fr-ca
-fr-fr
-ga-ie
-gd-gb
-gl-es
-gu-in
-he-il
-hi-in
-hr-hr
-hu-hu
-hy-am
-id-id
-is-is
-it-it
-ja-jp
-ka-ge
-kk-kz
-km-kh
-kn-in
-ko-kr
-kok-in
-lb-lu
-lo-la
-lt-lt
-lv-lv
-mi-nz
-mk-mk
-ml-in
-mr-in
-ms-my
-mt-mt
-nb-no
-ne-np
-nl-nl
-nn-no
-or-in
-pa-in
-pl-pl
-pt-br
-pt-pt
-quz-pe
-ro-ro
-ru-ru
-sk-sk
-sl-si
-sq-al
-sr-cyrl-ba
-sr-cyrl-rs
-sr-latn-rs
-sv-se
-ta-in
-te-in
-th-th
-tr-tr
-tt-ru
-ug-cn
-uk-ua
-ur-pk
-uz-latn-uz
-vi-vn
+# 各语言的 WinUI 资源目录（Resources.pri 按语言取）。只带简体中文：设置界面不做多语言，
+# 多带一百多个其它语言的 .mui 白占体积；系统语言不是中文时回退到资源里的默认语言。
 zh-cn
-zh-tw

@@ -1,102 +1,51 @@
-//! 「词库」页：随包领域词库开关，用户导入词库的开关 / 移除 / 导入。
-//! 随包开关写 `[dictionaries] domains`（列打开的），用户词库写 `disabled`（列关掉的）。
+//! 「词库」页：导入的第三方词库，以及导入 / 移除与生僻项查询开关。
+//!
+//! 随包的 `Dict.db` 与数据目录里的 `UserWordBank.db` 是内置词库、始终加载，不出现在列表里；
+//! 列表只列用户导入的第三方词库，目录里有的全部加载，没有启用清单。
 
-use std::path::{Path, PathBuf};
-
-use qingjian_dictionary::Dictionary;
-use qingjian_platform::extra_dictionaries;
+use cloudime_platform::WordBank;
 use windows_reactor::*;
 
-use crate::panel::controls::{check_row, entry_title, note, page, repo_resource};
+use crate::panel::controls::{bank_row, entry_title, field, note, page};
 use crate::panel::{Message, Settings};
 
-/// 用户词库目录 `%APPDATA%\Qingjian\dicts`。
-fn user_dir(settings: &Settings) -> PathBuf {
-    settings.data_dir().join("dicts")
+/// 词库目录：随包根（装机时就是程序目录）下的 `WordBank\`。
+pub(crate) fn bank(settings: &Settings) -> WordBank {
+    let root = cloudime_platform::resources::bundled_root()
+        .unwrap_or_else(|| settings.data_dir().to_path_buf());
+    WordBank::locate(&root)
 }
 
-/// 打开词库读显示信息：(显示名, 词条数, 许可证, 是否坏文件)。
-fn read_info(path: &Path, stem: &str) -> (String, usize, String, bool) {
-    match Dictionary::from_path(path) {
-        Ok(dict) => (
-            dict.metadata()
-                .map_or_else(|| stem.to_owned(), |m| m.name.clone()),
-            dict.len(),
-            dict.metadata()
-                .map_or_else(String::new, |m| m.license.clone()),
-            false,
-        ),
-        Err(_) => (stem.to_owned(), 0, String::new(), true),
+fn word_bank_list(settings: &Settings, context: &mut ViewContext<Settings>) -> View {
+    let bank = bank(settings);
+    let files = bank.imported();
+    if files.is_empty() {
+        return note("还没有导入第三方词库。用下面「导入词库…」加一本 .db。");
     }
-}
-
-fn bundled_list(settings: &Settings, context: &mut ViewContext<Settings>) -> View {
-    let Some(dir) = repo_resource("data/generated/dicts") else {
-        return note("没找到随包领域词库目录（安装布局待定）。");
-    };
-    let dicts = extra_dictionaries::list(&dir);
-    if dicts.is_empty() {
-        return note("随包领域词库目录是空的。");
-    }
-    let mut rows: Vec<KeyedView> = Vec::with_capacity(dicts.len());
-    for (stem, path) in dicts {
-        let (name, entries, license, broken) = read_info(&path, &stem);
-        let enabled = settings.config.dictionaries.is_domain_enabled(&stem);
-        let label = entry_title(&name, entries, &license, true, broken);
-        let for_msg = stem.clone();
-        rows.push(check_row(
-            &stem,
-            label,
-            enabled,
-            broken,
-            move |on| Message::ToggleDomain(for_msg.clone(), on),
-            None,
-            context,
-        ));
-    }
-    StackPanel::new().spacing(6.0).keyed_children(rows)
-}
-
-fn user_list(settings: &Settings, context: &mut ViewContext<Settings>) -> View {
-    let dicts = extra_dictionaries::list(&user_dir(settings));
-    if dicts.is_empty() {
-        return note(
-            "还没有导入词库。点下面「导入词库」加一本，或把文件放进 %APPDATA%\\Qingjian\\dicts。",
-        );
-    }
-    let mut rows: Vec<KeyedView> = Vec::with_capacity(dicts.len());
-    for (stem, path) in dicts {
-        let (name, entries, license, broken) = read_info(&path, &stem);
-        let enabled = settings.config.dictionaries.is_enabled(&stem);
-        let label = entry_title(&name, entries, &license, false, broken);
-        let for_msg = stem.clone();
-        let remove = Message::RemoveUserDict(stem.clone());
-        rows.push(check_row(
-            &stem,
-            label,
-            enabled,
-            broken,
-            move |on| Message::ToggleUserDict(for_msg.clone(), on),
-            Some(remove),
-            context,
-        ));
+    let mut rows: Vec<KeyedView> = Vec::with_capacity(files.len());
+    for file in files {
+        let label = entry_title(&file.name, file.entries, &file.license, file.broken);
+        let remove = Message::RemoveWordBank(file.file.clone());
+        rows.push(bank_row(&file.file, label, remove, context));
     }
     StackPanel::new().spacing(6.0).keyed_children(rows)
 }
 
 pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> View {
+    let bank = bank(settings);
     let body = StackPanel::new().spacing(12.0).children([
-        note("随包的基础词库始终启用，不在这里。这里管随包领域词库的开关与导入词库的开关 / 移除。改完自动生效。"),
-        TextBlock::new()
-            .text("随包领域词库")
-            .font_weight(FontWeight::SEMI_BOLD)
-            .into(),
-        bundled_list(settings, context),
-        TextBlock::new()
-            .text("导入的词库")
-            .font_weight(FontWeight::SEMI_BOLD)
-            .into(),
-        user_list(settings, context),
+        note(&format!(
+            "第三方词库都在这个目录里，目录里有的全部加载：{}\n随包的 Dict.db 与数据目录里的 UserWordBank.db 是内置词库、始终加载，不在下面的列表里。导入与删除也作用在这里；删除只是挪到 removed\\ 子目录，不真的删掉。",
+            bank.dir.display()
+        )),
+        field(
+            "从词库中查询生僻项条目",
+            "开启后候选与整句才会从词库的生僻字 / 生僻词（方言字、罕见词等）里取词；关闭可加快查询，候选里也不再出现这些冷僻条目。改动一秒内生效。",
+            ToggleSwitch::new()
+                .is_on(settings.config.word_bank.rare_items)
+                .on_toggled(context.callback(Message::RareItems)),
+        ),
+        word_bank_list(settings, context),
         StackPanel::new()
             .orientation(Orientation::Horizontal)
             .spacing(12.0)
@@ -104,55 +53,69 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
                 Button::new()
                     .on_click(context.message(Message::ImportDictionary))
                     .content("导入词库…"),
-                note("接受青简 TSV、Rime .dict.yaml 与现成的 .qj；导入即转换进上面的目录，同名覆盖。"),
+                note("只接受现成的 .db 词库存档；导入即复制到上面目录并加载，同名覆盖。"),
             )),
         note(&settings.dictionary_status),
     ]);
     page("词库", body)
 }
 
-/// 挪进 `dicts\removed`，不真删（与 macOS 一致）。
-pub(crate) fn remove_user_dict(settings: &mut Settings, stem: &str) {
-    let dir = user_dir(settings);
-    let Some((_, path)) = extra_dictionaries::list(&dir)
-        .into_iter()
-        .find(|(name, _)| name == stem)
-    else {
+/// 挪进 `WordBank\removed`，不真删。内置词库不让移除。
+pub(crate) fn remove(settings: &mut Settings, file: &str) {
+    let bank = bank(settings);
+    if WordBank::is_builtin(file) {
+        settings.dictionary_status = format!("「{file}」是内置词库，不能移除。");
+        return;
+    }
+    let Some(entry) = bank.files().into_iter().find(|(_, name, _)| name == file) else {
         return;
     };
-    let removed = dir.join("removed");
+    let removed = bank.dir.join("removed");
     if let Err(error) = std::fs::create_dir_all(&removed) {
         settings.dictionary_status = format!("移除失败：{error}");
         return;
     }
-    if let Some(file_name) = path.file_name() {
-        settings.dictionary_status = match std::fs::rename(&path, removed.join(file_name)) {
-            Ok(()) => format!("已移除「{stem}」，输入法将自动更新。"),
-            Err(error) => format!("移除失败：{error}"),
-        };
+    if let Err(error) = std::fs::rename(&entry.2, removed.join(&entry.1)) {
+        settings.dictionary_status = format!("移除失败：{error}");
+        return;
     }
+    settings.dictionary_status = format!("已移除「{}」，输入法将自动更新。", entry.0);
 }
 
-/// 多选词库，逐个转换并汇总结果；成功项的开关一次写回。
+/// 多选 `.db` 词库，逐个复制并汇总结果。
 pub(crate) fn import(settings: &mut Settings) {
     let Some(sources) = rfd::FileDialog::new()
-        .add_filter("词库文件", &["tsv", "yaml", "yml", "qj"])
-        .add_filter("所有文件", &["*"])
+        .add_filter("词库文件（.db）", &["db"])
         .set_title("导入词库")
         .pick_files()
     else {
         return;
     };
-    let dir = user_dir(settings);
-    let mut disabled = settings.config.dictionaries.disabled.clone();
+    let bank = bank(settings);
     let mut results = Vec::new();
     let mut succeeded = 0;
     for source in &sources {
-        match qingjian_core::dictionary::import::import(source, &dir) {
+        let is_db = source
+            .extension()
+            .and_then(|extension| extension.to_str())
+            .is_some_and(|extension| extension.eq_ignore_ascii_case("db"));
+        if !is_db {
+            results.push(format!("{} 不是 .db 词库文件，已跳过。", source.display()));
+            continue;
+        }
+        let file_name = source
+            .file_name()
+            .and_then(|name| name.to_str())
+            .unwrap_or_default();
+        if WordBank::is_builtin(file_name) {
+            results.push(format!(
+                "{} 与内置词库同名，已跳过；请改名后再导入。",
+                source.display()
+            ));
+            continue;
+        }
+        match cloudime_core::dictionary::import::import(source, &bank.dir) {
             Ok(imported) => {
-                if let Some(stem) = imported.path.file_stem().and_then(|s| s.to_str()) {
-                    disabled.retain(|name| name != stem);
-                }
                 succeeded += 1;
                 results.push(format!(
                     "已导入「{}」，共 {} 条。",
@@ -171,18 +134,7 @@ pub(crate) fn import(settings: &mut Settings) {
         succeeded,
         sources.len() - succeeded
     );
-    if disabled != settings.config.dictionaries.disabled
-        && let Err(error) = qingjian_platform::Config::set_array(
-            &settings.path,
-            "dictionaries",
-            "disabled",
-            &disabled,
-        )
-    {
-        results.push(format!(
-            "自动启用失败：{error}。此前关闭的词库需手动勾选启用。"
-        ));
-    } else if succeeded > 0 {
+    if succeeded > 0 {
         summary.push_str("输入法将自动加载。");
     }
     settings.dictionary_status = format!("{summary}\n{}", results.join("\n"));

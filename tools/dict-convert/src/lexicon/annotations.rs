@@ -1,9 +1,9 @@
-//! `gloss-gen pinyin` 写出的 JSONL：每行 `{"word":"重庆","pinyin":["chong","qing"]}`。
+//! 多音字词标注的 JSONL：每行 `{"word":"重庆","pinyin":["chong","qing"]}`。
 
 use std::collections::HashMap;
 use std::path::Path;
 
-use qingjian_dictionary::canonical_syllable;
+use cloudime_dictionary::canonical_syllable;
 use serde::Deserialize;
 
 use crate::error::ConvertError;
@@ -43,7 +43,7 @@ mod tests {
     #[test]
     fn normalizes_u_umlaut_spellings() {
         let path = std::env::temp_dir().join(format!(
-            "qingjian-annotations-normalize-{}.jsonl",
+            "cloudime-annotations-normalize-{}.jsonl",
             std::process::id()
         ));
         std::fs::write(

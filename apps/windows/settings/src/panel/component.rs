@@ -1,16 +1,19 @@
 //! 根组件的 Reactor 生命周期：建状态、按消息落盘、画左侧导航 + 当前页。
 
-use qingjian_platform::{
-    CandidateRenderer, Config, DEFAULT_ENGLISH_CANDIDATES_OFF_WINDOWS, LayoutMode, LogLevel,
-    PreeditMode, ShiftLetter, ThemeMode, UpdateChannel,
+use std::path::{Path, PathBuf};
+
+use cloudime_platform::{
+    Config, FullHalfPunctuation, ItemNumberStyle, LayoutMode, LogLevel, MAX_ASSOCIATION_COUNTS,
+    MAX_CANDIDATE_COUNT, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MO_HU_YIN_BITS,
+    PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PreeditMode, SimpTrad, UpdateChannel,
 };
 use windows_reactor::*;
 
-use super::cloud_status::CloudStatus;
 use super::controls::{export_logs, log_dir, open_in_editor, open_with_explorer};
+use super::font_dialog;
 use super::notice::Notice;
-use super::pages::{about, aux_code, cloud, dictionaries, general, shortcut};
-use super::recorder::Recorder;
+use super::pages::phrase::PhraseForm;
+use super::pages::{about, dictionaries, phrase};
 use super::{Message, Settings};
 
 impl Component for Settings {
@@ -20,23 +23,39 @@ impl Component for Settings {
     fn create(_input: &(), _context: &ComponentContext<Self>) -> Self {
         let path = Self::config_path();
         Self::ensure_config_file(&path);
+        // 旧版配置先迁一遍（幂等）；设置程序也可能在 Server 之前启动
+        let migration = cloudime_platform::migrate::migrate(&path);
+        if !migration.is_empty() {
+            crate::log::info(format!(
+                "旧版配置与短语已迁移：配置 {}，短语 {}",
+                migration.config, migration.phrases
+            ));
+        }
         let config = Config::load(&path).unwrap_or_default();
+        let data_dir = path
+            .parent()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("."));
+        let (phrases, phrase_status) = phrase::load(&cloudime_platform::PhraseStore::locate(
+            &data_dir,
+            &config.phrase,
+        ));
         Self {
             config,
             path,
-            page: "general".to_string(),
-            cloud_status: CloudStatus::Idle,
-            recorder: Recorder::Idle,
-            record_box: ElementRef::new(),
+            page: "input".to_string(),
             notice: Notice::default(),
             update_state: Self::update_state_path()
-                .map(|path| qingjian_update::UpdateState::load(&path))
+                .map(|path| cloudime_update::UpdateState::load(&path))
                 .unwrap_or_default(),
             update_checking: false,
             update_error: None,
             dictionary_status: String::new(),
-            families: qingjian_render::system_fonts::families(),
-            font_query: None,
+            program_query: None,
+            phrases,
+            phrase_form: PhraseForm::default(),
+            phrase_edit: None,
+            phrase_status,
         }
     }
 
@@ -49,203 +68,165 @@ impl Component for Settings {
             }
             Message::Navigate(None) => {}
 
-            // 通用页
-            Message::LearningLanguage(Some(i)) if i < general::LANGUAGES.len() => {
-                self.save("general", "learning_language", general::LANGUAGES[i].1);
+            // 输入页
+            Message::UseJianPin(on) => self.save("input", "use_jian_pin", on),
+            Message::MoHuYin(index, on) => {
+                if let Some((bit, _)) = MO_HU_YIN_BITS.get(index) {
+                    let mut list = self.config.input.mo_hu_yin_list;
+                    if on {
+                        list |= bit;
+                    } else {
+                        list &= !bit;
+                    }
+                    self.save("input", "mo_hu_yin_list", i64::from(list));
+                }
             }
-            Message::PageSize(Some(value)) => {
-                let size = (value.round() as i64).clamp(1, 9);
-                self.save("general", "page_size", size);
+            Message::SimpTrad(Some(i)) if i < SimpTrad::ALL.len() => {
+                self.save(
+                    "input",
+                    "simp_trad_chinese_chars_toggle",
+                    SimpTrad::ALL[i].key(),
+                );
             }
-            Message::Scheme(Some(i)) if i < general::SCHEMES.len() => {
-                self.save("general", "scheme", general::SCHEMES[i].1);
+            Message::MixtureInput(on) => self.save("input", "mixture_input", on),
+            Message::FullHalfPunctuation(Some(i)) if i < FullHalfPunctuation::ALL.len() => {
+                self.save(
+                    "input",
+                    "full_half_punctuation_marks_toggle",
+                    FullHalfPunctuation::ALL[i].key(),
+                );
             }
-            Message::ShuangpinRawPreedit(on) => self.save("general", "shuangpin_raw_preedit", on),
-            Message::Wubi(on) => self.save("general", "wubi", if on { "wubi86" } else { "" }),
-            Message::Traditional(on) => self.save("general", "traditional", on),
-            Message::EnglishCandidates(on) => self.save("general", "english_candidates", on),
-            Message::ChineseFirst(on) => self.save("general", "chinese_first", on),
-            Message::FullWidthPunctuation(on) => {
-                self.save("general", "full_width_punctuation", on);
+            Message::PairwiseCompletion(index, on) => {
+                if let Some((bit, ..)) = PAIRWISE_COMPLETION_BITS.get(index) {
+                    let mut mask = self.config.input.punctuation_marks_pairwise_completion;
+                    if on {
+                        mask |= bit;
+                    } else {
+                        mask &= !bit;
+                    }
+                    self.save(
+                        "input",
+                        "punctuation_marks_pairwise_completion",
+                        i64::from(mask),
+                    );
+                }
             }
-            Message::EnglishFullWidthPunctuation(on) => {
-                self.save("general", "english_full_width_punctuation", on);
+            Message::PunctuationMapping(index, on) => {
+                if let Some((bit, ..)) = PUNCTUATION_MAPPING_BITS.get(index) {
+                    let mut mask = self.config.input.punctuation_marks_mapping;
+                    if on {
+                        mask |= bit;
+                    } else {
+                        mask &= !bit;
+                    }
+                    self.save("input", "punctuation_marks_mapping", i64::from(mask));
+                }
             }
-            Message::EnglishOffInApps(on) => {
-                let list: Vec<String> = if on {
-                    DEFAULT_ENGLISH_CANDIDATES_OFF_WINDOWS
-                        .iter()
-                        .map(|s| (*s).to_owned())
-                        .collect()
-                } else {
-                    Vec::new()
-                };
-                self.save_array("apps", "english_candidates_off", &list);
+            Message::HalfWideAfterDigit(on) => {
+                self.save("input", "use_half_wide_punctuation_marks_after_digital", on)
             }
-            Message::SwitchKey(key, on) => {
-                let keys = self.config.shortcut.switch_mode.with(key, on);
-                let values: Vec<String> =
-                    keys.config_values().into_iter().map(String::from).collect();
-                self.save_array("shortcut", "switch_mode", &values);
-            }
-            Message::EnglishMode(on) => self.save("general", "english_mode", on),
 
-            // 候选窗口页
-            Message::Theme(Some(i)) if i < ThemeMode::ALL.len() => {
-                self.save("general", "theme", ThemeMode::ALL[i].key());
+            // 候选页
+            Message::LocalModel(on) => {
+                self.save("candidate", "use_local_sentence_organization_model", on);
             }
-            Message::Layout(Some(i)) if i < LayoutMode::ALL.len() => {
-                self.save("general", "layout", LayoutMode::ALL[i].key());
+            Message::Arrangement(Some(i)) if i < LayoutMode::ALL.len() => {
+                self.save(
+                    "candidate",
+                    "candidate_arrangement_direction",
+                    LayoutMode::ALL[i].key(),
+                );
+            }
+            Message::CandidateCount(value) => {
+                let count = (value.round() as i64)
+                    .clamp(MIN_CANDIDATE_COUNT as i64, MAX_CANDIDATE_COUNT as i64);
+                self.save("candidate", "candidate_count", count);
+            }
+            Message::AssociationCounts(value) => {
+                let count = (value.round() as i64)
+                    .clamp(MIN_ASSOCIATION_COUNTS as i64, MAX_ASSOCIATION_COUNTS as i64);
+                self.save("candidate", "candidate_association_counts", count);
+            }
+            Message::PickFont(role) => {
+                let current = role.current(&self.config.candidate).clone();
+                if let Some(choice) = font_dialog::pick_font(&current) {
+                    self.save_font(role, &choice);
+                }
+            }
+            Message::ItemNumberStyle(Some(i)) if i < ItemNumberStyle::ALL.len() => {
+                self.save(
+                    "candidate",
+                    "item_number_style",
+                    ItemNumberStyle::ALL[i].key(),
+                );
+            }
+            Message::CandidateBoxMinimumWidth(Some(value)) => {
+                let width = (value.round() as i64).clamp(0, 2000);
+                self.save("candidate", "candidate_box_minimum_width", width);
+            }
+            Message::ShowMoreCandidates(on) => {
+                self.save("candidate", "show_more_candidate_items", on);
+            }
+            Message::ProgramQuery(text) => self.program_query = Some(text),
+            Message::ProgramAdd => {
+                let name = self
+                    .program_query
+                    .take()
+                    .unwrap_or_default()
+                    .trim()
+                    .to_owned();
+                if !name.is_empty() {
+                    let mut programs = self
+                        .config
+                        .candidate
+                        .program_list_of_hiding_candidate
+                        .clone();
+                    if !self.config.candidate.hides_candidate_for(&name) {
+                        programs.push(name);
+                        self.save_array("candidate", "program_list_of_hiding_candidate", &programs);
+                    }
+                }
+            }
+            Message::ProgramRemove(name) => {
+                let mut programs = self
+                    .config
+                    .candidate
+                    .program_list_of_hiding_candidate
+                    .clone();
+                programs.retain(|program| !program.eq_ignore_ascii_case(&name));
+                self.save_array("candidate", "program_list_of_hiding_candidate", &programs);
             }
             Message::Preedit(Some(i)) if i < PreeditMode::ALL.len() => {
-                self.save("general", "preedit", PreeditMode::ALL[i].key());
+                self.save("candidate", "preedit", PreeditMode::ALL[i].key());
             }
-            Message::ShiftLetter(Some(i)) if i < ShiftLetter::ALL.len() => {
-                self.save("general", "shift_letter", ShiftLetter::ALL[i].key());
-            }
-            Message::Renderer(Some(i)) if i < CandidateRenderer::ALL.len() => {
-                self.save("general", "renderer", CandidateRenderer::ALL[i].key());
-            }
-            Message::FontQuery(text) => {
-                let text = text.trim().to_owned();
-                let exact = self
-                    .families
-                    .iter()
-                    .find(|family| family.eq_ignore_ascii_case(&text))
-                    .cloned();
-                match exact {
-                    Some(family) => {
-                        self.font_query = None;
-                        self.save("general", "font", family);
-                    }
-                    None if text.is_empty() => {
-                        self.font_query = None;
-                        self.save("general", "font", "");
-                    }
-                    None => self.font_query = Some(text),
-                }
-            }
-            Message::Font(family) => {
-                self.font_query = None;
-                self.save("general", "font", family);
-            }
-            Message::StatusBar(on) => self.save("status_bar", "enabled", on),
-
-            // 云服务页
-            Message::LocalModel(on) => self.save("model", "enabled", on),
-            Message::CloudEnabled(on) => self.save("predict", "enabled", on),
-            Message::CloudApiKey(value) => self.save("predict", "api_key", value),
-            Message::CloudModel(value) => self.save("predict", "model", value),
-            Message::CloudBaseUrl(value) => self.save("predict", "base_url", value),
-            Message::CloudSlots(Some(value)) => {
-                let slots = (value.round() as i64).clamp(0, 9);
-                self.save("predict", "slots", slots);
-            }
-            Message::CloudSentence(on) => self.save("predict", "sentence", on),
-            Message::TestConnection => {
-                if matches!(self.cloud_status, CloudStatus::Testing) {
-                    return;
-                }
-                self.cloud_status = CloudStatus::Testing;
-                let config = self.config.predict.clone();
-                context.spawn_background(move |cancel| {
-                    Message::CloudTestDone(cloud::run_test(&config, &cancel))
-                });
-            }
-            Message::CloudTestDone(result) => {
-                self.cloud_status = match result {
-                    Ok(message) => CloudStatus::Ok(message),
-                    Err(message) => CloudStatus::Failed(message),
-                };
-            }
-
-            // 快捷键页
-            Message::PageKeys(Some(i)) if i < shortcut::PAGE_KEYS.len() => {
-                self.save("general", "page_keys", shortcut::PAGE_KEYS[i].1);
-            }
-            Message::ModeExpression(Some(i)) if i < shortcut::MODE_KEYS.len() => {
-                self.save("shortcut", "expression", shortcut::MODE_KEYS[i]);
-            }
-            Message::ModeQuestion(Some(i)) if i < shortcut::MODE_KEYS.len() => {
-                self.save("shortcut", "question", shortcut::MODE_KEYS[i]);
-            }
-            Message::QuestionMark(on) => self.save("shortcut", "question_mark", on),
-            Message::Translation(Some(i)) if i < shortcut::MODIFIERS.len() => {
-                self.save("shortcut", "translation", shortcut::MODIFIERS[i].1);
-            }
-            Message::TranslationSecond(Some(i)) if i < shortcut::MODIFIERS.len() => {
-                self.save("shortcut", "translation_second", shortcut::MODIFIERS[i].1);
-            }
-            Message::DeleteCandidate(Some(i)) if i < shortcut::MODIFIERS.len() => {
-                self.save("shortcut", "delete_candidate", shortcut::MODIFIERS[i].1);
-            }
-            Message::TranslateSelection(Some(i)) if i < shortcut::MODIFIERS.len() => {
-                let key = self.config.shortcut.translate_selection.key;
-                let combo = format!("{}+{key}", shortcut::MODIFIERS[i].1);
-                self.save("shortcut", "translate_selection", combo);
-            }
-
-            // 模糊音页
-            Message::Fuzzy(key, on) => self.save("fuzzy", key, on),
 
             // 词库页
-            Message::ToggleDomain(name, on) => {
-                let mut domains = self.config.dictionaries.domains.clone();
-                if on {
-                    if !domains.contains(&name) {
-                        domains.push(name);
-                    }
-                } else {
-                    domains.retain(|d| d != &name);
-                }
-                self.save_array("dictionaries", "domains", &domains);
-            }
-            Message::ToggleUserDict(name, on) => {
-                // 用户词库缺省启用，`disabled` 列的是关掉的。
-                let mut disabled = self.config.dictionaries.disabled.clone();
-                if on {
-                    disabled.retain(|d| d != &name);
-                } else if !disabled.contains(&name) {
-                    disabled.push(name);
-                }
-                self.save_array("dictionaries", "disabled", &disabled);
-            }
-            Message::RemoveUserDict(name) => {
-                dictionaries::remove_user_dict(self, &name);
-                self.reload();
-            }
+            Message::RemoveWordBank(file) => dictionaries::remove(self, &file),
+            Message::RareItems(on) => self.save("word_bank", "rare_items", on),
             Message::ImportDictionary => {
                 dictionaries::import(self);
                 self.reload();
             }
 
-            // 辅码页
-            Message::AuxCodeEnabled(on) => self.save("aux_code", "enabled", on),
-            Message::AuxCodeShow(on) => self.save("general", "aux_code_show", on),
-            Message::AuxCodeKeepEmpty(on) => self.save("general", "aux_code_keep_empty", on),
-            Message::AuxRecordStart => self.recorder = self.recorder.waiting(),
-            Message::AuxRecordCancel => self.recorder = Recorder::Idle,
-            Message::AuxRecorded(text) => aux_code::record_key(self, &text),
-            Message::ToggleAuxTable(name, on) => {
-                // 码表缺省启用，`disabled` 列的是关掉的；随包笔画表也走这条
-                let mut disabled = self.config.aux_code.disabled.clone();
-                if on {
-                    disabled.retain(|d| d != &name);
-                } else if !disabled.contains(&name) {
-                    disabled.push(name);
+            // 短语页
+            Message::PhraseCode(text) => self.phrase_form.code = text,
+            Message::PhraseText(text) => self.phrase_form.text = text,
+            Message::PhrasePosition(Some(value)) => self.phrase_form.position = value,
+            Message::PhraseSave => phrase::save(self),
+            Message::PhraseCancel => {
+                self.phrase_form = PhraseForm::default();
+                self.phrase_edit = None;
+            }
+            Message::PhraseEdit(index) => {
+                if let Some(selected) = self.phrases.get(index) {
+                    self.phrase_form = PhraseForm::from_phrase(selected);
+                    self.phrase_edit = Some(index);
+                    self.phrase_status.clear();
                 }
-                self.save_array("aux_code", "disabled", &disabled);
             }
-            Message::RemoveAuxTable(name) => {
-                aux_code::remove_table(self, &name);
-                self.reload();
-            }
-            Message::ImportCodeTable => {
-                aux_code::import(self);
-                self.reload();
-            }
+            Message::PhraseRemove(index) => phrase::remove(self, index),
 
-            // 高级页
+            // 调试页（文件 / 日志 / 学习那几项，原「高级」页）
             Message::VerboseLog(on) => {
                 let level = if on { LogLevel::Debug } else { LogLevel::Info };
                 self.save("general", "log_level", level.key());
@@ -277,7 +258,7 @@ impl Component for Settings {
 
             // 关于页
             Message::OpenWebsite => open_with_explorer(about::WEBSITE_URL),
-            Message::OpenDownload => open_with_explorer(qingjian_update::DOWNLOAD_URL),
+            Message::OpenDownload => open_with_explorer(cloudime_update::DOWNLOAD_URL),
 
             // 关于页：检查更新
             Message::UpdateCheck(on) => self.save("update", "check", on),
@@ -296,7 +277,7 @@ impl Component for Settings {
                 let config = self.config.update.clone();
                 context.spawn_background(move |_cancel| {
                     let result =
-                        qingjian_update::Checker::check_blocking(&path, about::VERSION, &config);
+                        cloudime_update::Checker::check_blocking(&path, about::VERSION, &config);
                     Message::UpdateChecked(result.map(|r| r.map_err(|error| error.to_string())))
                 });
             }
@@ -310,13 +291,21 @@ impl Component for Settings {
             }
             Message::OpenRepository => open_with_explorer(about::REPOSITORY_URL),
 
+            // 调试页
+            Message::AutoHideFloatToolBar(on) => {
+                self.save("debugging", "auto_hide_float_tool_bar", on);
+            }
+            Message::OpenComponents => {
+                crate::log::info("「组件」页还没有做，点了只记一条日志");
+            }
+
             // 下拉被清空 / 越界：不改
             _ => {}
         }
     }
 
     fn view(&self, _input: &(), context: &mut ViewContext<Self>) -> View {
-        context.window_title("青简设置");
+        context.window_title("云朵设置");
         let item = |tag: &str, label: &str, symbol| {
             KeyedView::new(
                 tag,
@@ -333,20 +322,16 @@ impl Component for Settings {
             )
         };
         let items = [
-            item("general", "通用", Symbol::Setting),
-            item("candidates", "候选窗口", Symbol::View),
-            item("shortcut", "快捷键", Symbol::Keyboard),
-            item("cloud", "云服务", Symbol::World),
-            item("fuzzy", "模糊音", Symbol::Audio),
+            item("input", "输入", Symbol::Keyboard),
+            item("candidates", "候选", Symbol::View),
             item("dictionaries", "词库", Symbol::Library),
-            item("aux_code", "辅码", Symbol::Character),
-            item("usage", "统计", Symbol::List),
-            item("advanced", "高级", Symbol::Repair),
+            item("phrase", "短语", Symbol::Comment),
+            item("debugging", "调试", Symbol::Repair),
             item("about", "关于", Symbol::Help),
         ];
         NavigationView::new()
             .pane_display_mode(NavigationViewPaneDisplayMode::Left)
-            .pane_title("青简")
+            .pane_title("云朵输入法")
             .open_pane_length(220.0)
             .is_pane_open(true)
             .is_pane_toggle_button_visible(false)

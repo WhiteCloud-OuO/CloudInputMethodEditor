@@ -54,18 +54,18 @@ C 是 `bigram --phrases`：分词时把短语摘掉（二元证据保住），�
 
 ## 品牌词
 
-`assets/lexicon/brand.tsv`：青简 210，既是词频也写进语言模型一元（句首二元按八分之一算，与 请柬 的句首占比一致）。
-只写词频没用：词级排序用语言模型概率，语料里没有的词兜底扣 4 nat，青简 排不进前三；句首二元给整个 210 又压过了整句 请见。
-目标是 `qingjian` 下 请见（整句）/ 青简 / 请柬 的顺序，用户选一次个人学习就把它顶到第一。
+`assets/lexicon/brand.tsv`：云朵输入法 210，既是词频也写进语言模型一元（句首二元按八分之一算，取 请柬 的句首占比）。
+只写词频没用：词级排序用语言模型概率，语料里没有的词兜底扣 4 nat，云朵输入法 排不进前三；句首二元给整个 210 又会盖过更长的整句候选。
+目标是 `yun duo shu ru fa` 下品牌词稳居最前、又不越位压过真词，用户选一次个人学习就把它顶到第一。
 
 ## 复现
 
 ```bash
-cargo run --release -p qingjian-dict-convert -- phrases data/corpus/*.txt          # 重跑加 --refresh assets/lexicon/phrases.tsv
+cargo run --release -p cloudime-dict-convert -- phrases data/corpus/*.txt          # 重跑加 --refresh assets/lexicon/phrases.tsv
 cp data/generated/phrases.tsv assets/lexicon/phrases.tsv
-cargo run --release -p qingjian-dict-convert -- lexicon --pinyin data/generated/pinyin-llm.jsonl --frequency data/generated/lm-unigram.tsv \
+cargo run --release -p cloudime-dict-convert -- lexicon --pinyin data/generated/pinyin-llm.jsonl --frequency data/generated/lm-unigram.tsv \
   --extra-words assets/lexicon/mined_words.tsv --extra-words assets/lexicon/phrases.tsv --extra-words assets/lexicon/brand.tsv
-cargo run --release -p qingjian-dict-convert -- bigram --phrases assets/lexicon/phrases.tsv --phrases assets/lexicon/domain_words.tsv --brand assets/lexicon/brand.tsv data/corpus/*.txt
+cargo run --release -p cloudime-dict-convert -- bigram --phrases assets/lexicon/phrases.tsv --phrases assets/lexicon/domain_words.tsv --brand assets/lexicon/brand.tsv data/corpus/*.txt
 ```
 
-再 `pack dict` / `pack lm`（`bundle.sh` 会做），然后 `--eval-text data/eval/sentences.tsv` 与 `--replay` 冻结日志各跑一遍与改前比。
+再 `pack dict` / `pack lm`（产物随 `tools/release/data-bundle.sh` 打的数据包发出去），然后 `--eval-text data/eval/sentences.tsv` 与 `--replay` 冻结日志各跑一遍与改前比。

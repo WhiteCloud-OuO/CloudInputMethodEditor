@@ -8,14 +8,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{HSTRING, PCWSTR};
 
-use qingjian_platform::protocol::IndicatorCommand;
+use cloudime_platform::protocol::IndicatorCommand;
 
 /// 打开菜单时的勾选状态。
 pub(crate) struct MenuState {
     pub(crate) english: bool,
+    pub(crate) disabled: bool,
     pub(crate) english_enabled: bool,
     pub(crate) full_width: bool,
-    pub(crate) status_bar: bool,
     pub(crate) update_available: bool,
 }
 
@@ -28,7 +28,6 @@ pub(crate) enum MenuChoice {
 const ID_CHINESE: u32 = 1;
 const ID_ENGLISH: u32 = 2;
 const ID_PUNCTUATION: u32 = 3;
-const ID_STATUS_BAR: u32 = 4;
 const ID_SETTINGS: u32 = 5;
 const ID_DOWNLOAD: u32 = 6;
 
@@ -36,16 +35,19 @@ const ID_DOWNLOAD: u32 = 6;
 pub(crate) fn track(owner: HWND, point: POINT, state: &MenuState) -> Option<MenuChoice> {
     let checked = |on: bool| if on { MF_CHECKED } else { MENU_ITEM_FLAGS(0) };
     let english_flags = if state.english_enabled {
-        checked(state.english)
+        checked(state.english && !state.disabled)
     } else {
         MF_GRAYED
     };
     let mut items = vec![
-        Some((ID_CHINESE, "中文", checked(!state.english))),
+        Some((
+            ID_CHINESE,
+            "中文",
+            checked(!state.english && !state.disabled),
+        )),
         Some((ID_ENGLISH, "英文", english_flags)),
         None,
         Some((ID_PUNCTUATION, "全角标点", checked(state.full_width))),
-        Some((ID_STATUS_BAR, "悬浮状态条", checked(state.status_bar))),
         None,
     ];
     if state.update_available {
@@ -73,7 +75,6 @@ pub(crate) fn track(owner: HWND, point: POINT, state: &MenuState) -> Option<Menu
         ID_CHINESE => Some(MenuChoice::Mode { english: false }),
         ID_ENGLISH => Some(MenuChoice::Mode { english: true }),
         ID_PUNCTUATION => Some(MenuChoice::Server(IndicatorCommand::TogglePunctuation)),
-        ID_STATUS_BAR => Some(MenuChoice::Server(IndicatorCommand::ToggleStatusBar)),
         ID_SETTINGS => Some(MenuChoice::Server(IndicatorCommand::OpenSettings)),
         ID_DOWNLOAD => Some(MenuChoice::Server(IndicatorCommand::OpenDownload)),
         _ => None,

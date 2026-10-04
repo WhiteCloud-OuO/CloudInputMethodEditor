@@ -1,11 +1,11 @@
 //! `--tune 名=值`：把引擎里几组「拍的」常数换成别的值，回放评测时扫参数用；名字见 [`KEYS`]。
 
-use qingjian_core::Engine;
-use qingjian_core::correction::TypoCosts;
-use qingjian_core::sentence::Interpolation;
+use cloudime_core::Engine;
+use cloudime_core::correction::TypoCosts;
+use cloudime_core::sentence::Interpolation;
 
 /// 可调的参数名。
-pub const KEYS: [&str; 11] = [
+pub const KEYS: [&str; 9] = [
     "lambda",
     "k",
     "cap",
@@ -15,8 +15,6 @@ pub const KEYS: [&str; 11] = [
     "extra",
     "missing",
     "typo-cap",
-    "correction",
-    "correction-transpose",
 ];
 
 /// 把一组 `名=值` 应用到引擎；没给的项保持缺省。
@@ -44,8 +42,6 @@ pub fn apply(engine: &mut Engine, settings: &[String]) -> Result<(), TuneError> 
             "extra" => costs.extra = value,
             "missing" => costs.missing = value,
             "typo-cap" => costs.discount_cap = value,
-            "correction" => costs.correction_penalty = value,
-            "correction-transpose" => costs.correction_transpose_discount = value,
             other => {
                 return Err(TuneError::Unknown {
                     name: other.to_owned(),
@@ -73,7 +69,7 @@ pub enum TuneError {
 
 #[cfg(test)]
 mod tests {
-    use qingjian_dictionary::Dictionary;
+    use cloudime_dictionary::Dictionary;
 
     use super::*;
 

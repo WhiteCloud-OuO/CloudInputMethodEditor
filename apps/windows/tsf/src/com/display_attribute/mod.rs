@@ -1,4 +1,4 @@
-//! 组句 preedit 的内联下划线：按 TSF 显示属性协议给组句范围标一个「输入中」属性（对应 macOS marked text 的下划线）。
+//! 组句 preedit 的内联下划线：按 TSF 显示属性协议给组句范围标一个「输入中」属性。
 //! 系统经 `ITfDisplayAttributeProvider`（实现在 [`super::service::TextService`]）来取 [`AttributeInfo`]
 //! （枚举器 [`AttributeEnum`]）；写组句时把 GUID 换成 atom 写进范围的 `GUID_PROP_ATTRIBUTE`。
 
@@ -20,9 +20,9 @@ use self::enumerator::AttributeEnum;
 use self::info::AttributeInfo;
 use super::log::log;
 
-/// 青简的组句显示属性 GUID（自定义），与注册表里声明的显示属性提供者类别配套。
+/// 云朵输入法的组句显示属性 GUID（自定义），与注册表里声明的显示属性提供者类别配套。
 pub(crate) const GUID_DISPLAY_ATTRIBUTE_INPUT: GUID =
-    GUID::from_u128(0xc47cb4c0_0ac9_4c8f_bdbf_8b6d21cc504f);
+    GUID::from_u128(0x5d1ba831_e117_4470_8645_8534f3f94cda);
 
 thread_local! {
     /// GUID 在类别管理器里的 atom，首次用时算出来缓存；0 = 还没算。

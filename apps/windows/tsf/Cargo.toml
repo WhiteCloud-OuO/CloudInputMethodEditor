@@ -1,23 +1,23 @@
 [package]
-name = "qingjian-windows-tsf"
+name = "cloudime-windows-tsf"
 description = "Windows 输入法的 TSF 文本服务 DLL：加载进每个应用进程，把系统按键经 IPC 交给 Server 进程（../server）"
-version = "0.1.5-dev"
+version = "0.0.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-# cdylib 是产物 qingjian_tsf.dll（regsvr32 与安装脚本都认这个名字）；rlib 给端到端协议测试 `use qingjian_tsf`。
+# cdylib 是产物 cloudime_tsf.dll（regsvr32 与安装脚本都认这个名字）；rlib 给端到端协议测试 `use cloudime_tsf`。
 [lib]
-name = "qingjian_tsf"
+name = "cloudime_tsf"
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
-qingjian-core.workspace = true
-qingjian-platform.workspace = true
+cloudime-core.workspace = true
+cloudime-platform.workspace = true
 thiserror.workspace = true
 
 [dev-dependencies]
-qingjian-windows-server = { path = "../server" }
+cloudime-windows-server = { path = "../server" }
 
 [lints]
 workspace = true

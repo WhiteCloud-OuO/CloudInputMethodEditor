@@ -1,13 +1,13 @@
 [package]
-name = "qingjian-windows-server"
+name = "cloudime-windows-server"
 description = "Windows 输入法的 Server 进程：持有 Engine，跑在应用进程外，与 TSF DLL（../tsf）走 IPC 协议通信"
-version = "0.1.5-dev"
+version = "0.0.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [[bin]]
-name = "qingjian-server"
+name = "cloudime-server"
 path = "src/main.rs"
 
 # 嵌 uiAccess manifest（见 build.rs）
@@ -15,17 +15,14 @@ path = "src/main.rs"
 embed-manifest.workspace = true
 
 [dependencies]
-qingjian-core.workspace = true
-qingjian-dictionary.workspace = true
-qingjian-learning.workspace = true
-qingjian-lm.workspace = true
-qingjian-neural.workspace = true
-qingjian-platform.workspace = true
-qingjian-predict.workspace = true
-qingjian-render.workspace = true
-qingjian-translate.workspace = true
-qingjian-update.workspace = true
-dotenvy.workspace = true
+cloudime-core.workspace = true
+cloudime-dictionary.workspace = true
+cloudime-learning.workspace = true
+cloudime-lm.workspace = true
+cloudime-neural.workspace = true
+cloudime-platform.workspace = true
+cloudime-render.workspace = true
+cloudime-update.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
@@ -36,7 +33,6 @@ toml_edit.workspace = true
 workspace = true
 
 [target."cfg(windows)".dependencies]
-windows-registry.workspace = true
 windows = { version = "0.62.2", features = [
     "Win32_Foundation",
     "Win32_Graphics_Gdi",

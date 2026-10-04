@@ -1,6 +1,6 @@
 //! 文档上下文级的开关：TSF 规定键盘类文本服务**必须**看 `GUID_COMPARTMENT_KEYBOARD_DISABLED`（非零 = 所有键原样放行、不组句），
 //! 微软 SampleIME 连同 `GUID_COMPARTMENT_EMPTYCONTEXT` 一起查。密码框走的就是这条：微软文档明说密码框应当禁用文本服务
-//! （`IS_PASSWORD` 只是标注、不提供保护），Chromium 系浏览器给密码框的上下文设的也是它。对应 macOS 的 Secure Input：直接不组句。
+//! （`IS_PASSWORD` 只是标注、不提供保护），Chromium 系浏览器给密码框的上下文设的也是它：直接不组句。
 
 use windows::Win32::UI::TextServices::{
     GUID_COMPARTMENT_EMPTYCONTEXT, GUID_COMPARTMENT_KEYBOARD_DISABLED, ITfCompartmentMgr,

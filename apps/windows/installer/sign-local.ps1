@@ -11,12 +11,12 @@
 .PARAMETER Path
     要签名的文件（.exe / .dll），可多个。
 .PARAMETER CertSubject
-    自签证书主题，缺省 "CN=Qingjian Dev CodeSign"。
+    自签证书主题，缺省 "CN=CloudIME Dev CodeSign"。
 #>
 [CmdletBinding()]
 param(
     [Parameter(Mandatory)][string[]]$Path,
-    [string]$CertSubject = 'CN=Qingjian Dev CodeSign'
+    [string]$CertSubject = 'CN=CloudIME Dev CodeSign'
 )
 
 $ErrorActionPreference = 'Stop'
@@ -47,7 +47,7 @@ foreach ($store in @('Root', 'TrustedPublisher')) {
     if (-not $exists) {
         Write-Host "装证书进 LocalMachine\$store…" -ForegroundColor Cyan
         # 只导公钥（.cer），不带私钥。
-        $tmp = Join-Path $env:TEMP 'qingjian-dev-codesign.cer'
+        $tmp = Join-Path $env:TEMP 'cloudime-dev-codesign.cer'
         Export-Certificate -Cert $cert -FilePath $tmp -Type CERT | Out-Null
         Import-Certificate -FilePath $tmp -CertStoreLocation $storePath | Out-Null
         Remove-Item $tmp -Force -ErrorAction SilentlyContinue
@@ -63,6 +63,14 @@ if (-not $signtool) { throw '在 Windows SDK 里找不到 signtool.exe' }
 foreach ($f in $Path) {
     if (-not (Test-Path -LiteralPath $f)) { throw "要签的文件不存在：$f" }
 }
-& $signtool.FullName sign /sha1 $thumbprint /fd sha256 /v $Path
-if ($LASTEXITCODE -ne 0) { throw "signtool 签名失败（退出码 $LASTEXITCODE）" }
+# PowerShell 5.1 会把 signtool 写进 stderr 的内容包装成错误记录，配合上面的 Stop 会打断签名。
+$previous = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+    & $signtool.FullName sign /sha1 $thumbprint /fd sha256 /v $Path 2>&1 | ForEach-Object { Write-Host $_ }
+    $exitCode = $LASTEXITCODE
+} finally {
+    $ErrorActionPreference = $previous
+}
+if ($exitCode -ne 0) { throw "signtool 签名失败（退出码 $exitCode）" }
 Write-Host "已签名 $($Path.Count) 个文件。" -ForegroundColor Green

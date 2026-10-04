@@ -7,8 +7,8 @@ fn local_model_rescoring_reorders_sentence_after_pause() {
     // k 优路径按末词分状态，几条路径要在末词上不同才都留下来：ni + ta → 你他 / 你她 / 你它
     let mut router = router_with_scorer("你它");
     let (_, _, frame) = type_letters(&mut router, "nita");
-    // 按键时只按词级模型：他 的词频高，首选是「你他」
-    assert_eq!(candidate_texts(&frame).first(), Some(&"你他"));
+    // 按键时只按词级模型：整句候选是「你他」（纯按权重排，单字 你 可能更靠前）
+    assert!(candidate_texts(&frame).contains(&"你他"));
     // 在等防抖，工人循环该在 80 ms 内醒来
     assert!(router.next_tick() <= std::time::Duration::from_millis(80));
 
@@ -29,10 +29,11 @@ fn local_model_does_not_touch_a_navigated_page() {
     type_letters(&mut router, "nita");
     // 用户动过高亮：模型的结果只留在缓存里，不换正在看的这页
     let (_, _, frame) = press(&mut router, KeyEvent::new(0x28, None, Default::default())); // VK_DOWN
-    assert_eq!(candidate_texts(&frame).first(), Some(&"你他"));
-    // 防抖 80 ms + 假模型立即回分，300 ms 足够等到结果；首选仍是原来的
+    assert!(candidate_texts(&frame).contains(&"你他"));
+    assert!(!candidate_texts(&frame).contains(&"你它"));
+    // 防抖 80 ms + 假模型立即回分，300 ms 足够等到结果；模型偏爱的 你它 仍不显示
     let frame = tick_until_first(&mut router, "你它", std::time::Duration::from_millis(300));
-    assert_eq!(candidate_texts(&frame).first(), Some(&"你他"));
+    assert!(!candidate_texts(&frame).contains(&"你它"));
 }
 
 #[test]

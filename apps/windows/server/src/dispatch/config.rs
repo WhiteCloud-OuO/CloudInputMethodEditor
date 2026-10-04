@@ -1,138 +1,120 @@
-use qingjian_platform::protocol::KeyModifiers;
-use qingjian_platform::{
-    AppsConfig, CandidateRenderer, Config, KeyCombo, LayoutMode, PreeditMode, Scheme, SwitchKeys,
-    ThemeMode,
-};
+use cloudime_platform::{Config, ItemNumberStyle, LayoutMode, PreeditMode, SimpTrad};
 
 use super::RenderSettings;
 
-/// Router 要用的配置项，与 macOS 壳的 `Host` 字段对齐。
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Router 要用的配置项。
+#[derive(Debug, Clone, PartialEq)]
 pub struct RouterConfig {
-    /// 每页候选数（`[general] page_size`）。
+    /// 候选项个数（`[candidate] candidate_count`，5–9）。
     pub page_size: usize,
 
-    /// 云端候选在第一页预留的格数（`[predict] slots`）。
-    pub cloud_slots: usize,
-
-    /// 中文模式下 Shift+字母收进组句缓冲区（`[general] shift_letter = "compose"`）。
-    /// 关着（缺省）时壳把大写字母交给应用，与以前一致。
-    pub shift_letter_compose: bool,
-
-    /// 候选排布（`[general] layout`）。
+    /// 候选排布（`[candidate] candidate_arrangement_direction`）。
     pub layout: LayoutMode,
 
-    /// 候选窗口外观（`[general] theme`）。
-    pub theme: ThemeMode,
+    /// 拼音串字体：字族名（空为系统界面字体）+ 字号（点）。
+    pub pinyin_font: (String, f32),
 
-    /// 候选窗口 / 状态条由青简渲染器还是 GDI 画（`[general] renderer`）。
-    pub renderer: CandidateRenderer,
+    /// 候选词字体。
+    pub candidate_font: (String, f32),
 
-    /// 候选窗口字体的字族名（`[general] font`），空为系统字体；只对青简渲染器生效。
-    pub font: String,
+    /// 序号字体。
+    pub item_number_font: (String, f32),
 
-    /// 拼音显示位置（`[general] preedit`）。
+    /// 序号的写法（`[candidate] item_number_style`）。
+    pub item_number_style: ItemNumberStyle,
+
+    /// 竖排时窗口的最小宽度（`[candidate] candidate_box_minimum_width`，物理像素）。
+    pub min_width_pixels: f32,
+
+    /// 拼音显示位置（`[candidate] preedit`）。
     pub preedit: PreeditMode,
 
-    /// 翻页键对（`[general] page_keys`，上一页 / 下一页）。
-    pub page_keys: (char, char),
+    /// 在「不显示候选框」名单里的程序（`[candidate] program_list_of_hiding_candidate`，exe 文件名）。
+    pub hiding_candidates: Vec<String>,
 
-    /// 英文模式给不给英文候选（`[general] english_candidates`）。
-    pub english_candidates: bool,
+    /// 中文模式下不在组句时的标点转全角；不进配置文件，状态条 / 右键菜单可切，会话内有效、重启回缺省（开）。
+    /// 初值来自 `[input] full_half_punctuation_marks_toggle`（follow 中文全角、英文半角）。
+    pub full_width_punctuation: bool,
 
-    /// 内置英文模式总开关（`[general] english_mode`）：关掉后状态条上的「中 / 英」不再切模式
-    /// （切换键与语言栏按钮由 DLL 按同一项拦住，见 `com::service::mode`）。
-    pub english_mode: bool,
+    /// 英文模式的那一份，中英各记一份；会话内有效、重启回缺省（半角）。
+    pub english_full_width_punctuation: bool,
 
-    /// 中英切换键（`[shortcut] switch_mode`）：由 Server 经协议下发给 DLL，由它认键。
-    pub switch_mode: SwitchKeys,
+    /// 直通给应用的可打印 ASCII 转全角（状态条上的「全角 / 半角」开关）；同标点，会话内有效、重启回缺省（半角）。
+    pub full_width_chars: bool,
 
-    /// 中文模式下不在组句时的标点转全角（`[general] full_width_punctuation`）；状态条可切。
-    pub full_width: bool,
+    /// 繁体输出（`[input] simp_trad_chinese_chars_toggle`）；状态条「简 / 繁」按钮与设置页共用这一份。
+    pub traditional: bool,
 
-    /// 英文模式的那一份（`[general] english_full_width_punctuation`）。
-    pub english_full_width: bool,
+    /// 中文模式的符号映射（`[input] punctuation_marks_mapping`）。
+    pub punctuation_mapping: cloudime_core::Mapping,
 
-    /// 大千注音（[general] zhuyin）。
-    pub zhuyin: bool,
-
-    /// 按应用的设置（`[apps]`），按宿主 exe 名认。
-    pub apps: AppsConfig,
-
-    /// 上屏第一 / 第二个译词的修饰键（`[shortcut] translation` / `translation_second`）。
-    pub translation_keys: (KeyModifiers, KeyModifiers),
-
-    /// 删候选的修饰键（`[shortcut] delete_candidate`）。
-    pub delete_keys: KeyModifiers,
-
-    /// 「翻译选中文字」快捷键（`[shortcut] translate_selection`）。
-    pub translate_selection: KeyCombo,
-
-    /// 悬浮状态条开关（`[status_bar] enabled`）。
-    pub status_enabled: bool,
+    /// 符号成对补全的位图（`[input] punctuation_marks_pairwise_completion`）。
+    pub pairwise_completion: u32,
 
     /// 状态条记住的位置（`[status_bar] x` / `y`，内容左上角物理像素）。
     pub status_pos: Option<(i32, i32)>,
 
-    /// 拼音侧方案（`[general] scheme`）。
-    pub scheme: Scheme,
-
-    /// 形码侧开没开（`[general] wubi`）。与拼音同时开着就是混输。
-    pub wubi: bool,
-
-    /// 辅码触发键（`[general] aux_code_key`，缺省 `;`）；非法值退回缺省。
-    pub aux_code_key: char,
-
-    /// 候选上是否显示辅码（`[general] aux_code_show`）。随帧下发给候选窗。
-    pub aux_code_show: bool,
+    /// 自动隐藏悬浮工具栏（`[debugging] auto_hide_float_tool_bar`）：前台全屏时收起。
+    /// 切到别的输入法、云朵被禁用时始终收起，与这一项无关。
+    pub auto_hide_float_tool_bar: bool,
 }
 
 impl RouterConfig {
-    /// 全局开关开着，且应用不在 `[apps] english_candidates_off` 里；没报 exe 名按不关。
-    pub fn english_candidates_in(&self, app: Option<&str>) -> bool {
-        self.english_candidates && !app.is_some_and(|app| self.apps.english_candidates_off(app))
-    }
-
-    /// 交给 UI 线程的画法。
+    /// 交给 UI 线程的渲染设置。
     pub fn render_settings(&self) -> RenderSettings {
         RenderSettings {
-            renderer: self.renderer,
-            font: self.font.clone(),
+            pinyin_font: self.pinyin_font.clone(),
+            candidate_font: self.candidate_font.clone(),
+            item_number_font: self.item_number_font.clone(),
+            min_width_pixels: self.min_width_pixels,
+            item_number_style: self.item_number_style,
         }
+    }
+
+    /// 这个程序在不在「不显示候选框」名单里。
+    pub fn hides_candidate_for(&self, program: &str) -> bool {
+        let program = program.trim();
+        !program.is_empty()
+            && self
+                .hiding_candidates
+                .iter()
+                .any(|name| name.trim().eq_ignore_ascii_case(program))
     }
 }
 
 impl From<&Config> for RouterConfig {
     fn from(config: &Config) -> Self {
+        let input = &config.input;
+        let candidate = &config.candidate;
+        let punctuation = input.full_half_punctuation_marks_toggle;
         Self {
-            page_size: config.general.page_size(),
-            cloud_slots: config.predict.slots,
-            shift_letter_compose: config.general.shift_letter.compose(),
-            layout: config.general.layout,
-            theme: config.general.theme,
-            renderer: config.general.renderer,
-            font: config.general.font.trim().to_owned(),
-            preedit: config.general.preedit,
-            page_keys: config.general.page_keys(),
-            english_candidates: config.general.english_candidates,
-            english_mode: config.general.english_mode,
-            switch_mode: config.shortcut.switch_mode,
-            full_width: config.general.full_width_punctuation,
-            english_full_width: config.general.english_full_width_punctuation,
-            zhuyin: config.general.is_zhuyin(),
-            apps: config.apps.clone(),
-            translation_keys: {
-                let (first, second) = config.shortcut.translation_keys();
-                (first.into(), second.into())
-            },
-            delete_keys: config.shortcut.delete_keys().into(),
-            translate_selection: config.shortcut.translate_selection,
-            status_enabled: config.status_bar.enabled,
+            page_size: candidate.candidate_count(),
+            layout: candidate.candidate_arrangement_direction,
+            pinyin_font: (
+                candidate.pinyin_font.family.clone(),
+                candidate.pinyin_font.size,
+            ),
+            candidate_font: (
+                candidate.candidate_font.family.clone(),
+                candidate.candidate_font.size,
+            ),
+            item_number_font: (
+                candidate.item_number_font.family.clone(),
+                candidate.item_number_font.size,
+            ),
+            item_number_style: candidate.item_number_style,
+            min_width_pixels: candidate.candidate_box_minimum_width as f32,
+            preedit: candidate.preedit,
+            hiding_candidates: candidate.program_list_of_hiding_candidate.clone(),
+            // 「标点全 / 半角」的初值：follow 中文全角、英文半角，full / half 一律；之后还能用状态条那一格会话内切
+            full_width_punctuation: punctuation.full_width(false),
+            english_full_width_punctuation: punctuation.full_width(true),
+            full_width_chars: false,
+            traditional: input.simp_trad_chinese_chars_toggle == SimpTrad::Traditional,
+            punctuation_mapping: input.punctuation_mapping(),
+            pairwise_completion: input.punctuation_marks_pairwise_completion,
             status_pos: config.status_bar.x.zip(config.status_bar.y),
-            scheme: config.general.scheme(),
-            wubi: config.general.wubi(),
-            aux_code_key: config.general.aux_code_key(),
-            aux_code_show: config.general.aux_code_show,
+            auto_hide_float_tool_bar: config.debugging.auto_hide_float_tool_bar,
         }
     }
 }

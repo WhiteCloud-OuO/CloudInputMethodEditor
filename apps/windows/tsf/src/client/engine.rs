@@ -1,11 +1,11 @@
 use std::io::{Read, Write};
 
-use qingjian_platform::protocol::{
-    ClientMessage, Frame, IndicatorCommand, InputSettings, KeyEvent, PROTOCOL_VERSION, ScreenRect,
-    ServerMessage, SessionId, read_message, write_message,
+use cloudime_platform::protocol::{
+    ClientMessage, Frame, IndicatorCommand, InputMode, InputSettings, KeyEvent, PROTOCOL_VERSION,
+    ScreenRect, ServerMessage, SessionId, read_message, write_message,
 };
 
-use super::{KeyReply, KeyResponse, ModeSyncReply};
+use super::{KeyResponse, ModeSyncReply};
 use crate::error::ClientError;
 
 /// 连 Server 的一个会话客户端，开在一条已连好的双工流上（Windows 下是命名管道，测试里是内存流）。
@@ -60,9 +60,8 @@ impl<S: Read + Write> EngineClient<S> {
         Ok(())
     }
 
-    /// 送一个按键等结果。触发「翻译选中文字」快捷键时回 [`KeyReply::NeedSelection`]，
-    /// 调用方须读当前选区再用 [`Self::selection`] 回给 Server。
-    pub fn key(&mut self, event: KeyEvent) -> Result<KeyReply, ClientError> {
+    /// 送一个按键等结果。
+    pub fn key(&mut self, event: KeyEvent) -> Result<KeyResponse, ClientError> {
         let message = ClientMessage::Key {
             session: self.session,
             event,
@@ -71,49 +70,22 @@ impl<S: Read + Write> EngineClient<S> {
             ServerMessage::KeyResult {
                 outcome,
                 commit,
-                frame,
-                ..
-            } => Ok(KeyReply::Result(KeyResponse {
-                outcome,
-                commit,
-                frame,
-            })),
-            ServerMessage::RequestSelection { request, .. } => {
-                Ok(KeyReply::NeedSelection { request })
-            }
-            _ => Err(ClientError::Unexpected("expected key result")),
-        }
-    }
-
-    /// 把读到的选区发给 Server，等它回翻译候选帧。空选区时 Server 不进入翻译、回空帧。
-    pub fn selection(
-        &mut self,
-        request: u64,
-        text: String,
-        rect: ScreenRect,
-    ) -> Result<KeyResponse, ClientError> {
-        let message = ClientMessage::Selection {
-            session: self.session,
-            request,
-            text,
-            rect,
-        };
-        match self.call(&message)? {
-            ServerMessage::KeyResult {
-                outcome,
-                commit,
+                caret_shift,
+                delete_before,
                 frame,
                 ..
             } => Ok(KeyResponse {
                 outcome,
                 commit,
+                caret_shift,
+                delete_before,
                 frame,
             }),
-            _ => Err(ClientError::Unexpected("expected key result for selection")),
+            _ => Err(ClientError::Unexpected("expected key result")),
         }
     }
 
-    /// 组句期间定时拉一次云联想的异步结果，回最新一帧。
+    /// 组句期间定时轮询最新一帧（本地整句重排到达后候选顺序可能变了）。
     pub fn poll(&mut self) -> Result<Frame, ClientError> {
         match self.call(&ClientMessage::Poll {
             session: self.session,
@@ -169,12 +141,12 @@ impl<S: Read + Write> EngineClient<S> {
             session: self.session,
         })? {
             ServerMessage::ModeSync {
-                english,
+                mode,
                 input,
                 indicator,
                 ..
             } => Ok(ModeSyncReply {
-                english,
+                mode,
                 input,
                 indicator,
             }),
@@ -182,11 +154,11 @@ impl<S: Read + Write> EngineClient<S> {
         }
     }
 
-    /// 把当前会话的中英模式推给 Server（悬浮状态条）。不回话。
-    pub fn mode_changed(&mut self, english: bool) -> Result<(), ClientError> {
+    /// 把当前会话的输入法状态推给 Server（悬浮状态条）。不回话。
+    pub fn mode_changed(&mut self, mode: InputMode) -> Result<(), ClientError> {
         self.send(&ClientMessage::ModeChanged {
             session: self.session,
-            english,
+            mode,
         })
     }
 

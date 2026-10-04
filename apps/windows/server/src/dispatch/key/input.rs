@@ -1,20 +1,49 @@
-//! 按键怎么作用到 Engine / 高亮上。分流规则与 macOS 壳的 `handle_text` / `handle_command` 对齐。
+//! 按键怎么作用到 Engine / 高亮上。
 
-use qingjian_core::{QUESTION_PREFIX, shortcut};
-use qingjian_platform::protocol::KeyEvent;
+use cloudime_core::{CandidateKind, char_width, shortcut};
+use cloudime_platform::pairwise_completion;
+use cloudime_platform::protocol::KeyEvent;
 
 use super::{Effect, codes, with_prefix};
 use crate::dispatch::Router;
 
+/// 成对补全里右半边对应键盘上的哪个键：`）` → `)`、`”` → `"`；本来就是半角（或没有对应）的原样返回。
+fn keyboard_close(close: char) -> char {
+    match close {
+        '”' => '"',
+        '’' => '\'',
+        other => char::from_u32(u32::from(other).wrapping_sub(0xFEE0))
+            .filter(|half| half.is_ascii_graphic())
+            .unwrap_or(other),
+    }
+}
+
+/// 组句里敲这个键要「先把高亮候选上屏、再上屏这个标点」：可打印 ASCII 标点。
+///
+/// `-` / `=` 是固定的翻页键（[`codes::page_key`] 在前面先处理掉），`_` / `+` 是它们上档的键、
+/// 也是标识符里常见的字符，沿用原来的英文直输段；`'` 是拼音的分隔符（`xi'an`），不能抢；
+/// `` ` `` 留给「轮换英文候选大小写」（见 [`Router::apply_printable`]），没英文候选时才进直输段。
+fn is_commit_punctuation(c: char) -> bool {
+    c.is_ascii_punctuation() && !matches!(c, '\'' | '-' | '=' | '_' | '+' | '`')
+}
+
 impl Router {
-    /// 功能键靠键码，其余靠字符。组句中修饰键 + 数字是快捷键；带 Ctrl / Alt / Win 而没配到快捷键的键归应用。
-    /// 表达式模式里 Shift + 数字打的是 `^ * ( )`，不当快捷键。
+    /// 功能键靠键码，其余靠字符。带 Ctrl / Alt / Win 的键归应用。
+    /// 表达式模式里 Shift + 数字打的是 `^ * ( )`，进算式。
     pub(crate) fn apply_key(&mut self, event: &KeyEvent) -> Effect {
-        if self.composing()
-            && !self.engine.expression_mode()
-            && let Some(digit) = codes::digit_key(event.virtual_key)
-            && let Some(effect) = self.apply_digit_shortcut(digit, event.modifiers.chord())
+        // 成对补全：上一键补上的右半边，紧接着又敲了一次就跳过去（不再插一个）。别的键也会把它作废。
+        if let Some(close) = self.pending_close.take()
+            && event.character == Some(close)
+            && !self.composing()
+            && !event.modifiers.has_command_key()
         {
+            self.caret_shift = 1;
+            return Effect::Changed(None);
+        }
+        if let Some(effect) = self.ctrl_digit(event) {
+            return effect;
+        }
+        if let Some(effect) = self.ctrl_enter(event) {
             return effect;
         }
         if event.modifiers.has_command_key() {
@@ -23,81 +52,75 @@ impl Router {
         let Some(c) = event.character.filter(|c| !c.is_control()) else {
             return self.apply_function_key(event);
         };
-        // Caps 亮着无论中英模式都直接出大写英文；英文候选只在持久英文模式、Caps 灭、应用允许时给。
-        let caps = event.modifiers.caps;
-        let english = caps || event.modifiers.english_mode;
-        let english_candidates = event.modifiers.english_mode
-            && !caps
-            && self.config.english_candidates_in(self.focused_app());
-        // 缓冲区为空时敲 `?` 先进问字模式（配置 `[shortcut] question_mark`，缺省关），中英文模式都行：
-        // 后面跟字母就是在问字，跟别的键就还原成问号。
-        if !self.composing() && c == QUESTION_PREFIX && self.engine.takes_question_mark() {
-            self.engine.set_english_mode(false);
-            self.engine.push(c);
-            return Effect::Changed(None);
-        }
-        // 双拼下 Shift+V / Shift+U 进表达式 / 问字模式（全拼下的 v / u 被音节占了）。
-        if !self.composing() && !english && self.engine.takes_mode_letter(c) {
-            self.engine.set_english_mode(false);
-            self.engine.push(c);
-            return Effect::Changed(None);
-        }
-        let question = self.composing() && self.engine.question_mode();
-        // 英文模式下问字：Caps 让字母以大写送来，按小写收进问题。
-        let c = if question && english && c.is_ascii_uppercase() {
-            c.to_ascii_lowercase()
-        } else {
-            c
-        };
-        // 只有一个 `?` 时敲了字母以外的键：还原成问号上屏；空格只是「把这个 ? 上屏」，其他键按没在组句重新分派。
-        if question && !c.is_ascii_lowercase() && self.engine.bare_question() {
-            let mark = self.restore_bare_question(english);
-            if c == ' ' {
-                return Effect::Changed(Some(mark));
-            }
-            return with_prefix(Some(mark), self.apply_key(event), c);
-        }
-        // 英文组词中候选被关掉（Caps 亮 / 切应用）：敲过的字母先原样上屏。
-        let flushed = (self.composing() && !english_candidates && self.engine.english_mode())
-            .then(|| self.engine.take_raw());
-        self.engine
-            .set_english_mode(english_candidates && !question);
-        let effect = if english && !question {
-            self.apply_english(c, english_candidates, event)
+        let english = event.modifiers.english_mode;
+        if english {
+            self.apply_english(c, event)
         } else {
             self.apply_chinese(c, event)
-        };
-        with_prefix(flushed, effect, c)
+        }
     }
 
-    /// 缓冲区里只有一个 `?`：清掉，还原成问号（按当前模式的全角设置转）。
-    fn restore_bare_question(&mut self, english: bool) -> String {
-        self.engine.clear();
-        if self.full_width_for(english)
-            && let Some(mark) = self.engine.punctuate(QUESTION_PREFIX)
-        {
-            return mark.to_owned();
+    /// Ctrl + 候选数字：用户短语直接上屏（短语没有可杀的学习）；其余中文 / 英文候选「杀掉」——
+    /// 自造词从用户词库整个删掉（下次不再出），词库已有的词清掉对它的用户学习（选择次数、同输入串选择、
+    /// 个人 n-gram 里与它相关的转移），权重回到词库原始词频；然后由调用方重排。
+    /// 没这一格、或这一格既不是短语也不是中文 / 英文候选时返回 `None`，这一键照常交还应用。
+    fn ctrl_digit(&mut self, event: &KeyEvent) -> Option<Effect> {
+        let modifiers = event.modifiers;
+        if !modifiers.ctrl || modifiers.alt || modifiers.win || !self.composing() {
+            return None;
         }
-        self.engine.note_passthrough(QUESTION_PREFIX);
-        QUESTION_PREFIX.to_string()
+        let digit = codes::digit_virtual_key(event.virtual_key)?;
+        let index = self.slot_index(digit)?;
+        let candidate = self.layout_candidate(index)?;
+        if candidate.kind == CandidateKind::Custom {
+            // 短语原样上屏，与敲它的序号一样
+            return Some(Effect::Changed(Some(self.engine.commit(&candidate))));
+        }
+        if candidate.kind == CandidateKind::Sentence {
+            // 整句：先记一次（记够两次收进用户自造词库），再照常上屏
+            let learned = self.engine.remember_sentence(&candidate);
+            tracing::debug!(text = %candidate.text, learned, "Ctrl+数字 上屏整句候选");
+            return Some(Effect::Changed(Some(self.engine.commit(&candidate))));
+        }
+        if !matches!(
+            candidate.kind,
+            CandidateKind::Chinese | CandidateKind::English
+        ) {
+            return None;
+        }
+        let forgotten = self.engine.forget(&candidate);
+        tracing::debug!(text = %candidate.text, ?forgotten, "杀词");
+        self.notice = Some(kill_notice(
+            &candidate.text,
+            forgotten.user_word,
+            forgotten.learning,
+        ));
+        Some(Effect::Changed(None))
+    }
+
+    /// Ctrl + 回车：原样上屏当前字母串（去掉手敲的 `'`），并记一次；同一串记够两次收进自造词库（英文）。
+    /// 没在组句、或不是纯 Ctrl+回车时返回 `None`（交还应用）。
+    fn ctrl_enter(&mut self, event: &KeyEvent) -> Option<Effect> {
+        let modifiers = event.modifiers;
+        if !modifiers.ctrl
+            || modifiers.alt
+            || modifiers.win
+            || event.virtual_key != codes::RETURN
+            || !self.composing()
+        {
+            return None;
+        }
+        Some(Effect::Changed(Some(self.engine.take_raw_english())))
     }
 
     /// 退格 / Esc / 回车 / Tab / 方向键；没在组句时都交还应用。
     fn apply_function_key(&mut self, event: &KeyEvent) -> Effect {
         if !self.composing() {
-            // 回车交给应用：文本流里是一个段落边界（macOS 壳同样记）
+            // 回车交给应用：文本流里是一个段落边界
             if event.virtual_key == codes::RETURN {
                 self.engine.note_passthrough('\n');
             }
             return Effect::Passthrough;
-        }
-        // 只有一个 `?` 时按了回车：回车就是「把这个 ? 上屏」，吞掉，否则聊天框会连消息一起发出去；
-        // 退格 / Esc 照常删掉它。其他功能键 macOS 壳还原后交给应用，Windows 放行同步、上屏异步，
-        // 先动光标再插问号会插错位置，所以还原后一并吞掉。
-        if self.engine.bare_question() && !matches!(event.virtual_key, codes::BACK | codes::ESCAPE)
-        {
-            let english = event.modifiers.caps || event.modifiers.english_mode;
-            return Effect::Changed(Some(self.restore_bare_question(english)));
         }
         match event.virtual_key {
             codes::BACK => {
@@ -105,40 +128,18 @@ impl Router {
                 Effect::Changed(None)
             }
             codes::ESCAPE => {
-                // 辅码态里 Esc 只清码段、拼音留着（与 Core 的 clear_aux 语义一致）
-                if self.engine.in_aux() {
-                    self.engine.clear_aux();
-                } else {
-                    self.engine.clear();
-                }
+                self.engine.clear();
                 Effect::Changed(None)
             }
-            codes::RETURN => {
-                if self.engine.is_zhuyin_mode() {
-                    if event.modifiers.shift {
-                        Effect::Changed(Some(self.engine.take_raw()))
-                    } else {
-                        Effect::Changed(Some(self.commit_highlighted()))
-                    }
-                } else {
-                    Effect::Changed(Some(self.engine.take_raw()))
-                }
-            }
+            codes::RETURN => Effect::Changed(Some(self.engine.take_raw())),
             codes::TAB if event.modifiers.shift => {
                 self.page(-1);
                 Effect::Navigated
             }
-            codes::TAB if self.engine.english_mode() => {
-                Effect::Changed(Some(self.commit_highlighted()))
+            codes::TAB => {
+                self.page(1);
+                Effect::Navigated
             }
-            // 中文模式 Tab：有整句补全就接受，否则下一页。
-            codes::TAB => match self.sentence.take() {
-                Some(sentence) => Effect::Changed(Some(self.engine.accept_prediction(&sentence))),
-                None => {
-                    self.page(1);
-                    Effect::Navigated
-                }
-            },
             codes::DOWN => {
                 self.move_highlight(1);
                 Effect::Navigated
@@ -175,33 +176,19 @@ impl Router {
         }
     }
 
-    /// 中文模式：字母进拼音。缺省 Shift 大写是临时打英文——组句中先把拼音原样上屏、字母交给应用；
-    /// 配 `[general] shift_letter = "compose"` 时大写也收进缓冲区（Core 按小写匹配、原样上屏时还原大小写）。
-    /// 没在组句时的其他字符走全角标点（与 macOS 壳一致，组句中的标点仍进英文直输段）。
+    /// 中文模式：字母进拼音。Shift 敲的大写也收进缓冲区（Core 按小写匹配、原样上屏时还原大小写）；
+    /// Caps Lock 亮着的字母仍然直通给应用（应用自己按大小写位插入；全角字符开着时由我们转全角）。
+    /// 没在组句时的其他字符走全角标点与全角字符（组句中的标点仍进英文直输段）。
     fn apply_chinese(&mut self, c: char, event: &KeyEvent) -> Effect {
-        // 注音模式下数字与 `- ; , . /` 就是键盘上的音节键，跟着进缓冲区。
-        let is_zhuyin_key = self.engine.is_zhuyin_mode()
-            && (c.is_ascii_digit() || matches!(c, '-' | ';' | ',' | '.' | '/'));
-        if c.is_ascii_lowercase()
-            || is_zhuyin_key
-            || (c.is_ascii_uppercase() && self.config.shift_letter_compose)
-        {
-            // 辅码态：字母进码段（逐键即筛），不进拼音缓冲区
-            if c.is_ascii_lowercase() && self.engine.push_aux_code(c) {
+        if c.is_ascii_alphabetic() {
+            if !event.modifiers.caps {
+                self.engine.push(c);
                 return Effect::Changed(None);
             }
-            // 大写（shift_letter_compose）落在辅码态：先清码段回拼音态（与 Esc 同语义）再收进缓冲区；
-            // 码段不清会挂在已变化的缓冲区上继续筛
-            if c.is_ascii_uppercase() && self.engine.in_aux() {
-                self.engine.clear_aux();
-            }
-            self.engine.push(c);
-            return Effect::Changed(None);
-        }
-        if c.is_ascii_uppercase() {
+            // Caps 亮着：组句里的拼音先原样上屏，字母按「全角字符」设置交给应用或由我们插全角形
             let raw = self.composing().then(|| self.engine.take_raw());
             self.engine.note_passthrough(c);
-            return with_prefix(raw, Effect::Passthrough, c);
+            return with_prefix(raw, self.passthrough(c), c);
         }
         if !self.composing() {
             return self.apply_punctuation(c, event);
@@ -209,71 +196,102 @@ impl Router {
         self.apply_printable(c, event)
     }
 
-    /// 当前模式开着全角就让 Core 转（数字后的 `.` 与小键盘的键保持半角）；转不了的原样交给应用并告知 Core。
+    /// 当前模式开着全角就让 Core 转标点（数字后的 `.` 与小键盘的键保持半角）；转不了的原样交给应用并告知 Core。
+    /// 标点的全角 / 半角跟着模式走（英文模式半角、中文模式全角），Caps Lock 不参与；标点没转的再看「全角字符」。
+    /// 中文模式先走配置里的符号映射（`[input] punctuation_marks_mapping`），小键盘的键只认里面的 `{kp}` 条目。
     fn apply_punctuation(&mut self, c: char, event: &KeyEvent) -> Effect {
-        let english = event.modifiers.caps || event.modifiers.english_mode;
-        if !codes::is_keypad(event.virtual_key)
-            && self.full_width_for(english)
+        let english = event.modifiers.english_mode;
+        let keypad = codes::is_keypad(event.virtual_key);
+        if !english && let Some(mapped) = self.engine.map_symbol(c, keypad) {
+            // 两键规则要把上一个键的输出换掉
+            self.delete_before = mapped.delete_before;
+            return self.complete_pair(c, mapped.text);
+        }
+        if !keypad
+            && self.full_width_punctuation_for(english)
             && let Some(text) = self.engine.punctuate(c)
         {
-            return Effect::Changed(Some(text.to_owned()));
+            return self.complete_pair(c, text);
         }
         self.engine.note_passthrough(c);
-        Effect::Passthrough
+        // 没转换的左半边也要补全：半角标点模式下 `(` 不走全角表，`{` 这类干脆不在表里，
+        // 它们的成对补全（`()`、`{}`）只能在这条路上做。中文模式才补——英文模式是纯直通，
+        // 编辑器自己的括号配对比我们更懂上下文，别去抢。
+        if !english
+            && !keypad
+            && let Some(close) = pairwise_completion(self.config.pairwise_completion, c)
+        {
+            return self.insert_pair(c, c, close);
+        }
+        self.passthrough(c)
     }
 
-    /// 英文模式。开着候选：字母进缓冲区，选词与中文模式一样（空格选高亮、数字选当前页第 N 个、翻页键翻页），
-    /// 词上屏后空格照样交给应用；数字对应的格子没有候选（词表没有的词、候选不足 N 个）时是标识符的一部分（`foo1`）。
-    /// 回车 / 标点先把字母原样上屏。关着候选：字母由我们插入（大小写按 Shift）。
-    /// 其他键按英文模式那份全角设置转，转不了的交给应用。
-    fn apply_english(&mut self, c: char, candidates: bool, event: &KeyEvent) -> Effect {
-        let composing = self.composing();
-        if !candidates {
-            let raw = composing.then(|| self.engine.take_raw());
-            let effect = if c.is_ascii_alphabetic() {
-                self.engine.note_passthrough(c);
-                Effect::Changed(Some(c.to_string()))
-            } else {
-                self.apply_punctuation(c, event)
-            };
-            return with_prefix(raw, effect, c);
+    /// 成对补全（`[input] punctuation_marks_pairwise_completion`）：`text` 是开了补全的左半边时，
+    /// 连右半边一起上屏、把光标停在中间（`caret_shift = -1`）；左半边就是右半边的那种（引号）不记跳过。
+    fn complete_pair(&mut self, typed: char, text: String) -> Effect {
+        let mut chars = text.chars();
+        let (Some(open), None) = (chars.next(), chars.next()) else {
+            return Effect::Changed(Some(text));
+        };
+        // 转换后是开符号（`（`、`“`）就按它补；转成了收符号或别的（`’`、`》` 这种——引号交替、
+        // 半角标点都会给出）就退回按**敲的那个键**补 ASCII 的一对，否则 `''`、`<>` 在中文模式下
+        // 永远补不上（真机上报过）。
+        let open = match pairwise_completion(self.config.pairwise_completion, open) {
+            Some(_) => open,
+            None => typed,
+        };
+        match pairwise_completion(self.config.pairwise_completion, open) {
+            Some(close) => self.insert_pair(typed, open, close),
+            None => Effect::Changed(Some(text)),
         }
-        if composing
-            && let Some(digit) = codes::digit(event)
-            && let Some(index) = self.slot_index(digit)
-        {
-            return Effect::Changed(self.commit_index(index));
+    }
+
+    /// 把 `open` 与配对的 `close` 一起上屏、光标停在中间；记下用户再敲一次右半边时跳过。
+    fn insert_pair(&mut self, typed: char, open: char, close: char) -> Effect {
+        // 用户下一键会敲的是键盘上那个键（中文全角下敲 `(` 上屏 `（`，配对的还是 `)`）
+        let keyboard_close = keyboard_close(close);
+        self.pending_close = (keyboard_close != typed).then_some(keyboard_close);
+        self.caret_shift = -1;
+        Effect::Changed(Some(format!("{open}{close}")))
+    }
+
+    /// 英文模式：纯直通，不出候选，字母直接交应用上屏（`eats_key` 那边也放行，应用自己插）。
+    /// 缓冲区里还留着上一段拼音时先把它原样上屏，连同这个字母一起由我们插入——Windows 放行是同步的、
+    /// 上屏走异步编辑会话，分两步会让应用先插字母再插词。其他键按英文模式那份全角设置转，转不了的交给应用。
+    /// 「全角字符」开着时字母也走 [`Self::passthrough`]：DLL 那边会把它们吃掉送来，这里插全角形。
+    fn apply_english(&mut self, c: char, event: &KeyEvent) -> Effect {
+        let raw = self.composing().then(|| self.engine.take_raw());
+        let effect = if c.is_ascii_alphabetic() {
+            self.engine.note_passthrough(c);
+            self.passthrough(c)
+        } else {
+            self.apply_punctuation(c, event)
+        };
+        with_prefix(raw, effect, c)
+    }
+
+    /// 本来要直通给应用的一个可见字符：转全角得由我们插（`Changed` 带上转换后的字），不然应用自己插原字符。
+    fn passthrough(&self, c: char) -> Effect {
+        match self.full_width_char(c) {
+            Some(full) => Effect::Changed(Some(full.to_string())),
+            None => Effect::Passthrough,
         }
-        if c.is_ascii_alphabetic()
-            || (composing && (c.is_ascii_digit() || matches!(c, '_' | '\'' | '-')))
-        {
-            self.engine.push(c);
-            return Effect::Changed(None);
+    }
+
+    /// 「全角字符」开着时这个直通字符的全角形；关着或没有全角形为 `None`。
+    fn full_width_char(&self, c: char) -> Option<char> {
+        if self.config.full_width_chars {
+            char_width::full_width(c)
+        } else {
+            None
         }
-        if composing && let Some(step) = codes::page_key(event, self.config.page_keys) {
-            self.page(step);
-            return Effect::Navigated;
-        }
-        let committed = composing.then(|| {
-            if c == ' ' {
-                self.commit_highlighted()
-            } else {
-                self.engine.take_raw()
-            }
-        });
-        let effect = self.apply_punctuation(c, event);
-        with_prefix(committed, effect, c)
     }
 
     /// 组句中的可打印键：数字选当前页第 N 个（没有这一格就进直输段），翻页键翻页，空格上屏高亮，其余进英文直输段；已在直输段里就一律追加。
-    /// 表达式模式（`v1+2`）里数字和运算符进算式；问字模式敲的还可能是码点（`u4e00`、`u+1f600`），数字与 `+` 进缓冲区；
-    /// 微软 / 搜狗双拼的 `;` 是 ing 键，末尾有落单声母时进缓冲区。
+    /// 表达式模式（`v1+2`）里数字和运算符进算式。
     fn apply_printable(&mut self, c: char, event: &KeyEvent) -> Effect {
         let expression = self.engine.expression_mode();
-        if (expression && shortcut::is_expression_char(c))
-            || (self.engine.unicode_entry() && (c.is_ascii_digit() || c == '+'))
-            || (c == ';' && self.engine.takes_semicolon())
-        {
+        if expression && shortcut::is_expression_char(c) {
             self.engine.push(c);
             return Effect::Changed(None);
         }
@@ -290,45 +308,32 @@ impl Router {
                 return Effect::Changed(None);
             }
         }
-        // 辅码触发键：拼音打完整了、这个键也没被键盘方案吃掉 → 进辅码态（触发键不进缓冲区）
-        if self.engine.aux_trigger(c) {
-            self.engine.enter_aux();
-            return Effect::Changed(None);
-        }
-        // 已经在辅码态里再敲触发键是幂等的，既不上屏候选也不当标点
-        if self.engine.in_aux() && c == self.config.aux_code_key {
-            return Effect::Changed(None);
-        }
-        // 码段筛空（例如码敲错一个字母）：空格 / 标点 / 数字都不上屏原始拼音，吞掉停在辅码态等退格
-        if self.engine.in_aux() && !self.engine.aux_code().is_empty() && self.candidate_count() == 0
-        {
-            return Effect::Changed(None);
-        }
         if let Some(digit) = codes::digit(event)
-            && (!self.engine.is_zhuyin_mode() || self.navigated)
+            && let Some(index) = self.slot_index(digit)
         {
-            if let Some(index) = self.slot_index(digit) {
-                return Effect::Changed(self.commit_index(index));
-            }
-            // 问字模式里数字不是问题的一部分：没有这一格就不算
-            if self.engine.question_mode() {
-                return Effect::Changed(None);
-            }
+            return Effect::Changed(self.commit_index(index));
         }
-        if let Some(step) = codes::page_key(event, self.config.page_keys) {
+        if let Some(step) = codes::page_key(event) {
             self.page(step);
             return Effect::Navigated;
         }
         if c == ' ' {
-            if self.engine.zhuyin_needs_tone() {
-                self.engine.push(c);
-                return Effect::Changed(None);
-            }
             return Effect::Changed(Some(self.commit_highlighted()));
         }
-        // 表达式 / 问字模式下的其他字符不进缓冲区（与 macOS 壳一致），辅码态里敲标点同理（码段随之清空）：
-        // 都是先把高亮候选上屏，再按没在组句处理这个键、标点按组句外语义转全角
-        if (c != '\'' && (expression || self.engine.question_mode())) || self.engine.in_aux() {
+        // 表达式模式下的其他字符不进缓冲区：先把高亮候选上屏，再按没在组句处理这个键、标点按组句外语义转全角
+        if c != '\'' && expression {
+            let committed = self.commit_highlighted();
+            let effect = self.apply_punctuation(c, event);
+            return with_prefix(Some(committed), effect, c);
+        }
+        // 反引号：候选里有英文词时轮换英文候选的大小写（原样 → 全大写 → 首字母大写），不上屏标点
+        if c == '`' && self.has_english_candidate() {
+            self.engine.cycle_english_case();
+            return Effect::Changed(None);
+        }
+        // 组句里敲标点：先把高亮候选上屏，再按「没在组句」处理这一键（走符号映射 / 全角标点 / 成对补全）。
+        // `-` / `=` 是翻页键（上面已处理），`_` / `+` 与 `'` 由 [`is_commit_punctuation`] 排除，仍进缓冲区。
+        if is_commit_punctuation(c) {
             let committed = self.commit_highlighted();
             let effect = self.apply_punctuation(c, event);
             return with_prefix(Some(committed), effect, c);
@@ -338,11 +343,18 @@ impl Router {
     }
 
     /// 数字键在当前页对应的格子下标；这一页没有这一格（`gpt6` 只有三个候选）返回 `None`，数字当内容进缓冲区。
-    /// 云端词还没到的占位格算有：按了不算，免得结果一到就选错。
     fn slot_index(&self, digit: usize) -> Option<usize> {
         let page_size = self.config.page_size;
         let index = self.highlight / page_size * page_size + digit - 1;
         (digit <= page_size && index < self.candidate_count()).then_some(index)
+    }
+
+    /// 当前候选里有没有英文词（反引号轮换大小写只在有英文候选时生效）。
+    fn has_english_candidate(&self) -> bool {
+        (0..self.candidate_count()).any(|index| {
+            self.layout_candidate(index)
+                .is_some_and(|candidate| candidate.kind == CandidateKind::English)
+        })
     }
 
     /// 上屏高亮候选；没有候选时缓冲原样上屏。
@@ -355,5 +367,22 @@ impl Router {
 
     fn composing(&self) -> bool {
         !self.engine.composition().is_empty()
+    }
+}
+
+/// 杀词后候选窗状态行上的提示。
+fn kill_notice(text: &str, user_word: bool, learning: bool) -> String {
+    let preview: String = text.chars().take(12).collect();
+    let preview = if text.chars().count() > 12 {
+        format!("{preview}…")
+    } else {
+        preview
+    };
+    if user_word {
+        format!("已删掉自造词「{preview}」")
+    } else if learning {
+        format!("已重置「{preview}」的权重")
+    } else {
+        format!("「{preview}」没有可清除的学习")
     }
 }

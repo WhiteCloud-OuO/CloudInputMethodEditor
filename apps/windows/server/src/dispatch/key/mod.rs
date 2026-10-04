@@ -1,12 +1,9 @@
-//! 按键处理：键码 / 字符解析在 [`codes`]，分流在 [`input`]，「修饰键 + 数字」快捷键在 [`shortcut`]，
-//! 一次按键的结果是 [`Effect`]。
+//! 按键处理：键码 / 字符解析在 [`codes`]，分流在 [`input`]，一次按键的结果是 [`Effect`]。
 
 mod codes;
 mod effect;
 mod input;
-mod shortcut;
 
-pub(super) use self::codes::{ESCAPE, RETURN};
 pub(super) use self::effect::Effect;
 
 /// 把先行上屏的文本接到本次结果前面。Windows 放行是同步的、上屏走异步编辑会话，

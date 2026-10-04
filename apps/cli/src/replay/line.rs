@@ -1,7 +1,7 @@
-use qingjian_core::InputLogEntry;
+use cloudime_core::InputLogEntry;
 use serde::Deserialize;
 
-/// 日志文件里的一行：时间戳 + 条目。与 `qingjian-learning` 写出的格式对应。
+/// 日志文件里的一行：时间戳 + 条目。与 `cloudime-learning` 写出的格式对应。
 #[derive(Debug, Deserialize)]
 pub struct Line {
     /// 本机时间戳，回放不用。
@@ -16,7 +16,7 @@ pub struct Line {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use qingjian_core::InputSource;
+    use cloudime_core::InputSource;
 
     #[test]
     fn parses_commit_and_retract_lines() {

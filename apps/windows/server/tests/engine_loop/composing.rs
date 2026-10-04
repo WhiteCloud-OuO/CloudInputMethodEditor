@@ -165,59 +165,83 @@ fn commit_from_other_session_does_not_take_buffer() {
 }
 
 #[test]
-fn page_keys_follow_config() {
-    // 每页 1 条保证多页；翻页键改成 `,` `.`。
+fn page_keys_are_fixed_to_minus_and_equals() {
+    // 每页 1 条保证多页；固定的翻页键是主键盘 `-` 上一页、`=` 下一页。
     let mut router = router_with(RouterConfig {
         page_size: 1,
-        page_keys: (',', '.'),
         ..RouterConfig::default()
     });
     let (_, _, frame) = type_letters(&mut router, "ni");
     assert!(frame.page_count > 1, "样例词库里 ni 应不止一个候选");
     assert_eq!(frame.page, 0);
 
-    let key = |router: &mut Router, c| {
+    let minus = |router: &mut Router| {
         key_result(router.handle(ClientMessage::Key {
             session: SESSION,
-            event: punct(c),
+            event: KeyEvent::new(0xBD, Some('-'), Default::default()),
         }))
     };
-    let (outcome, commit, frame) = key(&mut router, '.');
+    let equals = |router: &mut Router| {
+        key_result(router.handle(ClientMessage::Key {
+            session: SESSION,
+            event: KeyEvent::new(0xBB, Some('='), Default::default()),
+        }))
+    };
+    let (outcome, commit, frame) = equals(&mut router);
     assert_eq!((outcome, commit), (KeyOutcome::Consumed, None));
-    assert_eq!(frame.page, 1, "`.` 应翻到下一页");
-    let (_, _, frame) = key(&mut router, ',');
-    assert_eq!(frame.page, 0, "`,` 应翻回上一页");
-    // 缺省的 `]` 此时不再翻页，进直输段。
-    let (_, _, frame) = key(&mut router, ']');
-    assert_eq!(frame.page, 0);
-    assert!(
-        preedit(&frame).contains(']'),
-        "`]` 应进直输段：{}",
-        preedit(&frame)
+    assert_eq!(frame.page, 1, "`=` 应翻到下一页");
+    let (_, _, frame) = minus(&mut router);
+    assert_eq!(frame.page, 0, "`-` 应翻回上一页");
+
+    // 逗号句号、方括号都不再翻页：先把高亮候选上屏，再按组句外语义处理这个标点（转全角）。
+    let (outcome, commit, frame) = press(&mut router, punct(','));
+    assert_eq!(
+        (outcome, commit.as_deref()),
+        (KeyOutcome::Consumed, Some("你，"))
     );
+    assert_eq!(frame.page, 0);
+    assert!(preedit(&frame).is_empty(), "标点把整段拼音一起上屏了");
+    type_letters(&mut router, "ni");
+    let (outcome, commit, frame) = press(&mut router, punct(']'));
+    assert_eq!(
+        (outcome, commit.as_deref()),
+        (KeyOutcome::Consumed, Some("你】"))
+    );
+    assert_eq!(frame.page, 0);
+    assert!(preedit(&frame).is_empty(), "标点把整段拼音一起上屏了");
 }
 
 #[test]
-fn minus_equals_page_keys_preserve_expression_input() {
+fn minus_and_equals_page_keys_preserve_expression_input() {
     let mut router = router_with(RouterConfig {
         page_size: 1,
-        page_keys: ('-', '='),
         ..RouterConfig::default()
     });
     let (_, _, frame) = type_letters(&mut router, "ni");
     assert!(frame.page_count > 1);
-    let (outcome, commit, frame) = press(&mut router, punct('='));
+    let (outcome, commit, frame) = press(
+        &mut router,
+        KeyEvent::new(0xBB, Some('='), Default::default()),
+    );
     assert_eq!((outcome, commit), (KeyOutcome::Consumed, None));
     assert_eq!(frame.page, 1);
     assert_eq!(preedit(&frame), "ni");
-    let (_, _, frame) = press(&mut router, punct('-'));
+    let (_, _, frame) = press(
+        &mut router,
+        KeyEvent::new(0xBD, Some('-'), Default::default()),
+    );
     assert_eq!(frame.page, 0);
     assert_eq!(preedit(&frame), "ni");
     press(&mut router, KeyEvent::new(0x1B, None, Default::default()));
 
     type_letters(&mut router, "v");
     for c in "2-1=".chars() {
-        let (outcome, commit, _) = press(&mut router, punct(c));
+        let event = match c {
+            '-' => KeyEvent::new(0xBD, Some('-'), Default::default()),
+            '=' => KeyEvent::new(0xBB, Some('='), Default::default()),
+            _ => punct(c),
+        };
+        let (outcome, commit, _) = press(&mut router, event);
         assert_eq!((outcome, commit), (KeyOutcome::Consumed, None));
     }
     let (outcome, commit, _) = press(&mut router, punct(' '));
@@ -228,37 +252,34 @@ fn minus_equals_page_keys_preserve_expression_input() {
 }
 
 #[test]
-fn shift_uppercase_while_composing_commits_raw_first() {
-    let mut router = router();
-    type_letters(&mut router, "ni");
-    // 中文模式按住 Shift 打大写字母：拼音原样上屏，字母跟在后面一起插。
+fn shift_uppercase_joins_the_composition() {
     let shifted = KeyModifiers {
         shift: true,
         ..KeyModifiers::default()
     };
-    let (outcome, commit, frame) = press(&mut router, letter_with('A', shifted));
-    assert_eq!(
-        (outcome, commit.as_deref()),
-        (KeyOutcome::Consumed, Some("niA"))
-    );
-    assert!(frame.is_empty());
-    // 没在组句时大写字母交给应用。
-    let (outcome, commit, _) = press(&mut router, letter_with('A', shifted));
-    assert_eq!((outcome, commit), (KeyOutcome::Passthrough, None));
+
+    // 组句中：收进组句缓冲区（匹配时按小写），拼音行按敲的样子显示
+    let mut composing = router();
+    type_letters(&mut composing, "ni");
+    let (outcome, commit, frame) = press(&mut composing, letter_with('A', shifted));
+    assert_eq!((outcome, commit.as_deref()), (KeyOutcome::Consumed, None));
+    assert_eq!(preedit(&frame), "niA");
+
+    // 没在组句时也一样：起一段新的组句，不再把字母交给应用
+    let mut idle = router();
+    let (outcome, commit, frame) = press(&mut idle, letter_with('A', shifted));
+    assert_eq!((outcome, commit.as_deref()), (KeyOutcome::Consumed, None));
+    assert_eq!(preedit(&frame), "A");
 }
 
 #[test]
 fn learning_data_persists_to_user_dir() {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let user_dir =
-        std::env::temp_dir().join(format!("qingjian-windows-learning-{}", std::process::id()));
+        std::env::temp_dir().join(format!("cloudime-windows-learning-{}", std::process::id()));
     let _ = std::fs::remove_dir_all(&user_dir);
     std::fs::create_dir_all(&user_dir).unwrap();
     let engine = assembly::assemble(&AssemblySpec {
-        glossary: Some((
-            Language::English,
-            root.join("assets/sample/glossary-en.tsv"),
-        )),
         user_dir: Some(user_dir.clone()),
         ..AssemblySpec::new(root.join("assets/sample/dict.tsv"))
     })
@@ -329,27 +350,4 @@ fn digit_without_a_slot_joins_the_buffer() {
     let first = frame.candidates.items[0].text.clone();
     let (_, commit, _) = press(&mut router, digit(1));
     assert_eq!(commit, Some(first));
-}
-
-/// 双拼「输入框显示原始按键」：发给 DLL 的帧是敲的键、光标按键数算，自绘窗的拼音行照旧全拼。
-#[test]
-fn shuangpin_raw_preedit_goes_to_the_app_and_full_pinyin_to_the_window() {
-    let mut router = router_with(RouterConfig {
-        scheme: Scheme::Shuangpin(ShuangpinScheme::Xiaohe),
-        ..RouterConfig::default()
-    });
-    router.engine_mut().set_shuangpin_raw_preedit(true);
-    let sink = RecordingCandidates::default();
-    router.set_candidate_sink(Box::new(sink.clone()));
-    type_letters(&mut router, "kdfa");
-    let _ = router.handle(ClientMessage::PositionCandidates {
-        session: SESSION,
-        rect: rect(),
-    });
-    press(&mut router, function_key(0x25));
-    let (_, _, frame) = press(&mut router, function_key(0x25));
-    assert_eq!((preedit(&frame).as_str(), frame.cursor), ("kdfa", 2));
-    let shown = sink.0.lock().unwrap();
-    let last = shown.last().expect("自绘窗收到过帧");
-    assert_eq!((preedit(last).as_str(), last.cursor), ("kai'fa", 3));
 }

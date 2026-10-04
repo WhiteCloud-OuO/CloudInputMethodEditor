@@ -1,10 +1,9 @@
-use qingjian_dictionary::DictionaryError;
-use qingjian_learning::LearningError;
-use qingjian_lm::LmError;
-use qingjian_neural::NeuralError;
-use qingjian_platform::ConfigError;
-use qingjian_predict::PredictError;
-use qingjian_translate::GlossaryError;
+//! CLI 的错误类型：词库、语言模型、神经重排、配置、学习、回放、评测与调参各自的错误。
+use cloudime_dictionary::DictionaryError;
+use cloudime_learning::LearningError;
+use cloudime_lm::LmError;
+use cloudime_neural::NeuralError;
+use cloudime_platform::ConfigError;
 #[derive(Debug, thiserror::Error)]
 pub enum CliError {
     #[error(transparent)]
@@ -14,20 +13,10 @@ pub enum CliError {
     Neural(#[from] NeuralError),
 
     #[error(transparent)]
-    Glossary(#[from] GlossaryError),
-
-    #[error(transparent)]
     Learning(#[from] LearningError),
-
-    /// 学习语言不是 en / ja / es。
-    #[error("learning language must be en, ja or es, got {0:?}")]
-    Language(String),
 
     #[error(transparent)]
     Config(#[from] ConfigError),
-
-    #[error(transparent)]
-    Predict(#[from] PredictError),
 
     #[error(transparent)]
     LanguageModel(#[from] LmError),

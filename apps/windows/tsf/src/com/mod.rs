@@ -35,22 +35,24 @@ use windows::Win32::System::SystemServices::DLL_PROCESS_ATTACH;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::core::{BOOL, GUID, HRESULT, HSTRING, Interface};
 
-use qingjian_platform::protocol::SessionId;
+use cloudime_platform::protocol::SessionId;
 
 /// 文本服务的 CLSID。注册表 InprocServer32、TSF profile、[`DllGetClassObject`] 都认它。
-pub(crate) const CLSID_QINGJIAN: GUID = GUID::from_u128(0x4fdca82d_e923_49bf_9e75_bb906b93b8bb);
+pub(crate) const CLSID_CLOUDIME: GUID = GUID::from_u128(0x50020ac6_80fe_4709_bc25_a173b14a6e7f);
 
-/// [`CLSID_QINGJIAN`] 的注册表字符串形式，两者必须同步改。
-pub(crate) const CLSID_QINGJIAN_STR: &str = "{4FDCA82D-E923-49BF-9E75-BB906B93B8BB}";
+/// [`CLSID_CLOUDIME`] 的注册表字符串形式，两者必须同步改。
+pub(crate) const CLSID_CLOUDIME_STR: &str = "{50020AC6-80FE-4709-BC25-A173B14A6E7F}";
 
 /// 语言 profile 的 GUID。
-pub(crate) const GUID_PROFILE: GUID = GUID::from_u128(0x8119f8e0_cf81_423b_9189_c0d7374324b3);
+pub(crate) const GUID_PROFILE: GUID = GUID::from_u128(0xe2a93289_5e91_46bc_bac1_62d4945dcd7b);
 
 /// zh-CN。
 pub(crate) const LANGID_ZH_CN: u16 = 0x0804;
 
 /// 输入法在系统里显示的名字。
-pub(crate) const SERVICE_DESCRIPTION: &str = "青简";
+pub(crate) const SERVICE_DESCRIPTION: &str = "云朵输入法";
+/// 构建标记：DLL 被加载 / 激活时写进日志，用来确认应用进程里装的是哪一版。
+pub(crate) const BUILD_STAMP: &str = "2026-10-02 显示名恢复为云朵输入法 v12";
 
 /// 存活的 COM 对象 + LockServer 计数，[`DllCanUnloadNow`] 据它判断能否卸载。
 static DLL_REFERENCES: AtomicIsize = AtomicIsize::new(0);
@@ -103,7 +105,7 @@ extern "system" fn DllGetClassObject(
     if rclsid.is_null() || riid.is_null() || ppv.is_null() {
         return E_FAIL;
     }
-    if unsafe { *rclsid } != CLSID_QINGJIAN {
+    if unsafe { *rclsid } != CLSID_CLOUDIME {
         return CLASS_E_CLASSNOTAVAILABLE;
     }
     let factory: IClassFactory = factory::ClassFactory.into();
@@ -142,7 +144,7 @@ extern "system" fn DllUnregisterServer() -> HRESULT {
 extern "system" fn DllMain(hinst: HINSTANCE, reason: u32, _reserved: *mut c_void) -> BOOL {
     if reason == DLL_PROCESS_ATTACH {
         DLL_MODULE.store(hinst.0, Ordering::SeqCst);
-        log::log("DllMain: DLL_PROCESS_ATTACH");
+        log::log(&format!("DllMain: DLL_PROCESS_ATTACH 构建={BUILD_STAMP}"));
     }
     true.into()
 }

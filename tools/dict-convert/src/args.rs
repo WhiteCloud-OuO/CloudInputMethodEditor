@@ -2,17 +2,14 @@ use std::path::PathBuf;
 
 use clap::{Parser, Subcommand, ValueEnum};
 
-use crate::mmh::MmhReferenceOptions;
-use crate::stroke::StrokeOptions;
-
 #[derive(Debug, Parser)]
 #[command(
-    name = "qingjian-dict-convert",
-    about = "把第三方词库 / 词典转换成青简的 TSV，或把 TSV 打包成 .qj"
+    name = "cloudime-dict-convert",
+    about = "把第三方词库 / 词典转换成云朵输入法的 TSV，或把 TSV 打包成 .qj"
 )]
 pub struct Args {
     /// 输出目录
-    #[arg(long, default_value = "data/generated")]
+    #[arg(long, default_value = "WordBank")]
     pub out_dir: PathBuf,
 
     #[command(subcommand)]
@@ -21,7 +18,7 @@ pub struct Args {
 
 #[derive(Debug, Subcommand)]
 pub enum Command {
-    /// 青简基础词库：从「输入法字词库_分类整理版」数据包 + Unihan 读音建 dict.tsv（两遍跑，见模块文档）
+    /// 云朵基础词库：从「输入法字词库_分类整理版」数据包 + Unihan 读音建 dict.tsv（两遍跑，见模块文档）
     Lexicon {
         /// 数据包目录（含 01_characters / 02_common / 03_domains），随仓库放在 assets/lexicon
         #[arg(long, default_value = "assets/lexicon")]
@@ -31,7 +28,7 @@ pub enum Command {
         #[arg(long, default_value = "data/unihan/Unihan_Readings.txt")]
         unihan: PathBuf,
 
-        /// LLM 标注的多音字词读音（`gloss-gen pinyin` 的 JSONL）
+        /// 多音字词读音标注（JSONL，一行一个词）
         #[arg(long)]
         pinyin: Option<PathBuf>,
 
@@ -39,7 +36,7 @@ pub enum Command {
         #[arg(long)]
         frequency: Option<PathBuf>,
 
-        /// 把仍靠猜读音的多音字词写到这个文件（一行一个），交给 `gloss-gen pinyin`
+        /// 把仍靠猜读音的多音字词写到这个文件（一行一个），交给外部标注工具
         #[arg(long)]
         emit_ambiguous: Option<PathBuf>,
 
@@ -50,26 +47,6 @@ pub enum Command {
         /// 领域词在语料里出现不少于这个次数就留在基础词库，否则拆到 dicts/<领域>.qj
         #[arg(long, default_value_t = 50)]
         domain_keep_min: u64,
-    },
-
-    /// 形码码表（五笔）：Rime `.dict.yaml` → `词\t编码\t词频`。词频由青简词库按词面回填，不用码表自带的权重
-    Wubi {
-        /// 输入的 Rime 码表（`.dict.yaml`，如极点 86 五笔）
-        input: PathBuf,
-
-        /// 词频来源：青简词库 TSV（`词\t拼音\t词频`）。可给多个（基础词库 + 随包领域词库），同一个词取词频最大的那份
-        #[arg(long, default_value = "assets/lexicon/dict.tsv", num_args = 1..)]
-        frequency: Vec<PathBuf>,
-
-        /// 输出文件名（写在 --out-dir 下）
-        #[arg(long, default_value = "wubi86.tsv")]
-        name: String,
-    },
-
-    /// CC-CEDICT `cedict_ts.u8` → glossary-en.tsv
-    Cedict {
-        /// 输入文件
-        input: PathBuf,
     },
 
     /// 英文词表（每行 `词\t编码[\t…]`，带不带表头都行，比如 `assets/lexicon/05_english/00_all_words.tsv`）→ english.tsv
@@ -83,24 +60,13 @@ pub enum Command {
         frequency: Option<PathBuf>,
     },
 
-    /// Unicode CLDR emoji annotations（`annotations/<语言>/annotations.json`、`annotationsDerived/…`）→ emoji-<语言>.tsv：`词\temoji …`
-    Emoji {
-        /// 输入的 JSON 文件
-        #[arg(required = true)]
-        inputs: Vec<PathBuf>,
-
-        /// 语言代码，决定输出文件名（zh → emoji-zh.tsv，en → emoji-en.tsv）
-        #[arg(long, default_value = "zh")]
-        language: String,
-    },
-
     /// 纯文本语料（每行一段）→ lm-unigram.tsv + lm-bigram.tsv：按词库分词后统计词级一元 / 二元计数
     Bigram {
         /// 语料文件（UTF-8 纯文本，简体）
         #[arg(required = true)]
         corpus: Vec<PathBuf>,
 
-        /// 分词用的词库（青简 TSV）；同目录 dicts/ 下的领域词库会一并用于分词（词表与拆分前一致）
+        /// 分词用的词库（云朵 TSV）；同目录 dicts/ 下的领域词库会一并用于分词（词表与拆分前一致）
         #[arg(long, default_value = "data/generated/dict.tsv")]
         dict: PathBuf,
 
@@ -122,7 +88,7 @@ pub enum Command {
         max_bigrams: usize,
     },
 
-    /// 从语料里挖词库没收的词：分词时被拆成连续单字的段按子串计数，出现够多的写到 oov-candidates.tsv（再交给 gloss-gen pinyin 标音、lexicon --extra-words 并入）
+    /// 从语料里挖词库没收的词：分词时被拆成连续单字的段按子串计数，出现够多的写到 oov-candidates.tsv（标注读音后交给 `lexicon --extra-words` 并入）
     Mine {
         /// 语料文件（UTF-8 纯文本，简体）；给了 --candidates 就不用扫语料
         #[arg(required_unless_present = "candidates")]
@@ -140,7 +106,7 @@ pub enum Command {
         #[arg(long)]
         candidates: Option<PathBuf>,
 
-        /// 分词用的词库（青简 TSV）
+        /// 分词用的词库（云朵 TSV）
         #[arg(long, default_value = "assets/lexicon/dict.tsv")]
         dict: PathBuf,
 
@@ -163,7 +129,7 @@ pub enum Command {
         #[arg(long, default_value = "data/corpus/lccc.txt")]
         dialogue: PathBuf,
 
-        /// 分词与成分读音用的词库（青简 TSV，同目录 dicts/ 一并读）
+        /// 分词与成分读音用的词库（云朵 TSV，同目录 dicts/ 一并读）
         #[arg(long, default_value = "data/generated/dict.tsv")]
         dict: PathBuf,
 
@@ -180,39 +146,17 @@ pub enum Command {
         max_chars: usize,
     },
 
-    /// 笔画表：CNS11643 全字庫「筆順資料」+ 大陆序覆盖表 → `codes/stroke.tsv`（随包笔画码表的源数据，见模块文档）。
-    /// 参数的 clap 定义在 `stroke::StrokeOptions`，加参数只动那一处
-    Stroke(StrokeOptions),
-
-    /// 笔画对照表：从 hanzi-writer-data（Make Me a Hanzi；Arphic 许可，不进仓库）生成 `stroke --verify`
-    /// 用的两张开发期对照表到 `data/mmh/`（笔画数、首笔几何类别，见模块文档与 assets/stroke/README.md）
-    MmhReference(MmhReferenceOptions),
-
-    /// 把 TSV 打包成 `.qj` 容器（mmap 直接用，启动近零耗时）：`dict` 读 dict.tsv 写 dict.qj，`lm` 读 lm-unigram/bigram.tsv 写 lm.qj，
-    /// `glossary --language en` 读 glossary-en.tsv 写 glossary-en.qj；`model` 把训练仓库导出的三件套目录（缺省 data/model）
-    /// 打成一个 model.qjm（`--out-dir data/model` 就写回原目录，随包只带这一个文件）；
-    /// `codes` 是唯一不「原样落盘」的一种：读笔画表与词库，按取码规则算成本地码表 codes/stroke.qj（见 codes 模块）
+    /// 把 TSV 打包成词库存档 / `.qj` 容器：`dict` 读一个 TSV 写单份中文 `.db`，`lm` 读 lm-unigram/bigram.tsv 写 lm.qj；
+    /// `model` 把训练仓库导出的三件套目录（缺省 data/local_models）打成一个 model.qjm（`--out-dir data/local_models` 就写回原目录，随包带该目录下的全部 `*.qjm`）
     Pack {
         /// 打包哪种数据
-        kind: PackKind,
+        kind: DataKind,
 
-        /// 输入文件；`dict` 一个 TSV，`lm` 两个（一元表、二元表），`model` 一个目录。缺省从输出目录里找同名 TSV（`model` 缺省 data/model）
+        /// 输入文件；`dict` 一个 TSV，`lm` 两个（一元表、二元表），`model` 一个目录。缺省从输出目录里找同名 TSV（`model` 缺省 data/local_models）
         #[arg(long, num_args = 1..)]
         input: Vec<PathBuf>,
 
-        /// `codes` 用：笔画表（`stroke` 子命令的产物，`字\t序列`）；缺省 <输出目录>/codes/stroke.tsv
-        #[arg(long)]
-        stroke: Option<PathBuf>,
-
-        /// `codes` 用：取码用的词库（`.qj` 或 TSV）；缺省 <输出目录>/dict.qj
-        #[arg(long)]
-        dict: Option<PathBuf>,
-
-        /// `codes` 用：码表产物；缺省 <输出目录>/codes/stroke.qj
-        #[arg(long)]
-        output: Option<PathBuf>,
-
-        /// 元数据：名称（`codes` 缺省「笔画」，别的种类必填）
+        /// 元数据：名称（必填）
         #[arg(long, default_value = "")]
         name: String,
 
@@ -231,41 +175,86 @@ pub enum Command {
         /// 元数据：数据版本（上游版本号或日期）
         #[arg(long, default_value = "")]
         data_version: String,
+    },
 
-        /// `glossary` 专用：释义表的语言代码（en / ja / zh / es），决定输出文件名 glossary-<语言>.qj
-        #[arg(long, default_value = "en")]
-        language: String,
+    /// 合并中文 / 英文 / 品牌 / 中英混杂词源，写出 7 张表的 `WordBank\Dict.db`（引擎按语言与稀有度分流加载）；
+    /// 同一 `(词, 拼音, 语言)` 重复的先去重（权重大的胜出）再按判据归表
+    WordBank {
+        /// 中文词库源（`词\t拼音\t词频`，TSV / `.db` / `.qj` 都认），可给多个；缺省 `data/generated/dict.tsv`
+        #[arg(long, value_name = "PATH", num_args = 1..)]
+        chinese: Vec<PathBuf>,
+
+        /// 英文词表源（`词\t编码\t词频`），可给多个；缺省 `data/generated/english.tsv`，没有再用 `assets/lexicon/english.tsv`
+        #[arg(long, value_name = "TSV", num_args = 1..)]
+        english: Vec<PathBuf>,
+
+        /// 品牌词 / 中英混杂词（`词\t次数\t拼音`），可给多个；缺省带上存在的 `assets/lexicon/brand.tsv` 与 `mixed_words.tsv`
+        #[arg(long, value_name = "TSV", num_args = 1..)]
+        extra: Vec<PathBuf>,
+
+        /// 元数据：名称（必填）
+        #[arg(long, default_value = "")]
+        name: String,
+
+        /// 元数据：许可证（SPDX 标识）
+        #[arg(long, default_value = "")]
+        license: String,
+
+        /// 元数据：署名 / 版权行
+        #[arg(long, default_value = "")]
+        attribution: String,
+
+        /// 元数据：来源 URL
+        #[arg(long, default_value = "")]
+        source: String,
+
+        /// 元数据：数据版本（上游版本号或日期）
+        #[arg(long, default_value = "")]
+        data_version: String,
+    },
+
+    /// 把改名前的 `.qj`（魔数 `QINGJIAN`）就地改成当前魔数 `CLOUDIME`：容器布局一字未动，只改头 8 字节。
+    /// 改之前按容器完整校验一遍、改完再开一遍，坏文件原样报错；已是新魔数的跳过。
+    /// `data-v1` / `data-v2` 这类旧数据要重发新号时先跑（`data-bundle.sh` 拒绝旧魔数，见 docs/notes/release.md）
+    Rehead {
+        /// 改哪一种数据，决定按哪个种类编号校验
+        kind: DataKind,
+
+        /// 要改写的 `.qj` 文件（可给多个）
+        #[arg(required = true, num_args = 1..)]
+        input: Vec<PathBuf>,
     },
 }
 
-/// `pack` 能打的数据种类。
+/// 产品数据的种类：`pack` 打包与 `rehead` 改魔数都按它走。
 #[derive(Debug, Clone, Copy, PartialEq, Eq, ValueEnum)]
-pub enum PackKind {
+pub enum DataKind {
     /// 拼音词库
     Dict,
 
     /// 词级 bigram 语言模型
     Lm,
 
-    /// 释义表（glossary-<语言>.tsv → glossary-<语言>.qj）
-    Glossary,
-
     /// 本地整句模型（三件套目录 → model.qjm）
     Model,
-
-    /// 笔画码表（笔画表 + 词库 → codes/stroke.qj，随包原生码表）
-    Codes,
 }
 
-impl PackKind {
+impl DataKind {
     /// 子命令里写的名字（报错文案用）。
     pub fn name(self) -> &'static str {
         match self {
             Self::Dict => "dict",
             Self::Lm => "lm",
-            Self::Glossary => "glossary",
             Self::Model => "model",
-            Self::Codes => "codes",
+        }
+    }
+
+    /// 按容器打开 `.qj` 时校验的数据种类编号。
+    pub fn container_kind(self) -> cloudime_format::Kind {
+        match self {
+            Self::Dict => cloudime_format::Kind::Dictionary,
+            Self::Lm => cloudime_format::Kind::LanguageModel,
+            Self::Model => cloudime_format::Kind::Model,
         }
     }
 }

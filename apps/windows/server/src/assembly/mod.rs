@@ -1,16 +1,14 @@
-//! 装配 Engine：Server 里唯一知道具体 Translator / Learner 类型的地方，装的东西与 macOS 的 `host::init` 一致。
+//! 装配 Engine：Server 里唯一知道具体 Learner / 词表类型的地方。
 
 mod language_model;
 mod spec;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::time::Instant;
 
-use qingjian_core::{EmojiTable, Engine, Language};
-use qingjian_dictionary::{Dictionary, WordList};
-use qingjian_learning::{FrequencyLearner, InputLog, UsageStats, VocabularyBook};
-use qingjian_platform::{Config, code_tables, extra_dictionaries};
-use qingjian_translate::{Glossary, LayeredTranslator, LevelTable, PersonalGlossary};
+use cloudime_core::Engine;
+use cloudime_dictionary::DictDb;
+use cloudime_learning::{FrequencyLearner, InputLog, UsageStats, VocabularyBook};
 
 use crate::error::ServerError;
 
@@ -19,89 +17,72 @@ pub use self::spec::AssemblySpec;
 
 pub fn assemble(spec: &AssemblySpec) -> Result<Engine, ServerError> {
     let started = Instant::now();
-    let dictionary = Dictionary::from_path(&spec.dict)?;
+    let data = DictDb::from_path(&spec.dict)?;
+    let dictionary = data.chinese;
+    let rare = data.rare;
+    let english = data.english;
     let learner = match &spec.user_dir {
         Some(dir) => load_learner(dir),
         None => FrequencyLearner::default(),
     };
     tracing::info!(
         entries = dictionary.len(),
+        rare = rare.len(),
+        english = english.len(),
         learned = learner.len(),
         dictionary_ms = started.elapsed().as_millis(),
         "词库与学习数据已加载"
     );
     let mut engine = Engine::new(dictionary).with_learner(Box::new(learner));
-    if let Some((language, path)) = &spec.glossary {
-        engine = engine.with_translator(Box::new(load_glossary(
-            *language,
-            path,
-            spec.user_dir.as_deref(),
-        )?));
+    if !rare.is_empty() {
+        tracing::info!(
+            words = rare.len(),
+            "稀有词库已随 Dict.db 加载（是否参与查询由 [word_bank] rare_items 决定）"
+        );
+        engine = engine.with_rare(rare);
     }
     if let Some(dir) = &spec.user_dir {
         engine = engine
             .with_usage_meter(Box::new(UsageStats::open(dir.join("usage.tsv"))))
-            .with_vocabulary_tracker(Box::new(load_vocabulary(dir, spec.levels_dir.as_deref())));
+            .with_vocabulary_tracker(Box::new(VocabularyBook::open(dir.join("user-vocab.tsv"))));
         if spec.input_log {
             let path = dir.join("input-log.jsonl");
             tracing::info!(path = %path.display(), "输入日志开着");
             engine = engine.with_input_logger(Box::new(InputLog::open(path)));
         }
     }
-    engine.set_extra_dictionaries(extra_dictionaries::load(
-        spec.bundled_dicts_dir.as_deref(),
-        user_dicts_dir(spec.user_dir.as_deref()).as_deref(),
-        &spec.dictionaries,
-    ));
-    engine.set_aux_codes(code_tables::load(
-        spec.bundled_codes_dir.as_deref(),
-        user_codes_dir(spec.user_dir.as_deref()).as_deref(),
-        &spec.aux_code,
-    ));
-    if let Some(path) = &spec.english_glossary {
-        match Glossary::from_path(Language::Chinese, path) {
-            Ok(glossary) => {
-                tracing::info!(glosses = glossary.len(), "英→中释义表已加载");
-                engine = engine.with_english_translator(Box::new(glossary));
-            }
-            Err(error) => tracing::warn!(%error, "英→中释义表加载失败"),
-        }
-    }
-    if let Some(path) = &spec.english {
-        let words = WordList::from_path(path)?;
-        tracing::info!(words = words.len(), "英文词表已加载");
-        engine = engine.with_english(words);
-    }
-    if let Some(table) = load_emoji(&spec.emoji) {
-        tracing::info!(words = table.len(), "emoji 表已加载");
-        engine = engine.with_emoji(table);
+    engine.set_extra_dictionaries(
+        spec.word_bank
+            .as_ref()
+            .map(|bank| bank.load_except(Some(&spec.dict)))
+            .unwrap_or_default(),
+    );
+    if !english.is_empty() {
+        tracing::info!(words = english.len(), "英文词表已随 Dict.db 加载");
+        engine = engine.with_english(english);
     }
     if let Some(files) = &spec.language_model {
         let started = Instant::now();
-        let model = files.load()?;
-        tracing::info!(
-            words = model.word_count(),
-            bigrams = model.bigram_count(),
-            load_ms = started.elapsed().as_millis(),
-            "语言模型已加载"
-        );
-        engine = engine.with_language_model(Box::new(model));
+        match files.load() {
+            Ok(model) => {
+                tracing::info!(
+                    words = model.word_count(),
+                    bigrams = model.bigram_count(),
+                    load_ms = started.elapsed().as_millis(),
+                    "语言模型已加载"
+                );
+                engine = engine.with_language_model(Box::new(model));
+            }
+            Err(error) => {
+                tracing::error!(
+                    %error,
+                    path = %files.path().display(),
+                    "语言模型加载失败，退化成一元词频整句"
+                );
+            }
+        }
     }
     Ok(engine)
-}
-
-/// 用户导入词库目录 `dicts/`，不存在则创建；建不了当没有。
-pub fn user_dicts_dir(user_dir: Option<&Path>) -> Option<std::path::PathBuf> {
-    let dir = user_dir?.join("dicts");
-    std::fs::create_dir_all(&dir).ok()?;
-    Some(dir)
-}
-
-/// 用户导入码表目录 `codes/`，不存在则创建；建不了当没有。
-pub fn user_codes_dir(user_dir: Option<&Path>) -> Option<std::path::PathBuf> {
-    let dir = user_dir?.join("codes");
-    std::fs::create_dir_all(&dir).ok()?;
-    Some(dir)
 }
 
 /// 读不了就退回只在内存里学，不拿空表覆盖用户文件。
@@ -116,87 +97,31 @@ fn load_learner(dir: &Path) -> FrequencyLearner {
     }
 }
 
-/// 配置里的学习语言；`off` 为 `None`（不显示译文），写得不认识按英文。
-pub fn learning_language(config: &Config) -> Option<Language> {
-    if config.general.learning_language_off() {
-        return None;
-    }
-    let code = &config.general.learning_language;
-    Some(code.parse().unwrap_or_else(|_| {
-        tracing::warn!(code, "不认识的学习语言，按英文");
-        Language::English
-    }))
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
 
-/// 某语言的释义表：`<root>/data/generated/` 打包过的 `.qj` 优先，否则随 git 的 `assets/glossary/` TSV；都没有为 `None`。
-pub fn glossary_file(root: &Path, language: Language) -> Option<PathBuf> {
-    let code = language.code();
-    [
-        root.join("data/generated")
-            .join(format!("glossary-{code}.qj")),
-        root.join("assets/glossary")
-            .join(format!("glossary-{code}.tsv")),
-    ]
-    .into_iter()
-    .find(|path| path.is_file())
-}
+    /// 语言模型读不出来就地降级，装配照样成功；只有主词库坏了才留给外层回落样例词库。
+    #[test]
+    fn optional_data_files_degrade_instead_of_failing() {
+        let dir = std::env::temp_dir().join(format!("cloudime-assembly-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        let unreadable = [0xff, 0xfe, 0xff, 0xff];
+        let language_model = dir.join("lm.qj");
+        std::fs::write(&language_model, unreadable).unwrap();
+        let sample = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../../assets/sample/dict.tsv");
 
-/// 随包释义表叠上个人释义表（`user-glossary-<语言>.tsv`）。启动装配与热加载换语言共用。
-pub(crate) fn load_glossary(
-    language: Language,
-    path: &Path,
-    user_dir: Option<&Path>,
-) -> Result<LayeredTranslator, ServerError> {
-    let bundled = Glossary::from_path(language, path)?;
-    let personal = match user_dir {
-        Some(dir) => PersonalGlossary::open(
-            language,
-            dir.join(format!("user-glossary-{}.tsv", language.code())),
-        ),
-        None => PersonalGlossary::in_memory(language),
-    };
-    if !personal.is_empty() {
-        tracing::info!(
-            language = language.code(),
-            entries = personal.len(),
-            "个人释义表已加载"
-        );
-    }
-    Ok(LayeredTranslator::new(bundled, personal))
-}
+        let degraded = AssemblySpec {
+            language_model: Some(LanguageModelFiles::Packed(language_model)),
+            ..AssemblySpec::new(sample)
+        };
+        assert!(assemble(&degraded).is_ok());
 
-/// 词汇记录（`user-vocab.tsv`），有等级表就按级统计。
-fn load_vocabulary(user_dir: &Path, levels_dir: Option<&Path>) -> VocabularyBook {
-    let mut vocabulary = VocabularyBook::open(user_dir.join("user-vocab.tsv"));
-    let Some(levels_dir) = levels_dir else {
-        return vocabulary;
-    };
-    for language in [Language::English, Language::Japanese, Language::Spanish] {
-        let path = levels_dir.join(format!("levels-{}.tsv", language.code()));
-        if !path.is_file() {
-            continue;
-        }
-        match LevelTable::from_path(&path) {
-            Ok(table) => vocabulary = vocabulary.with_levels(language, table),
-            Err(error) => {
-                tracing::warn!(path = %path.display(), %error, "词汇等级表读不了，不分级");
-            }
-        }
-    }
-    vocabulary
-}
+        // 主词库没得降级，报错交给 assemble_with_fallback 换样例词库
+        let broken_dict = dir.join("dict.qj");
+        std::fs::write(&broken_dict, unreadable).unwrap();
+        assert!(assemble(&AssemblySpec::new(broken_dict)).is_err());
 
-/// 几张 emoji 表合成一张；坏的跳过。
-fn load_emoji(paths: &[std::path::PathBuf]) -> Option<EmojiTable> {
-    let mut merged: Option<EmojiTable> = None;
-    for path in paths {
-        match EmojiTable::from_path(path) {
-            Ok(table) => match &mut merged {
-                Some(all) => all.merge(table),
-                None => merged = Some(table),
-            },
-            Err(error) => tracing::warn!(%error, path = %path.display(), "emoji 表加载失败，跳过"),
-        }
+        std::fs::remove_dir_all(&dir).ok();
     }
-    merged
 }

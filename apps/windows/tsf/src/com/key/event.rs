@@ -5,7 +5,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_RETURN, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB,
 };
 
-use qingjian_platform::protocol::{KeyEvent, KeyModifiers};
+use cloudime_platform::protocol::{KeyEvent, KeyModifiers};
 
 /// 采当前修饰键并解析字符（标点 / 数字使用当前键盘布局）。`english_mode` 是 DLL 记的持久中英模式，随事件带给 Server。
 pub(crate) fn to_key_event(vk: u32, english_mode: bool) -> KeyEvent {
@@ -19,11 +19,6 @@ pub(crate) fn to_key_event(vk: u32, english_mode: bool) -> KeyEvent {
 
 pub(crate) fn is_letter(vk: u32) -> bool {
     (0x41..=0x5A).contains(&vk)
-}
-
-/// 可配成模式键的字母 V / U / I（Core `ModeKeys::CANDIDATES`）：双拼下按住 Shift 是表达式 / 问字入口。
-pub(crate) fn is_mode_letter(vk: u32) -> bool {
-    matches!(vk, 0x56 | 0x55 | 0x49)
 }
 
 /// 组句中要吃的功能键：退格 / Tab / 回车 / Esc / 空格 / 数字。Tab 由 Router 决定接受整句补全或翻页，Shift+Tab 上一页。
@@ -43,11 +38,6 @@ fn is_digit(vk: u32) -> bool {
     (0x30..=0x39).contains(&vk)
 }
 
-/// 主键盘区 1–9（修饰键 + 数字的快捷键按这个认）。
-pub(crate) fn digit_key(vk: u32) -> bool {
-    (0x31..=0x39).contains(&vk)
-}
-
 fn current_modifiers(english_mode: bool) -> KeyModifiers {
     KeyModifiers {
         ctrl: key_down(VK_CONTROL),
@@ -57,6 +47,35 @@ fn current_modifiers(english_mode: bool) -> KeyModifiers {
         caps: key_toggled(VK_CAPITAL),
         english_mode,
     }
+}
+
+/// 主动清掉 Caps Lock：补一次 Caps Lock 键，系统会翻转锁定状态。
+/// Caps Lock 亮着时单击 Shift 用它（微软拼音：解锁并切英文）。
+pub(crate) fn clear_caps_lock() {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
+    };
+    let key = |flags: KEYBDINPUT| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 { ki: flags },
+    };
+    let inputs = [
+        key(KEYBDINPUT {
+            wVk: VK_CAPITAL,
+            ..Default::default()
+        }),
+        key(KEYBDINPUT {
+            wVk: VK_CAPITAL,
+            dwFlags: KEYEVENTF_KEYUP,
+            ..Default::default()
+        }),
+    ];
+    unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
+}
+
+/// Shift 按下没有。
+pub(crate) fn shift_down() -> bool {
+    key_down(VK_SHIFT)
 }
 
 /// 高位为 1（返回值为负）表示按下。

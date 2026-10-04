@@ -12,7 +12,7 @@ use windows::Win32::UI::TextServices::{
 };
 use windows::core::{Error, Result, implement};
 
-use crate::com::composition::{Shared, apply};
+use crate::com::composition::{Shared, Update, apply};
 use crate::com::log::log;
 use crate::com::service::SharedClient;
 
@@ -28,25 +28,15 @@ pub(crate) struct UpdateSession {
     /// 组句状态。
     shared: Rc<Shared>,
 
-    /// 本次要落定上屏的文本。
-    commit: Option<String>,
-
-    /// 本次组句拼音行；空串表示收起组句。
-    preedit: String,
+    /// 本次要写进文档的东西。
+    update: Update,
 }
 
 impl ITfEditSession_Impl for UpdateSession_Impl {
     fn DoEditSession(&self, ec: u32) -> Result<()> {
         // 从框架的 C++ 调进来：panic 不能越过 FFI。
         let result = catch_unwind(AssertUnwindSafe(|| {
-            apply(
-                &self.shared,
-                &self.engine,
-                &self.context,
-                ec,
-                self.commit.as_deref(),
-                &self.preedit,
-            )
+            apply(&self.shared, &self.engine, &self.context, ec, &self.update)
         }));
         match result {
             Ok(Ok(())) => Ok(()),
@@ -68,15 +58,13 @@ pub(crate) fn request_update(
     client_id: u32,
     engine: SharedClient,
     shared: Rc<Shared>,
-    commit: Option<String>,
-    preedit: String,
+    update: Update,
 ) -> Result<()> {
     let session = UpdateSession {
         context: context.clone(),
         engine,
         shared,
-        commit,
-        preedit,
+        update,
     };
     request(context, client_id, session.into(), TF_ES_READWRITE)
 }

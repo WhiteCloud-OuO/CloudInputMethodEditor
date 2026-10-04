@@ -9,12 +9,13 @@ use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::WindowsAndMessaging::{CreateIconIndirect, HICON, ICONINFO};
 use windows::core::Result;
 
-/// 三个图标。
+/// 四个图标。
 #[derive(Clone, Copy)]
 pub(super) enum Glyph {
     Chinese,
     English,
     CapsLock,
+    Off,
 }
 
 /// 四档边长（像素）：100% / 125% / 150% / 200% 缩放下的 16pt。
@@ -34,6 +35,7 @@ macro_rules! masks {
 const CHINESE: [&[u8]; 4] = masks!("zh");
 const ENGLISH: [&[u8]; 4] = masks!("en");
 const CAPS_LOCK: [&[u8]; 4] = masks!("caps");
+const OFF: [&[u8]; 4] = masks!("off");
 
 impl Glyph {
     fn masks(self) -> &'static [&'static [u8]; 4] {
@@ -41,6 +43,7 @@ impl Glyph {
             Self::Chinese => &CHINESE,
             Self::English => &ENGLISH,
             Self::CapsLock => &CAPS_LOCK,
+            Self::Off => &OFF,
         }
     }
 }

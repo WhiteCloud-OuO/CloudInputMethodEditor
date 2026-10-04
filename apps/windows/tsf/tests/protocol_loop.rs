@@ -1,8 +1,8 @@
-//! DLL 引擎层的端到端协议测试：把 [`EngineClient`] 接到真正的 Server（`qingjian-windows-server` 的
-//! [`Router`] + [`serve`](qingjian_windows_server::ipc::serve)），两端各在一条 socketpair 上，验证
+//! DLL 引擎层的端到端协议测试：把 [`EngineClient`] 接到真正的 Server（`cloudime-windows-server` 的
+//! [`Router`] + [`serve`](cloudime_windows_server::ipc::serve)），两端各在一条 socketpair 上，验证
 //! 「开会话 → 敲拼音收到候选 → 空格上屏」这条 IPC 闭环。
 //!
-//! 用 `UnixStream::pair` 起真双工流，所以只在 Unix 跑（mac 上开发时能验证 client 编排）；Windows 上
+//! 用 `UnixStream::pair` 起真双工流，所以只在 Unix 跑（用来验证 client 编排）；Windows 上
 //! 同一套 [`EngineClient`] 由命名管道驱动，靠交互测试。样例词库来自 `assets/sample/`，无需产品数据。
 #![cfg(unix)]
 
@@ -10,10 +10,9 @@ use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::thread;
 
-use qingjian_core::Language;
-use qingjian_platform::protocol::{KeyEvent, KeyModifiers, KeyOutcome, SessionId};
-use qingjian_tsf::client::{EngineClient, KeyReply, KeyResponse};
-use qingjian_windows_server::{AssemblySpec, Router, RouterConfig, assembly, ipc};
+use cloudime_platform::protocol::{KeyEvent, KeyOutcome, SessionId};
+use cloudime_tsf::client::{EngineClient, KeyResponse};
+use cloudime_windows_server::{AssemblySpec, Router, RouterConfig, assembly, ipc};
 
 const SESSION: SessionId = SessionId(1);
 
@@ -22,12 +21,9 @@ fn letter(c: char) -> KeyEvent {
     KeyEvent::new(c.to_ascii_uppercase() as u32, Some(c), Default::default())
 }
 
-/// 取常规按键结果；收到「读选区」请求（不该在这些用例里出现）就 panic。
-fn result(reply: KeyReply) -> KeyResponse {
-    match reply {
-        KeyReply::Result(response) => response,
-        KeyReply::NeedSelection { .. } => panic!("没料到 Server 要读选区"),
-    }
+/// 取常规按键结果。
+fn result(response: KeyResponse) -> KeyResponse {
+    response
 }
 
 /// 起一个后台 Server：用样例词库装 Router，在 `server_end` 上 serve 到对端关闭。
@@ -35,12 +31,8 @@ fn spawn_server(server_end: UnixStream) -> thread::JoinHandle<()> {
     thread::spawn(move || {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
         let dict = root.join("assets/sample/dict.tsv");
-        let glossary = root.join("assets/sample/glossary-en.tsv");
-        let engine = assembly::assemble(&AssemblySpec {
-            glossary: Some((Language::English, glossary)),
-            ..AssemblySpec::new(dict)
-        })
-        .expect("assemble engine from sample data");
+        let engine =
+            assembly::assemble(&AssemblySpec::new(dict)).expect("assemble engine from sample data");
         let mut router = Router::new(engine, RouterConfig::default());
         let mut stream = server_end;
         let _ = ipc::serve(&mut stream, &mut router);
@@ -123,41 +115,6 @@ fn commit_returns_raw_text() {
         None,
         "缓冲已清空"
     );
-
-    client.close().expect("close session");
-    server.join().unwrap();
-}
-
-/// 「翻译选中文字」快捷键在云服务关着时不劫持：样例词库没配 predictor，Ctrl+Alt+T 不该要求读选区，
-/// 而是走常规分派（带 Ctrl/Alt 的键 Router 一律 Passthrough 交回应用）。真正的翻译闭环靠真机测（要云服务）。
-#[test]
-fn translate_combo_is_dormant_without_cloud() {
-    let (client_end, server_end) = UnixStream::pair().unwrap();
-    let server = spawn_server(server_end);
-
-    let (mut client, _input) = EngineClient::open(client_end, SESSION, None).expect("open session");
-    // Ctrl+Alt+T（缺省 translate_selection）：character = 't'，修饰键 ctrl+alt。
-    let combo = KeyEvent::new(
-        b'T' as u32,
-        Some('t'),
-        KeyModifiers {
-            ctrl: true,
-            alt: true,
-            ..Default::default()
-        },
-    );
-    let reply = client.key(combo).expect("combo round-trips");
-    match reply {
-        KeyReply::Result(response) => {
-            assert_eq!(
-                response.outcome,
-                KeyOutcome::Passthrough,
-                "云服务关着，带 Ctrl/Alt 的键应放行给应用"
-            );
-            assert!(response.frame.is_empty(), "不该起组句 / 候选");
-        }
-        KeyReply::NeedSelection { .. } => panic!("云服务关着不该要求读选区"),
-    }
 
     client.close().expect("close session");
     server.join().unwrap();

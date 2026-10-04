@@ -12,11 +12,11 @@ use windows::Win32::UI::TextServices::{
 use windows::Win32::UI::WindowsAndMessaging::HICON;
 use windows::core::{BOOL, BSTR, GUID, IUnknown, Interface, Ref, Result, implement};
 
-use qingjian_platform::SwitchKeys;
+use cloudime_platform::SwitchKeys;
 
 use super::ModeState;
 use super::icon::{self, Glyph};
-use crate::com::CLSID_QINGJIAN;
+use crate::com::CLSID_CLOUDIME;
 use crate::com::key::event::caps_lock_on;
 
 /// `GUID_LBI_INPUTMODE` 语言栏按钮：图标随 [`ModeState`] 显示中 / 英，点它切模式。
@@ -34,11 +34,11 @@ impl ModeButton {
 impl ITfLangBarItem_Impl for ModeButton_Impl {
     fn GetInfo(&self, pinfo: *mut TF_LANGBARITEMINFO) -> Result<()> {
         let info = unsafe { &mut *pinfo };
-        info.clsidService = CLSID_QINGJIAN;
+        info.clsidService = CLSID_CLOUDIME;
         info.guidItem = GUID_LBI_INPUTMODE;
         info.dwStyle = TF_LBI_STYLE_BTN_BUTTON;
         info.ulSort = 0;
-        let desc: Vec<u16> = "青简中英模式".encode_utf16().collect();
+        let desc: Vec<u16> = "云朵输入法中英模式".encode_utf16().collect();
         let n = desc.len().min(info.szDescription.len());
         info.szDescription[..n].copy_from_slice(&desc[..n]);
         Ok(())
@@ -93,14 +93,17 @@ impl ITfLangBarItemButton_Impl for ModeButton_Impl {
             Glyph::Chinese => "中",
             Glyph::English => "英",
             Glyph::CapsLock => "A",
+            Glyph::Off => "禁",
         }))
     }
 }
 
 impl ModeButton_Impl {
-    /// Caps 亮着无论中英模式都直接出大写英文，所以它优先。
+    /// 禁用优先（Ctrl + Space 关了）；其次 Caps 亮着无论中英都直接出大写英文；再按中英。
     fn glyph(&self) -> Glyph {
-        if caps_lock_on() {
+        if self.state.disabled() {
+            Glyph::Off
+        } else if caps_lock_on() {
             Glyph::CapsLock
         } else if self.state.english() {
             Glyph::English

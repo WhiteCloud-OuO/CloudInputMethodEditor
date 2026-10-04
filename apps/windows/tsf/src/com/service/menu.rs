@@ -6,7 +6,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
     ASFW_ANY, AllowSetForegroundWindow, GetForegroundWindow, GetWindowThreadProcessId,
 };
 
-use qingjian_platform::protocol::IndicatorCommand;
+use cloudime_platform::protocol::IndicatorCommand;
 
 use super::TextService_Impl;
 use crate::com::log::log;
@@ -24,17 +24,20 @@ impl TextService_Impl {
         let indicator = self.indicator_state.get();
         let state = MenuState {
             english,
+            disabled: self.mode_state.disabled(),
             english_enabled: self.mode_state.enabled(),
             full_width: if english {
                 indicator.english_full_width_punctuation
             } else {
                 indicator.full_width_punctuation
             },
-            status_bar: indicator.status_bar,
             update_available: indicator.update_available,
         };
         match menu::track(owner, point, &state) {
-            Some(MenuChoice::Mode { english }) if english != self.mode_state.english() => {
+            Some(MenuChoice::Mode { english })
+                if english != self.mode_state.english() || self.mode_state.disabled() =>
+            {
+                self.switch_source.set("语言栏 / 状态条右键菜单");
                 self.set_english_mode(english);
             }
             Some(MenuChoice::Server(command)) => self.send_indicator(command),
@@ -42,7 +45,7 @@ impl TextService_Impl {
         }
     }
 
-    fn send_indicator(&self, command: IndicatorCommand) {
+    pub(super) fn send_indicator(&self, command: IndicatorCommand) {
         if matches!(
             command,
             IndicatorCommand::OpenSettings | IndicatorCommand::OpenDownload
@@ -53,10 +56,10 @@ impl TextService_Impl {
         match self.engine.borrow_mut().as_mut() {
             Some(client) => {
                 if let Err(error) = client.indicator(command) {
-                    log(&format!("右键菜单发给 Server 失败: {error}"));
+                    log(&format!("给 Server 发指示器指令失败: {error}"));
                 }
             }
-            None => log("右键菜单：没连上 Server"),
+            None => log("指示器指令：没连上 Server"),
         }
     }
 

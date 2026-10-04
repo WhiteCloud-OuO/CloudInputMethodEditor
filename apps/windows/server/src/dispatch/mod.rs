@@ -1,10 +1,8 @@
 //! 协议分派：把 DLL 发来的 [`ClientMessage`] 交给 Engine，产出回给 DLL 的 [`ServerMessage`]。
 //! 消息分派在 [`message`]，会话在 [`session`]，组句展示状态在 [`composed`]，按键在 [`key`]，
-//! 候选窗口输出在 [`candidates`]，状态条在 [`status`]，翻译选中文字在 [`translate`]，配置热加载在 [`reload`]，
-//! 本地整句模型在 [`rescore`]，形码码表在 [`code`]。
+//! 候选窗口输出在 [`candidates`]，状态条在 [`status`]，配置热加载在 [`reload`]，本地整句模型在 [`rescore`]。
 
 mod candidates;
-mod code;
 mod composed;
 mod config;
 mod key;
@@ -13,31 +11,29 @@ mod reload;
 mod rescore;
 mod session;
 mod status;
-mod translate;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::time::{Duration, Instant};
 
-use qingjian_core::Engine;
-use qingjian_platform::LocalModelConfig;
-use qingjian_platform::protocol::{
-    ClientMessage, Frame, IndicatorState, InputSettings, ScreenRect, ServerMessage, SessionId,
+use cloudime_core::Engine;
+use cloudime_platform::SwitchKeys;
+use cloudime_platform::protocol::{
+    ClientMessage, Frame, IndicatorState, InputMode, InputSettings, ScreenRect, ServerMessage,
+    SessionId,
 };
 
 pub use self::candidates::{CandidateSink, NoopSink, RenderSettings};
-pub use self::code::find_code_table;
 use self::composed::Composed;
 pub use self::config::RouterConfig;
 use self::reload::ConfigReload;
-pub use self::reload::{DataDirs, attach_cloud};
+pub use self::reload::DataDirs;
 pub use self::rescore::find_model;
 use self::rescore::{ModelLoader, RescoreState};
 use self::session::SessionInfo;
 pub use self::status::{NoopStatusSink, StatusEvent, StatusSink, StatusView};
-use self::translate::Translation;
 
-/// 学习数据落盘间隔（与 macOS 壳一致）；Server 没有定时器，借消息节拍看时间。
+/// 学习数据落盘间隔；Server 没有定时器，借消息节拍看时间。
 const LEARNING_FLUSH_INTERVAL: Duration = Duration::from_secs(60);
 
 /// 同一时刻只有一个应用有键盘焦点，所以一个 Engine 持当前组句；焦点切到别的会话时先清掉上一个的残留。
@@ -45,7 +41,7 @@ pub struct Router {
     /// 输入内核，进程内唯一。
     engine: Engine,
 
-    /// 每页候选数 / 云端槽位 / 排布 / 外观 / 翻页键等。
+    /// 每页候选数 / 排布 / 外观 / 翻页键等。
     config: RouterConfig,
 
     /// 活跃会话及各自的宿主应用。
@@ -57,25 +53,13 @@ pub struct Router {
     /// 当前组句的展示状态；没在组句时为 `None`。
     composed: Option<Composed>,
 
-    /// 「翻译选中文字」进行态；与 `composed` 互斥。
-    translation: Option<Translation>,
-
-    /// 已发出、等 DLL 回选区的请求号；对不上的 `Selection` 丢弃。
-    pending_selection: Option<u64>,
-
-    /// 「翻译选中文字」请求号计数器。
-    selection_seq: u64,
-
-    /// 整句补全（preedit 右侧、Tab 上屏）；缓冲变化时清空。
-    sentence: Option<String>,
-
-    /// 删候选后的屏幕提示，随下一帧下发、下一次按键清。
+    /// 屏幕提示（当前没有来源写入），随下一帧下发、下一次按键清。
     notice: Option<String>,
 
     /// 当前高亮候选在布局里的下标（跨页）。
     highlight: usize,
 
-    /// 这轮查询里动过高亮：动过就不再拿重排结果换掉候选；注音模式数字键动过之后才选词。
+    /// 这轮查询里动过高亮：动过就不再拿重排结果换掉候选。
     navigated: bool,
 
     /// 上次把学习数据落盘的时间。
@@ -90,10 +74,10 @@ pub struct Router {
     /// 悬浮状态条输出端；Windows 上由 [`crate::ui`] 注入。
     status: Box<dyn StatusSink>,
 
-    /// 全局中英模式（`true` 英文），所有应用共用。DLL 切了报来，激活 / 获焦 / 轮询时取走。
-    english: bool,
+    /// 全局输入法状态（中文 / 英文 / 禁用），所有应用共用。DLL 切了报来，激活 / 获焦 / 轮询时取走。
+    mode: InputMode,
 
-    /// 当前输入法是不是青简：有 DLL 来取模式就是，切成别的输入法时收起。状态条只在这时显示；
+    /// 当前输入法是不是云朵输入法：有 DLL 来取模式就是，切成别的输入法时收起。状态条只在这时显示；
     /// 应用退出不影响它，状态条是桌面常驻的。
     ime_active: bool,
 
@@ -101,26 +85,35 @@ pub struct Router {
     last_rect: Option<ScreenRect>,
 
     /// 上次真正显示的帧与位置：没变就不重画（组字期间的空转 Poll 很多）。
-    last_shown: Option<(Frame, ScreenRect)>,
+    last_shown: Option<(Frame, Vec<Option<char>>, ScreenRect)>,
 
     /// 本地整句模型（`.qjm` 或三件套目录）；没有模型文件为 `None`。
     model_path: Option<PathBuf>,
 
-    /// 形码码表（`wubi/wubi86.tsv`，启动时找好的，见 [`code::find_code_table`]）；没有为 `None`。
-    code_table: Option<PathBuf>,
-
     /// 进行中的模型加载；加载完接到 Engine 上就清掉。
     model_loader: Option<ModelLoader>,
 
-    /// 上次套用的 `[model]`，变了才重载 / 卸载。
-    applied_model: LocalModelConfig,
+    /// 本地整句模型开没开（`[candidate] use_local_sentence_organization_model`）；变了才重载 / 卸载。
+    applied_model: bool,
 
     /// 重排的防抖 / 轮询进行态。
     rescore: RescoreState,
+
+    /// 本次按键要不要额外挪光标（成对补全把光标停到括号中间 / 跳过右半边），随 `KeyResult` 下发。
+    caret_shift: i16,
+
+    /// 本次按键上屏前要先删掉光标前几个字符（符号映射的两键规则），随 `KeyResult` 下发。
+    delete_before: u16,
+
+    /// 上一键成对补全补上的右半边（用户敲的那个键）；紧接着又敲它一下就是「跳过」。
+    pending_close: Option<char>,
 }
 
 impl Router {
     pub fn new(engine: Engine, config: RouterConfig) -> Self {
+        let mut engine = engine;
+        // 中文模式的符号映射缺省表在配置里（Core 自己缺省是空表），在这里接上，测试与正式跑的是同一条路
+        engine.set_punctuation_mapping(config.punctuation_mapping.clone());
         Self {
             engine,
             config: RouterConfig {
@@ -130,10 +123,6 @@ impl Router {
             sessions: HashMap::new(),
             focused: None,
             composed: None,
-            translation: None,
-            pending_selection: None,
-            selection_seq: 0,
-            sentence: None,
             notice: None,
             highlight: 0,
             navigated: false,
@@ -141,34 +130,46 @@ impl Router {
             reload: None,
             candidates: Box::new(NoopSink),
             status: Box::new(NoopStatusSink),
-            english: false,
+            mode: InputMode::default(),
             ime_active: false,
             last_rect: None,
             last_shown: None,
             model_path: None,
-            code_table: None,
             model_loader: None,
-            applied_model: LocalModelConfig::default(),
+            applied_model: false,
             rescore: RescoreState::default(),
+            caret_shift: 0,
+            delete_before: 0,
+            pending_close: None,
         }
     }
 
     /// 下发给 DLL 的按键行为设置：`OpenSession` 的回包带一次，之后每拍 `SyncMode` 也跟着走，
     /// 所以 DLL 不用自己读配置文件，配置改了也不用重开会话。
-    pub(super) fn input_settings(&self) -> InputSettings {
+    ///
+    /// 切换键与英文模式两项已不再由配置决定（设置页里没有对应选项了），这里恒发缺省值：
+    /// 单击 Shift 切中英、内置英文模式开着，英文模式只由切换键与语言栏 / 状态条按钮进。
+    /// `raw_input` 看这个会话的程序在不在「不显示候选框」名单里（`[candidate] program_list_of_hiding_candidate`）。
+    pub(super) fn input_settings(&self, session: SessionId) -> InputSettings {
+        let app = self
+            .sessions
+            .get(&session)
+            .and_then(|info| info.app.as_deref());
+        let raw_input = app.is_some_and(|app| self.config.hides_candidate_for(app));
         InputSettings {
-            switch_mode: self.config.switch_mode,
-            english_mode: self.config.english_mode,
-            shift_letter_compose: self.config.shift_letter_compose,
+            switch_mode: SwitchKeys::default(),
+            english_mode: true,
+            shift_letter_compose: true,
+            full_width_chars: self.config.full_width_chars,
+            raw_input,
         }
     }
 
     /// 任务栏图标右键菜单打勾用的开关状态，随 `ModeSync` 每一拍下发。
     pub(super) fn indicator_state(&self) -> IndicatorState {
         IndicatorState {
-            full_width_punctuation: self.config.full_width,
-            english_full_width_punctuation: self.config.english_full_width,
-            status_bar: self.config.status_enabled,
+            full_width_punctuation: self.config.full_width_punctuation,
+            english_full_width_punctuation: self.config.english_full_width_punctuation,
             update_available: self.update_available(),
         }
     }

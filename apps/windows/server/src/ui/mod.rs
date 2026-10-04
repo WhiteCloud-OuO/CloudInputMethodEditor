@@ -29,7 +29,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Error, Result};
 
-use qingjian_platform::protocol::{Frame, ScreenRect};
+use cloudime_platform::protocol::{Frame, ScreenRect};
 
 use self::candidates::CandidateWindow;
 use self::command::UiCommand;
@@ -42,6 +42,9 @@ pub type StatusEvents = Box<dyn Fn(StatusEvent) + Send>;
 
 /// 唤醒 UI 线程去排空命令队列的线程消息。
 const WM_WAKE: u32 = WM_APP;
+
+/// 状态条窗口的定时器发现 Caps Lock 亮灭变了：重画一次状态条（`WM_WAKE` 是投命令，这个是纯重画）。
+const WM_STATUS_CAPS: u32 = WM_APP + 1;
 
 /// UI 线程句柄：发命令 = 投进通道 + 一条 `WM_WAKE`。线程 detached，随进程存活。
 #[derive(Clone)]
@@ -60,7 +63,7 @@ impl UiHandle {
         let (ready_tx, ready_rx) = mpsc::channel::<Option<u32>>();
         let (command_tx, command_rx) = mpsc::channel::<UiCommand>();
         thread::Builder::new()
-            .name("qingjian-candidates".to_owned())
+            .name("cloudime-candidates".to_owned())
             .spawn(move || run(command_rx, &ready_tx, on_status))
             .map_err(|_| Error::from(E_FAIL))?;
         match ready_rx.recv() {
@@ -81,8 +84,8 @@ impl UiHandle {
 }
 
 impl CandidateSink for UiHandle {
-    fn show(&self, frame: Frame, rect: ScreenRect) {
-        self.post(UiCommand::Show(Box::new((frame, rect))));
+    fn show(&self, frame: Frame, badges: Vec<Option<char>>, rect: ScreenRect) {
+        self.post(UiCommand::Show(Box::new((frame, badges, rect))));
     }
 
     fn hide(&self) {
@@ -110,7 +113,7 @@ impl StatusSink for UiHandle {
     fn open_download(&self) {
         let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
         let opened = std::process::Command::new("explorer")
-            .arg(qingjian_update::DOWNLOAD_URL)
+            .arg(cloudime_update::DOWNLOAD_URL)
             .spawn();
         if let Err(error) = opened {
             tracing::warn!(%error, "打开下载页失败");
@@ -121,7 +124,7 @@ impl StatusSink for UiHandle {
 /// 起与本 exe 同目录的设置程序。设置程序已开时由新实例把它带到前台，得先把前台权让出去。
 pub(crate) fn open_settings() {
     let _ = unsafe { AllowSetForegroundWindow(ASFW_ANY) };
-    let exe = std::env::current_exe().map(|exe| exe.with_file_name("qingjian-settings.exe"));
+    let exe = std::env::current_exe().map(|exe| exe.with_file_name("cloudime-settings.exe"));
     let spawned = exe.and_then(|exe| std::process::Command::new(exe).spawn());
     if let Err(error) = spawned {
         tracing::warn!(%error, "打开设置程序失败");
@@ -173,6 +176,12 @@ fn run(commands: Receiver<UiCommand>, ready: &Sender<Option<u32>>, on_status: St
             }
             continue;
         }
+        if msg.message == WM_STATUS_CAPS {
+            if let Some(status) = &status {
+                status.render();
+            }
+            continue;
+        }
         unsafe {
             let _ = TranslateMessage(&msg);
             DispatchMessageW(&msg);
@@ -188,8 +197,8 @@ fn apply(
 ) {
     match command {
         UiCommand::Show(payload) => {
-            let (frame, rect) = *payload;
-            window.set_content(&frame);
+            let (frame, badges, rect) = *payload;
+            window.set_content(&frame, &badges);
             window.show(to_win_rect(rect));
         }
         UiCommand::Hide => window.hide(),
@@ -203,7 +212,10 @@ fn apply(
                 status.hide();
             }
         }
-        UiCommand::Configure(settings) => Painter::configure(painter, &settings),
+        UiCommand::Configure(settings) => {
+            window.configure(&settings);
+            Painter::configure(painter, &settings);
+        }
     }
 }
 

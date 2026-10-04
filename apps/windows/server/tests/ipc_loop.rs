@@ -1,27 +1,20 @@
-//! 传输层测试：帧编解码，以及在内存流上跑 serve 循环；不碰命名管道，跨平台可跑。
+//! 传输层测试：帧编解码，以及在内存流上跑 serve 循环；不碰命名管道。
 
 use std::io::{Cursor, Read, Write};
 use std::path::PathBuf;
 
-use qingjian_core::Language;
-use qingjian_platform::protocol::{
+use cloudime_platform::protocol::{
     ClientMessage, KeyEvent, PROTOCOL_VERSION, ServerMessage, SessionId,
 };
-use qingjian_windows_server::ipc::{read_message, serve, write_message};
-use qingjian_windows_server::{AssemblySpec, Router, RouterConfig, assembly};
+use cloudime_windows_server::ipc::{read_message, serve, write_message};
+use cloudime_windows_server::{AssemblySpec, Router, RouterConfig, assembly};
 
 const SESSION: SessionId = SessionId(1);
 
 fn router() -> Router {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-    let engine = assembly::assemble(&AssemblySpec {
-        glossary: Some((
-            Language::English,
-            root.join("assets/sample/glossary-en.tsv"),
-        )),
-        ..AssemblySpec::new(root.join("assets/sample/dict.tsv"))
-    })
-    .expect("assemble engine from sample data");
+    let engine = assembly::assemble(&AssemblySpec::new(root.join("assets/sample/dict.tsv")))
+        .expect("assemble engine from sample data");
     Router::new(engine, RouterConfig::default())
 }
 

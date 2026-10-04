@@ -1,37 +1,17 @@
-//! 往文档写字：按键结果经异步编辑会话写上屏文本 + 组句拼音行；失焦 / 停用 / 切模式时让 Server 交出缓冲区原样落定；
-//! 翻译选中文字时起只读会话读选区。
+//! 往文档写字：按键结果经异步编辑会话写上屏文本 + 组句拼音行；失焦 / 停用 / 切模式时让 Server 交出缓冲区原样落定。
 
 use windows::Win32::UI::TextServices::ITfContext;
 use windows::core::Ref;
 
 use super::TextService_Impl;
-use crate::com::edit::{request_selection, request_update};
+use crate::com::composition::Update;
+use crate::com::edit::request_update;
 use crate::com::log::log;
 
 impl TextService_Impl {
-    pub(super) fn read_selection(&self, pic: Ref<ITfContext>, request: u64) {
-        let Ok(context) = pic.ok() else {
-            log("翻译选中文字：无上下文，取消读选区");
-            return;
-        };
-        if let Err(error) = request_selection(
-            context,
-            self.client_id.get(),
-            self.engine.clone(),
-            self.shared.clone(),
-            request,
-        ) {
-            log(&format!("请求读选区会话失败: {error}"));
-        }
-    }
-
     /// 失焦 / 停用 / 切模式：让 Server 交出缓冲区，原样落进最近收键的文档并收掉组句。
     /// 组句已被应用终止的（拼音已是普通文本）只清 Server 不再插。
     pub(super) fn commit_pending(&self) {
-        if self.shared.translating() {
-            self.shared.set_translating(false);
-            self.shared.hide_candidates();
-        }
         let stale = self.shared.take_server_stale();
         if !self.shared.composing() && !stale {
             return;
@@ -67,8 +47,10 @@ impl TextService_Impl {
             self.client_id.get(),
             self.engine.clone(),
             self.shared.clone(),
-            text.filter(|t| !t.is_empty()),
-            String::new(),
+            Update {
+                commit: text.filter(|t| !t.is_empty()),
+                ..Update::default()
+            },
         );
         if let Err(error) = requested {
             log(&format!("失焦上屏的编辑会话没被受理: {error}"));
@@ -76,25 +58,16 @@ impl TextService_Impl {
         }
     }
 
-    /// 经异步编辑会话把上屏文本 + 组句拼音行写进文档。
-    pub(super) fn update_document(
-        &self,
-        pic: Ref<ITfContext>,
-        commit: Option<String>,
-        preedit: String,
-    ) {
-        // 退到最后一个字母时帧已空但组句句柄还在，得跑一次把它收掉。
-        if commit.is_none()
-            && preedit.is_empty()
-            && !self.shared.composing()
-            && !self.shared.has_composition()
-        {
+    /// 经异步编辑会话把上屏文本 + 组句拼音行写进文档；`update` 里还有光标位移与要删的字符数
+    /// （见 [`Update`](crate::com::composition::Update)）。
+    pub(super) fn update_document(&self, pic: Ref<ITfContext>, update: Update) {
+        // 退到最后一个字母时帧已空但组句句柄还在，得跑一次把它收掉；
+        // 成对补全跳过右半边（只有光标要挪）与两键符号规则（要删前一个字）也走这一趟。
+        if update.is_empty() && !self.shared.composing() && !self.shared.has_composition() {
             return;
         }
         let Ok(context) = pic.ok() else {
-            log(&format!(
-                "无上下文，丢弃更新: commit={commit:?} preedit={preedit:?}"
-            ));
+            log(&format!("无上下文，丢弃更新: {update:?}"));
             return;
         };
         if let Err(error) = request_update(
@@ -102,8 +75,7 @@ impl TextService_Impl {
             self.client_id.get(),
             self.engine.clone(),
             self.shared.clone(),
-            commit,
-            preedit,
+            update,
         ) {
             log(&format!("请求组句更新失败: {error}"));
         }

@@ -1,16 +1,17 @@
-//! 中 / 英模式：全局一份，存在 Server 那边，所有应用共用。
-//! 用户在这里切了就报给 Server（[`TextService_Impl::set_english_mode`]）；激活、得到焦点和每隔几拍的轮询
-//! 向 Server 取当前模式跟上（[`TextService_Impl::sync_mode_from_server`]）。切模式先把组着的内容落定；
-//! 指示器走语言栏按钮 + 转换模式 compartment；用户点任务栏中 / 英由 compartment 回调反向同步。
-//! 切换键与内置英文模式开关由 Server 经协议下发（[`TextService_Impl::apply_input_settings`]），DLL 不读配置文件。
+//! 输入法状态：全局一份，存在 Server 那边，所有应用共用。
+//! 用户在这里切了就报给 Server（[`TextService_Impl::set_mode`]）；激活、得到焦点和每隔几拍的轮询
+//! 向 Server 取当前状态跟上（[`TextService_Impl::sync_mode_from_server`]）。切状态先把组着的内容落定；
+//! 指示器走语言栏按钮 + 转换模式 / 输入法开关两条 compartment；用户点任务栏或按系统 Ctrl + Space
+//! 由 compartment 回调反向同步。切换键（固定单击 Shift）与内置英文模式开关由 Server 经协议下发
+//! （[`TextService_Impl::apply_input_settings`]），设置里已不再提供这两项、Server 恒发固定值，DLL 不读配置文件。
 
 use std::time::Instant;
 
 use windows::Win32::UI::TextServices::{ITfKeystrokeMgr, ITfLangBarItemMgr};
 use windows::core::Interface;
 
-use qingjian_platform::SwitchKeys;
-use qingjian_platform::protocol::InputSettings;
+use cloudime_platform::SwitchKeys;
+use cloudime_platform::protocol::{InputMode, InputSettings};
 
 use super::TextService_Impl;
 use crate::com::key::preserved;
@@ -23,10 +24,11 @@ pub(super) const CONVERSION_RESTORE_GUARD: std::time::Duration =
     std::time::Duration::from_millis(1200);
 
 impl TextService_Impl {
-    /// 应用中英模式的两项设置：激活时与配置变更时都走这里。
+    /// 应用中英模式的两项设置：激活时与收到下发值时都走这里。两项由 Server 经协议下发，
+    /// 设置里已不再提供（切换键恒为单击 Shift、内置英文模式恒开），DLL 只管照做。
     ///
     /// 内置英文模式开关在运行中翻转时，语言栏的中 / 英按钮与转换模式回调跟着登记 / 撤掉（激活时由 `Activate`
-    /// 自己按开关登记，这里只管激活之后的变化），设置窗口改完不用切走再切回输入法。
+    /// 自己按开关登记，这里只管激活之后的变化），协议值变了不用切走再切回输入法。
     pub(super) fn apply_mode_settings(&self, english_mode: bool, switch_keys: SwitchKeys) {
         let was_enabled = self.mode_state.enabled();
         self.mode_state.set_settings(english_mode, switch_keys);
@@ -47,6 +49,27 @@ impl TextService_Impl {
             }
         }
         self.sync_switch_preserved_key(switch_keys.ctrl_alt_space);
+        self.sync_preserved_hotkeys();
+    }
+
+    /// 两个固定内置热键（Ctrl + Alt + . 简 / 繁、Ctrl + Alt + , 标点）登记为保留键，只登记一次。
+    fn sync_preserved_hotkeys(&self) {
+        if self.hotkeys_preserved.get() {
+            return;
+        }
+        let Some(thread_mgr) = self.thread_mgr.borrow().clone() else {
+            return;
+        };
+        let Ok(keystroke) = thread_mgr.cast::<ITfKeystrokeMgr>() else {
+            return;
+        };
+        match preserved::register_hotkeys(&keystroke, self.client_id.get()) {
+            Ok(()) => {
+                self.hotkeys_preserved.set(true);
+                log("内置热键 Ctrl + Alt + . / Ctrl + Alt + , 已登记为保留键");
+            }
+            Err(error) => log(&format!("登记内置热键失败: {error}")),
+        }
     }
 
     /// `Activate` 是否已经走完（[`super::ACTIVE`] 在它末尾才设）。
@@ -95,24 +118,37 @@ impl TextService_Impl {
         }
     }
 
-    /// 停用时撤掉 Ctrl + Alt + Space 的保留键登记。
+    /// 停用时撤掉保留键登记（切换键与两个内置热键）。
     pub(super) fn drop_switch_preserved_key(&self, keystroke: &ITfKeystrokeMgr) {
         if self.switch_preserved.replace(false) {
             preserved::unregister_switch_mode(keystroke);
         }
+        if self.hotkeys_preserved.replace(false) {
+            preserved::unregister_hotkeys(keystroke);
+        }
     }
 
-    /// 用户在这个应用里切了模式（切换键、语言栏按钮、右键菜单）：改状态、刷指示器，报给 Server 成为全局模式。
-    pub(super) fn set_english_mode(&self, english: bool) {
-        if self.switch_mode(english) {
+    /// 用户在这个应用里切了模式（切换键、语言栏按钮、右键菜单）：改状态、刷指示器，报给 Server 成为全局状态。
+    pub(super) fn set_mode(&self, mode: InputMode) {
+        if self.switch_mode(mode) {
             self.refresh_mode_indicator();
             self.report_mode();
         }
     }
 
-    /// 跟上 Server 的全局模式（别的应用切过、点了悬浮状态条）：改状态、刷指示器，不再回报。
-    pub(super) fn adopt_mode(&self, english: bool) {
-        if english != self.mode_state.english() && self.switch_mode(english) {
+    /// 按布尔切中英（清掉禁用）。
+    pub(super) fn set_english_mode(&self, english: bool) {
+        self.set_mode(if english {
+            InputMode::English
+        } else {
+            InputMode::Chinese
+        });
+    }
+
+    /// 跟上 Server 的全局状态（别的应用切过、点了悬浮状态条）：改状态、刷指示器，不再回报。
+    pub(super) fn adopt_mode(&self, mode: InputMode) {
+        self.switch_source.set("跟随 Server 全局状态");
+        if mode != self.mode_state.mode() && self.switch_mode(mode) {
             self.refresh_mode_indicator();
         }
     }
@@ -128,8 +164,8 @@ impl TextService_Impl {
             Some(Ok(reply)) => {
                 self.apply_input_settings(reply.input);
                 self.indicator_state.set(reply.indicator);
-                if let Some(english) = reply.english {
-                    self.adopt_mode(english);
+                if let Some(mode) = reply.mode {
+                    self.adopt_mode(mode);
                 }
             }
             Some(Err(error)) => {
@@ -140,44 +176,71 @@ impl TextService_Impl {
         }
     }
 
-    /// 用户点了任务栏中 / 英、按了系统 Ctrl + Space：只更新按钮，不回写 compartment（在它自己的 `OnChange` 里写会报
+    /// 用户点了任务栏的中 / 英：只更新按钮，不回写 compartment（在它自己的 `OnChange` 里写会报
     /// 0x8000FFFF），报给 Server。
     fn follow_system_mode(&self, english: bool) {
-        if self.switch_mode(english) {
+        self.switch_source
+            .set("系统转换模式（任务栏 / 系统快捷键）");
+        let mode = if english {
+            InputMode::English
+        } else {
+            InputMode::Chinese
+        };
+        if self.switch_mode(mode) {
             self.mode_state.notify();
             self.report_mode();
         }
     }
 
-    /// 两条路共用：先把组着的内容原样落定，再改状态。返回是否真的改了。
+    /// 系统 Ctrl + Space 翻了输入法开关：关 = 禁用、开 = 回到禁用前的中 / 英模式。先把组着的拼音落定。
+    fn follow_system_disabled(&self, disabled: bool) {
+        self.commit_pending();
+        let mode = if disabled {
+            InputMode::Disabled
+        } else {
+            self.mode_state.resume_mode()
+        };
+        self.mode_state.set_mode(mode);
+        log(if disabled {
+            "输入法已禁用（Ctrl + Space）"
+        } else {
+            "输入法已启用（Ctrl + Space）"
+        });
+        self.mode_state.notify();
+        self.report_mode();
+    }
+
+    /// 先把组着的内容原样落定，再改状态。返回是否真的改了。
     ///
-    /// 配置关掉了内置英文模式时什么都不做——切换键、语言栏按钮、悬浮状态条、任务栏转换模式四条入口
-    /// 都汇到这里，一处拦住就再也进不了英文模式（见 issue #81）。
-    fn switch_mode(&self, english: bool) -> bool {
-        if !self.mode_state.enabled() {
-            if english {
-                log("内置英文模式已关闭，忽略切到英文");
-            }
+    /// 下发的内置英文模式为关时（当前恒为开）不许切到英文——切换键、语言栏按钮、悬浮状态条、任务栏
+    /// 四条入口都汇到这里，一处拦住就再也进不了英文模式（见 issue #81）；禁用不受它影响。
+    fn switch_mode(&self, mode: InputMode) -> bool {
+        if !self.mode_state.enabled() && mode.english() {
+            log("内置英文模式已关闭，忽略切到英文");
+            return false;
+        }
+        if mode == self.mode_state.mode() {
             return false;
         }
         self.commit_pending();
-        self.mode_state.set_english(english);
-        log(if english {
-            "切到英文模式"
-        } else {
-            "切到中文模式"
+        self.mode_state.set_mode(mode);
+        let source = self.switch_source.get();
+        log(&match mode {
+            InputMode::Chinese => format!("切到中文模式（来源：{source}）"),
+            InputMode::English => format!("切到英文模式（来源：{source}）"),
+            InputMode::Disabled => format!("切到禁用（来源：{source}）"),
         });
         true
     }
 
-    /// 语言栏按钮换图标，写转换模式与输入法开关两条 compartment：开关跟着模式走（中文开、英文关），
+    /// 语言栏按钮换图标，写转换模式与输入法开关两条 compartment：中英跟着模式、开关跟着禁用与否，
     /// 系统的 Ctrl + Space 翻的就是它，对上了才能一按就切。
     pub(super) fn refresh_mode_indicator(&self) {
         self.mode_state.notify();
-        let english = self.mode_state.english();
+        let current = self.mode_state.mode();
         if let Some(thread_mgr) = self.thread_mgr.borrow().as_ref() {
-            mode::set_indicator(thread_mgr, self.client_id.get(), english);
-            mode::set_keyboard_open(thread_mgr, self.client_id.get(), !english);
+            mode::set_indicator(thread_mgr, self.client_id.get(), current.english());
+            mode::set_keyboard_open(thread_mgr, self.client_id.get(), !current.disabled());
         }
     }
 
@@ -193,13 +256,13 @@ impl TextService_Impl {
         }
     }
 
-    /// 把用户切出的模式报给 Server，成为全局模式。
+    /// 把用户切出的状态报给 Server，成为全局状态。
     pub(super) fn report_mode(&self) {
-        let english = self.mode_state.english();
+        let mode = self.mode_state.mode();
         if let Some(client) = self.engine.borrow_mut().as_mut()
-            && let Err(error) = client.mode_changed(english)
+            && let Err(error) = client.mode_changed(mode)
         {
-            log(&format!("上报中英模式失败: {error}"));
+            log(&format!("上报输入法状态失败: {error}"));
         }
     }
 
@@ -240,7 +303,7 @@ impl TextService_Impl {
         }
     }
 
-    /// 系统的「输入法/非输入法切换」（缺省 Ctrl + Space）翻了输入法开关：关 = 英文、开 = 中文，与微软拼音一致。
+    /// 系统的「输入法/非输入法切换」（缺省 Ctrl + Space）翻了输入法开关：关 = 禁用、开 = 中文。
     /// 这个热键的 Space 被系统截走，按着的 Ctrl 抬起时别再当成单击。
     pub(super) fn sync_from_keyboard_open(&self) {
         self.key_tap.cancel();
@@ -250,12 +313,12 @@ impl TextService_Impl {
         let Ok(compartment) = mode::openclose_compartment(&thread_mgr) else {
             return;
         };
-        let english = !mode::is_keyboard_open(&compartment);
-        if english != self.mode_state.english() {
+        let disabled = !mode::is_keyboard_open(&compartment);
+        if disabled != self.mode_state.disabled() {
             log(&format!(
-                "输入法开关变了（系统 Ctrl + Space），english={english}"
+                "输入法开关变了（系统 Ctrl + Space），disabled={disabled}"
             ));
-            self.follow_system_mode(english);
+            self.follow_system_disabled(disabled);
         }
     }
 

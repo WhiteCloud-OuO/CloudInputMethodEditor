@@ -25,6 +25,9 @@ pub(super) struct Placement {
     /// 上次画出的各格右边界（内容坐标）与动作，从左到右；点击按 x 落进哪格。
     pub(super) cells: RefCell<Vec<(i32, StatusAction)>>,
 
+    /// Caps Lock 亮着没有：窗口过程的定时器盯着它，「中 / 英」按钮据此换成「A」图标。
+    pub(super) caps: Cell<bool>,
+
     /// 前台全屏、暂时收起了（见 [`super::fullscreen`]）。
     pub(super) fullscreen_hidden: Cell<bool>,
 
@@ -39,6 +42,7 @@ impl Placement {
             margin: Cell::new(margin),
             pos: Cell::new(None),
             cells: RefCell::new(Vec::new()),
+            caps: Cell::new(super::caps_lock_on()),
             fullscreen_hidden: Cell::new(false),
             events,
         }
@@ -66,11 +70,17 @@ impl Placement {
             .find(|(right, _)| x < *right)
             .map(|(_, action)| *action);
         match action {
-            Some(StatusAction::ToggleMode) => (self.events)(StatusEvent::ToggleMode),
-            Some(StatusAction::TogglePunctuation) => {
-                (self.events)(StatusEvent::TogglePunctuation);
+            Some(StatusAction::ToggleLang) => (self.events)(StatusEvent::ToggleLang),
+            Some(StatusAction::TogglePunctuation) => (self.events)(StatusEvent::TogglePunctuation),
+            Some(StatusAction::ToggleCharWidthType) => {
+                (self.events)(StatusEvent::ToggleCharWidthType);
             }
-            Some(StatusAction::OpenSettings) => crate::ui::open_settings(),
+            Some(StatusAction::ToggleSimpTrad) => (self.events)(StatusEvent::ToggleSimpTrad),
+            Some(StatusAction::OpenOptions) => crate::ui::open_settings(),
+            // 工具页 / 特殊字符页的程序还没做：按钮照画，点了只留一条日志
+            Some(action @ (StatusAction::OpenWidgets | StatusAction::OpenSpecChars)) => {
+                tracing::debug!(?action, "状态条：这个按钮的功能还没做");
+            }
             None => {}
         }
     }

@@ -23,8 +23,7 @@ use windows::Win32::UI::TextServices::{
 };
 use windows::core::{ComObject, implement};
 
-use qingjian_platform::KeyCombo;
-use qingjian_platform::protocol::{IndicatorState, InputSettings};
+use cloudime_platform::protocol::{IndicatorState, InputMode, InputSettings};
 
 use super::composition::Shared;
 use super::key::KeyTap;
@@ -55,7 +54,7 @@ pub struct TextService {
     /// 跨按键存活的组句状态。
     shared: Rc<Shared>,
 
-    /// 云联想轮询定时器；挂失败时为 `None`，退化为只在按键时收云结果。
+    /// 云联想轮询定时器；挂失败时为 `None`，退化为只在按键时收重排结果。
     poll_timer: RefCell<Option<PollTimer>>,
 
     /// 上次连 Server 失败的时间，按 [`RECONNECT_INTERVAL`] 退避。
@@ -79,11 +78,11 @@ pub struct TextService {
     /// 语言 profile 通知挂上后的 cookie；挂一次就够（见 [`super::profile`]）。
     profile_cookie: Cell<Option<u32>>,
 
-    /// 登记成保留键的「翻译选中文字」组合；停用时撤掉（见 [`preserved`](crate::com::key::preserved)）。
-    translate_combo: Cell<Option<KeyCombo>>,
-
     /// Ctrl + Alt + Space 切换键当前是否已登记为保留键（`[shortcut] switch_mode` 勾了它时才有）。
     switch_preserved: Cell<bool>,
+
+    /// 两个固定内置热键（Ctrl + Alt + . 简繁、Ctrl + Alt + , 标点）是否已登记为保留键。
+    hotkeys_preserved: Cell<bool>,
 
     /// 上一次应用过的按键行为设置；与 Server 下发的一致时就不重复应用
     /// （每一拍 `SyncMode` 都带着它，见 [`TextService_Impl::apply_input_settings`]）。
@@ -94,6 +93,9 @@ pub struct TextService {
 
     /// 激活后一小段时间内忽略转换模式 compartment 的变化，见 [`TextService_Impl::sync_from_conversion_mode`]。
     conversion_guard_until: Cell<Option<Instant>>,
+
+    /// 这次切模式是谁引发的：只进日志，用于定位「我没动它自己切了中英」（见 [`TextService_Impl::switch_mode`]）。
+    switch_source: Cell<&'static str>,
 }
 
 thread_local! {
@@ -108,9 +110,18 @@ fn with_active(f: impl FnOnce(&TextService_Impl)) {
     }
 }
 
-/// 用户点了语言栏的中 / 英按钮（见 [`ModeButton`](crate::com::mode::ModeButton)）：翻转模式。
+/// 用户点了语言栏的中 / 英按钮（见 [`ModeButton`](crate::com::mode::ModeButton)）：中英翻转；
+/// 禁用时（图标是「禁」）点一下回到中文。
 pub(super) fn toggle_mode() {
-    with_active(|service| service.set_english_mode(!service.mode_state.english()));
+    with_active(|service| {
+        service.switch_source.set("语言栏中 / 英按钮");
+        let next = if service.mode_state.disabled() || service.mode_state.english() {
+            InputMode::Chinese
+        } else {
+            InputMode::English
+        };
+        service.set_mode(next);
+    });
 }
 
 /// 右键点了语言栏的中 / 英按钮：在 `point`（屏幕坐标）弹菜单。
@@ -140,9 +151,9 @@ pub(super) fn on_reconnect_tick() {
     });
 }
 
-/// 轮询取到了 Server 的全局模式（见 [`super::poll`]）；与当前相同就不动。
-pub(super) fn on_mode_sync(english: bool) {
-    with_active(|service| service.adopt_mode(english));
+/// 轮询取到了 Server 的全局状态（见 [`super::poll`]）；与当前相同就不动。
+pub(super) fn on_mode_sync(mode: InputMode) {
+    with_active(|service| service.adopt_mode(mode));
 }
 
 /// 轮询取回了 Server 下发的按键行为设置（见 [`super::poll`]）：切换键 / 内置英文模式改了就地应用。
@@ -172,9 +183,10 @@ impl TextService {
             mode_sinks: RefCell::new(Vec::new()),
             focus_sink: RefCell::new(None),
             key_tap: KeyTap::default(),
+            switch_source: Cell::new("未标注"),
             profile_cookie: Cell::new(None),
-            translate_combo: Cell::new(None),
             switch_preserved: Cell::new(false),
+            hotkeys_preserved: Cell::new(false),
             input_settings: Cell::new(None),
             indicator_state: Cell::new(IndicatorState::default()),
             conversion_guard_until: Cell::new(None),

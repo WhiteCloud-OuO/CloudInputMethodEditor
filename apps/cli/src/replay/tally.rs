@@ -16,7 +16,7 @@ pub struct Tally {
     /// 当时选的词现在根本不在候选里（词库变了、删过词、云端词）。
     pub missing: usize,
 
-    /// 作用域现在切不动（双拼方案 / 模式键变了）。
+    /// 作用域现在切不动（模式键变了）。
     pub unparsable: usize,
 
     /// 找到时的名次之和（算平均名次）。
@@ -46,7 +46,7 @@ pub struct Tally {
 
 impl Tally {
     /// 从日志里的一条记下当时的情况（命中、翻页、耗时、重排），回放前调。
-    pub fn note_logged(&mut self, commit: &qingjian_core::CommitEntry) {
+    pub fn note_logged(&mut self, commit: &cloudime_core::CommitEntry) {
         let hit = commit.index == Some(0);
         if hit {
             self.then_top1 += 1;

@@ -1,21 +1,14 @@
-# 推 v<版本> 标签发三个平台（共用一个 GitHub Release）；单平台补丁推 macos-v / windows-v / linux-v<版本>，只打那一个平台。
-# 版本号读各平台壳：macOS apps/macos/Cargo.toml、Windows apps/windows/server/Cargo.toml、Linux apps/linux/server/Cargo.toml，要打的平台都得与标签一致。
-# 流程：prepare 核对版本、建草稿 Release → 各平台 job 并行打包，把安装包与摘要 / 构建信息片段传到草稿上
-# → publish 合并片段、转正、生成并签名 releases.json、触发官网构建。任何平台失败都停在草稿，不会发出缺平台的版本。
-# 流程见 docs/notes/release.md。macOS 的签名与公证可选，下面的 Secrets 配齐才签，否则出 ad-hoc 包；
-# Windows 现在没有代码签名（QINGJIAN_UIACCESS=0 关掉 uiAccess，否则没签名的 Server 起不来），证书办下来再加 signtool。
-#   QINGJIAN_CERT_P12            Developer ID Application + Installer 两张证书（含私钥）导出的 .p12，base64
-#   QINGJIAN_CERT_PASSWORD       .p12 的密码
-#   QINGJIAN_SIGN_IDENTITY       "Developer ID Application: 名字 (TEAMID)"
-#   QINGJIAN_INSTALLER_IDENTITY  "Developer ID Installer: 名字 (TEAMID)"
-#   QINGJIAN_NOTARY_KEY          App Store Connect API 密钥 .p8，base64
-#   QINGJIAN_NOTARY_KEY_ID       密钥的 Key ID
-#   QINGJIAN_NOTARY_ISSUER       密钥的 Issuer ID
+# 推 `v<版本>` 或 `windows-v<版本>` 标签发版（当前只有 Windows 一个平台）。
+# 版本号读 apps/windows/{server,tsf,settings}/Cargo.toml（三个一起改，打包读 server），必须与标签一致。
+# 流程：prepare 核对版本、建草稿 Release → windows job 打包，把安装包与摘要 / 构建信息片段传到草稿上
+# → publish 合并片段、转正、生成并签名 releases.json、触发官网构建。打包失败会停在草稿，不会发出缺内容的版本。
+# 流程见 docs/notes/release.md。
+# Windows 现在没有代码签名（CLOUDIME_UIACCESS=0 关掉 uiAccess，否则没签名的 Server 起不来），证书办下来再加 signtool。
 # 版本索引的签名（必须，没配门禁直接失败）：
-#   QINGJIAN_INDEX_SIGNING_KEY   releases.json 的 ed25519 私钥（base64 的 32 字节，tools/release-sign keygen 生成），
-#                                公钥在 crates/qingjian-update/src/index/signature.rs；软件内检查更新只认签过名的索引
+#   CLOUDIME_INDEX_SIGNING_KEY   releases.json 的 ed25519 私钥（base64 的 32 字节，tools/release-sign keygen 生成），
+#                                公钥在 crates/cloudime-update/src/index/signature.rs；软件内检查更新只认签过名的索引
 # 发版后让官网重新构建（也可选）：
-#   QINGJIAN_WEB_TOKEN           fine-grained PAT，对 qingjian-team/qingjian-web 有 Contents: read and write
+#   CLOUDIME_WEB_TOKEN           fine-grained PAT，对 WhiteCloud-OuO/CloudInputMethodEditor-web 有 Contents: read and write
 #                                （官网由 Cloudflare 按仓库提交自动构建，tools/release/bump-website.sh 往那边推一个小提交）
 #
 # 门禁：版本号与标签一致且不带 -dev；标签指向的提交必须在 main 上（防止从没合并的分支或手滑的本地提交发版）。
@@ -25,7 +18,7 @@ name: release
 
 on:
   push:
-    tags: ['v*', 'macos-v*', 'windows-v*', 'linux-v*']
+    tags: ['v*', 'windows-v*']
 
 env:
   CARGO_TERM_COLOR: always
@@ -37,9 +30,7 @@ jobs:
       contents: write
     outputs:
       version: ${{ steps.gate.outputs.version }}
-      macos: ${{ steps.gate.outputs.macos }}
       windows: ${{ steps.gate.outputs.windows }}
-      linux: ${{ steps.gate.outputs.linux }}
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
@@ -49,17 +40,17 @@ jobs:
       - name: Check versions match tag and tag is on main
         id: gate
         env:
-          INDEX_KEY_SET: ${{ secrets.QINGJIAN_INDEX_SIGNING_KEY != '' }}
+          INDEX_KEY_SET: ${{ secrets.CLOUDIME_INDEX_SIGNING_KEY != '' }}
         run: |
           if [[ "$INDEX_KEY_SET" != "true" ]]; then
-            echo "没配 QINGJIAN_INDEX_SIGNING_KEY：releases.json 签不了名，已装的青简都不认这份索引、收不到更新提示（docs/notes/release.md）" >&2
+            echo "没配 CLOUDIME_INDEX_SIGNING_KEY：releases.json 签不了名，已装的云朵输入法都不认这份索引、收不到更新提示（docs/notes/release.md）" >&2
             exit 1
           fi
           case "$GITHUB_REF_NAME" in
-            v*) PLATFORMS="macos windows linux"; VERSION="${GITHUB_REF_NAME#v}" ;;
+            v*) PLATFORMS="windows"; VERSION="${GITHUB_REF_NAME#v}" ;;
             *-v*) PLATFORMS="${GITHUB_REF_NAME%%-v*}"; VERSION="${GITHUB_REF_NAME#*-v}" ;;
           esac
-          declare -A MANIFEST=([macos]=apps/macos/Cargo.toml [windows]=apps/windows/server/Cargo.toml [linux]=apps/linux/server/Cargo.toml)
+          declare -A MANIFEST=([windows]=apps/windows/server/Cargo.toml)
           for platform in $PLATFORMS; do
             found="$(sed -n 's/^version = "\(.*\)"/\1/p' "${MANIFEST[$platform]}" | head -1)"
             if [[ "$found" != "$VERSION" ]]; then
@@ -77,7 +68,7 @@ jobs:
             exit 1
           fi
           echo "version=$VERSION" >> "$GITHUB_OUTPUT"
-          for platform in macos windows linux; do
+          for platform in windows; do
             [[ " $PLATFORMS " == *" $platform "* ]] && on=true || on=false
             echo "$platform=$on" >> "$GITHUB_OUTPUT"
           done
@@ -86,112 +77,20 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.gate.outputs.version }}
-          MACOS: ${{ steps.gate.outputs.macos }}
           WINDOWS: ${{ steps.gate.outputs.windows }}
-          LINUX: ${{ steps.gate.outputs.linux }}
-          MAC_SIGNED: ${{ secrets.QINGJIAN_CERT_P12 != '' }}
         run: |
           NOTES="$RUNNER_TEMP/notes.md"
           python3 tools/release/releases_json.py --notes-for "$VERSION" > "$NOTES"
-          if [[ "$MACOS" == "true" && "$MAC_SIGNED" != "true" ]]; then
-            printf '\n> macOS：这一版没有 Apple 开发者签名，首次打开系统会拦一下：到「系统设置 → 隐私与安全性」底部点「仍要打开」再装一次。\n' >> "$NOTES"
-          fi
           if [[ "$WINDOWS" == "true" ]]; then
             printf '\n> Windows：这一版没有代码签名：安装时 SmartScreen 拦截请点「更多信息 → 仍要运行」；任务栏搜索、「设置」等系统应用里候选窗口可能被遮挡。\n' >> "$NOTES"
           fi
-          if [[ "$LINUX" == "true" ]]; then
-            printf '\n> Linux：预编译包在 Ubuntu 26.04 上构建，其他发行版请用源码安装；解开后运行 install.sh，说明见官网文档「Linux」。\n' >> "$NOTES"
-          fi
           case "$GITHUB_REF_NAME" in
-            macos-v*) TITLE="青简 macOS $VERSION" ;;
-            windows-v*) TITLE="青简 Windows $VERSION" ;;
-            linux-v*) TITLE="青简 Linux $VERSION" ;;
-            *) TITLE="青简 $VERSION" ;;
+            windows-v*) TITLE="云朵输入法 Windows $VERSION" ;;
+            *) TITLE="云朵输入法 $VERSION" ;;
           esac
-          # 带预发布后缀的版本（0.1.4-beta.1）是测试渠道的：标成预发布，不抢 GitHub 的 latest
+          # 带预发布后缀的版本（0.0.1-beta.1）是测试渠道的：标成预发布，不抢 GitHub 的 latest
           PRERELEASE=(); [[ "$VERSION" == *-* ]] && PRERELEASE=(--prerelease --latest=false)
           gh release create "$GITHUB_REF_NAME" --draft --verify-tag --title "$TITLE" --notes-file "$NOTES" ${PRERELEASE[@]+"${PRERELEASE[@]}"}
-
-  macos:
-    needs: prepare
-    if: needs.prepare.outputs.macos == 'true'
-    runs-on: macos-26
-    permissions:
-      contents: write
-    env:
-      VERSION: ${{ needs.prepare.outputs.version }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          # bundle.sh 用提交数当构建号
-          fetch-depth: 0
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
-        with:
-          toolchain: 1.96.0
-          targets: aarch64-apple-darwin, x86_64-apple-darwin
-
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      - name: Detect optional secrets
-        id: secrets
-        run: |
-          echo "sign=${{ secrets.QINGJIAN_CERT_P12 != '' }}" >> "$GITHUB_OUTPUT"
-          echo "notarize=${{ secrets.QINGJIAN_NOTARY_KEY != '' }}" >> "$GITHUB_OUTPUT"
-
-      - name: Fetch product data
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tools/release/data-fetch.sh
-          ls -la data/generated data/generated/dicts data/model
-
-      - name: Import signing certificates
-        if: steps.secrets.outputs.sign == 'true'
-        env:
-          CERT_P12: ${{ secrets.QINGJIAN_CERT_P12 }}
-          CERT_PASSWORD: ${{ secrets.QINGJIAN_CERT_PASSWORD }}
-          SIGN_IDENTITY: ${{ secrets.QINGJIAN_SIGN_IDENTITY }}
-          INSTALLER_IDENTITY: ${{ secrets.QINGJIAN_INSTALLER_IDENTITY }}
-        run: |
-          KEYCHAIN="$RUNNER_TEMP/signing.keychain-db"
-          security create-keychain -p "" "$KEYCHAIN"
-          security set-keychain-settings -lut 21600 "$KEYCHAIN"
-          security unlock-keychain -p "" "$KEYCHAIN"
-          echo "$CERT_P12" | base64 --decode > "$RUNNER_TEMP/cert.p12"
-          security import "$RUNNER_TEMP/cert.p12" -P "$CERT_PASSWORD" -A -t cert -f pkcs12 -k "$KEYCHAIN"
-          rm -f "$RUNNER_TEMP/cert.p12"
-          security set-key-partition-list -S apple-tool:,apple:,codesign:,productbuild: -s -k "" "$KEYCHAIN" >/dev/null
-          security list-keychains -d user -s "$KEYCHAIN" $(security list-keychains -d user | tr -d '"')
-          {
-            echo "QINGJIAN_SIGN_IDENTITY=$SIGN_IDENTITY"
-            echo "QINGJIAN_INSTALLER_IDENTITY=$INSTALLER_IDENTITY"
-          } >> "$GITHUB_ENV"
-
-      - name: Store notarization credentials
-        if: steps.secrets.outputs.notarize == 'true'
-        env:
-          NOTARY_KEY: ${{ secrets.QINGJIAN_NOTARY_KEY }}
-          NOTARY_KEY_ID: ${{ secrets.QINGJIAN_NOTARY_KEY_ID }}
-          NOTARY_ISSUER: ${{ secrets.QINGJIAN_NOTARY_ISSUER }}
-        run: |
-          echo "$NOTARY_KEY" | base64 --decode > "$RUNNER_TEMP/AuthKey.p8"
-          xcrun notarytool store-credentials qingjian --key "$RUNNER_TEMP/AuthKey.p8" \
-            --key-id "$NOTARY_KEY_ID" --issuer "$NOTARY_ISSUER"
-          rm -f "$RUNNER_TEMP/AuthKey.p8"
-          echo "QINGJIAN_NOTARY_PROFILE=qingjian" >> "$GITHUB_ENV"
-
-      - name: Build pkg (arm64)
-        run: QINGJIAN_TARGET=aarch64-apple-darwin apps/macos/scripts/bundle.sh --pkg
-
-      - name: Build pkg (x86_64)
-        run: QINGJIAN_TARGET=x86_64-apple-darwin apps/macos/scripts/bundle.sh --pkg
-
-      - name: Upload to draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: tools/release/upload-build.sh macos "macOS $(sw_vers -productVersion)" target/pkg/*.pkg
 
   windows:
     needs: prepare
@@ -205,7 +104,7 @@ jobs:
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
       # 没有代码签名证书：Server 不带 uiAccess（没签名的 exe 带 uiAccess=true 起不来）。证书办下来后去掉这一行并在 build.ps1 加 signtool。
-      QINGJIAN_UIACCESS: '0'
+      CLOUDIME_UIACCESS: '0'
       PYTHON: python
       # Windows 上 Python 的标准输出缺省 cp1252，中文更新日志会编码失败。
       PYTHONUTF8: '1'
@@ -228,7 +127,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           tools/release/data-fetch.sh
-          ls -la data/generated data/generated/dicts data/model
+          ls -la data/generated WordBank data/local_models
 
       # 与开发机同版本（7.1.0，自带简体中文翻译；Chocolatey 只有 6.x，6 的安装包不带简中）。钉死 GitHub Release 上的文件。
       - name: Install Inno Setup 7.1.0
@@ -253,63 +152,8 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: tools/release/upload-build.sh windows "$(powershell -NoProfile -Command '(Get-CimInstance Win32_OperatingSystem).Caption' | tr -d '\r')" target/installer/*.exe
 
-  linux:
-    needs: prepare
-    if: needs.prepare.outputs.linux == 'true'
-    # Fcitx5 插件链接的是构建机上的 Fcitx5，与已验证的 Ubuntu 26.04 一致
-    runs-on: ubuntu-26.04
-    permissions:
-      contents: write
-    env:
-      VERSION: ${{ needs.prepare.outputs.version }}
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-
-      - uses: dtolnay/rust-toolchain@02cb101ec7c40f2c49e1d9714d64511d8e1b74de # v1
-        with:
-          toolchain: 1.96.0
-
-      - uses: Swatinem/rust-cache@6323deb102c322ba6fcbdcafc7e3dddab59af2b6 # v2.9.2
-
-      - name: Install Fcitx5 build dependencies
-        run: |
-          sudo apt-get update
-          sudo apt-get install -y cmake g++ pkg-config libssl-dev libfcitx5core-dev libfcitx5config-dev libfcitx5utils-dev nlohmann-json3-dev fcitx5
-
-      - name: Fetch product data
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tools/release/data-fetch.sh
-          ls -la data/generated data/generated/dicts data/model
-
-      - name: Build package
-        run: apps/linux/scripts/package.sh
-
-      # 装进临时目录再卸载：包里文件齐、校验过得去、两个二进制在这台机器上找得到全部动态库
-      - name: Smoke-test package
-        run: |
-          work="$RUNNER_TEMP/package-test"
-          mkdir -p "$work"
-          tar -xzf target/linux-package/*.tar.gz -C "$work"
-          cd "$work"/qingjian-*/
-          export XDG_DATA_HOME="$work/data"
-          ./install.sh --prefix "$work/prefix"
-          for binary in "$work/prefix/bin/qingjian-linux-server" "$work/prefix/lib/fcitx5/qingjian.so"; do
-            if ldd "$binary" | grep 'not found'; then exit 1; fi
-          done
-          ./uninstall.sh --prefix "$work/prefix"
-          test ! -e "$work/prefix/bin/qingjian-linux-server"
-
-      - name: Upload to draft release
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: tools/release/upload-build.sh linux "$(. /etc/os-release && echo "$PRETTY_NAME"), Fcitx5 $(pkg-config --modversion Fcitx5Core)" target/linux-package/*.tar.gz
-
   publish:
-    needs: [prepare, macos, windows, linux]
+    needs: [prepare, windows]
     # 没选中的平台是 skipped，照样发；有平台失败就停在草稿
     if: ${{ !cancelled() && needs.prepare.result == 'success' && !contains(needs.*.result, 'failure') }}
     runs-on: ubuntu-26.04
@@ -328,7 +172,7 @@ jobs:
 
       - name: Detect optional secrets
         id: secrets
-        run: echo "website=${{ secrets.QINGJIAN_WEB_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
+        run: echo "website=${{ secrets.CLOUDIME_WEB_TOKEN != '' }}" >> "$GITHUB_OUTPUT"
 
       - name: Merge checksums and build info, publish
         env:
@@ -339,11 +183,11 @@ jobs:
       - name: Generate releases.json
         env:
           GH_TOKEN: ${{ github.token }}
-          QINGJIAN_INDEX_SIGNING_KEY: ${{ secrets.QINGJIAN_INDEX_SIGNING_KEY }}
+          CLOUDIME_INDEX_SIGNING_KEY: ${{ secrets.CLOUDIME_INDEX_SIGNING_KEY }}
         run: tools/release/publish-releases-json.sh "$GITHUB_REF_NAME" "$RUNNER_TEMP/release"
 
       - name: Trigger website build
         if: steps.secrets.outputs.website == 'true'
         env:
-          QINGJIAN_WEB_TOKEN: ${{ secrets.QINGJIAN_WEB_TOKEN }}
+          CLOUDIME_WEB_TOKEN: ${{ secrets.CLOUDIME_WEB_TOKEN }}
         run: tools/release/bump-website.sh

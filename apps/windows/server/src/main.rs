@@ -4,23 +4,22 @@
 
 use std::path::{Path, PathBuf};
 
-use qingjian_core::{Engine, Language};
-use qingjian_platform::{Config, ConfigError, LogLevel, resources};
-use qingjian_windows_server::assembly::{glossary_file, learning_language};
-use qingjian_windows_server::{
+use cloudime_core::Engine;
+use cloudime_platform::{Config, ConfigError, LogLevel, PhraseStore, WordBank, resources};
+use cloudime_windows_server::{
     AssemblySpec, LanguageModelFiles, Router, RouterConfig, ServerError, assembly, dispatch,
 };
 
-/// 用户数据目录 `%APPDATA%\Qingjian`。非 Windows 拿不到。
+/// 用户数据目录 `%APPDATA%\CloudIME`。非 Windows 拿不到。
 fn user_dir() -> Option<PathBuf> {
-    qingjian_platform::dirs::user_dir()
+    cloudime_platform::dirs::user_dir()
 }
 
 fn config_path() -> Option<PathBuf> {
-    qingjian_platform::dirs::config_path()
+    cloudime_platform::dirs::config_path()
 }
 
-/// 首次启动把带说明的配置模板写到 `%APPDATA%\Qingjian\config.toml`（与 macOS 一致）；
+/// 首次启动把带说明的配置模板写到 `%APPDATA%\CloudIME\config.toml`；
 /// 这时日志还没装好，结果交给 `main` 记。已有文件返回 `Ok(false)`。
 fn write_config_template() -> Option<Result<bool, ConfigError>> {
     Some(Config::write_template_if_missing(&config_path()?))
@@ -37,38 +36,13 @@ fn load_config() -> Config {
     }
 }
 
-/// 读密钥：工作目录 `.env`，再叠加 `%APPDATA%\Qingjian\.env`；不覆盖已有环境变量。
-fn load_env() {
-    let _ = dotenvy::dotenv();
-    if let Some(env_file) = user_dir().map(|dir| dir.join(".env")) {
-        let _ = dotenvy::from_path(&env_file);
-    }
-}
-
-/// `<root>/data/generated/<name>`，不存在为 `None`。
-fn generated(root: &Path, name: &str) -> Option<PathBuf> {
-    existing(root.join("data/generated").join(name))
-}
-
-/// `<root>/assets/<rel>`，不存在为 `None`。
-fn asset(root: &Path, rel: &str) -> Option<PathBuf> {
-    existing(root.join("assets").join(rel))
-}
-
-fn existing(path: PathBuf) -> Option<PathBuf> {
-    path.is_file().then_some(path)
-}
-
-/// 正式词库，没有就回落手写样例。
-fn default_dict(root: &Path) -> PathBuf {
-    generated(root, "dict.qj").unwrap_or_else(|| sample_dict(root))
-}
-
 fn sample_dict(root: &Path) -> PathBuf {
     root.join("assets/sample/dict.tsv")
 }
 
 /// 正式词库装配失败回落样例词库，连样例都装不起来才报错。
+/// 语言模型坏掉在 [`assembly::assemble`] 里就地降级、不走这里——数据坏了只该掉效果，不该让 Server 起不来
+///（装完打不出候选、按键没反应就是这么来的）。
 fn assemble_with_fallback(mut spec: AssemblySpec, root: &Path) -> Result<Engine, ServerError> {
     assembly::assemble(&spec).or_else(|error| {
         tracing::error!(%error, dict = %spec.dict.display(), "正式词库装配失败，回落样例词库");
@@ -77,9 +51,9 @@ fn assemble_with_fallback(mut spec: AssemblySpec, root: &Path) -> Result<Engine,
     })
 }
 
-/// 三个进程共用的日志目录 `%LOCALAPPDATA%\Qingjian\logs`（见 `qingjian_platform::dirs`），这里顺手建出来。
+/// 三个进程共用的日志目录 `%LOCALAPPDATA%\CloudIME\logs`（见 `cloudime_platform::dirs`），这里顺手建出来。
 fn log_dir() -> Option<PathBuf> {
-    let dir = qingjian_platform::dirs::log_dir()?;
+    let dir = cloudime_platform::dirs::log_dir()?;
     std::fs::create_dir_all(&dir).ok()?;
     Some(dir)
 }
@@ -104,9 +78,7 @@ fn init_logging(config: &Config) -> Option<tracing_appender::non_blocking::Worke
                 .max_log_files(7)
                 .build(&dir)
                 .expect("构建滚动日志文件");
-            let (writer, guard) = tracing_appender::non_blocking(
-                qingjian_platform::logs::secrets::MaskingWriter::new(appender),
-            );
+            let (writer, guard) = tracing_appender::non_blocking(appender);
             tracing_subscriber::fmt()
                 .with_env_filter(filter)
                 .with_ansi(false)
@@ -122,10 +94,11 @@ fn init_logging(config: &Config) -> Option<tracing_appender::non_blocking::Worke
 }
 
 fn main() {
-    load_env();
-
-    // 日志级别取自配置，所以先写模板、读配置，再装日志。
+    // 日志级别取自配置，所以先写模板、迁移旧配置、读配置，再装日志。
     let template = write_config_template();
+    // 装机布局与 exe 同级，开发布局是仓库根；都找不到回落工作目录。
+    let root = resources::bundled_root().unwrap_or_else(|| PathBuf::from("."));
+    let migration = config_path().map(|path| cloudime_platform::migrate::migrate(&path));
     let config = load_config();
     let _log_guard = init_logging(&config);
     match template {
@@ -133,35 +106,24 @@ fn main() {
         Some(Err(error)) => tracing::warn!(%error, "写配置模板失败"),
         _ => {}
     }
-    let language = learning_language(&config);
-    // 装机布局与 exe 同级，开发布局是仓库 `ime/`；都找不到回落工作目录。
-    let root = resources::bundled_root().unwrap_or_else(|| PathBuf::from("."));
-    let dict = std::env::var_os("QINGJIAN_DICT")
+    if let Some(migration) = migration
+        && !migration.is_empty()
+    {
+        tracing::info!(
+            config = migration.config,
+            phrases = migration.phrases,
+            "旧版配置与短语已迁移"
+        );
+    }
+    // 词库在随包根的 WordBank\ 下（主词库 Dict.db），用户导入的附加词库也一起加载；一个都没有时回落样例
+    let word_bank = WordBank::locate(&root);
+    let dict = std::env::var_os("CLOUDIME_DICT")
         .map(PathBuf::from)
-        .unwrap_or_else(|| default_dict(&root));
-    let glossary_path = language.and_then(|language| {
-        std::env::var_os("QINGJIAN_GLOSSARY")
-            .map(PathBuf::from)
-            .or_else(|| glossary_file(&root, language))
-            .filter(|path| path.is_file())
-    });
-    let glossary = language.zip(glossary_path);
-    let bundled_dicts_dir = Some(root.join("data/generated/dicts")).filter(|dir| dir.is_dir());
-    let bundled_codes_dir = Some(root.join("data/generated/codes")).filter(|dir| dir.is_dir());
+        .or_else(|| word_bank.main().map(|(_, path)| path))
+        .unwrap_or_else(|| sample_dict(&root));
     let spec = AssemblySpec {
-        glossary: glossary.clone(),
-        english_glossary: glossary_file(&root, Language::Chinese),
-        english: generated(&root, "english.tsv"),
-        emoji: ["emoji-zh.tsv", "emoji-en.tsv"]
-            .into_iter()
-            .filter_map(|name| asset(&root, &format!("emoji/{name}")))
-            .collect(),
         language_model: LanguageModelFiles::find(&root.join("data/generated")),
-        bundled_dicts_dir: bundled_dicts_dir.clone(),
-        dictionaries: config.dictionaries.clone(),
-        bundled_codes_dir: bundled_codes_dir.clone(),
-        aux_code: config.aux_code.clone(),
-        levels_dir: Some(root.join("assets/levels")),
+        word_bank: Some(word_bank.clone()),
         user_dir: user_dir(),
         input_log: config.general.input_log,
         ..AssemblySpec::new(&dict)
@@ -173,61 +135,68 @@ fn main() {
             std::process::exit(1);
         }
     };
-    engine.set_fuzzy(config.fuzzy);
-    // 拼音侧与形码侧在 `configure_code_table` 里一起装配（双拼 / 注音 / 混输都在那）
-    engine.set_traditional_mode(config.general.traditional);
+    engine.set_fuzzy(config.input.fuzzy_rules());
+    engine.set_use_jian_pin(config.input.use_jian_pin);
+    engine.set_mixture_input(config.input.mixture_input);
+    engine.set_punctuation_mapping(config.input.punctuation_mapping());
+    engine.set_half_wide_after_digit(config.input.use_half_wide_punctuation_marks_after_digital);
+    engine.set_association_counts(config.candidate.association_counts());
+    engine.set_traditional_mode(
+        config.input.simp_trad_chinese_chars_toggle == cloudime_platform::SimpTrad::Traditional,
+    );
     engine.set_learning(config.general.learning);
-    engine.set_mode_keys(config.shortcut.mode);
-    engine.set_aux_code_key(config.general.aux_code_key(), config.general.page_keys());
-    engine.set_aux_keep_empty(config.general.aux_code_keep_empty);
-    engine.set_aux_enabled(config.aux_code.enabled);
-    engine.set_aux_show(config.general.aux_code_show);
-    engine.set_chinese_first(config.general.chinese_first);
-    engine.set_shift_letter_compose(config.general.shift_letter.compose());
-    engine.set_shuangpin_raw_preedit(config.general.shuangpin_raw_preedit);
+    // 生僻项（词库稀有组）缺省不查，由 [word_bank] rare_items 决定；热加载同款
+    engine.set_rare_enabled(config.word_bank.rare_items);
+    // 用户短语在数据目录的短语库里（`[phrase] file`）；读不出来只按没有短语处理
+    let phrase_store = PhraseStore::locate(
+        &user_dir().unwrap_or_else(|| PathBuf::from(".")),
+        &config.phrase,
+    );
+    match phrase_store.load() {
+        Ok(phrases) => {
+            if let Err(error) = engine.set_custom_phrases(phrases) {
+                tracing::warn!(%error, "短语库内容不合法，本次不启用短语");
+            }
+        }
+        Err(error) => tracing::warn!(%error, "短语库读不出来，本次不启用短语"),
+    }
     engine.log_session(env!("CARGO_PKG_VERSION"), "windows");
-    dispatch::attach_cloud(&mut engine, &config.predict);
     let router_config = RouterConfig::from(&config);
     let mut router = Router::new(engine, router_config.clone());
     let model_path = dispatch::find_model(user_dir().as_deref(), &root);
-    router.configure_local_model(model_path.clone(), &config.model);
-    router.configure_code_table(dispatch::find_code_table(user_dir().as_deref(), &root));
+    router.configure_local_model(
+        model_path.clone(),
+        config.candidate.use_local_sentence_organization_model,
+    );
     if let Some(path) = config_path() {
         let user = user_dir();
         router.watch_config(
             &config,
             path,
-            root.clone(),
             dispatch::DataDirs {
                 user_root: user.clone(),
-                bundled_dicts: bundled_dicts_dir,
-                bundled_codes: bundled_codes_dir,
-                user_dicts: assembly::user_dicts_dir(user.as_deref()),
-                user_codes: assembly::user_codes_dir(user.as_deref()),
+                root: Some(root.clone()),
+                word_bank: Some(word_bank.clone()),
+                main_dict: Some(dict.clone()),
+                phrase: Some(phrase_store.clone()),
             },
         );
     }
     tracing::info!(
         dict = %dict.display(),
-        glossary = glossary.as_ref().map(|(_, p)| p.display().to_string()).unwrap_or_default(),
-        language = language.map_or("off", |l| l.code()),
         page_size = router_config.page_size,
-        page_keys = %format!("{}{}", router_config.page_keys.0, router_config.page_keys.1),
         layout = router_config.layout.key(),
-        theme = router_config.theme.key(),
-        scheme = %if config.general.scheme_label().is_empty() { "全拼".to_owned() } else { config.general.scheme_label() },
-        fuzzy = config.fuzzy.any(),
-        cloud = config.predict.enabled,
+        fuzzy = config.input.fuzzy_rules().any(),
         model = model_path.as_deref().map(|p| p.display().to_string()).unwrap_or_default(),
-        model_enabled = config.model.enabled,
+        model_enabled = config.candidate.use_local_sentence_organization_model,
         sessions = router.session_count(),
-        "青简 Windows Server 就绪"
+        "云朵 Windows Server 就绪"
     );
 
     serve(router);
 }
 
-/// 日志目录 `%LOCALAPPDATA%\Qingjian\logs` 给 AppContainer 应用（任务栏搜索 / 设置）写权限：
+/// 日志目录 `%LOCALAPPDATA%\CloudIME\logs` 给 AppContainer 应用（任务栏搜索 / 设置）写权限：
 /// 那些进程里的 DLL 默认写不了用户目录，出了问题连日志都没有。失败只记警告。
 #[cfg(windows)]
 fn grant_appcontainer_log_access() {
@@ -253,8 +222,8 @@ fn grant_appcontainer_log_access() {
 /// 起 UI 线程作为候选窗口 / 状态条的输出端（失败退化为不画），再在命名管道上服务到进程结束。
 #[cfg(windows)]
 fn serve(mut router: Router) {
-    use qingjian_windows_server::ipc::{Work, pipe};
-    use qingjian_windows_server::ui::UiHandle;
+    use cloudime_windows_server::ipc::{Work, pipe};
+    use cloudime_windows_server::ui::UiHandle;
     grant_appcontainer_log_access();
     // 工人循环的活：各连接的消息 + 状态条上的操作（UI 线程投进来）。
     let (work_tx, work_rx) = std::sync::mpsc::channel::<Work>();

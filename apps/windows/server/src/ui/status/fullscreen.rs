@@ -17,8 +17,14 @@ pub(super) const TIMER_ID: usize = 1;
 
 const INTERVAL_MS: u32 = 1000;
 
-/// 显示状态条，前台正全屏就先收着；开始每秒检查。
-pub(super) fn show(hwnd: HWND, hidden: &Cell<bool>) {
+/// 显示状态条；`auto_hide` 开着时前台正全屏就先收着并开始每秒检查，关着则一直显示、不检查。
+pub(super) fn show(hwnd: HWND, hidden: &Cell<bool>, auto_hide: bool) {
+    if !auto_hide {
+        let _ = unsafe { KillTimer(Some(hwnd), TIMER_ID) };
+        hidden.set(false);
+        let _ = unsafe { ShowWindow(hwnd, SW_SHOWNA) };
+        return;
+    }
     unsafe { SetTimer(Some(hwnd), TIMER_ID, INTERVAL_MS, None) };
     hidden.set(false);
     on_timer(hwnd, hidden);
@@ -27,7 +33,7 @@ pub(super) fn show(hwnd: HWND, hidden: &Cell<bool>) {
     }
 }
 
-/// 收起状态条（青简不在前台 / 关掉了），不再检查。
+/// 收起状态条（云朵输入法不在前台 / 关掉了），不再检查。
 pub(super) fn hide(hwnd: HWND, hidden: &Cell<bool>) {
     let _ = unsafe { KillTimer(Some(hwnd), TIMER_ID) };
     hidden.set(false);

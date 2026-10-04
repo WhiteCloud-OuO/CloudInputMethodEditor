@@ -1,37 +1,26 @@
-//! 把数据源转换成青简的 TSV 格式，或打包成 `.qj`。
+//! 把数据源转换成云朵输入法的 TSV 格式，或打包成 `.qj`。
 //!
-//! - `lexicon`：青简基础词库，「输入法字词库_分类整理版」数据包（规范字 / 常用词 / THUOCL 领域词）+ Unihan 读音 + LLM 多音字标注 → `dict.tsv`
-//! - `wubi`：Rime 形码码表（极点 86 五笔，Apache-2.0）→ `wubi86.tsv`（`词\t编码\t词频`，词频由青简词库按词面回填）
-//! - `cedict`：CC-CEDICT（CC BY-SA 4.0）→ `glossary-en.tsv`（释义表的备用来源，现在用 gloss-gen 的 LLM 表）
+//! - `lexicon`：云朵基础词库，「输入法字词库_分类整理版」数据包（规范字 / 常用词 / THUOCL 领域词）+ Unihan 读音 + 多音字词标注 → `dict.tsv`
 //! - `english`：`词\t编码` 英文词表（数据包的 `05_english`，ESDB / CSpell，MIT）→ `english.tsv`
-//! - `emoji`：Unicode CLDR annotations（Unicode License v3，`--language zh|en`）→ `emoji-<语言>.tsv`（可发布，放 `assets/emoji/`）
 //! - `bigram`：纯文本语料（如 `tools/corpus/parquet_to_text.py` 转出的中文维基 CC BY-SA 4.0、LCCC 对话 MIT）→ `lm-unigram.tsv` + `lm-bigram.tsv`
 //! - `mine`：语料里分词落成连续单字的段 → `oov-candidates.tsv`（词库没收的高频词，标音后用 `lexicon --extra-words` 并入）
 //! - `phrases`：bigram 表的相邻两词 + 语料的相邻三词 → `phrases.tsv`（我的 / 不知道 这类短语层，读音由成分词拼出，同样用 `lexicon --extra-words` 并入）
-//! - `stroke`：CNS11643 全字庫「筆順資料」+ 大陆序覆盖表（`assets/stroke/prc-rules.tsv`）→ `codes/stroke.tsv`（随包笔画码表的源数据，`--verify` 抽样对照大陆笔画数）
-//! - `mmh-reference`：hanzi-writer-data（Make Me a Hanzi；Arphic 许可，不进仓库）→ `data/mmh/` 的两张开发期对照表
-//!   （笔画数、首笔几何类别），`stroke --verify` 找不到哪张就跳过哪张对照
-//! - `pack codes`：笔画表（`stroke` 的产物，`字\t序列`）+ 词库 → `codes/stroke.qj`（随包原生辅码表：单字前 4 笔 + 末笔、
-//!   词组每字首笔；缺字的词跳过并计入统计，见 `codes` 模块）
-//! - `pack dict|lm|glossary|model`：TSV → `.qj` 容器（`dict.qj` / `lm.qj`），带名称 / 许可证 / 署名元数据，输入法与 CLI 优先加载它；
+//! - `pack dict|lm|model`：TSV → 词库存档 / `.qj` 容器（`dict` 写 SQLite `.db`，`lm` 写 `lm.qj`），带名称 / 许可证 / 署名元数据；
 //!   `model` 把本地整句模型的三件套目录打成一个 `model.qjm`
+//! - `word-bank`：合并中文 / 英文 / 品牌 / 中英混杂词源，写出 `WordBank\Dict.db`（引擎按 `language` 分流加载）
+//! - `rehead`：把改名前的 `.qj`（魔数 `QINGJIAN`）就地改成当前魔数 `CLOUDIME`，只改头 8 字节，见 `rehead.rs`
 //!
 //! 输出默认写到仓库根目录 `data/generated/`（gitignore）。
 
 mod args;
 mod bigram;
-mod cedict;
-mod codes;
-mod emoji;
 mod english;
 mod error;
 mod lexicon;
-mod mmh;
 mod oov_filter;
 mod pack;
 mod phrases;
-mod stroke;
-mod wubi;
+mod rehead;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
@@ -74,30 +63,10 @@ fn run() -> Result<(), ConvertError> {
             domain_keep_min,
             &args.out_dir,
         ),
-        Command::Wubi {
-            input,
-            frequency,
-            name,
-        } => {
-            let converted = wubi::convert(&input, &frequency, &args.out_dir.join(name))?;
-            tracing::info!(
-                entries = converted.entries,
-                from_corpus = converted.with_frequency,
-                unknown = converted.unknown,
-                "形码码表已写出"
-            );
-            Ok(())
-        }
-        Command::Cedict { input } => cedict::convert(&input, &args.out_dir.join("glossary-en.tsv")),
         Command::English { inputs, frequency } => english::convert(
             &inputs,
             frequency.as_deref(),
             &args.out_dir.join("english.tsv"),
-        ),
-        Command::Emoji { inputs, language } => emoji::convert(
-            &inputs,
-            &args.out_dir.join(format!("emoji-{language}.tsv")),
-            &language,
         ),
         Command::Bigram {
             corpus,
@@ -153,36 +122,48 @@ fn run() -> Result<(), ConvertError> {
             },
             &args.out_dir,
         ),
-        Command::Stroke(options) => stroke::convert(&options, &args.out_dir),
-        Command::MmhReference(options) => mmh::generate(&options),
+        Command::Rehead { kind, input } => rehead::rehead(kind, &input),
         Command::Pack {
             kind,
             input,
-            stroke,
-            dict,
-            output,
             name,
             license,
             attribution,
             source,
             data_version,
-            language,
         } => pack::pack(
             kind,
             &input,
-            &pack::CodePaths {
-                stroke: stroke.as_deref(),
-                dict: dict.as_deref(),
-                output: output.as_deref(),
-            },
-            &language,
-            qingjian_format::Metadata {
+            cloudime_format::Metadata {
                 name,
                 license,
                 attribution,
                 source,
                 version: data_version,
-                ..qingjian_format::Metadata::default()
+                ..cloudime_format::Metadata::default()
+            },
+            &args.out_dir,
+        ),
+        Command::WordBank {
+            chinese,
+            english,
+            extra,
+            name,
+            license,
+            attribution,
+            source,
+            data_version,
+        } => pack::word_bank(
+            &chinese,
+            &english,
+            &extra,
+            cloudime_format::Metadata {
+                name,
+                license,
+                attribution,
+                source,
+                version: data_version,
+                ..cloudime_format::Metadata::default()
             },
             &args.out_dir,
         ),

@@ -1,4 +1,4 @@
-//! 本地整句模型（与 macOS 壳的 `host/model.rs` 对齐）：后台加载、停键后请求重排、结果到了重画当前页。
+//! 本地整句模型：后台加载、停键后请求重排、结果到了重画当前页。
 //!
 //! 按键回调里永远只跑词级模型；模型的意见在停键 80 毫秒后请求、几十毫秒后到，只换候选窗口里的整句候选，
 //! 用户翻过页或动过高亮就不打扰。前文优先用应用里光标前的文字（DLL 起组句时随 `ClientMessage::Surrounding` 送来），没有退回本会话历史。
@@ -11,9 +11,8 @@ mod state;
 use std::path::{Path, PathBuf};
 use std::time::Duration;
 
-use qingjian_core::CandidateLayout;
-use qingjian_platform::LocalModelConfig;
-use qingjian_platform::protocol::SessionId;
+use cloudime_core::CandidateLayout;
+use cloudime_platform::protocol::SessionId;
 
 use self::loader::Loaded;
 pub(crate) use self::loader::ModelLoader;
@@ -21,39 +20,36 @@ pub(crate) use self::state::RescoreState;
 use super::Router;
 use super::composed::{Composed, marked_parts};
 
-/// 找模型（`.qjm` 单文件，或开发时的三件套目录）：用户目录 `model/` 优先（用户自己的模型），否则随包 `data/model/`；都没有为 `None`。
+/// 找模型（`.qjm` 单文件，或开发时的三件套目录）：用户目录 `local_models/` 优先（用户自己的模型），否则随包 `data/local_models/`；都没有为 `None`。
+/// 目录里有多份时按 [`cloudime_neural::find_model`] 优先词表含汉字的字级模型。
 pub fn find_model(user_dir: Option<&Path>, bundled_root: &Path) -> Option<PathBuf> {
     let candidates = [
-        user_dir.map(|dir| dir.join("model")),
-        Some(bundled_root.join("data/model")),
+        user_dir.map(|dir| dir.join("local_models")),
+        Some(bundled_root.join("data/local_models")),
     ];
     candidates
         .into_iter()
         .flatten()
-        .find_map(|dir| qingjian_neural::find_model(&dir))
+        .find_map(|dir| cloudime_neural::find_model(&dir))
 }
 
 impl Router {
-    /// 启动时：记下模型文件，按 `[model] enabled` 决定要不要加载。
-    pub fn configure_local_model(
-        &mut self,
-        model_path: Option<PathBuf>,
-        config: &LocalModelConfig,
-    ) {
+    /// 启动时：记下模型文件，按 `[candidate] use_local_sentence_organization_model` 决定要不要加载。
+    pub fn configure_local_model(&mut self, model_path: Option<PathBuf>, enabled: bool) {
         self.model_path = model_path;
-        self.applied_model = config.clone();
-        if config.enabled {
+        self.applied_model = enabled;
+        if enabled {
             self.load_local_model();
         }
     }
 
-    /// 热加载：`[model]` 变了才重载 / 卸载。
-    pub(super) fn apply_model_config(&mut self, config: &LocalModelConfig) {
-        if *config == self.applied_model {
+    /// 热加载：这一项变了才重载 / 卸载。
+    pub(super) fn apply_model_config(&mut self, enabled: bool) {
+        if enabled == self.applied_model {
             return;
         }
-        self.applied_model = config.clone();
-        if config.enabled {
+        self.applied_model = enabled;
+        if enabled {
             self.load_local_model();
         } else {
             self.unload_local_model();
@@ -77,7 +73,9 @@ impl Router {
         self.model_loader = None;
         self.engine.set_async_sentence_scorer(None);
         self.rescore.stop();
-        tracing::info!("本地整句模型已卸载（[model] enabled = false）");
+        tracing::info!(
+            "本地整句模型已卸载（[candidate] use_local_sentence_organization_model = false）"
+        );
     }
 
     /// 加载线程有结果了就接到 Engine 上；每次按键 / tick 顺手看一眼，不阻塞。
@@ -152,7 +150,7 @@ impl Router {
 
     /// 防抖到点就发请求；在等结果就收一次，收到了重查并重画当前页。
     fn advance_rescoring(&mut self) {
-        if self.engine.composition().is_empty() || self.translation.is_some() {
+        if self.engine.composition().is_empty() {
             self.rescore.stop();
             return;
         }
@@ -181,7 +179,7 @@ impl Router {
         self.requery_rescored();
     }
 
-    /// 分回来了：按重排后的顺序重建候选布局，云端词与整句补全留着，重画当前页。
+    /// 分回来了：按重排后的顺序重建候选布局，重画当前页。
     fn requery_rescored(&mut self) {
         let Ok(query) = self.engine.query() else {
             return;
@@ -189,23 +187,13 @@ impl Router {
         let Some(Composed::Candidates {
             preedit,
             cursor,
-            typed_keys,
             layout,
         }) = self.composed.as_mut()
         else {
             return;
         };
-        let cloud = layout.cloud().to_vec();
-        let mut rebuilt = CandidateLayout::new(
-            query.candidates.items.clone(),
-            self.config.page_size,
-            self.config.cloud_slots,
-        );
-        if !cloud.is_empty() {
-            rebuilt.set_cloud(cloud);
-        }
-        *layout = rebuilt;
-        (*preedit, *cursor, *typed_keys) = marked_parts(&query);
+        *layout = CandidateLayout::new(query.candidates.items.clone(), self.config.page_size);
+        (*preedit, *cursor) = marked_parts(&query);
         let frame = self.self_drawn_frame();
         self.reconcile_candidates(&frame);
         // 前文在结果回来之前换过（Surrounding 晚到）：这次查询又记下了一批要打分的，再来一轮

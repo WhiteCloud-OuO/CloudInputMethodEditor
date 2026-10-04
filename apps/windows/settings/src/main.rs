@@ -1,4 +1,4 @@
-//! 青简 Windows 设置界面入口：左侧导航栏 + 各分节表单，读写 `%APPDATA%\Qingjian\config.toml`。
+//! 云朵 Windows 设置界面入口：左侧导航栏 + 各分节表单，读写 `%APPDATA%\CloudIME\config.toml`。
 //! UI 用 Windows Reactor；非 Windows 编成空壳，让工作区能整体编译。
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
@@ -19,9 +19,9 @@ fn main() {
         log::error(format!("设置界面启动失败: {error:?}"));
         rfd::MessageDialog::new()
             .set_level(rfd::MessageLevel::Error)
-            .set_title("青简设置")
+            .set_title("云朵设置")
             .set_description(format!(
-                "设置界面启动失败，请重新安装青简；仍不行请把日志目录发给作者。\n\n{error}"
+                "设置界面启动失败，请重新安装云朵输入法；仍不行请把日志目录发给作者。\n\n{error}"
             ))
             .set_buttons(rfd::MessageButtons::Ok)
             .show();
@@ -30,5 +30,5 @@ fn main() {
 
 #[cfg(not(windows))]
 fn main() {
-    eprintln!("qingjian-settings 仅支持 Windows");
+    eprintln!("cloudime-settings 仅支持 Windows");
 }

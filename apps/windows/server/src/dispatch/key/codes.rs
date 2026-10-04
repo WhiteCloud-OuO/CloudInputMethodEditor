@@ -1,6 +1,6 @@
 //! 按键分派用的虚拟键码与字符解析。
 
-use qingjian_platform::protocol::KeyEvent;
+use cloudime_platform::protocol::KeyEvent;
 
 pub(crate) const BACK: u32 = 0x08;
 pub(crate) const TAB: u32 = 0x09;
@@ -15,15 +15,21 @@ pub(crate) const UP: u32 = 0x26;
 pub(crate) const RIGHT: u32 = 0x27;
 pub(crate) const DOWN: u32 = 0x28;
 
-/// 翻页键对 `(上一页, 下一页)`：返回 -1 / +1。
-pub(crate) fn page_key(event: &KeyEvent, page_keys: (char, char)) -> Option<isize> {
-    let c = event.character?;
-    if c == page_keys.0 {
-        Some(-1)
-    } else if c == page_keys.1 {
-        Some(1)
-    } else {
-        None
+/// 主键盘 `-`（VK_OEM_MINUS）与 `=`（VK_OEM_PLUS）：固定的上一页 / 下一页。
+pub(crate) const OEM_MINUS: u32 = 0xBD;
+pub(crate) const OEM_PLUS: u32 = 0xBB;
+
+/// 固定的翻页键：主键盘 `-` 上一页、`=` 下一页；返回 -1 / +1。
+/// 只认**没按 Shift 的裸键**：`Shift + =` 是 `+`、`Shift + -` 是 `_`，属上档符号，不翻页。
+/// 小键盘的 `-` / `=` 不算，PageUp / PageDown 由功能键分派（`input::apply_function_key`）处理。
+pub(crate) fn page_key(event: &KeyEvent) -> Option<isize> {
+    if event.modifiers.shift {
+        return None;
+    }
+    match event.virtual_key {
+        OEM_MINUS => Some(-1),
+        OEM_PLUS => Some(1),
+        _ => None,
     }
 }
 
@@ -35,11 +41,21 @@ pub(crate) fn digit(event: &KeyEvent) -> Option<usize> {
     }
 }
 
-/// 主键盘区数字键 1–9 的键码，不管修饰键（修饰键 + 数字的快捷键按键位认）。
+/// 主键盘区数字键 1–9 的键码（没有 `character` 时兜底认数字）。
 pub(crate) fn digit_key(virtual_key: u32) -> Option<usize> {
     (0x31..=0x39)
         .contains(&virtual_key)
         .then(|| (virtual_key - 0x30) as usize)
+}
+
+/// 主键盘或小键盘数字键 1–9 的键码。按住 Ctrl 时 `character` 是控制字符（`\u{1}`），
+/// 杀词的组合键只能按键码认。
+pub(crate) fn digit_virtual_key(virtual_key: u32) -> Option<usize> {
+    match virtual_key {
+        0x31..=0x39 => Some((virtual_key - 0x30) as usize),
+        0x61..=0x69 => Some((virtual_key - 0x60) as usize),
+        _ => None,
+    }
 }
 
 /// 小键盘区的键（数字与 `* + - . /`）：敲出来的标点一律半角。

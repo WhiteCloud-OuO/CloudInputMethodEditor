@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::Path;
 
-use qingjian_dictionary::canonical_syllable;
+use cloudime_dictionary::canonical_syllable;
 
 use crate::error::ConvertError;
 
@@ -70,7 +70,7 @@ mod tests {
     #[test]
     fn normalizes_given_pinyin() {
         let path = std::env::temp_dir().join(format!(
-            "qingjian-extra-words-normalize-{}.tsv",
+            "cloudime-extra-words-normalize-{}.tsv",
             std::process::id()
         ));
         std::fs::write(&path, "策略\t20\tce lue\n虐待\t10\tnue dai\n").unwrap();

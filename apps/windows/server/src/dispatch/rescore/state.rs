@@ -1,6 +1,6 @@
 //! 本地整句模型的两个节拍：停键后的防抖（到点才把整句路径送去后台打分）与结果轮询。
 //! Server 没有定时器，工人循环按 [`RescoreState::next_deadline`] 给的时长等消息，超时就来一次 `tick`；
-//! 常数与 macOS 壳的 `RescoreMonitor` 相同。
+//! 常数固定在这里。
 
 use std::time::{Duration, Instant};
 

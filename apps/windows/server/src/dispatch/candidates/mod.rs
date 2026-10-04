@@ -2,7 +2,8 @@
 
 mod sink;
 
-use qingjian_platform::protocol::{Frame, ScreenRect, SessionId};
+use cloudime_core::{CandidateKind, Learner};
+use cloudime_platform::protocol::{Frame, ScreenRect, SessionId};
 
 pub use self::sink::{CandidateSink, NoopSink, RenderSettings};
 use super::Router;
@@ -14,14 +15,23 @@ impl Router {
             self.engine.note_displayed(std::iter::empty());
             self.hide_candidate_window();
         } else if let Some(rect) = self.last_rect {
-            let unchanged = matches!(&self.last_shown, Some((f, r)) if f == frame && *r == rect);
+            let badges = self.candidate_badges(frame);
+            let unchanged = matches!(
+                &self.last_shown,
+                Some((f, b, r)) if f == frame && *b == badges && *r == rect
+            );
             if !unchanged {
-                // 词汇记录的「看到轮次」按真正显示的页算，与 macOS 壳对齐。
+                // 词汇记录的「看到轮次」按真正显示的页算。
                 self.engine.note_displayed(frame.candidates.items.iter());
-                self.candidates.show(frame.clone(), rect);
-                self.last_shown = Some((frame.clone(), rect));
+                self.candidates.show(frame.clone(), badges.clone(), rect);
+                self.last_shown = Some((frame.clone(), badges, rect));
             }
         }
+    }
+
+    /// 每个候选右侧的来源角标。
+    fn candidate_badges(&self, frame: &Frame) -> Vec<Option<char>> {
+        badges_of(frame, self.engine.learner())
     }
 
     pub(super) fn hide_candidate_window(&mut self) {
@@ -38,5 +48,69 @@ impl Router {
         // 自绘窗吃未降级的帧（降级只作用于发给 DLL 的那份）
         let frame = self.self_drawn_frame();
         self.reconcile_candidates(&frame);
+    }
+}
+
+/// 每个候选右侧的来源角标：用户短语「短」、用户自造词「造」，其余没有。
+fn badges_of(frame: &Frame, learner: &dyn Learner) -> Vec<Option<char>> {
+    frame
+        .candidates
+        .items
+        .iter()
+        .map(|candidate| match candidate.kind {
+            CandidateKind::Custom => Some('短'),
+            CandidateKind::Sentence => Some('句'),
+            _ if learner.is_user_word(&candidate.text) => Some('造'),
+            _ => None,
+        })
+        .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use cloudime_core::{Candidate, CandidateKind, Learner};
+    use cloudime_platform::protocol::Frame;
+
+    use super::badges_of;
+
+    /// 只认固定几个用户词的学习器。
+    struct UserWords(Vec<&'static str>);
+
+    impl Learner for UserWords {
+        fn record(&mut self, _candidate: &Candidate) {}
+
+        fn weight(&self, _text: &str) -> u32 {
+            0
+        }
+
+        fn is_user_word(&self, text: &str) -> bool {
+            self.0.contains(&text)
+        }
+    }
+
+    fn candidate(text: &str, kind: CandidateKind) -> Candidate {
+        Candidate {
+            text: text.to_owned(),
+            kind,
+            syllables: Vec::new(),
+            reading: None,
+        }
+    }
+
+    #[test]
+    fn badges_mark_phrases_sentences_and_user_words_only() {
+        let mut frame = Frame::default();
+        frame.candidates.items = vec![
+            candidate("第1项", CandidateKind::Custom),
+            candidate("想开发", CandidateKind::Sentence),
+            candidate("青简", CandidateKind::Chinese),
+            candidate("创造", CandidateKind::Chinese),
+            candidate("hello", CandidateKind::English),
+        ];
+        let learner = UserWords(vec!["青简"]);
+        assert_eq!(
+            badges_of(&frame, &learner),
+            [Some('短'), Some('句'), Some('造'), None, None]
+        );
     }
 }

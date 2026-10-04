@@ -1,19 +1,14 @@
 //! 候选窗口一次绘制要用的全部内容，由帧换算而来；渲染器要的帧由 [`RenderData::render_frame`] 再换一次。
 
-use std::rc::Rc;
-
-use qingjian_platform::protocol::{Frame, PreeditKind};
-use qingjian_platform::{LayoutMode, ThemeMode};
-use qingjian_render::{Preedit, PreeditSegment, PreeditStyle, Row};
+use cloudime_platform::ItemNumberStyle;
+use cloudime_platform::LayoutMode;
+use cloudime_platform::protocol::{Frame, PreeditKind};
+use cloudime_render::{Preedit, PreeditSegment, PreeditStyle, Row};
 
 use super::row;
-use super::theme::Theme;
 
 /// 一次绘制要用的全部内容。
 pub(crate) struct RenderData {
-    /// 配色与字体（随 DPI / 深浅重建）。
-    pub(super) theme: Rc<Theme>,
-
     /// 顶部拼音行的各段。
     pub(super) preedit: Vec<(String, PreeditKind)>,
 
@@ -29,43 +24,38 @@ pub(crate) struct RenderData {
     /// 页码，只有多页时有。
     pub(super) footer: Option<String>,
 
-    /// 整句补全，画在拼音行右侧。
-    pub(super) sentence: Option<String>,
-
-    /// 屏幕提示（删候选后的「已删除…」），画在拼音行下方。
+    /// 屏幕提示（当前没有来源写入），画在拼音行下方。
     pub(super) notice: Option<String>,
 
     /// 候选排布。
     pub(super) layout: LayoutMode,
 
-    /// 外观模式；`System` 由窗口按系统主题解析。
-    pub(super) theme_mode: ThemeMode,
-
-    /// 候选上是否显示辅码（随帧下发的 `[general] aux_code_show`）。
-    pub(super) show_code: bool,
+    /// 序号的写法。
+    pub(super) index_style: ItemNumberStyle,
 }
 
 impl RenderData {
-    pub(super) fn empty(theme: Rc<Theme>) -> Self {
+    pub(super) fn empty() -> Self {
         Self {
-            theme,
             preedit: Vec::new(),
             cursor: 0,
             rows: Vec::new(),
             highlight: usize::MAX,
             footer: None,
-            sentence: None,
             notice: None,
             layout: LayoutMode::default(),
-            theme_mode: ThemeMode::default(),
-            show_code: false,
+            index_style: ItemNumberStyle::default(),
         }
     }
 
-    pub(super) fn set(&mut self, frame: &Frame) {
+    pub(super) fn set(
+        &mut self,
+        frame: &Frame,
+        badges: &[Option<char>],
+        index_style: ItemNumberStyle,
+    ) {
         self.layout = frame.layout;
-        self.theme_mode = frame.theme;
-        self.show_code = frame.aux_code_show;
+        self.index_style = index_style;
         self.preedit = window_preedit(frame);
         self.cursor = frame.cursor;
         self.rows = frame
@@ -73,17 +63,18 @@ impl RenderData {
             .items
             .iter()
             .enumerate()
-            .map(|(i, candidate)| row::from_candidate(i, candidate, self.show_code))
+            .map(|(i, candidate)| {
+                row::from_candidate(i, candidate, badges.get(i).copied().flatten(), index_style)
+            })
             .collect();
         self.highlight = frame.highlight;
         self.footer =
             (frame.page_count > 1).then(|| format!("{}/{}", frame.page + 1, frame.page_count));
-        self.sentence = frame.sentence.clone();
         self.notice = frame.notice.clone();
     }
 
-    /// 渲染器要的帧。提示（删了什么词）在渲染器里画在拼音行右侧，与 macOS 一致。
-    pub(super) fn render_frame(&self) -> qingjian_render::Frame {
+    /// 渲染器要的帧。提示（删了什么词）在渲染器里画在拼音行右侧。
+    pub(super) fn render_frame(&self) -> cloudime_render::Frame {
         let preedit = (!self.preedit.is_empty()).then(|| Preedit {
             segments: self
                 .preedit
@@ -94,13 +85,12 @@ impl RenderData {
                         PreeditKind::Typed => PreeditStyle::Typed,
                         PreeditKind::Rest => PreeditStyle::Rest,
                         PreeditKind::Corrected => PreeditStyle::Struck,
-                        PreeditKind::AuxCode => PreeditStyle::AuxCode,
                     },
                 })
                 .collect(),
             cursor: self.cursor,
         });
-        qingjian_render::Frame {
+        cloudime_render::Frame {
             preedit,
             rows: self.rows.clone(),
             // 协议里 usize::MAX 表示不高亮。
@@ -108,7 +98,6 @@ impl RenderData {
             columns: 0,
             column_ems: Vec::new(),
             footer: self.footer.clone(),
-            sentence: self.sentence.clone(),
             status: self.notice.clone(),
         }
     }
@@ -129,8 +118,8 @@ fn window_preedit(frame: &Frame) -> Vec<(String, PreeditKind)> {
 
 #[cfg(test)]
 mod tests {
-    use qingjian_platform::PreeditMode;
-    use qingjian_platform::protocol::{Frame, PreeditKind, PreeditSegment};
+    use cloudime_platform::PreeditMode;
+    use cloudime_platform::protocol::{Frame, PreeditKind, PreeditSegment};
 
     use super::window_preedit;
 

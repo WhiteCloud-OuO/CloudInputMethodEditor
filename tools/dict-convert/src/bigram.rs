@@ -6,7 +6,7 @@
 //! 这样 P(短语|v) = P(a|v)·P(b|a)、P(w|短语) = P(w|b)，短语在整句词图和词级排序里的得分与原来走 a / b 两个词的路径一模一样，
 //! 只是多了一个能整块选的词。三词短语的一元按 c(a,b)·c(b,c)/c(b) 估。
 //!
-//! 分词用青简自己的词库做一元最大概率切分（与输入法词图同一套词表，统计出来的词才能在整句转换里用上）；
+//! 分词用云朵输入法自己的词库做一元最大概率切分（与输入法词图同一套词表，统计出来的词才能在整句转换里用上）；
 //! 只统计连续的汉字段，段与段之间（标点、数字、字母）算句子边界，句首用 `<s>` 标记；空格忽略（预分词语料）。
 //! 词库里没有的字跳过，并切断前后的二元关系。
 
@@ -196,7 +196,7 @@ pub struct MineOptions {
 /// 挖词库里没有的词：分词时连续落成单字的那一段（2–`max_chars` 个字）多半是一个词库没收的词，
 /// 按出现次数统计，出现 `min_count` 次以上的写到 `oov-candidates.tsv`（`词\t次数`），
 /// 再经 [`OovFilter`]（虚词规则 + 相邻字对 PMI）筛成 `oov-filtered.tsv` 与一行一词的 `oov-words.txt`，
-/// 后者交给 `gloss-gen pinyin` 标音、前者给 `lexicon --extra-words` 并进词库。
+/// 后者交给外部标注工具标音、前者给 `lexicon --extra-words` 并进词库。
 /// 单字词本身在词库里（规范字全收了），所以这里只看「本可以成词却被拆成单字」的连续段：
 /// 段内每个字都是词库里的单字词、且整段不在词库里。
 pub fn mine(options: &MineOptions, out_dir: &Path) -> Result<(), ConvertError> {
@@ -207,7 +207,7 @@ pub fn mine(options: &MineOptions, out_dir: &Path) -> Result<(), ConvertError> {
             let counts = scan_single_runs(options)?;
             write_counts(
                 &out_dir.join("oov-candidates.tsv"),
-                "# 由 qingjian-dict-convert mine 从语料挖出的词库未收词（未过滤）。词\t次数",
+                "# 由 cloudime-dict-convert mine 从语料挖出的词库未收词（未过滤）。词\t次数",
                 &sorted_rows(&counts, options.min_count),
             )?;
             counts
@@ -439,8 +439,8 @@ pub fn convert(
         distinct_bigrams = bigram.len(),
         "统计完成"
     );
-    // 品牌词（青简）与中英混杂词（C盘）语料里没有：按文件给的次数写进一元，句首二元给八分之一（请柬 209 次里 25 次在句首，同一比例），
-    // 让词级排序不把它当模型不认识的词扣分、能与同音词（请柬）平起平坐，又不压过 请见 这种整句路径
+    // 品牌词（云朵输入法）与中英混杂词（C盘）语料里没有：按文件给的次数写进一元，句首二元给八分之一（请柬 209 次里 25 次在句首，同一比例），
+    // 让词级排序不把它当模型不认识的词扣分、能在同拼音的候选里排到最前，也不至于压过更常见的真词
     for path in brand {
         let mut added = 0usize;
         for line in std::fs::read_to_string(path)?.lines() {
@@ -476,7 +476,7 @@ pub fn convert(
     let mut writer = BufWriter::new(File::create(&bigram_path)?);
     writeln!(
         writer,
-        "# 由 qingjian-dict-convert bigram 从语料统计。前词\\t后词\\t计数"
+        "# 由 cloudime-dict-convert bigram 从语料统计。前词\\t后词\\t计数"
     )?;
     for (key, count) in &pairs {
         let first = &vocabulary.words[(key >> 32) as usize];
@@ -490,7 +490,7 @@ pub fn convert(
     let mut writer = BufWriter::new(File::create(&unigram_path)?);
     writeln!(
         writer,
-        "# 由 qingjian-dict-convert bigram 从语料统计。词\\t计数；<s> 是句首标记"
+        "# 由 cloudime-dict-convert bigram 从语料统计。词\\t计数；<s> 是句首标记"
     )?;
     let mut written = 0usize;
     for (id, count) in unigram.iter().enumerate() {
@@ -611,7 +611,7 @@ mod tests {
     #[test]
     fn vocabulary_skips_hidden_temp_and_non_file_dicts() {
         let dir = std::env::temp_dir().join(format!(
-            "qingjian-dict-convert-bigram-{}",
+            "cloudime-dict-convert-bigram-{}",
             std::process::id()
         ));
         let _ = std::fs::remove_dir_all(&dir);

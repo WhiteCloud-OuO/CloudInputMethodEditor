@@ -1,6 +1,6 @@
 # 中英混杂词：字母 + 汉字的固定说法，输入码为「字母音节 + 汉字拼音」（搜狗 / 微软同款）。
 # c pan → 敲 cpan 出 C盘。u 是问字前缀，U盘 走 youpan（与 优盘 同读音，候选并列）。
-# 由 qingjian-dict-convert lexicon --extra-words 并入基础词库；次数与 domain_words 同一尺度。
+# 由 cloudime-dict-convert lexicon --extra-words 并入基础词库；次数与 domain_words 同一尺度。
 # 词	次数	拼音
 C盘	8000	c pan
 D盘	4000	d pan

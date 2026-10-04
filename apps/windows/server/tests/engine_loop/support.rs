@@ -3,19 +3,14 @@
 pub use std::path::PathBuf;
 pub use std::sync::{Arc, Mutex};
 
-pub use qingjian_core::sentence::SentenceScorer;
-pub use qingjian_core::{Language, ModeKeys, ShuangpinScheme};
-pub use qingjian_platform::protocol::{
-    ClientMessage, Frame, KeyEvent, KeyModifiers, KeyOutcome, PROTOCOL_VERSION, ScreenRect,
+pub use cloudime_core::sentence::SentenceScorer;
+pub use cloudime_platform::PreeditMode;
+pub use cloudime_platform::protocol::{
+    ClientMessage, Frame, InputMode, KeyEvent, KeyModifiers, KeyOutcome, PROTOCOL_VERSION,
     ServerMessage, SessionId,
 };
-pub use qingjian_platform::{
-    AppsConfig, DEFAULT_ENGLISH_CANDIDATES_OFF_WINDOWS, PreeditMode, Scheme,
-};
-pub use qingjian_windows_server::dispatch::{
-    CandidateSink, RenderSettings, StatusEvent, StatusSink, StatusView,
-};
-pub use qingjian_windows_server::{AssemblySpec, Router, RouterConfig, assembly};
+pub use cloudime_windows_server::dispatch::{StatusEvent, StatusSink, StatusView};
+pub use cloudime_windows_server::{AssemblySpec, Router, RouterConfig, assembly};
 
 pub const SESSION: SessionId = SessionId(1);
 
@@ -48,41 +43,11 @@ pub fn router_with(config: RouterConfig) -> Router {
     router_in(config, None)
 }
 
-/// 在某个应用（宿主 exe 名）里开会话，名单用 Windows 缺省那份。
-pub fn router_in_app(app: &str) -> Router {
-    let config = RouterConfig {
-        apps: AppsConfig::with_english_candidates_off(DEFAULT_ENGLISH_CANDIDATES_OFF_WINDOWS),
-        ..RouterConfig::default()
-    };
-    router_in(config, Some(app.to_owned()))
-}
-
-/// `?` 开着当问字入口的 Router（配置 `[shortcut] question_mark`，缺省关）。
-pub fn router_asking() -> Router {
-    router_asking_with(RouterConfig::default())
-}
-
-pub fn router_asking_with(config: RouterConfig) -> Router {
-    let mut router = router_with(config);
-    router.engine_mut().set_mode_keys(ModeKeys {
-        question_mark: true,
-        ..ModeKeys::default()
-    });
-    router
-}
-
 pub fn router_in(config: RouterConfig, app: Option<String>) -> Router {
     let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
     let dict = root.join("assets/sample/dict.tsv");
-    let glossary = root.join("assets/sample/glossary-en.tsv");
-    let mut engine = assembly::assemble(&AssemblySpec {
-        glossary: Some((Language::English, glossary)),
-        english: Some(root.join("assets/sample/english.tsv")),
-        ..AssemblySpec::new(dict)
-    })
-    .expect("assemble engine from sample data");
-    // 与 main.rs 一样，双拼方案是启动时直接设给 Engine 的。
-    engine.set_shuangpin(config.scheme.shuangpin());
+    let engine =
+        assembly::assemble(&AssemblySpec::new(dict)).expect("assemble engine from sample data");
     let mut router = Router::new(engine, config);
     // 协议版本与 Server 一致：开会话时把按键行为设置回一次（DLL 不读配置文件，靠它拿切换键）。
     open_session(&mut router, SESSION, app);
@@ -154,11 +119,6 @@ pub const SHIFT: KeyModifiers = KeyModifiers {
     ..ALT_OFF
 };
 
-pub const CTRL: KeyModifiers = KeyModifiers {
-    ctrl: true,
-    ..ALT_OFF
-};
-
 pub const ALT_OFF: KeyModifiers = KeyModifiers {
     ctrl: false,
     shift: false,
@@ -167,38 +127,6 @@ pub const ALT_OFF: KeyModifiers = KeyModifiers {
     caps: false,
     english_mode: false,
 };
-
-/// 两个平台的缺省快捷键都没用 Win，拿来测「没配到的修饰键归应用」。
-pub const WIN: KeyModifiers = KeyModifiers {
-    win: true,
-    ..ALT_OFF
-};
-
-/// 平台缺省的译词键：macOS 是 Alt，Windows 是 Ctrl（Alt 被系统菜单截走）。
-#[cfg(not(windows))]
-pub const TRANSLATE: KeyModifiers = KeyModifiers {
-    alt: true,
-    ..ALT_OFF
-};
-#[cfg(windows)]
-pub const TRANSLATE: KeyModifiers = KeyModifiers {
-    ctrl: true,
-    ..ALT_OFF
-};
-
-pub const TRANSLATE_SECOND: KeyModifiers = KeyModifiers {
-    shift: true,
-    ..TRANSLATE
-};
-
-/// 当前页里 `text` 排第几（1 起）。
-pub fn slot_of(frame: &Frame, text: &str) -> u32 {
-    let position = candidate_texts(frame)
-        .iter()
-        .position(|t| *t == text)
-        .unwrap_or_else(|| panic!("{text} 应在当前页：{:?}", candidate_texts(frame)));
-    position as u32 + 1
-}
 
 /// 带字符的按键（标点等），虚拟键码随便给一个 OEM 键。
 pub fn punct(c: char) -> KeyEvent {
@@ -213,6 +141,27 @@ pub fn key_result(message: Option<ServerMessage>) -> (KeyOutcome, Option<String>
             frame,
             ..
         }) => (outcome, commit, frame),
+        other => panic!("expected KeyResult, got {other:?}"),
+    }
+}
+
+/// 一次按键的完整结果：`(吃不吃, 上屏文本, 光标位移, 先删几个字, 帧)`。
+pub fn press_full(
+    router: &mut Router,
+    event: KeyEvent,
+) -> (KeyOutcome, Option<String>, i16, u16, Frame) {
+    match router.handle(ClientMessage::Key {
+        session: SESSION,
+        event,
+    }) {
+        Some(ServerMessage::KeyResult {
+            outcome,
+            commit,
+            caret_shift,
+            delete_before,
+            frame,
+            ..
+        }) => (outcome, commit, caret_shift, delete_before, frame),
         other => panic!("expected KeyResult, got {other:?}"),
     }
 }
@@ -233,24 +182,24 @@ pub fn preedit(frame: &Frame) -> String {
     frame.preedit.iter().map(|s| s.text.as_str()).collect()
 }
 
-/// 记录状态条调用：`Some(模式格文字)` 是显示、`None` 是收起。
+/// 记录状态条调用：`Some(视图)` 是显示（按当时的模式与开关）、`None` 是收起。
 #[derive(Clone, Default)]
-pub struct RecordingStatus(pub Arc<Mutex<Vec<Option<String>>>>);
+pub struct RecordingStatus(pub Arc<Mutex<Vec<Option<StatusView>>>>);
 
 impl RecordingStatus {
-    pub fn calls(&self) -> Vec<Option<String>> {
+    pub fn calls(&self) -> Vec<Option<StatusView>> {
         self.0.lock().unwrap().clone()
+    }
+
+    /// 最后显示的那个视图（收起时是 `None`）。
+    pub fn shown(&self) -> Option<StatusView> {
+        self.calls().last().copied().flatten()
     }
 }
 
 impl StatusSink for RecordingStatus {
     fn show_status(&self, view: StatusView) {
-        let label = match (view.english, view.scheme) {
-            (true, _) => "英".to_owned(),
-            (false, Some(scheme)) => format!("中 · {scheme}"),
-            (false, None) => "中".to_owned(),
-        };
-        self.0.lock().unwrap().push(Some(label));
+        self.0.lock().unwrap().push(Some(view));
     }
 
     fn hide_status(&self) {
@@ -307,27 +256,4 @@ pub fn tick_until_first(router: &mut Router, text: &str, timeout: std::time::Dur
 
 pub fn press_in(router: &mut Router, session: SessionId, event: KeyEvent) {
     let _ = router.handle(ClientMessage::Key { session, event });
-}
-
-/// 记录自绘候选窗收到的帧。
-#[derive(Clone, Default)]
-pub struct RecordingCandidates(pub Arc<Mutex<Vec<Frame>>>);
-
-impl CandidateSink for RecordingCandidates {
-    fn show(&self, frame: Frame, _rect: ScreenRect) {
-        self.0.lock().unwrap().push(frame);
-    }
-
-    fn hide(&self) {}
-
-    fn configure(&self, _settings: RenderSettings) {}
-}
-
-pub fn rect() -> ScreenRect {
-    ScreenRect {
-        left: 0,
-        top: 0,
-        right: 100,
-        bottom: 20,
-    }
 }

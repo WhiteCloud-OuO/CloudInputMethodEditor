@@ -1,4 +1,4 @@
-//! `ITfTextInputProcessor`：激活时挂击键 sink、登记翻译保留键、连 Server、起轮询定时器、挂 profile /
+//! `ITfTextInputProcessor`：激活时挂击键 sink、连 Server、起轮询定时器、挂 profile /
 //! 模式 compartment 回调、登记语言栏按钮；停用按相反顺序撤掉，敲了一半的拼音先原样落定。
 
 use std::time::Instant;
@@ -8,12 +8,11 @@ use windows::Win32::UI::TextServices::{
 };
 use windows::core::{IUnknownImpl, Interface, Ref, Result};
 
-use qingjian_platform::protocol::InputSettings;
+use cloudime_platform::protocol::{InputMode, InputSettings};
 
 use super::mode::CONVERSION_RESTORE_GUARD;
 use super::{ACTIVE, TextService_Impl};
 use crate::com::focus;
-use crate::com::key::preserved;
 use crate::com::log::log;
 use crate::com::poll::PollTimer;
 use crate::com::profile;
@@ -24,14 +23,6 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         let keystroke: ITfKeystrokeMgr = thread_mgr.cast()?;
         let sink: ITfKeyEventSink = self.to_interface();
         unsafe { keystroke.AdviseKeyEventSink(tid, &sink, true)? };
-        let combo = preserved::load_combo();
-        match preserved::register(&keystroke, tid, combo) {
-            Ok(()) => {
-                self.translate_combo.set(Some(combo));
-                log(&format!("翻译选中文字快捷键已登记为保留键: {combo}"));
-            }
-            Err(error) => log(&format!("登记翻译快捷键失败: {error}")),
-        }
 
         self.client_id.set(tid);
         // 连不上 Server、没定时器都不致命。
@@ -66,7 +57,7 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         // 那不是用户操作，这段窗口里忽略它（见 `sync_from_conversion_mode`）。
         self.conversion_guard_until
             .set(Some(Instant::now() + CONVERSION_RESTORE_GUARD));
-        self.mode_state.set_english(false);
+        self.mode_state.set_mode(InputMode::Chinese);
         if focused {
             self.shared.set_foreground(true);
         }
@@ -81,7 +72,10 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
             log("配置关掉了内置英文模式：不登记中 / 英按钮，固定中文模式");
         }
         ACTIVE.with(|active| *active.borrow_mut() = Some(self.to_object()));
-        log(&format!("青简 TSF 已激活 tid={tid}"));
+        log(&format!(
+            "云朵输入法 TSF 已激活 tid={tid} 构建={}",
+            crate::com::BUILD_STAMP
+        ));
         Ok(())
     }
 
@@ -100,9 +94,6 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
             && let Ok(keystroke) = thread_mgr.cast::<ITfKeystrokeMgr>()
         {
             self.drop_switch_preserved_key(&keystroke);
-            if let Some(combo) = self.translate_combo.take() {
-                preserved::unregister(&keystroke, combo);
-            }
             let _ = unsafe { keystroke.UnadviseKeyEventSink(self.client_id.get()) };
         }
         if let Some(client) = self.engine.borrow_mut().take() {
@@ -111,7 +102,7 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         self.shared.reset();
         self.shared.take_server_stale();
         self.shared.set_foreground(false);
-        log("青简 TSF 已停用");
+        log("云朵输入法 TSF 已停用");
         Ok(())
     }
 }

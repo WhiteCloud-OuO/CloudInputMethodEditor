@@ -1,6 +1,6 @@
 //! 按消息类型分派：会话开关、按键、轮询、失焦上屏、选区 / 光标矩形 / 中英模式的通知。
 
-use qingjian_platform::protocol::{
+use cloudime_platform::protocol::{
     ClientMessage, Frame, KeyEvent, KeyOutcome, PROTOCOL_VERSION, SESSION_OPENED_SINCE,
     ServerMessage, SessionId,
 };
@@ -46,7 +46,7 @@ impl Router {
                 // 也能拿到同一份（新字段它直接忽略），只是慢一拍。
                 (protocol >= SESSION_OPENED_SINCE).then(|| ServerMessage::SessionOpened {
                     session,
-                    input: self.input_settings(),
+                    input: self.input_settings(session),
                 })
             }
             ClientMessage::Key { session, event } => Some(self.handle_key(session, event)),
@@ -66,35 +66,28 @@ impl Router {
                 self.set_privacy(session, private);
                 None
             }
-            ClientMessage::Selection {
-                session,
-                request,
-                text,
-                rect,
-            } => Some(self.handle_selection(session, request, text, rect)),
             ClientMessage::PositionCandidates { session, rect } => {
                 self.position_candidates(session, rect);
                 None
             }
             ClientMessage::HideCandidates { session } => {
-                // 组句在 DLL 侧结束（应用终止组句 / 翻译评审失焦）：只收窗口；缓冲留给下一键的 Commit 清。
+                // 组句在 DLL 侧结束（应用终止组句）：只收窗口；缓冲留给下一键的 Commit 清。
                 if self.focused == Some(session) {
-                    self.end_translation();
                     self.hide_candidate_window();
                 }
                 None
             }
-            ClientMessage::ModeChanged { session, english } => {
-                tracing::debug!(?session, english, "中英模式");
-                self.handle_mode_changed(english);
+            ClientMessage::ModeChanged { session, mode } => {
+                tracing::debug!(?session, ?mode, "输入法状态");
+                self.handle_mode_changed(mode);
                 None
             }
             ClientMessage::SyncMode { session } => {
                 self.handle_ime_active();
                 Some(ServerMessage::ModeSync {
                     session,
-                    english: Some(self.english),
-                    input: self.input_settings(),
+                    mode: Some(self.mode),
+                    input: self.input_settings(session),
                     indicator: self.indicator_state(),
                 })
             }
@@ -124,25 +117,8 @@ impl Router {
     fn handle_key(&mut self, session: SessionId, event: KeyEvent) -> ServerMessage {
         self.ensure_focus(session);
         self.notice = None;
-        if self.translation.is_some() {
-            return self.handle_translation_review(session, &event);
-        }
-        if self.engine.composition().is_empty()
-            && self.engine.prediction_enabled()
-            && self.matches_translate_combo(&event)
-        {
-            self.selection_seq += 1;
-            self.pending_selection = Some(self.selection_seq);
-            tracing::debug!(
-                ?session,
-                request = self.selection_seq,
-                "翻译选中文字：请 DLL 读选区"
-            );
-            return ServerMessage::RequestSelection {
-                session,
-                request: self.selection_seq,
-            };
-        }
+        self.caret_shift = 0;
+        self.delete_before = 0;
         let (commit, outcome) = match self.apply_key(&event) {
             Effect::Changed(commit) => {
                 self.recompose();
@@ -151,7 +127,6 @@ impl Router {
             Effect::Navigated => (None, KeyOutcome::Consumed),
             Effect::Passthrough => (None, KeyOutcome::Passthrough),
         };
-        self.poll_prediction();
         // 自绘窗吃未降级的帧；发给 DLL 的那份按老协议降级（见 composed 的 current_frame）
         let shown = self.self_drawn_frame();
         self.reconcile_candidates(&shown);
@@ -159,19 +134,16 @@ impl Router {
             session,
             outcome,
             commit,
+            caret_shift: self.caret_shift,
+            delete_before: self.delete_before,
             frame: self.current_frame(),
         }
     }
 
-    /// 云联想轮询：聚焦会话拉一次异步结果回最新一帧，否则回空帧。释义兜底与本地整句模型也借这个节拍收。
+    /// 轮询：聚焦会话回最新一帧（本地整句重排到达后候选顺序可能变了），否则回空帧。
     fn handle_poll(&mut self, session: SessionId) -> ServerMessage {
         self.tick();
-        let learned = self.engine.poll_glosses();
-        if learned > 0 {
-            tracing::info!(learned, "释义兜底写入个人释义表");
-        }
         let frame = if self.focused == Some(session) {
-            self.poll_prediction();
             let shown = self.self_drawn_frame();
             self.reconcile_candidates(&shown);
             self.current_frame()

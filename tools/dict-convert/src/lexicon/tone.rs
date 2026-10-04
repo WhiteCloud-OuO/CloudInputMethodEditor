@@ -1,7 +1,7 @@
 //! 拼音写法归一：带声调符号的（Unihan 的 `xíng`）与带声调数字的（通用词表的 `wei4'shen2'me`）都转成
 //! 不带声调、ü 写 v 的小写音节。
 
-use qingjian_dictionary::canonical_syllable;
+use cloudime_dictionary::canonical_syllable;
 
 /// `xíng` → `xing`，`lǜ` → `lv`，`ê̄` 这类罕见记号转成对应字母；组合用变音符号（U+0300–U+036F）丢掉。
 pub fn strip_tone(reading: &str) -> String {

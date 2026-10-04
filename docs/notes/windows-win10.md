@@ -2,16 +2,16 @@
 
 ## 起因
 
-Windows 10 22H2 上点开始菜单的「青简设置」，弹的是系统错误框：
+Windows 10 22H2 上点开始菜单的「云朵设置」，弹的是系统错误框：
 
-> qingjian-settings.exe - 无法找到入口
-> 无法定位程序输入点 TryCreatePackageDependency 于动态链接库 C:\Program Files\Qingjian\qingjian-settings.exe 上。
+> cloudime-settings.exe - 无法找到入口
+> 无法定位程序输入点 TryCreatePackageDependency 于动态链接库 C:\Program Files\CloudIME\cloudime-settings.exe 上。
 
 同一台机器上 Server 与 TSF DLL 一切正常（候选、上屏、学习都在跑），只有设置程序起不来。
 
 ## 定位
 
-1. 读 `qingjian-settings.exe` 的 PE 导入表：`api-ms-win-appmodel-runtime-l1-1-5.dll` 下挂着
+1. 读 `cloudime-settings.exe` 的 PE 导入表：`api-ms-win-appmodel-runtime-l1-1-5.dll` 下挂着
    `TryCreatePackageDependency` 与 `AddPackageDependency`，而且是**静态导入**（延迟导入段是空的）。
 2. 在 Windows 10 22H2（19045.5011）上逐个探导出：`kernel32.dll` / `kernelbase.dll` / `AppXDeploymentClient.dll` /
    `Kernel.Appcore.dll` 与 `api-ms-win-appmodel-runtime-l1-1-{0,1,2,3}` 全都没有这两个函数，符号名在 System32 里
@@ -42,19 +42,20 @@ Windows 10 22H2 上点开始菜单的「青简设置」，弹的是系统错误�
   ② 链接参数加 `/DELAYLOAD:api-ms-win-appmodel-runtime-l1-1-5.dll` + `delayimp.lib`，把这两个名字从 IAT 挪到
   延迟加载描述符——自包含部署下它们永远不会被调用，Windows 10 也就不会去找它们。
 - `apps/windows/installer/`：`settings-runtime.txt` 记要跟着装的运行时清单，`build.ps1` 按清单从
-  `target\release` 挑进 `target\installer\settings-runtime`，`qingjian.iss` 整个目录装进 `{app}`。
-  代价：安装包多约 56 MB 的运行时（185 个文件，LZMA2 压完更小），换来的是不依赖机器上装没装框架包。
+  `target\release` 挑进 `target\installer\settings-runtime`，`cloudime.iss` 整个目录装进 `{app}`。
+  清单的语言资源只留简体中文（`zh-cn`）：界面不做多语言，别的语言由资源默认值兜底，少装 150 个 `.mui`。
+  代价：安装包多约 53 MB 的运行时（35 个文件，LZMA2 压完更小），换来的是不依赖机器上装没装框架包。
 
 ## 验证
 
 在本机（Windows 10 22H2，19045.5011）跑：
 
 ```powershell
-cargo build --release -p qingjian-windows-settings
-target\release\qingjian-settings.exe
+cargo build --release -p cloudime-windows-settings
+target\release\cloudime-settings.exe
 ```
 
-设置窗口应当正常打开（不再弹入口错误），改一项设置能写进 `%APPDATA%\Qingjian\config.toml`。
+设置窗口应当正常打开（不再弹入口错误），改一项设置能写进 `%APPDATA%\CloudIME\config.toml`。
 反证：把 `build.rs` 里那两行 `/DELAYLOAD` 去掉重编，同一台机器上会重新以 0xc0000139 在加载期失败。
 CI 侧：`windows` job 编三个 Windows 产物；`release.yml` 打 Inno 包时缺任何一项运行时文件会在 `build.ps1` 里直接失败。
 

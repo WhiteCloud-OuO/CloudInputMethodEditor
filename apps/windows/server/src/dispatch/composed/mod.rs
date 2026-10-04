@@ -1,46 +1,38 @@
-//! 组句的展示状态：缓冲变化时重查候选并重建 [`Composed`]，云端词异步并入，高亮 / 翻页，按状态生成给 DLL 的帧。
+//! 组句的展示状态：缓冲变化时重查候选并重建 [`Composed`]，高亮 / 翻页，按状态生成给 DLL 的帧。
 
 mod state;
 
-use qingjian_core::{Candidate, CandidateLayout, CandidateList, CloudWord, Query};
-use qingjian_platform::protocol::{Frame, PROTOCOL_VERSION, PreeditKind, PreeditSegment};
+use cloudime_core::{Candidate, CandidateLayout, CandidateList, Query};
+use cloudime_platform::protocol::{Frame, PreeditKind, PreeditSegment};
 
-pub(super) use self::state::{Composed, TypedKeys};
+pub(super) use self::state::Composed;
 use super::Router;
 
 impl Router {
-    /// 缓冲变化后：按 Engine 状态重建 [`Composed`]，发一次云联想请求，归零高亮与整句补全。
+    /// 缓冲变化后：按 Engine 状态重建 [`Composed`]，归零高亮。
     pub(super) fn recompose(&mut self) {
         self.highlight = 0;
         self.navigated = false;
-        self.sentence = None;
         if self.engine.composition().is_empty() {
             self.composed = None;
-            self.cancel_prediction();
             self.stop_rescoring();
             return;
         }
         self.attach_loaded_model();
         let built = self.engine.query().ok().map(|query| {
-            let (preedit, cursor, typed_keys) = marked_parts(&query);
-            (query.candidates.items.clone(), preedit, cursor, typed_keys)
+            let (preedit, cursor) = marked_parts(&query);
+            (query.candidates.items.clone(), preedit, cursor)
         });
         self.composed = Some(match built {
-            Some((items, preedit, cursor, typed_keys)) => {
-                let layout =
-                    CandidateLayout::new(items, self.config.page_size, self.config.cloud_slots);
-                if self.engine.prediction_enabled() {
-                    self.engine.request_prediction(None, layout.local());
-                }
+            Some((items, preedit, cursor)) => {
+                let layout = CandidateLayout::new(items, self.config.page_size);
                 Composed::Candidates {
                     preedit,
                     cursor,
-                    typed_keys,
                     layout,
                 }
             }
             None => {
-                self.cancel_prediction();
                 let composition = self.engine.composition();
                 let text = composition.text().to_owned();
                 let cursor = text[..composition.cursor()].chars().count();
@@ -48,45 +40,6 @@ impl Router {
             }
         });
         self.schedule_rescoring();
-    }
-
-    /// 拉一次云联想结果：云端词并进候选布局，整句补全记下；翻译评审时结果是译文。
-    pub(super) fn poll_prediction(&mut self) {
-        if !self.engine.prediction_enabled() {
-            return;
-        }
-        let Some(prediction) = self.engine.poll_prediction() else {
-            return;
-        };
-        if self.translation.is_some() {
-            match prediction.sentence {
-                Some(text) => {
-                    if let Some(translation) = self.translation.as_mut() {
-                        translation.result = Some(text);
-                    }
-                }
-                None => {
-                    tracing::info!("翻译选中文字：云端没有给出译文");
-                    self.translation = None;
-                }
-            }
-            return;
-        }
-        if let Some(Composed::Candidates { layout, .. }) = self.composed.as_mut() {
-            let words: Vec<Candidate> = prediction
-                .words
-                .into_iter()
-                .map(CloudWord::into_candidate)
-                .collect();
-            layout.set_cloud(words);
-            self.sentence = prediction.sentence;
-        }
-    }
-
-    pub(super) fn cancel_prediction(&mut self) {
-        if self.engine.prediction_enabled() {
-            self.engine.cancel_prediction();
-        }
     }
 
     /// 高亮移动 `delta`，夹在 `[0, 末尾]`，到页边自然换页。
@@ -139,62 +92,17 @@ impl Router {
         Some(self.engine.commit(&candidate))
     }
 
-    /// 按当前状态生成一帧：翻译评审优先；没在组句给空帧；否则给高亮所在的那一页。
-    /// 焦点会话的 DLL 比 Server 老时按老协议降级（见 [`Self::downgrade_for_old_dll`]）。
+    /// 按当前状态生成一帧：没在组句给空帧；否则给高亮所在的那一页。
     pub(super) fn current_frame(&self) -> Frame {
-        let mut frame = self.raw_frame();
-        self.show_typed_keys(&mut frame);
-        self.downgrade_for_old_dll(&mut frame);
-        frame
+        self.raw_frame()
     }
 
-    /// 给 DLL 的帧只管应用输入框：双拼「输入框显示原始按键」开着时换成敲的键，拼音行由 Server 自绘照旧全拼。
-    fn show_typed_keys(&self, frame: &mut Frame) {
-        if self.translation.is_some() {
-            return;
-        }
-        let Some(Composed::Candidates {
-            typed_keys: Some(keys),
-            ..
-        }) = &self.composed
-        else {
-            return;
-        };
-        frame.preedit = vec![PreeditSegment {
-            text: keys.text.clone(),
-            kind: PreeditKind::Typed,
-        }];
-        frame.cursor = keys.cursor;
-    }
-
-    /// 自绘候选窗用的帧：不做老 DLL 降级，码段照常画。
+    /// 自绘候选窗用的帧。
     pub(super) fn self_drawn_frame(&self) -> Frame {
         self.raw_frame()
     }
 
-    /// 协议比 Server 老的 DLL 不认识 `AuxCode` 段，收到会整条消息解析失败；给它的码段降级成普通拼音段。
-    fn downgrade_for_old_dll(&self, frame: &mut Frame) {
-        if self.focused_dll_protocol() >= PROTOCOL_VERSION {
-            return;
-        }
-        for segment in &mut frame.preedit {
-            if segment.kind == PreeditKind::AuxCode {
-                segment.kind = PreeditKind::Typed;
-            }
-        }
-    }
-
-    /// 焦点会话的 DLL 协议版本；没有焦点会话时按最新（不必降级）。
-    fn focused_dll_protocol(&self) -> u32 {
-        self.focused
-            .and_then(|session| self.sessions.get(&session))
-            .map_or(PROTOCOL_VERSION, |info| info.protocol)
-    }
-
     fn raw_frame(&self) -> Frame {
-        if let Some(translation) = &self.translation {
-            return self.translation_frame(translation);
-        }
         match &self.composed {
             None => Frame::default(),
             Some(Composed::Raw { text, cursor }) => Frame {
@@ -209,9 +117,6 @@ impl Router {
                 page: 0,
                 page_count: 1,
                 layout: self.config.layout,
-                theme: self.config.theme,
-                aux_code_show: self.config.aux_code_show,
-                sentence: None,
                 notice: self.notice.clone(),
             },
             Some(Composed::Candidates {
@@ -223,13 +128,8 @@ impl Router {
                 let page_size = self.config.page_size;
                 let highlight = self.highlight.min(layout.len().saturating_sub(1));
                 let page = highlight / page_size;
-                let items: Vec<Candidate> = layout
-                    .page(page)
-                    .into_iter()
-                    .filter_map(|cell| cell.candidate().cloned())
-                    .collect();
-                let mut candidates = CandidateList { items };
-                self.engine.annotate(&mut candidates);
+                let items: Vec<Candidate> = layout.page(page).to_vec();
+                let candidates = CandidateList { items };
                 Frame {
                     preedit: preedit.clone(),
                     preedit_mode: self.config.preedit,
@@ -239,9 +139,6 @@ impl Router {
                     page,
                     page_count: layout.pages().max(1),
                     layout: self.config.layout,
-                    theme: self.config.theme,
-                    aux_code_show: self.config.aux_code_show,
-                    sentence: self.sentence.clone(),
                     notice: self.notice.clone(),
                 }
             }
@@ -249,13 +146,9 @@ impl Router {
     }
 }
 
-/// 一次查询的拼音行分段与光标，以及输入框另显示原始按键时的那一串。
+/// 一次查询的拼音行分段与光标。
 /// 光标用 Core 的映射：自动补的 `'` 会让显示串比敲的长。
-pub(super) fn marked_parts(query: &Query) -> (Vec<PreeditSegment>, usize, Option<TypedKeys>) {
+pub(super) fn marked_parts(query: &Query) -> (Vec<PreeditSegment>, usize) {
     let preedit = query.marked_segments().iter().map(Into::into).collect();
-    let typed_keys = query.shuangpin_raw_preedit.then(|| TypedKeys {
-        text: query.marked_text(),
-        cursor: query.marked_cursor(),
-    });
-    (preedit, query.segments_cursor(), typed_keys)
+    (preedit, query.segments_cursor())
 }

@@ -2,7 +2,7 @@
 
 use std::io::{self, BufRead, Write};
 
-use qingjian_core::{Engine, Query};
+use cloudime_core::{Engine, Query};
 
 use crate::display;
 use crate::error::CliError;

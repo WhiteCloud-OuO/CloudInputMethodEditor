@@ -5,12 +5,19 @@ use std::rc::Rc;
 
 use windows::Win32::UI::TextServices::{ITfLangBarItemSink, TF_LBI_ICON, TF_LBI_STATUS};
 
-use qingjian_platform::SwitchKeys;
+use cloudime_platform::SwitchKeys;
+use cloudime_platform::protocol::InputMode;
 
-/// 当前中英模式 + 语言栏更新回调，文本服务与语言栏按钮共享（STA 单线程）。
+/// 当前输入法状态（中文 / 英文 / 禁用）+ 语言栏更新回调，文本服务与语言栏按钮共享（STA 单线程）。
 pub(crate) struct ModeState {
     /// `true` 是英文模式。
     english: Cell<bool>,
+
+    /// 禁用：不接管任何按键，悬浮状态栏收起，托盘显示「off」。
+    disabled: Cell<bool>,
+
+    /// 禁用前的中 / 英模式：重新启用时回到它。
+    resume: Cell<InputMode>,
 
     /// 内置英文模式开关（`[general] english_mode`）：关掉后谁都不许切到英文。
     enabled: Cell<bool>,
@@ -26,6 +33,8 @@ impl ModeState {
     pub(crate) fn new() -> Rc<Self> {
         Rc::new(Self {
             english: Cell::new(false),
+            disabled: Cell::new(false),
+            resume: Cell::new(InputMode::Chinese),
             enabled: Cell::new(true),
             switch_keys: Cell::new(SwitchKeys::default()),
             sink: RefCell::new(None),
@@ -34,6 +43,36 @@ impl ModeState {
 
     pub(crate) fn english(&self) -> bool {
         self.english.get()
+    }
+
+    pub(crate) fn disabled(&self) -> bool {
+        self.disabled.get()
+    }
+
+    /// 当前三态。
+    pub(crate) fn mode(&self) -> InputMode {
+        if self.disabled.get() {
+            InputMode::Disabled
+        } else if self.english.get() {
+            InputMode::English
+        } else {
+            InputMode::Chinese
+        }
+    }
+
+    /// 整体设三态（Server 下发 / 从 compartment 读回，两处都走这里）。
+    /// 非禁用的模式记下来，重新启用时回到它。
+    pub(crate) fn set_mode(&self, mode: InputMode) {
+        if !mode.disabled() {
+            self.resume.set(mode);
+        }
+        self.disabled.set(mode.disabled());
+        self.english.set(mode.english());
+    }
+
+    /// 禁用前的中 / 英模式。
+    pub(crate) fn resume_mode(&self) -> InputMode {
+        self.resume.get()
     }
 
     pub(crate) fn set_english(&self, english: bool) {

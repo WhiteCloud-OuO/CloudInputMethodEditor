@@ -1,15 +1,15 @@
 ﻿<#
 .SYNOPSIS
-    在 Windows 上打青简安装包：release 构建三个产物 + 用 Inno Setup 编 qingjian.iss。
+    在 Windows 上打云朵输入法安装包：release 构建三个产物 + 用 Inno Setup 编 cloudime.iss。
 .DESCRIPTION
     在编译机（MSVC 工具链 + Inno Setup）上跑。步骤：
       1) cargo build --release 出 DLL / Server / 设置程序，再单独编一份 32 位 DLL；
       2) 从 apps\windows\server\Cargo.toml 读版本号（-dev 版接 git 短哈希）；
       3) 找 ISCC.exe（PATH 或常见安装位置）；
-      4) iscc /DAppVersion=<版本> 编脚本，成品在 target\installer\qingjian-<版本>-windows-x86_64-setup.exe。
+      4) iscc /DAppVersion=<版本> 编脚本，成品在 target\installer\cloudime-<版本>-windows-x86_64-setup.exe。
     随包数据（.qj / .tsv）直接由 .iss 从仓库 data\generated 与 assets 里取，不另建暂存目录；
-    确保打包前 data\generated 里的 .qj 是最新的（bundle 流程见仓库 CLAUDE.md）。
-    uiAccess 跟着 -Sign 走，不用手设 QINGJIAN_UIACCESS（见 -Sign）。
+    确保打包前 data\generated 里的 .qj 是最新的（打包流程见仓库 CLAUDE.md）。
+    uiAccess 跟着 -Sign 走，不用手设 CLOUDIME_UIACCESS（见 -Sign）。
 .PARAMETER SkipBuild
     跳过 cargo build（数据或 .iss 改了、二进制没变时重编安装包用）。
 .PARAMETER Sign
@@ -22,12 +22,26 @@ param([switch]$SkipBuild, [switch]$Sign)
 
 $ErrorActionPreference = 'Stop'
 
+# 调外部 exe（cargo / iscc / rustup…）：PowerShell 5.1 会把它们写进 stderr 的进度行与警告包装成错误记录，
+# 配合上面的 Stop 会直接中断脚本。统一转成普通输出，只按退出码判断成败。
+function Invoke-Checked([string]$Exe, [string[]]$Arguments) {
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $Exe @Arguments 2>&1 | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($exitCode -ne 0) { throw "$Exe $($Arguments -join ' ') 失败（退出码 $exitCode）" }
+}
+
 # 仓库根：本脚本在 apps\windows\installer 下，往上三层是 ime\。
 $Repo = (Resolve-Path (Join-Path $PSScriptRoot '..\..\..')).Path
-$Iss  = Join-Path $PSScriptRoot 'qingjian.iss'
+$Iss  = Join-Path $PSScriptRoot 'cloudime.iss'
 
 # uiAccess 跟着 -Sign 走（server\build.rs 读这个变量，改了会自动重编 Server）；理由见 -Sign 的说明。
-$env:QINGJIAN_UIACCESS = if ($Sign) { '1' } else { '0' }
+$env:CLOUDIME_UIACCESS = if ($Sign) { '1' } else { '0' }
 if ($Sign) {
     Write-Host 'uiAccess=1（-Sign：仅本机真机测，别用于对外分发）' -ForegroundColor Yellow
 } else {
@@ -39,19 +53,30 @@ if (-not $SkipBuild) {
     Write-Host '构建 release 产物…' -ForegroundColor Cyan
     Push-Location $Repo
     try {
-        cargo build --release --locked -p qingjian-windows-server -p qingjian-windows-tsf -p qingjian-windows-settings
-        if ($LASTEXITCODE -ne 0) { throw "cargo build 失败（退出码 $LASTEXITCODE）" }
-        cargo build --release --locked -p qingjian-windows-tsf --target i686-pc-windows-msvc
-        if ($LASTEXITCODE -ne 0) { throw "32 位 DLL cargo build 失败（退出码 $LASTEXITCODE）" }
+        Invoke-Checked 'cargo' @('build', '--release', '--locked',
+            '-p', 'cloudime-windows-server', '-p', 'cloudime-windows-tsf', '-p', 'cloudime-windows-settings')
+        Invoke-Checked 'cargo' @('build', '--release', '--locked',
+            '-p', 'cloudime-windows-tsf', '--target', 'i686-pc-windows-msvc')
+        # TSF DLL 按位数起固定名（cloudime_tsf_x64.dll / cloudime_tsf_x86.dll，不带版本号）：
+        # Cargo 的 cdylib 输出名来自 lib name，两个 target 只能同名，所以编完在这里改名。
+        foreach ($pair in @(
+                @{ From = 'target\release\cloudime_tsf.dll'; To = 'target\release\cloudime_tsf_x64.dll' },
+                @{ From = 'target\i686-pc-windows-msvc\release\cloudime_tsf.dll'; To = 'target\i686-pc-windows-msvc\release\cloudime_tsf_x86.dll' }
+            )) {
+            $from = Join-Path $Repo $pair.From
+            if (Test-Path -LiteralPath $from) {
+                Move-Item -LiteralPath $from -Destination (Join-Path $Repo $pair.To) -Force
+            }
+        }
     } finally { Pop-Location }
 }
 
-# 缺一个产物就早报错。
+# 缺一个产物就早报错（TSF DLL 按位数起固定名，见 cargo-build.ps1 里的改名）。
 $targets = @(
-    'release\qingjian_tsf.dll',
-    'i686-pc-windows-msvc\release\qingjian_tsf.dll',
-    'release\qingjian-server.exe',
-    'release\qingjian-settings.exe'
+    'release\cloudime_tsf_x64.dll',
+    'i686-pc-windows-msvc\release\cloudime_tsf_x86.dll',
+    'release\cloudime-server.exe',
+    'release\cloudime-settings.exe'
 )
 foreach ($t in $targets) {
     $p = Join-Path $Repo "target\$t"
@@ -92,7 +117,7 @@ $cargoToml = Get-Content (Join-Path $Repo 'apps\windows\server\Cargo.toml')
 $verLine = $cargoToml | Where-Object { $_ -match '^\s*version\s*=\s*"(.+)"' } | Select-Object -First 1
 if (-not ($verLine -match '"(.+)"')) { throw '在 server\Cargo.toml 里没找到 version' }
 $Version = $Matches[1]
-# 开发版接 git 短哈希（0.1.3-dev-1a2b3c4，脏加 +），有 bug 能定位到哪次改动；发版提交去掉 -dev 就不接。
+# 开发版接 git 短哈希（0.0.1-dev-1a2b3c4，脏加 +），有 bug 能定位到哪次改动；发版提交去掉 -dev 就不接。
 if ($Version.EndsWith('-dev')) {
     Push-Location $Repo
     try {
@@ -108,8 +133,8 @@ $VersionNumeric = $Version -replace '-.*$', ''
 Write-Host "版本 $Version" -ForegroundColor Cyan
 
 # 3) 找 ISCC.exe：先 Program Files 里的 7（与开发机同版本；CI 镜像 PATH 上自带 Chocolatey 的 6，不带简中翻译，不能让它抢先），
-#    再 PATH，最后 6。QINGJIAN_ISCC 环境变量可直接指定。
-$iscc = $env:QINGJIAN_ISCC
+#    再 PATH，最后 6。CLOUDIME_ISCC 环境变量可直接指定。
+$iscc = $env:CLOUDIME_ISCC
 if (-not $iscc) {
     $candidates = @(
         "${env:ProgramFiles}\Inno Setup 7\ISCC.exe",
@@ -125,12 +150,11 @@ if (-not $iscc) {
     )
     $iscc = $candidates | Where-Object { Test-Path $_ } | Select-Object -First 1
 }
-if (-not $iscc) { throw '找不到 ISCC.exe：装 Inno Setup 7 或用 QINGJIAN_ISCC 指定' }
+if (-not $iscc) { throw '找不到 ISCC.exe：装 Inno Setup 7 或用 CLOUDIME_ISCC 指定' }
 Write-Host "用 $iscc" -ForegroundColor Cyan
 
 # 4) 编安装包。
-& $iscc "/DAppVersion=$Version" "/DAppVersionNumeric=$VersionNumeric" $Iss
-if ($LASTEXITCODE -ne 0) { throw "iscc 失败（退出码 $LASTEXITCODE）" }
+Invoke-Checked $iscc @("/DAppVersion=$Version", "/DAppVersionNumeric=$VersionNumeric", $Iss)
 
-$out = Join-Path $Repo "target\installer\qingjian-$Version-windows-x86_64-setup.exe"
+$out = Join-Path $Repo "target\installer\cloudime-$Version-windows-x86_64-setup.exe"
 Write-Host "完成：$out" -ForegroundColor Green

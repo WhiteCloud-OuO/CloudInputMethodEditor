@@ -2,7 +2,7 @@
 
 mod info;
 
-use qingjian_platform::protocol::SessionId;
+use cloudime_platform::protocol::SessionId;
 
 pub(super) use self::info::SessionInfo;
 use super::Router;
@@ -30,7 +30,7 @@ impl Router {
         }
     }
 
-    /// 当前聚焦的会话在私密输入框里（Engine 不学不记不发云端）。
+    /// 当前聚焦的会话在私密输入框里（Engine 不学不记）。
     pub fn is_private(&self) -> bool {
         self.engine.is_private()
     }
@@ -59,16 +59,12 @@ impl Router {
         text
     }
 
-    /// 清掉组句、展示状态、在飞的云联想与翻译评审，收起候选窗口。
+    /// 清掉组句、展示状态与在飞的重排，收起候选窗口。
     pub(super) fn reset_composition(&mut self) {
         self.engine.break_chain();
         self.engine.clear();
-        self.cancel_prediction();
         self.stop_rescoring();
         self.composed = None;
-        self.translation = None;
-        self.pending_selection = None;
-        self.sentence = None;
         self.notice = None;
         self.highlight = 0;
         self.navigated = false;

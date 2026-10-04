@@ -2,26 +2,23 @@
 //! 界面始终反映文件内容；Server 每秒看 mtime 热加载。
 //! 状态在这里，消息在 [`message`]，生命周期在 [`component`]，表单零件在 [`controls`]，各页在 [`pages`]。
 
-mod cloud_status;
 mod component;
 mod controls;
+mod font_dialog;
 mod message;
 mod notice;
 mod pages;
-mod recorder;
 
 use std::path::{Path, PathBuf};
 
-use qingjian_platform::Config;
+use cloudime_platform::{Config, FontChoice};
 use windows_reactor::*;
 
-use self::cloud_status::CloudStatus;
 pub(crate) use self::message::Message;
 use self::notice::Notice;
-use self::pages::{
-    about, advanced, aux_code, candidates, cloud, dictionaries, fuzzy, general, shortcut, usage,
-};
-use self::recorder::Recorder;
+use self::pages::candidates::FontRole;
+use self::pages::phrase::PhraseForm;
+use self::pages::{about, candidates, debugging, dictionaries, input, phrase};
 
 /// 左侧标签列的下限宽度，让短标签行的控件对齐；超长标签会把本行控件往右顶
 /// （见 `controls::labeled`）。
@@ -38,21 +35,11 @@ pub(crate) struct Settings {
     /// 当前导航分节 tag。
     page: String,
 
-    /// 云服务「测试连接」的状态。
-    cloud_status: CloudStatus,
-
-    /// 「辅码」页的触发键录制状态。
-    recorder: Recorder,
-
-    /// 触发键录制框（密码框：不走输入法，按 A–Z 直接进字符、不弹输入法候选窗）：
-    /// 进了录制态把焦点交给它，用户不用再点一下。
-    record_box: ElementRef<PasswordBox>,
-
     /// 页面底部的临时提示（导入统计 / 失败原因）。
     notice: Notice,
 
     /// Server 或「立即检查」落盘的检查更新结果（用户目录的 `update.json`）。
-    update_state: qingjian_update::UpdateState,
+    update_state: cloudime_update::UpdateState,
 
     /// 「立即检查」正在跑 / 刚失败的原因。
     update_checking: bool,
@@ -61,22 +48,31 @@ pub(crate) struct Settings {
     /// 最近一次词库操作的结果，显示在词库页。
     dictionary_status: String,
 
-    /// 系统里的字族名（DirectWrite），「字体」框的提示用。
-    families: Vec<String>,
+    /// 「不显示候选框」程序名单的输入框里正在敲的名字；`None` 显示空。
+    program_query: Option<String>,
 
-    /// 「字体」框里正在敲的文字；`None` 显示配置里的值。
-    font_query: Option<String>,
+    /// 短语库里的短语（打开设置时读一次，每次增删改后更新）。
+    phrases: Vec<cloudime_core::CustomPhrase>,
+
+    /// 短语页表单里正在编辑的内容。
+    phrase_form: PhraseForm,
+
+    /// 正在编辑第几条短语（`None` 是新增）。
+    phrase_edit: Option<usize>,
+
+    /// 最近一次短语操作的结果，显示在短语页。
+    phrase_status: String,
 }
 
 impl Settings {
-    /// `%APPDATA%\Qingjian\config.toml`；取不到 `APPDATA` 退回工作目录。
+    /// `%APPDATA%\CloudIME\config.toml`；取不到 `APPDATA` 退回工作目录。
     fn config_path() -> PathBuf {
-        qingjian_platform::dirs::config_path().unwrap_or_else(|| PathBuf::from("config.toml"))
+        cloudime_platform::dirs::config_path().unwrap_or_else(|| PathBuf::from("config.toml"))
     }
 
-    /// 检查更新的结果文件 `%APPDATA%\Qingjian\update.json`（Server 写，这里读）。
+    /// 检查更新的结果文件 `%APPDATA%\CloudIME\update.json`（Server 写，这里读）。
     fn update_state_path() -> Option<PathBuf> {
-        qingjian_platform::dirs::user_dir().map(|dir| dir.join("update.json"))
+        cloudime_platform::dirs::user_dir().map(|dir| dir.join("update.json"))
     }
 
     /// 配置文件不在就写出模板：这个账户下 Server 还没跑过时，保存与「在记事本中打开」都要有文件。
@@ -86,7 +82,7 @@ impl Settings {
         }
     }
 
-    /// 数据目录 `%APPDATA%\Qingjian`。
+    /// 数据目录 `%APPDATA%\CloudIME`。
     fn data_dir(&self) -> &Path {
         self.path.parent().unwrap_or_else(|| Path::new("."))
     }
@@ -109,6 +105,26 @@ impl Settings {
         self.reload();
     }
 
+    /// 落盘一个字体项：`[candidate]` 下的 `pinyin_font` / `candidate_font` / `item_number_font` 两个键。
+    fn save_font(&mut self, role: FontRole, choice: &FontChoice) {
+        let section = match role {
+            FontRole::Pinyin => "candidate.pinyin_font",
+            FontRole::Candidate => "candidate.candidate_font",
+            FontRole::ItemNumber => "candidate.item_number_font",
+        };
+        let family = choice.family.trim();
+        if let Err(error) = Config::set_value(&self.path, section, "family", family) {
+            crate::log::warn(format!("保存 {section} 的字族失败: {error}"));
+            return;
+        }
+        let size = f64::from(choice.size.max(1.0));
+        if let Err(error) = Config::set_value(&self.path, section, "size", size) {
+            crate::log::warn(format!("保存 {section} 的字号失败: {error}"));
+            return;
+        }
+        self.reload();
+    }
+
     fn reload(&mut self) {
         if let Ok(config) = Config::load(&self.path) {
             self.config = config;
@@ -118,15 +134,11 @@ impl Settings {
     fn page_content(&self, context: &mut ViewContext<Self>) -> View {
         match self.page.as_str() {
             "candidates" => candidates::view(self, context),
-            "shortcut" => shortcut::view(self, context),
-            "cloud" => cloud::view(self, context),
-            "fuzzy" => fuzzy::view(self, context),
             "dictionaries" => dictionaries::view(self, context),
-            "aux_code" => aux_code::view(self, context),
-            "usage" => usage::view(self, context),
-            "advanced" => advanced::view(self, context),
+            "phrase" => phrase::view(self, context),
+            "debugging" => debugging::view(self, context),
             "about" => about::view(self, context),
-            _ => general::view(self, context),
+            _ => input::view(self, context),
         }
     }
 }

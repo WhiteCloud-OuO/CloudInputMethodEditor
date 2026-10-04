@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use qingjian_lm::{BigramModel, LmError};
+use cloudime_lm::{BigramModel, LmError};
 
 /// 语言模型的数据文件：`lm.qj` 优先，没有就用两张 TSV。
 pub enum LanguageModelFiles {
@@ -10,6 +10,14 @@ pub enum LanguageModelFiles {
 }
 
 impl LanguageModelFiles {
+    /// 数据文件路径（`Tsv` 报一元表那张，日志用）。
+    pub(super) fn path(&self) -> &Path {
+        match self {
+            Self::Packed(path) => path,
+            Self::Tsv { unigram, .. } => unigram,
+        }
+    }
+
     pub fn find(dir: &Path) -> Option<Self> {
         let packed = dir.join("lm.qj");
         if packed.is_file() {

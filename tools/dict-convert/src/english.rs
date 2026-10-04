@@ -69,7 +69,7 @@ pub fn convert(
     let mut file = BufWriter::new(std::fs::File::create(output)?);
     writeln!(
         file,
-        "# 由 qingjian-dict-convert english 生成。词\\t编码\\t词频（wordfreq 的 Zipf 频率 ×1000）"
+        "# 由 cloudime-dict-convert english 生成。词\\t编码\\t词频（wordfreq 的 Zipf 频率 ×1000）"
     )?;
     for (word, code) in &rows {
         let count = frequencies.get(code).copied().unwrap_or(0);
@@ -86,14 +86,14 @@ mod tests {
 
     fn write(name: &str, body: &str) -> PathBuf {
         let path =
-            std::env::temp_dir().join(format!("qingjian-english-{}-{name}", std::process::id()));
+            std::env::temp_dir().join(format!("cloudime-english-{}-{name}", std::process::id()));
         std::fs::write(&path, body).unwrap();
         path
     }
 
     fn converted(tag: &str, inputs: &[PathBuf]) -> Vec<(String, String)> {
         let out = std::env::temp_dir().join(format!(
-            "qingjian-english-{}-{tag}-out.tsv",
+            "cloudime-english-{}-{tag}-out.tsv",
             std::process::id()
         ));
         convert(inputs, None, &out).unwrap();

@@ -1,24 +1,26 @@
 //! `ITfKeyEventSink`：所有键先经 `OnTestKeyDown` 判吃不吃（[`TextService_Impl::would_eat`]，与 Router 的分派对齐），
-//! 吃的键在 `OnKeyDown` 里转发给 Server 并按结果更新文档；单击中英切换键（`[shortcut] switch_mode`）的判定与保留键命中也在这里。
+//! 吃的键在 `OnKeyDown` 里转发给 Server 并按结果更新文档；单击中英切换键（缺省单击 Shift，由
+//! [`InputSettings`](cloudime_platform::protocol::InputSettings) 下发）的判定与保留键命中也在这里。
 //! 上下文禁了键盘（密码框，见 [`context`](crate::com::context)）时没在组句的键一律放行。
 
-use windows::Win32::Foundation::{FALSE, LPARAM, WPARAM};
-use windows::Win32::UI::Input::KeyboardAndMouse::VK_CAPITAL;
+use windows::Win32::Foundation::{FALSE, LPARAM, TRUE, WPARAM};
+use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CAPITAL, VK_SPACE};
 use windows::Win32::UI::TextServices::{ITfContext, ITfKeyEventSink_Impl};
 use windows::core::{BOOL, GUID, Ref, Result};
 
-use qingjian_platform::protocol::{KeyEvent, KeyOutcome};
+use cloudime_platform::protocol::{IndicatorCommand, KeyEvent, KeyOutcome};
 
 use super::TextService_Impl;
 use super::next::Next;
-use crate::client::KeyReply;
-use crate::com::composition::preedit_string;
-use crate::com::key::event::{digit_key, is_edit, is_letter, is_mode_letter, is_nav, to_key_event};
+use crate::com::composition::{Update, preedit_string};
+use crate::com::key::event::{
+    caps_lock_on, clear_caps_lock, is_edit, is_letter, is_nav, shift_down, to_key_event,
+};
 use crate::com::key::preserved;
 use crate::com::log::log;
 
 impl ITfKeyEventSink_Impl for TextService_Impl {
-    /// 失焦：把敲了一半的拼音原样落定（对应 macOS 的 `commitComposition`）。焦点本身交给
+    /// 失焦：把敲了一半的拼音原样落定。焦点本身交给
     /// [`TextService_Impl::set_thread_focus`]；切窗口时这条回调不触发，靠的是 [`crate::com::focus`]。
     fn OnSetFocus(&self, fforeground: BOOL) -> Result<()> {
         let foreground = fforeground.as_bool();
@@ -36,6 +38,9 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         if self.keyboard_disabled(&pic) {
             return Ok(FALSE);
         }
+        if self.char_width_hotkey(vk) {
+            return Ok(TRUE);
+        }
         Ok(self.would_eat(&self.key_event(vk)).into())
     }
 
@@ -44,6 +49,10 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         self.note_key_down(vk, lparam);
         if self.keyboard_disabled(&pic) {
             return Ok(FALSE);
+        }
+        if self.char_width_hotkey(vk) {
+            self.send_indicator(IndicatorCommand::ToggleCharWidthType);
+            return Ok(TRUE);
         }
         let event = self.key_event(vk);
         Ok(self.handle_key(pic, event).into())
@@ -59,26 +68,28 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         Ok(FALSE)
     }
 
-    /// 保留键命中：Ctrl+Space 直接切中英（切换键在 DLL 侧，不进 Server）；
-    /// 「翻译选中文字」当作按下了那个组合键转发给 Server（绕过 `would_eat`）。
+    /// 保留键命中：Ctrl + Alt + Space 切中英，Ctrl + Alt + . 切简繁，Ctrl + Alt + , 切标点。
+    /// 禁用时都不接管（按键还给应用）。
     fn OnPreservedKey(&self, pic: Ref<ITfContext>, rguid: *const GUID) -> Result<BOOL> {
         let guid = unsafe { *rguid };
         log(&format!("保留键命中 guid={guid:?}"));
+        if self.keyboard_disabled(&pic) || self.mode_state.disabled() {
+            return Ok(FALSE);
+        }
         if guid == preserved::GUID_SWITCH_MODE {
-            if self.keyboard_disabled(&pic) {
-                return Ok(FALSE);
-            }
+            self.switch_source.set("保留键 Ctrl + Alt + Space");
             self.set_english_mode(!self.mode_state.english());
             return Ok(true.into());
         }
-        if guid != preserved::GUID_TRANSLATE || self.keyboard_disabled(&pic) {
-            return Ok(FALSE);
-        }
-        let Some(combo) = self.translate_combo.get() else {
+        let command = if guid == preserved::GUID_TOGGLE_SIMP_TRAD {
+            IndicatorCommand::ToggleSimpTrad
+        } else if guid == preserved::GUID_TOGGLE_PUNCTUATION {
+            IndicatorCommand::TogglePunctuation
+        } else {
             return Ok(FALSE);
         };
-        let event = preserved::key_event(combo, self.mode_state.english());
-        Ok(self.forward_key(pic, event).into())
+        self.send_indicator(command);
+        Ok(true.into())
     }
 }
 
@@ -112,29 +123,60 @@ impl TextService_Impl {
         if vk == u32::from(VK_CAPITAL.0) {
             self.mode_state.notify();
         }
-        if self.key_tap.key_up(vk, self.mode_state.switch_keys()) {
+        let tapped = self.key_tap.key_up(vk, self.mode_state.switch_keys());
+        if !tapped || self.mode_state.disabled() {
+            return;
+        }
+        log(&format!("单击切换键（vk={vk}）切模式"));
+        // Caps Lock 亮着时单击切换键（缺省单击 Shift）：先取消大写锁定，再切英文（与微软拼音一致）。
+        if caps_lock_on() {
+            self.switch_source.set("单击切换键（Caps 亮着）");
+            clear_caps_lock();
+            self.set_english_mode(true);
+        } else {
+            self.switch_source.set("单击切换键");
             self.set_english_mode(!self.mode_state.english());
         }
     }
 
+    /// 内置热键 `Shift + Space`：翻转全角 / 半角字符（中英模式、组句中一律生效）。
+    fn char_width_hotkey(&self, vk: u32) -> bool {
+        vk == u32::from(VK_SPACE.0)
+            && !self.raw_input()
+            && !self.mode_state.disabled()
+            && shift_down()
+    }
+
     /// 这个键吃不吃，与 Router 的分派对齐；`OnTestKeyDown` 用，无副作用。判定见 [`eats_key`]。
     ///
-    /// 带 Ctrl/Alt/Win 只有组句中的「修饰键 + 数字」送 Server（译词 / 删候选），其余归应用（翻译选中文字走保留键）；
-    /// 字母只有「中文模式、没在组句、按住 Shift 的大写」归应用（`[general] shift_letter = "compose"` 时也吃，
-    /// 让它起一段组句），其中 V / U / I 仍送 Server：双拼下是表达式 / 问字入口；
+    /// 带 Ctrl/Alt/Win 的组合一律归应用；
+    /// 没在组句时字母只有「中文模式、Caps 灭、没按 Shift」才吃——英文模式与 Caps 亮着的字母归应用
+    /// （英文模式纯直通，Caps 只管大小写）；Shift 敲的大写也吃，
+    /// 让它起一段组句；
     /// 组句中功能键 / 方向键 / 可打印字符都吃；没在组句时数字 / 标点也先「测吃」送去转全角（中英各有一份开关），
-    /// Server 不转的回 Passthrough 再放行；`?` 是问字前缀。
+    /// Server 不转的回 Passthrough 再放行。
     fn would_eat(&self, event: &KeyEvent) -> bool {
-        let shift_letter_compose = self
-            .input_settings
-            .get()
-            .is_some_and(|input| input.shift_letter_compose);
+        // 这个程序在「不显示候选框」名单里（`[candidate] program_list_of_hiding_candidate`），
+        // 或者输入法被禁用（Ctrl + Space）：完全不接管
+        if self.raw_input() || self.mode_state.disabled() {
+            return false;
+        }
+        let input = self.input_settings.get();
+        let shift_letter_compose = input.is_some_and(|input| input.shift_letter_compose);
+        let full_width_chars = input.is_some_and(|input| input.full_width_chars);
         eats_key(
             event,
             self.shared.composing(),
-            self.shared.translating(),
             shift_letter_compose,
+            full_width_chars,
         )
+    }
+
+    /// 当前设置是不是「完全不接管」（名单里的程序）。
+    fn raw_input(&self) -> bool {
+        self.input_settings
+            .get()
+            .is_some_and(|input| input.raw_input)
     }
 
     /// 不吃的键绝不碰组句（否则光标一移，组句会把拼音重插到别处）。
@@ -151,6 +193,10 @@ impl TextService_Impl {
         // 别让拼音字母漏进应用；标点 / 数字 / 英文与 Caps 下的字母本来就会原样交给应用，
         // 这里放行——一律吃掉会表现为「按了没反应」（连不上时按 `-`、数字都没反应）。
         if !self.ensure_connected() {
+            // 名单里的程序本来就不接管，断了也照样放行
+            if self.raw_input() {
+                return false;
+            }
             let eat = eats_without_server(&event);
             if eat {
                 log(&format!(
@@ -179,7 +225,7 @@ impl TextService_Impl {
                 client.key(event)
             };
             match response {
-                Ok(KeyReply::Result(response)) => {
+                Ok(response) => {
                     // 「只在候选窗口」模式应用里不放行内拼音（那一行由 Server 画在候选窗口顶部）。
                     let preedit = if response.frame.preedit_mode.inline() {
                         preedit_string(&response.frame)
@@ -187,8 +233,6 @@ impl TextService_Impl {
                         String::new()
                     };
                     self.shared.set_composing(!response.frame.is_empty());
-                    // 翻译评审的任何键都结束评审（Server 侧已同步结束）。
-                    self.shared.set_translating(false);
                     let consumed = matches!(response.outcome, KeyOutcome::Consumed);
                     let m = event.modifiers;
                     log(&format!(
@@ -205,12 +249,10 @@ impl TextService_Impl {
                     Next::Document {
                         commit: response.commit,
                         preedit,
+                        caret_shift: response.caret_shift,
+                        delete_before: response.delete_before,
                         consumed,
                     }
-                }
-                Ok(KeyReply::NeedSelection { request }) => {
-                    log(&format!("翻译选中文字：Server 请读选区 request={request}"));
-                    Next::ReadSelection { request }
                 }
                 Err(error) => {
                     log(&format!("转发按键失败，放行并断开，下一键重连: {error}"));
@@ -221,7 +263,7 @@ impl TextService_Impl {
                 }
             }
         };
-        // 带 Ctrl / Alt / Win 的组合（翻译保留键）放行时仍交还应用，别把热键的字母插进文档。
+        // 带 Ctrl / Alt / Win 的组合放行时仍交还应用，别把热键的字母插进文档。
         let insertable = !event.modifiers.has_command_key();
         match (next, passthrough_char) {
             // 放行 + 没在组句 + 可打印字符：输入法插入，吃掉；Server 顺带交出的英文直输段字母拼在前面。
@@ -230,12 +272,19 @@ impl TextService_Impl {
                     consumed: false,
                     commit,
                     preedit,
+                    ..
                 },
                 Some(c),
             ) if insertable && preedit.is_empty() => {
                 let mut text = commit.unwrap_or_default();
                 text.push(c);
-                self.update_document(pic, Some(text), String::new());
+                self.update_document(
+                    pic,
+                    Update {
+                        commit: Some(text),
+                        ..Update::default()
+                    },
+                );
                 true
             }
             // 放行的功能键：Server 没动缓冲区，交还应用（应用处理这个键时光标可能会移）。
@@ -247,16 +296,23 @@ impl TextService_Impl {
             ) => false,
             (
                 Next::Document {
-                    commit, preedit, ..
+                    commit,
+                    preedit,
+                    caret_shift,
+                    delete_before,
+                    ..
                 },
                 _,
             ) => {
-                self.update_document(pic, commit, preedit);
-                true
-            }
-            // 读选区是异步的：先吃掉这个键，选区文本在回调里发给 Server。
-            (Next::ReadSelection { request }, _) => {
-                self.read_selection(pic, request);
+                self.update_document(
+                    pic,
+                    Update {
+                        commit,
+                        preedit,
+                        caret_shift,
+                        delete_before,
+                    },
+                );
                 true
             }
             (Next::Abort, _) => false,
@@ -278,34 +334,40 @@ fn eats_without_server(event: &KeyEvent) -> bool {
 
 /// 这个键吃不吃（[`TextService_Impl::would_eat`] 的纯逻辑，便于单测）。
 ///
-/// - 翻译评审中一律吃，交给 Server 定接受 / 取消；
-/// - 带 Ctrl / Alt / Win：只有组句中的「修饰键 + 数字」吃（译词 / 删候选），其余归应用（翻译选中文字走保留键）；
-/// - 字母只有「中文模式、没在组句、按住 Shift 的大写」归应用，其中 V / U / I 仍吃：双拼下是表达式 / 问字入口。
-///   `[general] shift_letter = "compose"`（Server 经 [`InputSettings`](qingjian_platform::protocol::InputSettings) 下发）时这种大写也吃：送去 Core 起一段组句，
-///   `⇧C` 接 `pan` 才能出「C盘」；组句一开始，后面的 Shift 字母本来就被 `composing` 兜住；
+/// - 带 Ctrl / Alt / Win：一律归应用；**只有组句中的 Ctrl + 数字**例外，交给 Server 判是不是杀词；
+/// - 字母：组句中一定吃（拼音要接着写下去）；没在组句时只有「中文模式、Caps 灭、
+///   没按 Shift）」才吃。英文模式是纯直通、
+///   Caps 只管大小写，这两种字母都归应用。`⇧C` 接 `pan` 出「C盘」靠的是后面这条；
+///   组句一开始，后面的 Shift 字母本来就被 `composing` 兜住；
+///   状态条「全角 / 半角」打着（`full_width_chars`）时字母一律吃：得送来 Server 换成全角形再上屏，
+///   英文模式本来送都不送，不吃就转不了；
 /// - 组句中功能键 / 方向键 / 可打印字符都吃；
-/// - 没在组句时数字 / 标点也先「测吃」送去转全角（中英各有一份开关），Server 不转的回 Passthrough 再放行；`?` 是问字前缀。
+/// - 没在组句时数字 / 标点也先「测吃」送去转全角（中英各有一份开关），Server 不转的回 Passthrough 再放行。
 fn eats_key(
     event: &KeyEvent,
     composing: bool,
-    translating: bool,
     shift_letter_compose: bool,
+    full_width_chars: bool,
 ) -> bool {
-    if translating {
+    let modifiers = event.modifiers;
+    if composing
+        && modifiers.ctrl
+        && !modifiers.alt
+        && !modifiers.win
+        && is_ctrl_command_key(event.virtual_key)
+    {
         return true;
     }
-    let modifiers = event.modifiers;
     if modifiers.has_command_key() {
-        return composing && digit_key(event.virtual_key);
+        return false;
     }
     let vk = event.virtual_key;
     if is_letter(vk) {
-        return modifiers.caps
-            || modifiers.english_mode
-            || !modifiers.shift
-            || composing
-            || shift_letter_compose
-            || is_mode_letter(vk);
+        return composing
+            || full_width_chars
+            || (!modifiers.caps
+                && !modifiers.english_mode
+                && (!modifiers.shift || shift_letter_compose));
     }
     if composing {
         return is_edit(vk) || is_nav(vk) || event.character.is_some_and(|c| !c.is_control());
@@ -315,9 +377,14 @@ fn eats_key(
         .is_some_and(|c| c.is_ascii_punctuation() || c.is_ascii_digit())
 }
 
+/// 组句里 Ctrl 组合能吃进 Server 的键：数字（杀词 / 上屏短语与整句）与回车（原样上屏并记一次）。
+fn is_ctrl_command_key(vk: u32) -> bool {
+    matches!(vk, 0x31..=0x39 | 0x61..=0x69 | 0x0D)
+}
+
 #[cfg(test)]
 mod tests {
-    use qingjian_platform::protocol::{KeyEvent, KeyModifiers};
+    use cloudime_platform::protocol::{KeyEvent, KeyModifiers};
 
     use super::{eats_key, eats_without_server};
     use crate::com::key::event::to_key_event;
@@ -325,10 +392,15 @@ mod tests {
     /// 中文模式（`caps` / `english_mode` 都灭）。
     const CHINESE: (bool, bool) = (false, false);
 
-    fn key(vk: u32, caps: bool, english_mode: bool) -> qingjian_platform::protocol::KeyEvent {
+    fn key(vk: u32, caps: bool, english_mode: bool) -> cloudime_platform::protocol::KeyEvent {
         let mut event = to_key_event(vk, english_mode);
-        event.modifiers.caps = caps;
-        event.modifiers.english_mode = english_mode;
+        // `to_key_event` 的修饰键来自实时键盘状态（`GetKeyState`）：测试里一律抹平，
+        // 免得跑测试时手还按着 Shift / Ctrl 就红。
+        event.modifiers = KeyModifiers {
+            caps,
+            english_mode,
+            ..KeyModifiers::default()
+        };
         event
     }
 
@@ -336,6 +408,63 @@ mod tests {
         let mut event = KeyEvent::new(vk, Some(character), modifiers);
         event.modifiers = modifiers;
         event
+    }
+
+    #[test]
+    fn ctrl_command_keys_are_eaten_only_while_composing() {
+        let ctrl = KeyModifiers {
+            ctrl: true,
+            ..KeyModifiers::default()
+        };
+        // 组句中的 Ctrl+1：先测吃，交给 Server 判是不是杀词 / 上屏短语
+        assert!(eats_key(
+            &with_modifiers(0x31, '\u{1}', ctrl),
+            true,
+            false,
+            false
+        ));
+        // 小键盘也一样
+        assert!(eats_key(
+            &with_modifiers(0x61, '\u{1}', ctrl),
+            true,
+            false,
+            false
+        ));
+        // Ctrl+回车 同样先测吃，交给 Server
+        assert!(eats_key(
+            &with_modifiers(0x0D, '\r', ctrl),
+            true,
+            false,
+            false
+        ));
+        // 没在组句：归应用
+        assert!(!eats_key(
+            &with_modifiers(0x31, '\u{1}', ctrl),
+            false,
+            false,
+            false
+        ));
+        assert!(!eats_key(
+            &with_modifiers(0x0D, '\r', ctrl),
+            false,
+            false,
+            false
+        ));
+        // Alt / Win 组合仍归应用
+        let alt = KeyModifiers { alt: true, ..ctrl };
+        assert!(!eats_key(
+            &with_modifiers(0x31, '\u{1}', alt),
+            true,
+            false,
+            false
+        ));
+        // 非数字 / 回车的 Ctrl 组合仍归应用
+        assert!(!eats_key(
+            &with_modifiers(0x41, 'a', ctrl),
+            true,
+            false,
+            false
+        ));
     }
 
     #[test]
@@ -351,24 +480,17 @@ mod tests {
             false,
             false
         ));
-        // `[general] shift_letter = "compose"`：没在组句也吃，送去起一段组句（⇧C 接 pan 出 C盘）
+        // Shift+字母固定收进组句：没在组句也吃，送去起一段组句（⇧C 接 pan 出 C盘）
         assert!(eats_key(
             &with_modifiers(0x41, 'A', shifted),
             false,
-            false,
-            true
+            true,
+            false
         ));
         // 组句一开始，后面的 Shift 字母就被 `composing` 兜住，一律吃
         assert!(eats_key(
             &with_modifiers(0x41, 'A', shifted),
             true,
-            false,
-            false
-        ));
-        // 双拼下 Shift + V / U / I 是表达式 / 问字入口：没在组句也吃
-        assert!(eats_key(
-            &with_modifiers(0x56, 'V', shifted),
-            false,
             false,
             false
         ));
@@ -379,18 +501,35 @@ mod tests {
             false,
             false
         ));
-        // Caps 亮着（直通大写）也吃，由我们插入
+        // Caps 亮着的字母由应用自己上屏（我们只管大小写位），归应用
         let caps = KeyModifiers {
             caps: true,
             ..KeyModifiers::default()
         };
-        assert!(eats_key(
+        assert!(!eats_key(
             &with_modifiers(0x41, 'A', caps),
             false,
             false,
             false
         ));
-        // 带 Ctrl 的组合键归应用，翻译评审中一律吃
+        // 英文模式纯直通，字母也归应用；只有组句中才吃（先把拼音原样上屏）
+        let english = KeyModifiers {
+            english_mode: true,
+            ..KeyModifiers::default()
+        };
+        assert!(!eats_key(
+            &with_modifiers(0x41, 'a', english),
+            false,
+            false,
+            false
+        ));
+        assert!(eats_key(
+            &with_modifiers(0x41, 'a', english),
+            true,
+            false,
+            false
+        ));
+        // 带 Ctrl 的组合键归应用
         let ctrl_c = KeyModifiers {
             ctrl: true,
             ..KeyModifiers::default()
@@ -401,11 +540,51 @@ mod tests {
             false,
             false
         ));
+    }
+
+    #[test]
+    fn full_width_chars_eat_letters_in_every_mode() {
+        // 状态条「全角 / 半角」打着：字母一律先送来 Server 转全角，英文模式 / Caps / Shift 都不例外
+        let english = KeyModifiers {
+            english_mode: true,
+            ..KeyModifiers::default()
+        };
         assert!(eats_key(
+            &with_modifiers(0x41, 'a', english),
+            false,
+            false,
+            true
+        ));
+        let caps = KeyModifiers {
+            caps: true,
+            ..KeyModifiers::default()
+        };
+        assert!(eats_key(
+            &with_modifiers(0x41, 'A', caps),
+            false,
+            false,
+            true
+        ));
+        let shifted = KeyModifiers {
+            shift: true,
+            ..KeyModifiers::default()
+        };
+        assert!(eats_key(
+            &with_modifiers(0x41, 'A', shifted),
+            false,
+            false,
+            true
+        ));
+        // 带 Ctrl 的组合键仍归应用（转全角不该截走快捷键）
+        let ctrl_c = KeyModifiers {
+            ctrl: true,
+            ..KeyModifiers::default()
+        };
+        assert!(!eats_key(
             &with_modifiers(0x43, 'c', ctrl_c),
             false,
-            true,
-            false
+            false,
+            true
         ));
     }
 

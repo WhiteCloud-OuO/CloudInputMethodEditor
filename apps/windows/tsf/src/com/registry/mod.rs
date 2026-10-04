@@ -1,4 +1,4 @@
-//! 自注册：写 COM 的 InprocServer32，经 `ITfInputProcessorProfiles` / `ITfCategoryMgr` 把青简登记成键盘类文本服务。
+//! 自注册：写 COM 的 InprocServer32，经 `ITfInputProcessorProfiles` / `ITfCategoryMgr` 把云朵输入法登记成键盘类文本服务。
 //! 写的是 `HKEY_CLASSES_ROOT`，所以 regsvr32 要管理员。输入法图标文件在 [`icon`]。
 
 mod icon;
@@ -18,7 +18,7 @@ use windows::core::{GUID, Result};
 use windows_registry::CLASSES_ROOT;
 
 use crate::com::{
-    CLSID_QINGJIAN, CLSID_QINGJIAN_STR, GUID_PROFILE, LANGID_ZH_CN, SERVICE_DESCRIPTION,
+    CLSID_CLOUDIME, CLSID_CLOUDIME_STR, GUID_PROFILE, LANGID_ZH_CN, SERVICE_DESCRIPTION,
 };
 
 /// 除「键盘类 TIP」外还要声明沉浸式 / 系统托盘等能力，否则 Win10/11 的输入切换器会把它过滤掉（表现为「装上又消失」）。
@@ -34,7 +34,7 @@ const CATEGORIES: &[GUID] = &[
 ];
 
 fn clsid_key() -> String {
-    format!("CLSID\\{CLSID_QINGJIAN_STR}")
+    format!("CLSID\\{CLSID_CLOUDIME_STR}")
 }
 
 pub(crate) fn register() -> Result<()> {
@@ -60,15 +60,15 @@ fn register_profile() -> Result<()> {
         let profiles: ITfInputProcessorProfiles = unsafe {
             CoCreateInstance(&CLSID_TF_InputProcessorProfiles, None, CLSCTX_INPROC_SERVER)?
         };
-        // AddLanguageProfile 按 null 扫描读字符串，不补 0 会多读相邻内存（曾显示成「青简C」）。
+        // AddLanguageProfile 按 null 扫描读字符串，不补 0 会多读相邻内存（曾显示成「云朵输入法C」）。
         let description = wide_z(SERVICE_DESCRIPTION);
         let icon = icon::install()
             .map(|path| wide_z(&path.to_string_lossy()))
             .unwrap_or_else(|| vec![0]);
         unsafe {
-            profiles.Register(&CLSID_QINGJIAN)?;
+            profiles.Register(&CLSID_CLOUDIME)?;
             profiles.AddLanguageProfile(
-                &CLSID_QINGJIAN,
+                &CLSID_CLOUDIME,
                 LANGID_ZH_CN,
                 &GUID_PROFILE,
                 &description,
@@ -79,7 +79,7 @@ fn register_profile() -> Result<()> {
         let category: ITfCategoryMgr =
             unsafe { CoCreateInstance(&CLSID_TF_CategoryMgr, None, CLSCTX_INPROC_SERVER)? };
         for catid in CATEGORIES {
-            unsafe { category.RegisterCategory(&CLSID_QINGJIAN, catid, &CLSID_QINGJIAN)? };
+            unsafe { category.RegisterCategory(&CLSID_CLOUDIME, catid, &CLSID_CLOUDIME)? };
         }
         Ok(())
     })
@@ -92,7 +92,7 @@ fn unregister_profile() -> Result<()> {
         } {
             for catid in CATEGORIES {
                 let _ =
-                    unsafe { category.UnregisterCategory(&CLSID_QINGJIAN, catid, &CLSID_QINGJIAN) };
+                    unsafe { category.UnregisterCategory(&CLSID_CLOUDIME, catid, &CLSID_CLOUDIME) };
             }
         }
         if let Ok(profiles) = unsafe {
@@ -104,8 +104,8 @@ fn unregister_profile() -> Result<()> {
         } {
             unsafe {
                 let _ =
-                    profiles.RemoveLanguageProfile(&CLSID_QINGJIAN, LANGID_ZH_CN, &GUID_PROFILE);
-                let _ = profiles.Unregister(&CLSID_QINGJIAN);
+                    profiles.RemoveLanguageProfile(&CLSID_CLOUDIME, LANGID_ZH_CN, &GUID_PROFILE);
+                let _ = profiles.Unregister(&CLSID_CLOUDIME);
             }
         }
         Ok(())

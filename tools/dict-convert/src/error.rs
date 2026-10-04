@@ -9,41 +9,32 @@ pub enum ConvertError {
     Json(#[from] serde_json::Error),
 
     #[error(transparent)]
-    Dictionary(#[from] qingjian_dictionary::DictionaryError),
+    Dictionary(#[from] cloudime_dictionary::DictionaryError),
 
     #[error(transparent)]
-    LanguageModel(#[from] qingjian_lm::LmError),
+    LanguageModel(#[from] cloudime_lm::LmError),
 
     #[error(transparent)]
-    Glossary(#[from] qingjian_translate::GlossaryError),
+    Neural(#[from] cloudime_neural::NeuralError),
 
-    #[error(transparent)]
-    Neural(#[from] qingjian_neural::NeuralError),
-
-    /// `pack` 少了必填的元数据（只有 `codes` 有缺省值）。
+    /// `pack` 少了必填的元数据。
     #[error("pack {kind} needs --name")]
     MissingName {
         /// `pack` 的种类名。
         kind: &'static str,
     },
 
-    /// 抽样对照出现白名单之外的不符。
-    #[error("stroke verification failed: {unmatched} character(s) differ outside the whitelist")]
-    Verify {
-        /// 不符的字数。
-        unmatched: usize,
-    },
+    /// `.qj` 容器校验失败（`rehead` 改之前先按容器读一遍）。
+    #[error(transparent)]
+    Container(#[from] cloudime_format::FormatError),
 
-    /// 文件不是预期格式。
-    #[error("{path}:{line}: {reason}")]
-    Format {
+    /// 不是 `.qj` 文件。
+    #[error("{path} 不是 .qj 文件：魔数 {magic}")]
+    NotQj {
         /// 出错的文件。
         path: PathBuf,
 
-        /// 从 1 开始的行号。
-        line: usize,
-
-        /// 具体原因。
-        reason: String,
+        /// 文件头前 8 字节的可读形式。
+        magic: String,
     },
 }

@@ -173,7 +173,7 @@ mod tests {
 
     /// 建一个最小词库目录：01/02 表只有表头（读出来是空），03_domains 由测试自己放文件。
     fn scratch(name: &str) -> std::path::PathBuf {
-        let dir = std::env::temp_dir().join(format!("qingjian-dict-convert-lexicon-{name}"));
+        let dir = std::env::temp_dir().join(format!("cloudime-dict-convert-lexicon-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
         for sub in ["01_characters", "02_common", "03_domains"] {
             std::fs::create_dir_all(dir.join(sub)).unwrap();

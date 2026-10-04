@@ -1,12 +1,12 @@
-//! 设置程序自己的文件日志：`%LOCALAPPDATA%\Qingjian\logs\settings.<YYYY-MM-DD>.log`，与 Server / DLL 同目录。
+//! 设置程序自己的文件日志：`%LOCALAPPDATA%\CloudIME\logs\settings.<YYYY-MM-DD>.log`，与 Server / DLL 同目录。
 //! exe 是 GUI 子系统没有控制台，`eprintln!` 的字全丢；启动失败、保存配置失败这些得有地方看。
-//! 与 DLL 一样开文件追加一行、失败吞掉，只留最近 7 天（命名与清理在 `qingjian_platform::logs::daily`）。
+//! 与 DLL 一样开文件追加一行、失败吞掉，只留最近 7 天（命名与清理在 `cloudime_platform::logs::daily`）。
 
 use std::fmt::Display;
 use std::io::Write;
 use std::sync::atomic::{AtomicU32, Ordering};
 
-use qingjian_platform::logs::daily::{self, KEEP_DAYS};
+use cloudime_platform::logs::daily::{self, KEEP_DAYS};
 
 const PREFIX: &str = "settings";
 
@@ -17,12 +17,16 @@ pub(crate) fn warn(message: impl Display) {
     write("WARN", &message.to_string());
 }
 
+pub(crate) fn info(message: impl Display) {
+    write("INFO", &message.to_string());
+}
+
 pub(crate) fn error(message: impl Display) {
     write("ERROR", &message.to_string());
 }
 
 fn write(level: &str, message: &str) {
-    let Some(dir) = qingjian_platform::dirs::log_dir() else {
+    let Some(dir) = cloudime_platform::dirs::log_dir() else {
         return;
     };
     let now = jiff::Zoned::now();
@@ -48,6 +52,6 @@ fn write(level: &str, message: &str) {
         "{} {level} [pid {}] {}",
         now.strftime("%Y-%m-%d %H:%M:%S%.3f"),
         std::process::id(),
-        qingjian_platform::logs::secrets::mask(message)
+        message
     );
 }

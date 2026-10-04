@@ -1,11 +1,11 @@
 #!/usr/bin/env bash
 # 发版最后一步：从 CHANGELOG.md + GitHub Releases API + 各版本的 SHA256SUMS / build-info.json 生成 releases.json，
 # 挂到本次发布上，并覆盖到 GitHub 的 latest 发布上（官网固定取 releases/latest/download/releases.json，
-# 而 latest 不一定是本次：各平台版本号独立，Windows 内测版发出去时 latest 可能仍是 macOS 的那版）。
+# 而 latest 不一定是本次：latest 由 GitHub 按发布日更新，Windows 内测版发出去时 latest 可能仍是更早那版）。
 #
 #   tools/release/publish-releases-json.sh <本次发布的标签> <输出目录>
 #
-# 需要 gh（带仓库写权限）、cargo、环境变量 QINGJIAN_INDEX_SIGNING_KEY 与 python3；Windows runner 上 python3 叫 python，用 PYTHON 环境变量指定。
+# 需要 gh（带仓库写权限）、cargo、环境变量 CLOUDIME_INDEX_SIGNING_KEY 与 python3；Windows runner 上 python3 叫 python，用 PYTHON 环境变量指定。
 set -euo pipefail
 
 TAG="$1"
@@ -16,7 +16,7 @@ TMP="$(mktemp -d)"
 
 gh api "repos/$REPO/releases" --paginate > "$TMP/releases.api.json"
 META="$TMP/meta"
-for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName' | grep -E '^(macos-|windows-|linux-)?v[0-9]'); do
+for tag in $(gh release list --limit 100 --json tagName --jq '.[].tagName' | grep -E '^(windows-)?v[0-9]'); do
   mkdir -p "$META/$tag"
   gh release download "$tag" --pattern SHA256SUMS --pattern build-info.json --dir "$META/$tag" || true
 done
@@ -25,9 +25,9 @@ mkdir -p "$OUT_DIR"
   --api-json "$TMP/releases.api.json" --meta-dir "$META" --out "$OUT_DIR/releases.json"
 cat "$OUT_DIR/releases.json"
 
-# 分离签名 releases.json.sig：软件内检查更新按内置公钥验，验不过就当没查到；私钥在 QINGJIAN_INDEX_SIGNING_KEY
-cargo run --release --locked -q -p qingjian-release-sign -- sign "$OUT_DIR/releases.json"
-cargo run --release --locked -q -p qingjian-release-sign -- verify "$OUT_DIR/releases.json"
+# 分离签名 releases.json.sig：软件内检查更新按内置公钥验，验不过就当没查到；私钥在 CLOUDIME_INDEX_SIGNING_KEY
+cargo run --release --locked -q -p cloudime-release-sign -- sign "$OUT_DIR/releases.json"
+cargo run --release --locked -q -p cloudime-release-sign -- verify "$OUT_DIR/releases.json"
 
 gh release upload "$TAG" "$OUT_DIR/releases.json" "$OUT_DIR/releases.json.sig" --clobber
 LATEST="$(gh release view --json tagName --jq .tagName)"

@@ -7,13 +7,12 @@ use std::path::PathBuf;
 use std::thread;
 use std::time::Duration;
 
-use qingjian_core::Language;
-use qingjian_platform::protocol::{
+use cloudime_platform::protocol::{
     ClientMessage, KeyEvent, PROTOCOL_VERSION, ServerMessage, SessionId,
 };
-use qingjian_windows_server::ipc::pipe::serve_pipe;
-use qingjian_windows_server::ipc::{read_message, write_message};
-use qingjian_windows_server::{AssemblySpec, Router, RouterConfig, assembly};
+use cloudime_windows_server::ipc::pipe::serve_pipe;
+use cloudime_windows_server::ipc::{read_message, write_message};
+use cloudime_windows_server::{AssemblySpec, Router, RouterConfig, assembly};
 
 const SESSION: SessionId = SessionId(1);
 
@@ -34,20 +33,14 @@ fn connect(name: &str) -> std::fs::File {
 
 #[test]
 fn named_pipe_round_trips_the_open_type_loop() {
-    let name = format!(r"\\.\pipe\qingjian-test-{}", std::process::id());
+    let name = format!(r"\\.\pipe\cloudime-test-{}", std::process::id());
 
     // 监听线程服务完一个客户端后阻塞等下一个，随进程退出即可。
     let server_name = name.clone();
     thread::spawn(move || {
         let root = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../..");
-        let engine = assembly::assemble(&AssemblySpec {
-            glossary: Some((
-                Language::English,
-                root.join("assets/sample/glossary-en.tsv"),
-            )),
-            ..AssemblySpec::new(root.join("assets/sample/dict.tsv"))
-        })
-        .expect("assemble engine from sample data");
+        let engine = assembly::assemble(&AssemblySpec::new(root.join("assets/sample/dict.tsv")))
+            .expect("assemble engine from sample data");
         let mut router = Router::new(engine, RouterConfig::default());
         let (work_tx, work_rx) = std::sync::mpsc::channel();
         let _ = serve_pipe(&server_name, &mut router, work_tx, work_rx);

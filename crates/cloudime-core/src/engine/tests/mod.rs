@@ -1,0 +1,241 @@
+//! Engine 的测试：共用的样例词库、辅助函数与 mock 在这里，用例按主题分文件。
+
+mod correction;
+mod custom;
+mod english;
+mod input;
+mod learning;
+mod lookup;
+mod privacy;
+mod raw;
+
+use std::collections::HashMap;
+
+use std::sync::{Arc, Mutex};
+
+use super::*;
+
+const SAMPLE: &str = "开发\tkai fa\t9000\n开发者\tkai fa zhe\t3000\n开饭\tkai fan\t800\n开放\tkai fang\t20000\n西安\txi an\t4000\n先\txian\t10000\n下\txia\t8000\n想\txiang\t9000\n开\tkai\t20000\n咖啡\tka fei\t5000\n不\tbu\t1000\n";
+
+fn engine() -> Engine {
+    Engine::new(Dictionary::parse(SAMPLE).unwrap())
+}
+
+fn texts(input: &str) -> Vec<String> {
+    let mut engine = engine();
+    engine.set_input(input);
+    engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .map(|c| c.text)
+        .collect()
+}
+
+struct CountingLearner(HashMap<String, u32>);
+
+impl Learner for CountingLearner {
+    fn record(&mut self, candidate: &Candidate) {
+        *self.0.entry(candidate.text.clone()).or_default() += 1;
+    }
+
+    fn weight(&self, text: &str) -> u32 {
+        self.0.get(text).copied().unwrap_or(0)
+    }
+
+    // 桩：还原旧的「1 + 选择次数」因子，排序用例的行为不变
+    fn rank_weight(&self, text: &str) -> f64 {
+        1.0 + f64::from(self.weight(text))
+    }
+
+    fn record_choice(&mut self, input: &str, text: &str) {
+        *self.0.entry(format!("{input}\t{text}")).or_default() += 1;
+    }
+
+    fn choice_weight(&self, input: &str, text: &str) -> u32 {
+        self.0
+            .get(&format!("{input}\t{text}"))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn record_raw(&mut self, input: &str) {
+        *self.0.entry(format!("{input}\t<raw>")).or_default() += 1;
+    }
+
+    fn record_typo(&mut self, typed: &str, intended: &str) {
+        *self
+            .0
+            .entry(format!("typo\t{typed}\t{intended}"))
+            .or_default() += 1;
+    }
+
+    fn unrecord_typo(&mut self, typed: &str, intended: &str) {
+        if let Some(count) = self.0.get_mut(&format!("typo\t{typed}\t{intended}")) {
+            *count = count.saturating_sub(1);
+        }
+    }
+
+    fn typo_count(&self, typed: &str, intended: &str) -> u32 {
+        self.0
+            .get(&format!("typo\t{typed}\t{intended}"))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn unrecord(&mut self, text: &str) {
+        if let Some(count) = self.0.get_mut(text) {
+            *count = count.saturating_sub(1);
+        }
+    }
+
+    fn unrecord_choice(&mut self, input: &str, text: &str) {
+        if let Some(count) = self.0.get_mut(&format!("{input}\t{text}")) {
+            *count = count.saturating_sub(1);
+        }
+    }
+
+    fn raw_count(&self, input: &str) -> u32 {
+        self.0.get(&format!("{input}\t<raw>")).copied().unwrap_or(0)
+    }
+}
+
+/// (看到轮次, 上屏次数)。
+type VocabularyCounts = HashMap<String, (u32, u32)>;
+
+/// 记在内存里的词汇记录。
+#[derive(Default)]
+struct MemoryVocabulary(Arc<Mutex<VocabularyCounts>>);
+
+impl VocabularyTracker for MemoryVocabulary {
+    fn record_exposure(&mut self, word: &str) {
+        self.0.lock().unwrap().entry(word.to_owned()).or_default().0 += 1;
+    }
+
+    fn record_commit(&mut self, word: &str) {
+        self.0.lock().unwrap().entry(word.to_owned()).or_default().1 += 1;
+    }
+}
+
+/// 把输入统计攒起来的假累计方。
+struct MemoryMeter(Arc<Mutex<Vec<Usage>>>);
+
+impl UsageMeter for MemoryMeter {
+    fn record(&mut self, usage: Usage) {
+        self.0.lock().unwrap().push(usage);
+    }
+}
+
+/// 把输入日志条目攒起来的假落盘方。
+struct MemoryLogger(Arc<Mutex<Vec<InputLogEntry>>>);
+
+impl InputLogger for MemoryLogger {
+    fn record(&mut self, entry: InputLogEntry) {
+        self.0.lock().unwrap().push(entry);
+    }
+}
+
+/// 记用户词与词转移的假学习器；`shared` 让测试从外面看到记了什么。
+#[derive(Default)]
+struct WordLearner {
+    words: Vec<(String, Vec<String>)>,
+    dictionary: Option<Dictionary>,
+    ngram: sentence::UserNgram,
+    shared: Arc<Mutex<(Vec<String>, sentence::UserNgram)>>,
+    choices: HashMap<String, u32>,
+}
+
+impl Learner for WordLearner {
+    fn record(&mut self, _candidate: &Candidate) {}
+
+    fn record_choice(&mut self, input: &str, text: &str) {
+        *self.choices.entry(format!("{input}\t{text}")).or_default() += 1;
+    }
+
+    fn choice_weight(&self, input: &str, text: &str) -> u32 {
+        self.choices
+            .get(&format!("{input}\t{text}"))
+            .copied()
+            .unwrap_or(0)
+    }
+
+    fn unrecord_choice(&mut self, input: &str, text: &str) {
+        if let Some(count) = self.choices.get_mut(&format!("{input}\t{text}")) {
+            *count = count.saturating_sub(1);
+        }
+    }
+
+    fn weight(&self, text: &str) -> u32 {
+        u32::from(self.words.iter().any(|(t, _)| t == text))
+    }
+
+    /// 桩：用户词给 2 倍，其余保持 1 倍。
+    fn rank_weight(&self, text: &str) -> f64 {
+        1.0 + f64::from(self.weight(text))
+    }
+
+    fn learn_word(&mut self, text: &str, syllables: &[String], _weight: f64) {
+        self.words.push((text.to_owned(), syllables.to_vec()));
+        let tsv: String = self
+            .words
+            .iter()
+            .map(|(t, s)| format!("{t}\t{}\t100\n", s.join(" ")))
+            .collect();
+        self.dictionary = Some(Dictionary::parse(&tsv).unwrap());
+        self.shared.lock().unwrap().0.push(text.to_owned());
+    }
+
+    fn learn_english_word(&mut self, text: &str, _weight: f64) {
+        self.shared.lock().unwrap().0.push(text.to_owned());
+    }
+
+    fn user_words(&self) -> Option<&Dictionary> {
+        self.dictionary.as_ref()
+    }
+
+    fn record_transition(&mut self, context: sentence::Context<'_>, word: &str, times: u32) {
+        self.ngram.record_times(context, word, times);
+        self.shared
+            .lock()
+            .unwrap()
+            .1
+            .record_times(context, word, times);
+    }
+
+    fn unrecord_transition(&mut self, context: sentence::Context<'_>, word: &str, times: u32) {
+        self.ngram.unrecord(context, word, times);
+        self.shared.lock().unwrap().1.unrecord(context, word, times);
+    }
+
+    fn user_ngram(&self) -> Option<&sentence::UserNgram> {
+        Some(&self.ngram)
+    }
+}
+
+/// 只认「做了 → 吧」与句首 把 的假模型。
+struct BaModel;
+
+impl LanguageModel for BaModel {
+    fn log_prob(&self, previous: Option<&str>, word: &str) -> Option<f64> {
+        match (previous, word) {
+            (Some("做了"), "吧") => Some(-1.0),
+            (Some("做了"), "把") => Some(-8.0),
+            (None, "把") => Some(-3.0),
+            (None, "吧") => Some(-7.0),
+            _ => None,
+        }
+    }
+}
+
+fn texts_of(engine: &Engine) -> Vec<String> {
+    engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .map(|c| c.text)
+        .collect()
+}

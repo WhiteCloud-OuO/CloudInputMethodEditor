@@ -1,4 +1,4 @@
-//! 组句起始时读应用光标前的文字，给本地整句模型当前文（对应 macOS 壳的 `surrounding_text`），
+//! 组句起始时读应用光标前的文字，给本地整句模型当前文，
 //! 顺手按输入范围判这个输入框私密不私密（[`private_input`]）。在起组句的那次读写会话里做（此时选区还是原来的插入点，
 //! 拼音还没插进去），不另开会话。
 
@@ -13,7 +13,7 @@ use windows::Win32::UI::TextServices::{
 };
 use windows::core::Interface;
 
-/// 往前读多少字（与 macOS 壳的 `RESCORE_LOOKBACK` 一致）。
+/// 往前读多少字。
 const LOOKBACK: i32 = 64;
 
 /// 起组句时对输入框的判断：私密不私密，以及不私密时光标前的文字。

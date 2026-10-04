@@ -16,11 +16,5 @@ fi
 
 cargo fmt --all --check
 
-# clippy 要按平台排除编不了的壳，划分与 ci.yml 的三个 job 一致。
-# IMK 壳依赖 objc2，非 Apple 平台上是硬 compile_error!，排除不掉就只能整条命令失败；
-# 其余平台排除它之后，Windows 三件套在本机也编得过（已在 Windows 上验过）。
-case "$(uname -s)" in
-  Darwin) clippy_scope=(--workspace) ;;
-  *) clippy_scope=(--workspace --exclude qingjian-macos) ;;
-esac
-cargo clippy "${clippy_scope[@]}" --all-targets -- -D warnings
+# clippy 要覆盖整个 workspace，划分与 ci.yml 的 windows job 一致。
+cargo clippy --workspace --all-targets -- -D warnings

@@ -2,19 +2,9 @@
 # 推之前跑全 workspace 测试（提交时不跑，太慢）；跳过：git push --no-verify
 set -euo pipefail
 cd "$(git rev-parse --show-toplevel)"
-# 与 pre-commit 同一套平台划分（理由见那边）：非 Apple 平台编不了依赖 objc2 的 IMK 壳。
+# Windows 上 Server 的 build.rs 会嵌 uiAccess manifest，嵌了它的测试二进制没签名起不来（os error 740）；
+# 与 ci.yml 的 windows job 一样关掉这一项（其他平台没这项，跑法不变）。
 case "$(uname -s)" in
-  Darwin)
-    test_scope=(--workspace)
-    ;;
-  MINGW*|MSYS*|CYGWIN*)
-    # Server 的 build.rs 会嵌 uiAccess manifest，嵌了它的测试二进制没签名起不来（os error 740）；
-    # 与 ci.yml 的 windows job 一样关掉
-    test_scope=(--workspace --exclude qingjian-macos)
-    export QINGJIAN_UIACCESS=0
-    ;;
-  *)
-    test_scope=(--workspace --exclude qingjian-macos)
-    ;;
+  MINGW*|MSYS*|CYGWIN*) export CLOUDIME_UIACCESS=0 ;;
 esac
-cargo test "${test_scope[@]}" --locked
+cargo test --workspace --locked

@@ -3,15 +3,11 @@ use std::path::PathBuf;
 use clap::Parser;
 
 /// 按优先级挑一个存在的数据文件：`data/generated/` 里打包好的 `.qj`、那里的 TSV、仓库自带的产品数据
-/// （`assets/lexicon/dict.tsv`、`assets/glossary/glossary-*.tsv`、`assets/lexicon/english.tsv`），最后是 `assets/sample/` 的样例。
+/// （`assets/lexicon/dict.tsv`、`assets/lexicon/english.tsv`），最后是 `assets/sample/` 的样例。
 pub fn default_data_file(name: &str) -> PathBuf {
     let generated = PathBuf::from("data/generated").join(name);
     let packed = generated.with_extension("qj");
-    let shipped = if name.starts_with("glossary-") {
-        PathBuf::from("assets/glossary").join(name)
-    } else {
-        PathBuf::from("assets/lexicon").join(name)
-    };
+    let shipped = PathBuf::from("assets/lexicon").join(name);
     for candidate in [packed, generated, shipped] {
         if candidate.is_file() {
             return candidate;
@@ -20,43 +16,21 @@ pub fn default_data_file(name: &str) -> PathBuf {
     PathBuf::from("assets/sample").join(name)
 }
 
-/// 缺省配置文件位置：与输入法共用同一份。
+/// 缺省配置文件位置：与数据文件一样按 cwd 解析（仓库根目录的 `config.toml`）。
 pub fn default_config_file() -> PathBuf {
-    if cfg!(target_os = "macos")
-        && let Some(home) = std::env::var_os("HOME")
-    {
-        return PathBuf::from(home).join("Library/Application Support/Qingjian/config.toml");
-    }
     PathBuf::from("config.toml")
 }
 
 #[derive(Debug, Parser)]
-#[command(name = "qingjian", about = "青简输入法 Core 测试工具")]
+#[command(name = "cloudime", about = "云朵输入法 Core 测试工具")]
 pub struct Args {
     /// 词库路径（TSV）。缺省：data/generated/dict.tsv 存在就用它，否则 assets/sample/dict.tsv
     #[arg(long)]
     pub dict: Option<PathBuf>,
 
-    /// 释义表路径。缺省：data/generated/glossary-<language>.tsv 存在就用它，否则 assets/sample/ 下的同名文件
-    #[arg(long)]
-    pub glossary: Option<PathBuf>,
-
-    /// 学习语言：en / ja / es。也可用环境变量 QINGJIAN_LEARNING_LANGUAGE
-    #[arg(long, env = "QINGJIAN_LEARNING_LANGUAGE", default_value = "en")]
-    pub language: String,
-
     /// 附加词库（.qj 或 TSV），可给多个，与主词库一起查
     #[arg(long)]
     pub extra_dict: Vec<PathBuf>,
-
-    /// 辅码码表（.qj，或 `词<TAB>码` 的 TSV），可给多个一起筛。给了之后 `kaifa;kf` 这样的输入
-    /// 按辅码态走：触发键进辅码态、之后的字母按码缩小候选
-    #[arg(long)]
-    pub aux_table: Vec<PathBuf>,
-
-    /// 查码：打印这些词在已装码表里的全部码（配 --aux-table 用），逗号分隔或多次给；查完即退出
-    #[arg(long, value_delimiter = ',')]
-    pub aux_query: Vec<String>,
 
     /// 英文词表路径（中英混输）。缺省：data/generated/english.tsv 存在就用它，否则不启用
     #[arg(long)]
@@ -66,33 +40,18 @@ pub struct Args {
     #[arg(long)]
     pub user_dict: Option<PathBuf>,
 
-    /// 配置文件路径。缺省：~/Library/Application Support/Qingjian/config.toml（macOS）或 ./config.toml
+    /// 配置文件路径。缺省：./config.toml（仓库根目录，与数据文件一样按 cwd 解析）
     #[arg(long)]
     pub config: Option<PathBuf>,
-
-    /// 启用云联想（无视配置里的 enabled）；密钥来自配置或 QINGJIAN_API_KEY（`api_key_env`）
-    #[arg(long)]
-    pub predict: bool,
 
     /// 模糊音，逗号分隔（z-zh,c-ch,s-sh,n-l,f-h,l-r,an-ang,en-eng,in-ing），`all` 全开；给了就覆盖配置里的 [fuzzy]
     #[arg(long, value_delimiter = ',')]
     pub fuzzy: Vec<String>,
 
-    /// 英文模式（输入法里是 Caps Lock 亮着）：字母不当拼音，候选来自英文词表的补全与拼错纠正
+    /// 英文模式（Engine 层）：字母不当拼音，候选只来自英文词表的补全与拼错纠正。产品里的英文模式
+    /// 不给候选、字母直接交应用，这个开关只为评测词表查询路径
     #[arg(long)]
     pub english_mode: bool,
-
-    /// 打开中文优先（配置 [general] chinese_first = true）：整段是英文词时中文候选排第一、英文第二，评测两种排法用
-    #[arg(long)]
-    pub chinese_first: bool,
-
-    /// 双拼方案（xiaohe / ziranma / microsoft / sogou / abc / xiaolang / shoudao），覆盖配置里的 [general] shuangpin；off 强制全拼
-    #[arg(long)]
-    pub shuangpin: Option<String>,
-
-    /// 形码码表（五笔）的 TSV 文件（`词\t编码\t词频`）：给了就用编码查表，不走拼音那一套
-    #[arg(long, value_name = "码表")]
-    pub wubi: Option<PathBuf>,
 
     /// 神经重打分：字级 Transformer 的 .qjm 文件或导出目录（model.safetensors / config.json / vocab.json），整句前几条路径用它重排
     #[arg(long)]

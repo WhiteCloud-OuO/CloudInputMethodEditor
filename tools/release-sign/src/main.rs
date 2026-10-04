@@ -1,8 +1,8 @@
 //! 版本索引的签名工具。
 //!
-//!   qingjian-release-sign keygen --out <私钥文件>        # 生成密钥对：私钥写文件（不打印），公钥打印出来填进 qingjian-update
-//!   qingjian-release-sign sign <releases.json>           # 私钥取环境变量 QINGJIAN_INDEX_SIGNING_KEY，写 <文件>.sig
-//!   qingjian-release-sign verify <releases.json>         # 按程序内置的公钥验 <文件>.sig
+//!   cloudime-release-sign keygen --out <私钥文件>        # 生成密钥对：私钥写文件（不打印），公钥打印出来填进 cloudime-update
+//!   cloudime-release-sign sign <releases.json>           # 私钥取环境变量 CLOUDIME_INDEX_SIGNING_KEY，写 <文件>.sig
+//!   cloudime-release-sign verify <releases.json>         # 按程序内置的公钥验 <文件>.sig
 //!
 //! 私钥与公钥都是 base64 的 32 字节，签名是 base64 的 64 字节。
 
@@ -14,10 +14,10 @@ use clap::{Parser, Subcommand};
 use ed25519_dalek::{Signer, SigningKey};
 use thiserror::Error;
 
-const KEY_ENV: &str = "QINGJIAN_INDEX_SIGNING_KEY";
+const KEY_ENV: &str = "CLOUDIME_INDEX_SIGNING_KEY";
 
 #[derive(Parser)]
-#[command(name = "qingjian-release-sign")]
+#[command(name = "cloudime-release-sign")]
 struct Args {
     #[command(subcommand)]
     command: Command,
@@ -53,11 +53,11 @@ enum SignError {
     #[error("{KEY_ENV} is not a base64 32-byte key")]
     MalformedKey,
 
-    #[error("signing key does not match any public key built into qingjian-update")]
+    #[error("signing key does not match any public key built into cloudime-update")]
     ForeignKey,
 
     #[error("{0}")]
-    Verify(#[from] qingjian_update::UpdateError),
+    Verify(#[from] cloudime_update::UpdateError),
 }
 
 fn main() {
@@ -73,7 +73,7 @@ fn run(command: Command) -> Result<(), SignError> {
         Command::Sign { file } => sign(&file),
         Command::Verify { file } => {
             let signature = std::fs::read_to_string(signature_path(&file))?;
-            qingjian_update::verify(&std::fs::read(&file)?, &signature)?;
+            cloudime_update::verify(&std::fs::read(&file)?, &signature)?;
             println!("{}: signature ok", file.display());
             Ok(())
         }
@@ -108,7 +108,7 @@ fn sign(file: &Path) -> Result<(), SignError> {
     let key = SigningKey::from_bytes(&seed);
     // 私钥与程序里的公钥对不上时签出来的索引所有客户端都不认，当场拦下
     let public = STANDARD.encode(key.verifying_key().to_bytes());
-    if !qingjian_update::PUBLIC_KEYS.contains(&public.as_str()) {
+    if !cloudime_update::PUBLIC_KEYS.contains(&public.as_str()) {
         return Err(SignError::ForeignKey);
     }
     let signature = STANDARD.encode(key.sign(&std::fs::read(file)?).to_bytes());
@@ -124,7 +124,7 @@ fn signature_path(file: &Path) -> PathBuf {
     PathBuf::from(name)
 }
 
-/// 系统随机源：Unix 读 /dev/urandom；Windows 上不生成密钥（密钥在维护者的 Mac 上生成一次）。
+/// 系统随机源：Unix 读 /dev/urandom；Windows 上不生成密钥（密钥离线生成一次）。
 fn fill_random(seed: &mut [u8; 32]) -> Result<(), SignError> {
     use std::io::Read;
     std::fs::File::open("/dev/urandom")?.read_exact(seed)?;

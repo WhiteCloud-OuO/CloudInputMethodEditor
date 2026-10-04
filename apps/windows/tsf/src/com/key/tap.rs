@@ -4,30 +4,46 @@
 //! 切换键来自 `[shortcut] switch_mode`，单击 Shift / 单击 Ctrl 可以都勾；Ctrl + Alt + Space 是组合键，走保留键。
 //! 系统热键（如 Ctrl + Space）的第二个键被系统截走、到不了这里，看起来就像单击了 Ctrl：
 //! 系统热键生效时调 [`KeyTap::cancel`] 作废这次按下。
+//!
+//! **不记「现在有几个别的键按着」**：TSF 会对同一个键调 `OnTestKeyDown` 与 `OnKeyDown` 各一次、
+//! 抬起侧却未必成对（注入键、别的钩子截走的键都只有一边），计数一旦漂高就再也回不到 0，
+//! 表现是**中英再也切不了**（真机上踩过）。现在改成：装填之后只要别的键有**按下或抬起**就作废，
+//! 只有一个 Cell<Option<…>>，没有会漂的状态。真机上另踩过：敲 `Shift + 标点` 时手滑先按下标点、
+//! Shift 晚一拍才按下去（标点 down → Shift down → 标点 up → Shift up），标点那次抬起作废掉，
+//! Shift 抬起不算单击；按住超过 [`MAX_TAP`] 的也不算「按下即松开」。
 
 use std::cell::Cell;
+use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::LPARAM;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_CONTROL, VK_LCONTROL, VK_LSHIFT, VK_RCONTROL, VK_RSHIFT, VK_SHIFT,
 };
 
-use qingjian_platform::{SwitchKey, SwitchKeys};
+use cloudime_platform::{SwitchKey, SwitchKeys};
+
+/// 一次单击最长按多久：按住更久多半是组合键按住不放，不算「按下即松开」。
+const MAX_TAP: Duration = Duration::from_millis(800);
 
 #[derive(Default)]
 pub(crate) struct KeyTap {
-    /// 按下了哪个切换键、之后还没有别的键插进来。
+    /// 按下了哪个切换键、之后还没有别的键动过。
     pressed: Cell<Option<SwitchKey>>,
+
+    /// 上面那次按下发生在什么时候（配合 [`MAX_TAP`]）。
+    armed_at: Cell<Option<Instant>>,
 }
 
 impl KeyTap {
     /// 任一键按下。`lparam` 第 30 位是按下前的状态（1 = 自动重复，不算新按下）。
     pub(crate) fn key_down(&self, vk: u32, lparam: LPARAM, keys: SwitchKeys) {
+        let repeat = (lparam.0 >> 30) & 1 != 0;
         let Some(key) = tap_key(keys, vk) else {
+            // 别的键一动就作废（按下、自动重复都算）
             self.cancel();
             return;
         };
-        if (lparam.0 >> 30) & 1 != 0 {
+        if repeat {
             return;
         }
         // 两个切换键一起按（Ctrl + Shift 是系统换布局的键）不算单击
@@ -36,24 +52,30 @@ impl KeyTap {
             _ => Some(key),
         };
         self.pressed.set(pressed);
+        self.armed_at.set(pressed.map(|_| Instant::now()));
     }
 
     /// 任一键抬起；切换键单独抬起返回 `true`，一次抬起只算一次。
     pub(crate) fn key_up(&self, vk: u32, keys: SwitchKeys) -> bool {
         let Some(key) = tap_key(keys, vk) else {
+            // 别的键抬起也作废：先按下标点、Shift 晚一拍才按下的手滑就是这样兜住的
+            self.cancel();
             return false;
         };
-        if self.pressed.get() == Some(key) {
-            self.pressed.set(None);
-            true
-        } else {
-            false
-        }
+        let tapped = self.pressed.get() == Some(key)
+            && self
+                .armed_at
+                .get()
+                .is_some_and(|at| at.elapsed() <= MAX_TAP);
+        self.pressed.set(None);
+        self.armed_at.set(None);
+        tapped
     }
 
     /// 作废正按着的切换键（按下之后发生了别的事，这次抬起不算单击）。
     pub(crate) fn cancel(&self) {
         self.pressed.set(None);
+        self.armed_at.set(None);
     }
 }
 
@@ -94,6 +116,31 @@ mod tests {
         tap.key_down(VK_SHIFT_LEFT, DOWN, keys);
         tap.key_down(0x41, DOWN, keys); // 中间插了一个 A
         assert!(!tap.key_up(VK_SHIFT_LEFT, keys));
+    }
+
+    /// 手滑顺序：先按下标点、Shift 晚一拍才按下去，松开 Shift 不算单击。
+    #[test]
+    fn a_key_pressed_before_shift_suppresses_the_tap() {
+        let tap = KeyTap::default();
+        let keys = only(SwitchKey::Shift);
+        tap.key_down(0xBC, DOWN, keys); // 先敲 `,`
+        tap.key_down(VK_SHIFT_LEFT, DOWN, keys); // Shift 晚一拍
+        tap.key_up(0xBC, keys);
+        assert!(!tap.key_up(VK_SHIFT_LEFT, keys));
+    }
+
+    /// 只有一个「按下」、没有对应「抬起」的键（注入键 / 双份通知都会这样）不该把中英卡死。
+    /// 老实现用计数，这种键一漏，计数就回不到 0，单击中英切换键再也认不出来。
+    #[test]
+    fn an_unbalanced_key_down_does_not_block_later_taps() {
+        let tap = KeyTap::default();
+        let keys = only(SwitchKey::Shift);
+        tap.key_down(0x41, DOWN, keys);
+        tap.key_down(0x41, DOWN, keys); // 同一键的第二份通知
+        tap.key_up(0x41, keys);
+        // 下面这次单击照样算
+        tap.key_down(VK_SHIFT_LEFT, DOWN, keys);
+        assert!(tap.key_up(VK_SHIFT_LEFT, keys));
     }
 
     #[test]

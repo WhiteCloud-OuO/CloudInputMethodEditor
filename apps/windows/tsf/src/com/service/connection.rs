@@ -27,7 +27,7 @@ impl TextService_Impl {
             Err(error) => {
                 self.last_connect_failure.set(Some(Instant::now()));
                 log(&format!(
-                    "连 Server 失败（qingjian-server 没起？）: {error}"
+                    "连 Server 失败（cloudime-server 没起？）: {error}"
                 ));
                 // Server 只在登录时由「启动」文件夹拉起，中途挂了以前只能等下次登录；
                 // 这里自己起一次（进程内冷却 + 跨进程互斥体，不会砸出一串 Server）。

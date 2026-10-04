@@ -1,8 +1,8 @@
-//! 青简自己的词库：从「输入法字词库_分类整理版」数据包（规范字 + 现代汉语常用词 + THUOCL 领域词）建 `dict.tsv`。
+//! 云朵输入法自己的词库：从「输入法字词库_分类整理版」数据包（规范字 + 现代汉语常用词 + THUOCL 领域词）建 `dict.tsv`。
 //!
 //! 通用词自带拼音，直接规范化；规范字与领域词没有拼音，读音来自 Unihan（Unicode 许可）：
 //! 单字按 kHanyuPinlu / kXHC1983 / kMandarin 给全部读音与权重，多字词按字拼接，多音字先看 LLM 标注
-//! （`gloss-gen pinyin` 的 JSONL，逐字对照 Unihan 校验）、再看通用词里该字最常见的读音、再看 kHanyuPinlu。
+//! （多音字词标注的 JSONL，逐字对照 Unihan 校验）、再看通用词里该字最常见的读音、再看 kHanyuPinlu。
 //! 词频来自自己的语料统计（`bigram` 子命令的 lm-unigram.tsv），没统计到的按词表排序号 / 文档频次给一个很小的底值。
 //!
 //! 两遍跑：第一遍没有词频，只为分词与 `--emit-ambiguous` 出待标注词表；标注、统计完再跑一遍写最终 dict.tsv。
@@ -21,9 +21,9 @@ use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufWriter, Write};
 use std::path::Path;
 
-use qingjian_core::parser::is_syllable;
-use qingjian_dictionary::Dictionary;
-use qingjian_format::Metadata;
+use cloudime_core::parser::is_syllable;
+use cloudime_dictionary::Dictionary;
+use cloudime_format::Metadata;
 
 use crate::error::ConvertError;
 use entry::LexiconEntry;
@@ -48,7 +48,7 @@ const MINOR_READING_SHARE: f64 = 0.05;
 /// 常用词表自带的读音与 LLM 标注不一致时，原表读音降到标注读音词频的几分之一保留（怎么打都找得到，但不抢首选）。
 const DISPUTED_READING_DIVISOR: u32 = 8;
 
-/// 领域词库的中文名（文件名主干 → 名称），写进 `.qj` 元数据，偏好设置「词库」页显示它。
+/// 领域词库的中文名（文件名主干 → 名称），写进 `.qj` 元数据，设置「词库」页显示它。
 const DOMAIN_NAMES: [(&str, &str); 11] = [
     ("animals", "动物"),
     ("automotive", "汽车"),
@@ -355,9 +355,9 @@ pub fn convert(
     let mut file = BufWriter::new(std::fs::File::create(&output)?);
     writeln!(
         file,
-        "# 青简基础词库，由 qingjian-dict-convert lexicon 生成。词\t音节\t词频\n\
+        "# 云朵基础词库，由 cloudime-dict-convert lexicon 生成。词\t音节\t词频\n\
 # 来源：通用规范汉字表（8105 字）；现代汉语常用词表（liuxilu 校对版）；THUOCL 领域词（MIT，清华大学自然语言处理实验室）；\n\
-# 读音：Unihan（Unicode License）+ LLM 标注多音字词；词频：青简自己的语料统计（中文维基 CC BY-SA 4.0、LCCC MIT）。"
+# 读音：Unihan（Unicode License）+ LLM 标注多音字词；词频：云朵输入法自己的语料统计（中文维基 CC BY-SA 4.0、LCCC MIT）。"
     )?;
     for entry in entries.values() {
         writeln!(
@@ -395,20 +395,22 @@ pub fn convert(
     Ok(())
 }
 
-/// 每个领域写一本 `dicts/<领域>.tsv`（与主词库同格式）和一本带元数据的 `dicts/<领域>.qj`。
+/// 每个领域写一本 `<领域>.db`（SQLite 词库存档，与主词库同目录）和一份中间 TSV（`tsv/` 下，不过包）。
 fn write_domains(
     domains: &BTreeMap<String, BTreeMap<(String, Vec<String>), LexiconEntry>>,
     out_dir: &Path,
 ) -> Result<(), ConvertError> {
-    let dir = out_dir.join("dicts");
+    let dir = out_dir.to_path_buf();
+    let tsv_dir = out_dir.join("tsv");
     std::fs::create_dir_all(&dir)?;
+    std::fs::create_dir_all(&tsv_dir)?;
     for (stem, entries) in domains {
         let name = DOMAIN_NAMES
             .iter()
             .find(|(key, _)| key == stem)
             .map_or(stem.as_str(), |(_, name)| name);
         let mut tsv = format!(
-            "# 青简领域词库：{name}，由 qingjian-dict-convert lexicon 从 THUOCL 拆出，基础词库里没有的部分。词\t音节\t词频\n"
+            "# 云朵领域词库：{name}，由 cloudime-dict-convert lexicon 从 THUOCL 拆出，基础词库里没有的部分。词\t音节\t词频\n"
         );
         for entry in entries.values() {
             tsv.push_str(&entry.text);
@@ -418,20 +420,20 @@ fn write_domains(
             tsv.push_str(&entry.frequency.to_string());
             tsv.push('\n');
         }
-        let tsv_path = dir.join(format!("{stem}.tsv"));
+        let tsv_path = tsv_dir.join(format!("{stem}.tsv"));
         std::fs::write(&tsv_path, &tsv)?;
         let dictionary = Dictionary::parse(&tsv)?;
         let metadata = Metadata {
-            name: format!("青简领域词库：{name}"),
+            name: format!("云朵领域词库：{name}"),
             license: DOMAIN_LICENSE.to_owned(),
             attribution: DOMAIN_ATTRIBUTION.to_owned(),
             source: DOMAIN_SOURCE.to_owned(),
-            generator: format!("qingjian-dict-convert {}", env!("CARGO_PKG_VERSION")),
+            generator: format!("cloudime-dict-convert {}", env!("CARGO_PKG_VERSION")),
             ..Metadata::default()
         };
-        let qj_path = dir.join(format!("{stem}.qj"));
-        dictionary.write_qj(&qj_path, &metadata)?;
-        tracing::info!(domain = %name, entries = entries.len(), path = %qj_path.display(), "领域词库已写出");
+        let db_path = dir.join(format!("{stem}.db"));
+        dictionary.write_db(&db_path, &metadata)?;
+        tracing::info!(domain = %name, entries = entries.len(), path = %db_path.display(), "领域词库已写出");
     }
     Ok(())
 }
