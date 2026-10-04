@@ -1,10 +1,4 @@
 # 产品数据版本，data-bundle.sh 写、data-fetch.sh 读；不要手改
-#
-# 本仓库还没发过 data-vN（仓库里没有数据 Release），所以下面没有 tag 与哈希。
-# 发第一版：tools/release/data-bundle.sh（发到 WhiteCloud-OuO/CloudInputMethodEditor 的预发布 data-v1），
-# 它会把下面三行写好；把本文件的改动提交后，构建机才拿得到数据。
-# 在那之前 data-fetch.sh 会直接报错——不会静默拿到错数据。
-#
-# tag = data-vN
-# cloudime-data.tar.gz = <sha256>
-# cloudime-models.tar.gz = <sha256>
+tag = data-v1
+cloudime-data.tar.gz = 
+cloudime-models.tar.gz = 
