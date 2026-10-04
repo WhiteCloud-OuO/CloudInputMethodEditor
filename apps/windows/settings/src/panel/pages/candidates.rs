@@ -160,7 +160,7 @@ fn program_list(settings: &Settings, context: &mut ViewContext<Settings>) -> Vie
                 TextBox::new()
                     .width(260.0)
                     .text(query)
-                    .placeholder_text("例如 Code.exe")
+                    .placeholder_text("例如 notepad.exe")
                     .on_text_changed(context.callback(Message::ProgramQuery)),
                 Button::new()
                     .on_click(context.message(Message::ProgramAdd))

@@ -1,18 +1,12 @@
 //! 各页共用的表单零件（标签行、说明小字、整项、页外壳）与打开文件 / 目录、打包日志的小工具。
 
-use std::path::{Path, PathBuf};
+use std::path::PathBuf;
 
 use windows_reactor::*;
 
 use super::notice::Notice;
 use super::{LABEL_WIDTH, Message, Settings};
 use crate::log;
-
-pub(super) fn open_in_editor(path: &Path) {
-    if let Err(error) = std::process::Command::new("notepad").arg(path).spawn() {
-        log::warn(format!("打开 {} 失败: {error}", path.display()));
-    }
-}
 
 /// 资源管理器打开目录或网址。
 pub(super) fn open_with_explorer(target: &str) {

@@ -573,7 +573,6 @@ dependencies = [
  "cloudime-learning",
  "cloudime-platform",
  "cloudime-render",
- "cloudime-update",
  "jiff",
  "rfd",
  "toml_edit",

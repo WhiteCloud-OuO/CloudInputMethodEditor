@@ -118,7 +118,7 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
                 .on_toggled(context.callback(Message::UseJianPin)),
         ),
         field(
-            "模糊音列表",
+            "模糊音",
             "勾选项的两种读音互用（如「ZE」可以同时匹配「泽」和「折」）。使用模糊音匹配到的候选项排在完全匹配的候选项之后。\
              如果全部没有勾选，表示关闭模糊音。",
             check_grid(fuzzy, 3),
@@ -137,13 +137,13 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
         ),
         field(
             "中英文混合输入",
-            "中文模式下：全拼输入时，打出「KALAOK」可以匹配到候选项「卡拉OK」。",
+            "中文模式下：可以输入单词，出现英文的候选项后，按下反引号（`）可以在全部小写 - 全部大写 - 首字母大写之间循环切换。",
             ToggleSwitch::new()
                 .is_on(input.mixture_input)
                 .on_toggled(context.callback(Message::MixtureInput)),
         ),
         field(
-            "标点符号全 / 半角",
+            "全角 / 半角标点符号",
             "",
             ComboBox::new()
                 .items_source(
@@ -160,12 +160,12 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
         ),
         field(
             "中文模式下符号映射",
-            "勾上的项做单键替换：敲下来的是这个键，就换成右边的符号上屏（内置的 ，。？！…… 不受影响）。",
+            "选中项会进行映射：按按键出现的是对应映射的符号。英文模式不受影响。",
             check_grid(mapping, 5),
         ),
         field(
             "符号成对补全",
-            "勾上的左符号会补上右半边，光标停在中间；再敲一次右半边就跳过去。",
+            "选中项左边符号输入时会补上右半边，光标停在中间；再敲一次右半边就跳过去。",
             check_grid(pairwise, 5),
         ),
         field(

@@ -18,7 +18,13 @@ pub(crate) use self::message::Message;
 use self::notice::Notice;
 use self::pages::candidates::FontRole;
 use self::pages::phrase::PhraseForm;
-use self::pages::{about, candidates, debugging, dictionaries, input, phrase};
+use self::pages::{candidates, debugging, dictionaries, input, phrase};
+
+/// CLOUDIME_VERSION 由 build.rs 给：-dev 版接 git 短哈希。
+pub(crate) const VERSION: &str = env!("CLOUDIME_VERSION");
+
+/// 项目 GitHub 仓库。
+pub(crate) const REPOSITORY_URL: &str = "https://github.com/WhiteCloud-OuO/CloudInputMethodEditor";
 
 /// 左侧标签列的下限宽度，让短标签行的控件对齐；超长标签会把本行控件往右顶
 /// （见 `controls::labeled`）。
@@ -37,13 +43,6 @@ pub(crate) struct Settings {
 
     /// 页面底部的临时提示（导入统计 / 失败原因）。
     notice: Notice,
-
-    /// Server 或「立即检查」落盘的检查更新结果（用户目录的 `update.json`）。
-    update_state: cloudime_update::UpdateState,
-
-    /// 「立即检查」正在跑 / 刚失败的原因。
-    update_checking: bool,
-    update_error: Option<String>,
 
     /// 最近一次词库操作的结果，显示在词库页。
     dictionary_status: String,
@@ -70,12 +69,7 @@ impl Settings {
         cloudime_platform::dirs::config_path().unwrap_or_else(|| PathBuf::from("config.toml"))
     }
 
-    /// 检查更新的结果文件 `%APPDATA%\CloudIME\update.json`（Server 写，这里读）。
-    fn update_state_path() -> Option<PathBuf> {
-        cloudime_platform::dirs::user_dir().map(|dir| dir.join("update.json"))
-    }
-
-    /// 配置文件不在就写出模板：这个账户下 Server 还没跑过时，保存与「在记事本中打开」都要有文件。
+    /// 配置文件不在就写出模板：这个账户下 Server 还没跑过时，打开数据目录前也要有文件。
     fn ensure_config_file(path: &Path) {
         if let Err(error) = Config::write_template_if_missing(path) {
             crate::log::warn(format!("写配置模板失败: {error}"));
@@ -137,7 +131,6 @@ impl Settings {
             "dictionaries" => dictionaries::view(self, context),
             "phrase" => phrase::view(self, context),
             "debugging" => debugging::view(self, context),
-            "about" => about::view(self, context),
             _ => input::view(self, context),
         }
     }

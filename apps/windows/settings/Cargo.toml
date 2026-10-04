@@ -30,7 +30,6 @@ cloudime-render.workspace = true
 cloudime-learning.workspace = true
 cloudime-core.workspace = true
 cloudime-dictionary.workspace = true
-cloudime-update.workspace = true
 jiff.workspace = true
 rfd = "0.17"
 

@@ -5,16 +5,16 @@ use std::path::{Path, PathBuf};
 use cloudime_platform::{
     Config, FullHalfPunctuation, ItemNumberStyle, LayoutMode, LogLevel, MAX_ASSOCIATION_COUNTS,
     MAX_CANDIDATE_COUNT, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MO_HU_YIN_BITS,
-    PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PreeditMode, SimpTrad, UpdateChannel,
+    PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PreeditMode, SimpTrad,
 };
 use windows_reactor::*;
 
-use super::controls::{export_logs, log_dir, open_in_editor, open_with_explorer};
+use super::controls::{export_logs, log_dir, open_with_explorer};
 use super::font_dialog;
 use super::notice::Notice;
 use super::pages::phrase::PhraseForm;
-use super::pages::{about, dictionaries, phrase};
-use super::{Message, Settings};
+use super::pages::{dictionaries, phrase};
+use super::{Message, REPOSITORY_URL, Settings};
 
 impl Component for Settings {
     type Input = ();
@@ -45,11 +45,6 @@ impl Component for Settings {
             path,
             page: "input".to_string(),
             notice: Notice::default(),
-            update_state: Self::update_state_path()
-                .map(|path| cloudime_update::UpdateState::load(&path))
-                .unwrap_or_default(),
-            update_checking: false,
-            update_error: None,
             dictionary_status: String::new(),
             program_query: None,
             phrases,
@@ -59,7 +54,7 @@ impl Component for Settings {
         }
     }
 
-    fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
+    fn update(&mut self, message: Message, _context: &ComponentContext<Self>) {
         match message {
             Message::Navigate(Some(tag)) => {
                 self.page = tag;
@@ -233,10 +228,6 @@ impl Component for Settings {
             }
             Message::InputLog(on) => self.save("general", "input_log", on),
             Message::Learning(on) => self.save("general", "learning", on),
-            Message::OpenConfigFile => {
-                Self::ensure_config_file(&self.path);
-                open_in_editor(&self.path);
-            }
             Message::OpenDataDir => {
                 Self::ensure_config_file(&self.path);
                 open_with_explorer(&self.data_dir().to_string_lossy());
@@ -256,40 +247,8 @@ impl Component for Settings {
                 }
             }
 
-            // 关于页
-            Message::OpenWebsite => open_with_explorer(about::WEBSITE_URL),
-            Message::OpenDownload => open_with_explorer(cloudime_update::DOWNLOAD_URL),
-
-            // 关于页：检查更新
-            Message::UpdateCheck(on) => self.save("update", "check", on),
-            Message::UpdateChannel(Some(i)) if i < UpdateChannel::ALL.len() => {
-                self.save("update", "channel", UpdateChannel::ALL[i].key());
-            }
-            Message::CheckUpdateNow => {
-                let Some(path) = Self::update_state_path() else {
-                    return;
-                };
-                if self.update_checking {
-                    return;
-                }
-                self.update_checking = true;
-                self.update_error = None;
-                let config = self.config.update.clone();
-                context.spawn_background(move |_cancel| {
-                    let result =
-                        cloudime_update::Checker::check_blocking(&path, about::VERSION, &config);
-                    Message::UpdateChecked(result.map(|r| r.map_err(|error| error.to_string())))
-                });
-            }
-            Message::UpdateChecked(result) => {
-                self.update_checking = false;
-                match result {
-                    Some(Ok(state)) => self.update_state = state,
-                    Some(Err(error)) => self.update_error = Some(error),
-                    None => {}
-                }
-            }
-            Message::OpenRepository => open_with_explorer(about::REPOSITORY_URL),
+            // 调试页：打开项目 GitHub 页面
+            Message::OpenRepository => open_with_explorer(REPOSITORY_URL),
 
             // 调试页
             Message::AutoHideFloatToolBar(on) => {
@@ -327,7 +286,6 @@ impl Component for Settings {
             item("dictionaries", "词库", Symbol::Library),
             item("phrase", "短语", Symbol::Comment),
             item("debugging", "调试", Symbol::Repair),
-            item("about", "关于", Symbol::Help),
         ];
         NavigationView::new()
             .pane_display_mode(NavigationViewPaneDisplayMode::Left)

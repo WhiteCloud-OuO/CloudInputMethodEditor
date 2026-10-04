@@ -1,5 +1,5 @@
 //! 「调试」页：实验性开关、输入统计面板（原「统计」页）、文件 / 日志 / 学习设置（原「高级」页），
-//! 以及日志 / 软件官网 / 组件入口。
+//! 以及数据 / 日志入口与项目 GitHub 页面。
 //!
 //! 统计面板读数据目录里的 `usage.tsv` / `user-vocab.tsv`；文件与日志入口都直通本机路径，不经 Server。
 
@@ -60,8 +60,8 @@ fn columns(usage: &Usage) -> [String; 4] {
 
 fn since_line(summary: &UsageSummary) -> String {
     match &summary.since {
-        Some(date) => format!("自 {date} 起，有输入的天数 {}。", summary.days),
-        None => "还没有记录，打几个字再来看。".to_owned(),
+        Some(date) => format!("从{date}开始，云朵输入法一共陪伴了您{}天。", summary.days),
+        None => "暂无输入记录。".to_owned(),
     }
 }
 
@@ -79,7 +79,7 @@ fn vocabulary_line(summary: &VocabularySummary) -> String {
 
 /// 「有 / 无」。
 fn yes_no(present: bool) -> &'static str {
-    if present { "有" } else { "无" }
+    if present { "✅" } else { "❎" }
 }
 
 /// 目录里有文件。
@@ -120,7 +120,7 @@ fn data_lines(settings: &Settings) -> Vec<String> {
         ),
         format!(
             "版本：{}（{}）。",
-            super::about::VERSION,
+            crate::panel::VERSION,
             option_env!("CLOUDIME_BUILD").unwrap_or("本地构建")
         ),
     ]
@@ -136,7 +136,7 @@ fn usage_panel(settings: &Settings) -> Vec<KeyedView> {
     let rows = [
         header,
         table_row("今天", columns(&usage.today), false),
-        table_row("最近 7 天", columns(&usage.week), false),
+        table_row("最近一周", columns(&usage.week), false),
         table_row("累计", columns(&usage.total), false),
     ];
     let mut panel: Vec<KeyedView> = vec![
@@ -169,6 +169,9 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
     let g = &settings.config.general;
     let d = &settings.config.debugging;
     let rows = [
+        StackPanel::new()
+            .spacing(6.0)
+            .keyed_children(usage_panel(settings)),
         field(
             "自动隐藏悬浮工具栏（实验性功能）",
             "启用后，当处于全屏幕状态，或者用户切换输入法为其他输入法，或者禁用输入法时自动隐藏。",
@@ -177,47 +180,38 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
                 .on_toggled(context.callback(Message::AutoHideFloatToolBar)),
         ),
         StackPanel::new()
-            .spacing(6.0)
-            .keyed_children(usage_panel(settings)),
+            .orientation(Orientation::Horizontal)
+            .spacing(8.0)
+            .children((
+                Button::new()
+                    .on_click(context.message(Message::OpenDataDir))
+                    .content("数据目录"),
+                Button::new()
+                    .on_click(context.message(Message::OpenLogDir))
+                    .content("日志目录"),
+                Button::new()
+                    .on_click(context.message(Message::ExportLogs))
+                    .content("打包日志到桌面"),
+                Button::new()
+                    .on_click(context.message(Message::ClearInputLog))
+                    .content("清空日志"),
+            )),
+        StackPanel::new()
+            .orientation(Orientation::Horizontal)
+            .spacing(8.0)
+            .children([Button::new()
+                .on_click(context.message(Message::OpenRepository))
+                .content("GitHub页面")]),
         field(
-            "配置文件",
-            "",
-            Button::new()
-                .on_click(context.message(Message::OpenConfigFile))
-                .content("在记事本中打开"),
-        ),
-        field(
-            "数据目录",
-            "配置、短语、学习数据与统计都在这里。",
-            Button::new()
-                .on_click(context.message(Message::OpenDataDir))
-                .content("打开数据目录"),
-        ),
-        field(
-            "日志",
-            "输入法、引擎与设置程序的日志都在这一个目录（%LOCALAPPDATA%\\CloudIME\\logs），按天分文件，保留 7 天。",
-            StackPanel::new()
-                .orientation(Orientation::Horizontal)
-                .spacing(8.0)
-                .children((
-                    Button::new()
-                        .on_click(context.message(Message::OpenLogDir))
-                        .content("打开日志目录"),
-                    Button::new()
-                        .on_click(context.message(Message::ExportLogs))
-                        .content("打包日志到桌面"),
-                )),
-        ),
-        field(
-            "详细日志",
-            "排查问题时临时打开，会记下敲的拼音与上屏文字。",
+            "启用详细日志",
+            "排查问题时打开，会记下敲的拼音与上屏文字。",
             ToggleSwitch::new()
                 .is_on(g.log_level == LogLevel::Debug)
                 .on_toggled(context.callback(Message::VerboseLog)),
         ),
         field(
-            "学习输入习惯",
-            "按你的选择调整候选顺序、记新词与敲错纠正。关掉后不再学，已学的仍参与排序。",
+            "记忆输入习惯",
+            "按你的输入习惯自动调整候选顺序、记新词与敲错纠正。关闭后不再记忆，已记忆的仍参与排序。",
             ToggleSwitch::new()
                 .is_on(g.learning)
                 .on_toggled(context.callback(Message::Learning)),
@@ -228,27 +222,6 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             ToggleSwitch::new()
                 .is_on(g.input_log)
                 .on_toggled(context.callback(Message::InputLog)),
-        ),
-        field(
-            "清空输入日志",
-            "",
-            Button::new()
-                .on_click(context.message(Message::ClearInputLog))
-                .content("清空输入日志"),
-        ),
-        field(
-            "软件官网",
-            "",
-            Button::new()
-                .on_click(context.message(Message::OpenWebsite))
-                .content("打开官网"),
-        ),
-        field(
-            "组件（实验性功能）",
-            "还没做，先留一个入口。",
-            Button::new()
-                .on_click(context.message(Message::OpenComponents))
-                .content("打开组件"),
         ),
     ];
     page("调试", StackPanel::new().spacing(16.0).children(rows))

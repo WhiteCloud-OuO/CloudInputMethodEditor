@@ -73,27 +73,18 @@ pub(crate) enum Message {
     InputLog(bool),
     /// 学习输入习惯开关。
     Learning(bool),
-    OpenConfigFile,
     OpenDataDir,
     OpenLogDir,
     /// 日志目录 + config.toml 打成 zip 放桌面。
     ExportLogs,
     ClearInputLog,
-
-    // 关于页
-    OpenWebsite,
+    /// 打开项目 GitHub 页面。
+    OpenRepository,
 
     // 调试页
     /// 自动隐藏悬浮工具栏（`[debugging] auto_hide_float_tool_bar`）。
     AutoHideFloatToolBar(bool),
-    /// 「组件」按钮：功能还没做，只记一条日志。
+    /// 「组件」入口：功能还没做，只记一条日志。设置里已不显示这个入口、代码留着，所以允许未构造。
+    #[allow(dead_code)]
     OpenComponents,
-
-    // 关于页：检查更新（`UpdateChecked` 的 `None` = 本地开发版没查）
-    UpdateCheck(bool),
-    UpdateChannel(Option<usize>),
-    CheckUpdateNow,
-    UpdateChecked(Option<Result<cloudime_update::UpdateState, String>>),
-    OpenDownload,
-    OpenRepository,
 }

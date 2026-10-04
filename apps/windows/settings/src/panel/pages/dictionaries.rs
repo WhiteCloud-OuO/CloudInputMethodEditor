@@ -20,7 +20,7 @@ fn word_bank_list(settings: &Settings, context: &mut ViewContext<Settings>) -> V
     let bank = bank(settings);
     let files = bank.imported();
     if files.is_empty() {
-        return note("还没有导入第三方词库。用下面「导入词库…」加一本 .db。");
+        return note("未发现第三方词库。");
     }
     let mut rows: Vec<KeyedView> = Vec::with_capacity(files.len());
     for file in files {
@@ -32,15 +32,14 @@ fn word_bank_list(settings: &Settings, context: &mut ViewContext<Settings>) -> V
 }
 
 pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> View {
-    let bank = bank(settings);
     let body = StackPanel::new().spacing(12.0).children([
-        note(&format!(
-            "第三方词库都在这个目录里，目录里有的全部加载：{}\n随包的 Dict.db 与数据目录里的 UserWordBank.db 是内置词库、始终加载，不在下面的列表里。导入与删除也作用在这里；删除只是挪到 removed\\ 子目录，不真的删掉。",
-            bank.dir.display()
-        )),
+        note("用户词库（自造词）：输入2次就记住，打得越多权重越大，排序也会越靠前。按下Ctrl+候选项数字可以删除自造词。\
+        \n（注：本地整句模型所在的候选项，按下Ctrl+对应候选项数字两次后也会入库到用户词库。）\
+        \n软件词库：打的越多权重越大，按下Ctrl+候选项数字可以重置权重。\
+        \n软件自带的 Dict.db 与 UserWordBank.db 是内置词库，始终加载。"),
         field(
             "从词库中查询生僻项条目",
-            "开启后候选与整句才会从词库的生僻字 / 生僻词（方言字、罕见词等）里取词；关闭可加快查询，候选里也不再出现这些冷僻条目。改动一秒内生效。",
+            "开启时，候选与整句会从词库的生僻字 / 生僻词（方言字、罕见词等）里取词；关闭可加快查询，候选里不出现。",
             ToggleSwitch::new()
                 .is_on(settings.config.word_bank.rare_items)
                 .on_toggled(context.callback(Message::RareItems)),
@@ -52,8 +51,8 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             .children((
                 Button::new()
                     .on_click(context.message(Message::ImportDictionary))
-                    .content("导入词库…"),
-                note("只接受现成的 .db 词库存档；导入即复制到上面目录并加载，同名覆盖。"),
+                    .content("导入词库"),
+                note("只支持 .db 文件格式的词库文件。yaml格式可通过输入法自带工具转换为db文件。"),
             )),
         note(&settings.dictionary_status),
     ]);

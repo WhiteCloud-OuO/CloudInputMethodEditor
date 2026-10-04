@@ -39,7 +39,7 @@
 壳在已有的每秒定时器里调 `Checker::poll`：开关开着、上次成功超过 24 小时（或换了渠道）、上次尝试超过 1 小时、没有正在查的，才起一个一次性线程去查。
 失败（断网、验签不过、格式版本不认识）只记日志。结果落在数据目录的 `update.json`，装上新版后旧结果因为「不比当前新」自然失效。
 
-- Windows：Server 查并写 `update.json`（DLL 不联网）；设置程序的「关于」页读这个文件，「立即检查」在设置程序自己的后台线程里查。
+- Windows：Server 查并写 `update.json`（DLL 不联网）；设置里不再有检查更新的界面（「关于」页已删），「立即检查」与更新渠道一并去掉，开关也改配置文件的 `[update] check`。
   任务栏「中 / 英」图标的右键菜单在查到新版本时多一项「有新版本，前往下载…」：Server 随 `ModeSync` 下发 `IndicatorState.update_available`，
   点了发 `IndicatorCommand::OpenDownload`，由 Server 打开下载页（DLL 可能在 UWP 沙箱里起不了进程）。
 

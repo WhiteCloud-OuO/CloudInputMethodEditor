@@ -244,10 +244,10 @@ Server 装配直接退出，表现成「装完打不出候选、按键没反应�
 对应 `[input]` 那八项（模糊音位图、简繁单选、标点全半角下拉、符号映射只读列表等）；「候选」页在 `pages/candidates.rs`，
 对应 `[candidate]`（本地整句模型开关、排布单选、个数滑轨（右侧跟一个当前值数字）、联想候选项目上限滑轨 0–4、三个「字体…」按钮弹系统字体对话框 `font_dialog.rs`、
 序号样式下拉、最小宽度、展示更多候选项、按程序隐藏的名单）；「短语」页在 `pages/phrase.rs`（表单 + 三列列表，读写 `Phrase.db`）；
-「调试」页在 `pages/debugging.rs`：`[debugging]` 的自动隐藏开关、**原「统计」页整页搬来的输入统计面板**、
-原来「高级」页的配置文件 / 数据目录 / 日志入口、详细日志、学习输入习惯、记录 / 清空输入日志，以及软件官网与组件占位。
+「调试」页在 `pages/debugging.rs`：**原「统计」页整页搬来的输入统计面板**（末尾是「数据与组件」说明）与紧随其后的 `[debugging]` 自动隐藏开关、
+原来「高级」页的数据 / 日志入口（打开数据目录 / 打开日志目录 / 打包日志到桌面 / 清空输入日志四个按钮一行）与项目 GitHub 页面、详细日志、学习输入习惯、记录输入日志。
 「通用」页已删（`Shift` + 字母固定进组句，见 `dispatch/key/input.rs::apply_chinese`：字母进缓冲区、`Caps Lock` 亮着的仍直通），
-「统计」与「高级」两页并进「调试」。
+「统计」与「高级」两页并进「调试」；「关于」页已整体删除（版本在「数据与组件」里仍有一份，检查更新只剩 Server 侧与任务栏菜单，许可与数据署名看 `LICENSE` 与 `docs/design/landscape.md`）。
 
 「不显示候选框」名单（`[candidate] program_list_of_hiding_candidate`）：Server 按会话的 exe 名（`SessionInfo.app`）算出
 `InputSettings.raw_input` 下发给 DLL，DLL 彻底不吃键（`would_eat` / 断连时的兜底都放行），按键原样交给应用 —— 编辑器里
