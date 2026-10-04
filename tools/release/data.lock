@@ -1,4 +1,4 @@
 # 产品数据版本，data-bundle.sh 写、data-fetch.sh 读；不要手改
 tag = data-v1
-cloudime-data.tar.gz = 
-cloudime-models.tar.gz = 
+cloudime-data.tar.gz = 469c81d89222b295c33b8794943e13e572c35ca88a3d7d9fc8bdb4d78df11e22
+cloudime-models.tar.gz = 7c182dbd07f637d5b8b2384c49b4c241e80283d598d91f40e8e5497709a07e63
