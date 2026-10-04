@@ -87,7 +87,8 @@ du -h "$OUT"/*.tar.gz
 [[ "$MODE" == "pack" ]] && exit 0
 
 if [[ -z "$TAG" ]]; then
-  last="$(gh release list --repo "$REPO" --limit 200 --json tagName --jq '.[].tagName' | grep -E '^data-v[0-9]+$' | sed 's/data-v//' | sort -n | tail -1)"
+  # 一个 data-vN 都还没有时 grep 会空手而归、管道非零，被 set -e 静默打断——`|| true` 兜住（首次发布就踩这个）。
+  last="$(gh release list --repo "$REPO" --limit 200 --json tagName --jq '.[].tagName' | grep -E '^data-v[0-9]+$' | sed 's/data-v//' | sort -n | tail -1 || true)"
   TAG="data-v$(( ${last:-0} + 1 ))"
 fi
 [[ "$TAG" =~ ^data-v[0-9]+$ ]] || { echo "标签要写成 data-vN：$TAG" >&2; exit 1; }
@@ -100,7 +101,9 @@ gh api "repos/$REPO/commits/$HEAD_SHA" --silent >/dev/null 2>&1 || {
   exit 1
 }
 
-sha_of() { grep " ./$1\$" "$OUT/SHA256SUMS" | cut -d' ' -f1; }
+# SHA256SUMS 的行格式随平台而异：GNU 文本模式是 `<hash>  ./file`，二进制模式是 `<hash> *./file`，
+# 老写法 `grep " ./file\$"` 在 Windows 的 Git Bash 上匹配不到（前面是 `*` 不是空格）。
+sha_of() { awk -v name="$1" '{ n = $2; sub(/^\*/, "", n); sub(/^\.\//, "", n); if (n == name) { print $1; exit } }' "$OUT/SHA256SUMS"; }
 gh release create "$TAG" --repo "$REPO" --prerelease --target "$HEAD_SHA" --title "产品数据 $TAG" \
   --notes "词库 / 语言模型（cloudime-data.tar.gz）、本地整句模型（cloudime-models.tar.gz）、LLM 续跑中间产物（cloudime-llm-intermediates.tar.gz）。不可变；仓库 tools/release/data.lock 钉住要用哪一版。" \
   "$OUT"/*.tar.gz "$OUT/SHA256SUMS"
