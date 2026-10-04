@@ -121,10 +121,13 @@ fn main() {
         .map(PathBuf::from)
         .or_else(|| word_bank.main().map(|(_, path)| path))
         .unwrap_or_else(|| sample_dict(&root));
+    // 用户自造词库按 [word_bank] user_file 定位（相对安装目录，也可绝对路径）
+    let user_word_bank = word_bank.user_file(&config.word_bank);
     let spec = AssemblySpec {
         language_model: LanguageModelFiles::find(&root.join("data/generated")),
         word_bank: Some(word_bank.clone()),
         user_dir: user_dir(),
+        user_word_bank: Some(user_word_bank),
         input_log: config.general.input_log,
         ..AssemblySpec::new(&dict)
     };

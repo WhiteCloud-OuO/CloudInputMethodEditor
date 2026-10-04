@@ -22,7 +22,7 @@ pub fn assemble(spec: &AssemblySpec) -> Result<Engine, ServerError> {
     let rare = data.rare;
     let english = data.english;
     let learner = match &spec.user_dir {
-        Some(dir) => load_learner(dir),
+        Some(dir) => load_learner(dir, spec.user_word_bank.as_deref()),
         None => FrequencyLearner::default(),
     };
     tracing::info!(
@@ -86,9 +86,14 @@ pub fn assemble(spec: &AssemblySpec) -> Result<Engine, ServerError> {
 }
 
 /// 读不了就退回只在内存里学，不拿空表覆盖用户文件。
-fn load_learner(dir: &Path) -> FrequencyLearner {
+/// `bank` 是 `[word_bank] user_file` 解析出来的自造词库路径；没给就退回与词频文件同目录。
+fn load_learner(dir: &Path, bank: Option<&Path>) -> FrequencyLearner {
     let path = dir.join("user.tsv");
-    match FrequencyLearner::from_path(&path) {
+    let loaded = match bank {
+        Some(bank) => FrequencyLearner::from_path_with_user_word_bank(&path, bank),
+        None => FrequencyLearner::from_path(&path),
+    };
+    match loaded {
         Ok(learner) => learner,
         Err(error) => {
             tracing::error!(path = %path.display(), %error, "学习数据读取失败，本次只在内存里学习");

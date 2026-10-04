@@ -125,6 +125,28 @@ fn ambiguous_segmentation_merges_results() {
     assert!(all.contains(&"西安".to_owned()));
 }
 
+/// 同一个词同时出现在靠前与靠后的词库里时，只出靠前那本的那条（跨词库去重、靠前优先），
+/// 即使靠后那本词频高得多也不顶替；同一本词库里同一个词的多种读法在这一层照旧全收。
+#[test]
+fn earlier_dictionary_wins_for_the_same_text() {
+    // 基础词库靠前、附加词库靠后；两本都有同名的「重开」但读法不同，附加词库的词频高得多
+    let mut engine = Engine::new(Dictionary::parse("重开\tzhong kai\t100\n").unwrap());
+    engine.set_extra_dictionaries(vec![Dictionary::parse("重开\tzong kai\t999999\n").unwrap()]);
+    engine.set_input("zk");
+    let items = engine.query().unwrap().candidates.items;
+    let hits: Vec<&Candidate> = items.iter().filter(|c| c.text == "重开").collect();
+    assert_eq!(hits.len(), 1);
+    // 留下的是基础词库那条读法，不是附加词库的 zong
+    assert_eq!(hits[0].syllables, ["zhong", "kai"]);
+
+    // 同一本里同一个词按两种读法命中：这一层不去重，两条都在（rank 再按名次挑）
+    let engine = Engine::new(Dictionary::parse("重\tzhong\t100\n重\tzong\t100\n").unwrap());
+    let positions = vec![vec![cloudime_dictionary::SyllablePattern::prefix("z")]];
+    let hits = engine.lookup_all(&positions);
+    assert_eq!(hits.len(), 2);
+    assert!(hits.iter().all(|hit| hit.text == "重"));
+}
+
 #[test]
 fn complete_syllable_that_is_also_prefix_expands_after_exact() {
     // 敲的就是完整音节 `xia` = 下：末音节完整匹配的 下 先，前缀扩展来的 先 / 想 / 西安 随后按权重

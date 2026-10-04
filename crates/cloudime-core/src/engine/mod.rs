@@ -69,7 +69,8 @@ pub struct Engine {
     /// 稀有组是否参与查词（缺省关，由 `[word_bank] rare_items` 决定）。
     rare_enabled: bool,
 
-    /// 附加词库（领域词库、用户导入的），与主词库一起查词、一起进整句词图；不参与语言模型（它们没有 bigram，
+    /// 附加词库（领域词库、用户导入的第三方词库），**按添加顺序**与主词库一起查词、一起进整句词图；
+    /// 靠前的优先，同一个词靠前命中后后面的不再重复产出。不参与语言模型（它们没有 bigram，
     /// 走词频兜底）。壳按用户目录 `dicts/` 与配置 `[dictionaries]` 装配。
     extra_dictionaries: Vec<Dictionary>,
 

@@ -2,13 +2,15 @@
 //!
 //! 随包只带一份 `Dict.db`（中文 + 英文合一份，见 `cloudime_dictionary::DictDb`）；用户「导入词库」
 //! 放进来的其他 `.db` 都是附加词库，目录里有的全部加载，没有 List.dat 这种启用清单
-//!（旧版留下的 `.tsv` 仍能加载）。内置的 `Dict.db` 与数据目录里的 `UserWordBank.db` 始终加载、
-//! 不出现在设置页的导入列表里。
+//!（旧版留下的 `.tsv` 仍能加载）。内置的 `Dict.db` 与 `UserWordBank.db`（用户自造词库，位置由
+//! `[word_bank] user_file` 决定，缺省也在 `WordBank\`）始终加载、不出现在设置页的导入列表里。
 
 use std::path::{Path, PathBuf};
 use std::time::SystemTime;
 
 use cloudime_dictionary::{Dictionary, WORD_BANK_FILE};
+
+use crate::config::{DEFAULT_USER_WORD_BANK_FILE, WordBankConfig};
 
 /// 词库目录名（随包根下）。
 pub const WORD_BANK_DIR: &str = "WordBank";
@@ -17,7 +19,7 @@ pub const WORD_BANK_DIR: &str = "WordBank";
 const EXTENSIONS: [&str; 2] = ["db", "tsv"];
 
 /// 内置词库文件名（大小写不敏感），设置页不列出、也不能移除：
-/// 随包主词库 `Dict.db`，以及用户自造词库 `UserWordBank.db`（在数据目录，正常不出现在 `WordBank\`）。
+/// 随包主词库 `Dict.db`，以及用户自造词库 `UserWordBank.db`（缺省也在 `WordBank\`，由 learner 专门管）。
 const BUILTIN_FILES: [&str; 2] = [WORD_BANK_FILE, "UserWordBank.db"];
 
 /// 词库目录。
@@ -98,6 +100,23 @@ impl WordBank {
         self.dir.join(WORD_BANK_FILE)
     }
 
+    /// 用户自造词库（`[word_bank] user_file`）的完整路径：绝对路径直接用，相对路径相对随包根
+    ///（`WordBank\` 的父目录，装机时就是安装目录）。
+    pub fn user_file(&self, config: &WordBankConfig) -> PathBuf {
+        let configured = config.user_file.trim();
+        let file = if configured.is_empty() {
+            DEFAULT_USER_WORD_BANK_FILE
+        } else {
+            configured
+        };
+        let path = Path::new(file);
+        if path.is_absolute() {
+            path.to_path_buf()
+        } else {
+            self.dir.parent().unwrap_or(&self.dir).join(path)
+        }
+    }
+
     /// 目录里的词库文件（按文件名排序，同名只留优先扩展名的），返回 `(词干, 文件名, 路径)`。
     pub fn files(&self) -> Vec<(String, String, PathBuf)> {
         let Ok(entries) = std::fs::read_dir(&self.dir) else {
@@ -171,11 +190,12 @@ impl WordBank {
             .collect()
     }
 
-    /// 加载除主词库外的全部附加词库（目录里有的都加载）。坏文件只记日志、跳过。
+    /// 加载除内置词库外的全部附加词库（目录里有的都加载）。坏文件只记日志、跳过。
+    /// 内置的 `Dict.db` / `UserWordBank.db` 由装配与 learner 专门管，不当第三方词库再加载一遍。
     pub fn load_except(&self, main: Option<&Path>) -> Vec<Dictionary> {
         let mut loaded = Vec::new();
         for (stem, file, path) in self.files() {
-            if main.is_some_and(|main| main == path) {
+            if main.is_some_and(|main| main == path) || Self::is_builtin(&file) {
                 continue;
             }
             if let Some(dictionary) = self.open(&stem, &file, &path) {
@@ -236,6 +256,40 @@ mod tests {
     }
 
     #[test]
+    fn user_file_follows_the_config_relative_root_or_absolute() {
+        let bank = WordBank::locate(Path::new("C:/CloudIME"));
+        // 缺省与随包词库同在 WordBank\ 下
+        assert_eq!(
+            bank.user_file(&WordBankConfig::default()),
+            Path::new("C:/CloudIME/WordBank/UserWordBank.db")
+        );
+        // 相对路径相对随包根（安装目录），不是相对 WordBank\
+        let custom = WordBankConfig {
+            user_file: "Cache/UserWordBank.db".to_owned(),
+            ..WordBankConfig::default()
+        };
+        assert_eq!(
+            bank.user_file(&custom),
+            Path::new("C:/CloudIME/Cache/UserWordBank.db")
+        );
+        // 绝对路径直接用
+        let absolute = WordBankConfig {
+            user_file: "D:/CloudIME/user.db".to_owned(),
+            ..WordBankConfig::default()
+        };
+        assert_eq!(bank.user_file(&absolute), Path::new("D:/CloudIME/user.db"));
+        // 空串退回缺省，不会把安装目录本身当成自造词库文件
+        let empty = WordBankConfig {
+            user_file: String::new(),
+            ..WordBankConfig::default()
+        };
+        assert_eq!(
+            bank.user_file(&empty),
+            Path::new("C:/CloudIME/WordBank/UserWordBank.db")
+        );
+    }
+
+    #[test]
     fn main_prefers_dict_db() {
         let (dir, bank) = fixture("main");
         std::fs::create_dir_all(&bank.dir).unwrap();
@@ -259,6 +313,19 @@ mod tests {
         std::fs::write(bank.dir.join("law.tsv"), "法\tfa\t10\n").unwrap();
         let main = bank.dir.join("dict.tsv");
         let extras = bank.load_except(Some(&main));
+        assert_eq!(extras.len(), 1);
+        assert_eq!(extras[0].lookup(&["fa"], false)[0].text, "法");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn load_except_skips_the_builtin_user_word_bank() {
+        let (dir, bank) = fixture("load-builtin");
+        std::fs::create_dir_all(&bank.dir).unwrap();
+        // 自造词库挪进 WordBank\ 后也按内置处理，不能再当第三方词库装一遍
+        std::fs::write(bank.dir.join("UserWordBank.db"), "自造\tzi zao\t100\n").unwrap();
+        std::fs::write(bank.dir.join("law.tsv"), "法\tfa\t10\n").unwrap();
+        let extras = bank.load_except(None);
         assert_eq!(extras.len(), 1);
         assert_eq!(extras[0].lookup(&["fa"], false)[0].text, "法");
         let _ = std::fs::remove_dir_all(&dir);

@@ -37,7 +37,7 @@ pub use preedit_mode::PreeditMode;
 pub use status_bar::StatusBarConfig;
 pub use switch_key::{SwitchKey, SwitchKeys};
 pub use update::{UpdateChannel, UpdateConfig};
-pub use word_bank::WordBankConfig;
+pub use word_bank::{DEFAULT_USER_WORD_BANK_FILE, WordBankConfig};
 
 /// 用户配置文件（TOML）。所有平台同一份格式，缺省值全部在各分节的 `Default` 里。
 ///
@@ -57,7 +57,7 @@ pub struct Config {
     /// 用户短语库（`Phrase.db`）的位置。
     pub phrase: PhraseConfig,
 
-    /// 词库：生僻项（稀有组）是否参与查询；目录固定随包根的 `WordBank\`。
+    /// 词库：生僻项（稀有组）是否参与查询、用户自造词库的位置；第三方词库目录固定随包根的 `WordBank\`。
     pub word_bank: WordBankConfig,
 
     /// 悬浮状态条记住的位置（常开，不再有开关）。
@@ -136,7 +136,8 @@ log_level = "info"
 # 输入日志：每次上屏记一行到数据目录的 input-log.jsonl（敲的键、看到的候选、选了什么），只写在这台电脑上，不上传；
 # 用来离线评测排序和训练个人模型。false 不记；「调试」页可以清空
 input_log = true
-# 学习输入习惯：按你的选择调整候选顺序、记新词与敲错纠正。false 不再学，已学的仍参与排序；学习数据在数据目录，删掉文件即清空
+# 学习输入习惯：按你的选择调整候选顺序、记新词与敲错纠正。false 不再学，已学的仍参与排序；学习数据在数据目录里，删掉文件即清空
+#（自造词库 UserWordBank.db 在安装目录的 WordBank\ 下，位置见 [word_bank] user_file）
 learning = true
 
 [phrase]
@@ -148,6 +149,9 @@ file = "Phrase.db"
 # 从词库中查询生僻项条目：开启后候选与整句才会从词库的生僻字 / 生僻词（方言字、罕见词等）里取词；
 # 关闭能加快查询，候选里也不再出现这些冷僻条目
 rare_items = false
+# 用户自造词库 UserWordBank.db 的位置：相对安装目录，也可写绝对路径。缺省与随包词库同在 WordBank\；
+# 安装包给 WordBank\ 开了普通用户可写，想换到别的可写位置就改这里
+user_file = "WordBank/UserWordBank.db"
 
 [status_bar]
 # 桌面上常驻、可拖动的悬浮状态条（Windows）：一排图标按钮——中 / 英、中文标点 / 英文标点、全角 / 半角、
@@ -359,6 +363,27 @@ mod tests {
         assert!(config.word_bank.rare_items);
         // 模板里就带着这一节
         assert!(TEMPLATE.contains("[word_bank]\n"));
+    }
+
+    #[test]
+    fn word_bank_user_file_defaults_to_the_bundled_directory() {
+        // 缺省不能是空串，否则自造词库会把路径解析成空目录
+        assert_eq!(
+            WordBankConfig::default().user_file,
+            DEFAULT_USER_WORD_BANK_FILE
+        );
+        let config: Config = toml::from_str("[word_bank]\nrare_items = true\n").unwrap();
+        assert_eq!(config.word_bank.user_file, "WordBank/UserWordBank.db");
+        // 显式配置能读进来
+        let config: Config =
+            toml::from_str("[word_bank]\nuser_file = \"D:/CloudIME/user.db\"\n").unwrap();
+        assert_eq!(config.word_bank.user_file, "D:/CloudIME/user.db");
+        // 模板里带着这一项，解析回缺省
+        assert!(TEMPLATE.contains("user_file = \"WordBank/UserWordBank.db\""));
+        assert_eq!(
+            toml::from_str::<Config>(TEMPLATE).unwrap(),
+            Config::default()
+        );
     }
 
     #[test]

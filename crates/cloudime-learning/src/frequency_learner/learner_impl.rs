@@ -305,8 +305,9 @@ impl Learner for FrequencyLearner {
                 }
             }
         }
-        if self.bank_dirty {
-            let bank_path = Self::bank_path(&path);
+        if self.bank_dirty
+            && let Some(bank_path) = self.bank_path.clone()
+        {
             match self.save_bank_to(&bank_path) {
                 Ok(()) => {
                     tracing::info!(path = %bank_path.display(), entries = self.bank.len(), "自造词库已保存")

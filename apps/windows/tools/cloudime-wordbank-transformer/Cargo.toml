@@ -1,0 +1,25 @@
+[package]
+name = "cloudime-wordbank-transformer"
+description = "命令行词库转换工具 cwt：把 yaml / tsv / dat 等第三方词库转成云朵的 .db 词库"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "cwt"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+rusqlite.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[dev-dependencies]
+# 测试里把写出的 .db 用引擎自己的读端读回来，钉住格式兼容
+cloudime-dictionary.workspace = true
+
+[lints]
+workspace = true

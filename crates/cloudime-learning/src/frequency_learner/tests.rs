@@ -216,6 +216,31 @@ fn missing_file_is_empty_table() {
 }
 
 #[test]
+fn user_word_bank_can_live_outside_the_frequency_directory() {
+    let dir = std::env::temp_dir().join("cloudime-user-bank-path-test");
+    let _ = std::fs::remove_dir_all(&dir);
+    let data = dir.join("data");
+    let bank_dir = dir.join("install").join("WordBank");
+    std::fs::create_dir_all(&data).unwrap();
+    std::fs::create_dir_all(&bank_dir).unwrap();
+    let frequency = data.join("user.tsv");
+    let bank = bank_dir.join("UserWordBank.db");
+
+    let mut learner = FrequencyLearner::from_path_with_user_word_bank(&frequency, &bank).unwrap();
+    learner.learn_word("账套", &["zhang".into(), "tao".into()], 1.0);
+    learner.flush();
+
+    // 自造词库落在指定路径，词频目录里不再留 UserWordBank.db
+    assert!(bank.is_file(), "自造词库应落在指定路径");
+    assert!(!data.join("UserWordBank.db").exists());
+
+    let reloaded = FrequencyLearner::from_path_with_user_word_bank(&frequency, &bank).unwrap();
+    assert_eq!(reloaded.bank_count(), 1);
+    assert!(reloaded.is_user_word("账套"));
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+#[test]
 fn forget_removes_the_user_word_and_every_trace_of_learning() {
     let mut learner = FrequencyLearner::default();
     learner.learn_word("账套", &["zhang".into(), "tao".into()], 1.0);

@@ -291,7 +291,8 @@ impl Engine {
         self.rare_enabled
     }
 
-    /// 换掉全部附加词库（导入、移除、开关之后）。格子缓存随之作废。
+    /// 换掉全部附加词库（导入、移除、开关之后），**按第三方词库的添加顺序**排列：查词时靠前的优先，
+    /// 同一个词靠前命中后后面的不再重复产出。格子缓存随之作废。
     pub fn set_extra_dictionaries(&mut self, dictionaries: Vec<Dictionary>) {
         self.extra_dictionaries = dictionaries;
         self.forget_span_cache();
@@ -301,9 +302,14 @@ impl Engine {
         &self.extra_dictionaries
     }
 
-    /// 查词用的全部词库：主词库、稀有词库（开着时才含）、附加词库、用户词。
+    /// 查词用的全部词库，按优先级从高到低：用户词、主词库（云朵基础词库）、稀有词库（开着时才含）、
+    /// 附加词库（第三方词库，按添加顺序）。同一个词在靠前的词库里命中后，后面的词库不再重复产出（跨词库去重见
+    /// [`Self::lookup_across_dictionaries`]）。
     pub(super) fn all_dictionaries(&self) -> Vec<&Dictionary> {
         let mut all = Vec::with_capacity(self.extra_dictionaries.len() + 3);
+        if let Some(user) = self.learner.user_words() {
+            all.push(user);
+        }
         all.push(&self.dictionary);
         if self.rare_enabled
             && let Some(rare) = &self.rare
@@ -311,9 +317,6 @@ impl Engine {
             all.push(rare);
         }
         all.extend(self.extra_dictionaries.iter());
-        if let Some(user) = self.learner.user_words() {
-            all.push(user);
-        }
         all
     }
 

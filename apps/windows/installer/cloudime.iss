@@ -95,10 +95,16 @@ Source: "{#Repo}\target\release\cloudime-settings.exe"; DestDir: "{app}"; Flags:
 ; 文件由 build.ps1 按 settings-runtime.txt 从 target\release 挑进 target\installer\settings-runtime，必须与 exe 同级。
 Source: "{#Repo}\target\installer\settings-runtime\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Repo}\apps\windows\tsf\resources\cloudime.ico"; DestDir: "{app}"; Flags: ignoreversion
+; —— 命令行工具：exe 与「工具」菜单清单装进 {app}\tools；清单只在没有时铺一份，用户自己加的工具与改过的清单升级时留着 ——
+Source: "{#Repo}\target\release\cwt.exe"; DestDir: "{app}\tools"; Flags: ignoreversion
+; cwt-gui.exe 是随仓库带的可执行文件（VB6 编的成品，放在 cwt-gui\release64\，构建时只拷不编）
+Source: "{#Repo}\apps\windows\tools\cloudime-wordbank-transformer\cwt-gui\release64\cwt-gui.exe"; DestDir: "{app}\tools"; Flags: ignoreversion
+Source: "{#Repo}\apps\windows\installer\tools.list"; DestDir: "{app}\tools"; Flags: onlyifdoesntexist
 ; —— 随包生成数据（只装运行时要的 .qj，不装 dev 中间产物）——
 Source: "{#Repo}\data\generated\lm.qj";          DestDir: "{app}\data\generated";       Flags: ignoreversion
 ; —— 词库：主词库 Dict.db（中文 + 英文合一份）与用户导入的附加词库都放 WordBank\ ——
-Source: "{#Repo}\WordBank\*.db";   DestDir: "{app}\WordBank"; Flags: ignoreversion
+; Excludes 挡掉开发机自己的 UserWordBank.db（用户自造词库，运行时生成，绝不能进包）。
+Source: "{#Repo}\WordBank\*.db";   DestDir: "{app}\WordBank"; Flags: ignoreversion; Excludes: "UserWordBank.db"
 ; —— 本地整句模型（data\local_models\ 下的 *.qjm；没有就不装，Server 不重排）——
 ; 目录里可以有多份（不同用途），Server 自己优先词表含汉字的字级模型（见 cloudime-neural 的 find_model），所以整目录带上。
 Source: "{#Repo}\data\local_models\*.qjm"; DestDir: "{app}\data\local_models"; Flags: ignoreversion skipifsourcedoesntexist

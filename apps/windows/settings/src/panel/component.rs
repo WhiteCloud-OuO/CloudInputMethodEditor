@@ -1,6 +1,7 @@
 //! 根组件的 Reactor 生命周期：建状态、按消息落盘、画左侧导航 + 当前页。
 
 use std::path::{Path, PathBuf};
+use std::sync::OnceLock;
 
 use cloudime_platform::{
     Config, FullHalfPunctuation, ItemNumberStyle, LayoutMode, LogLevel, MAX_ASSOCIATION_COUNTS,
@@ -15,6 +16,21 @@ use super::notice::Notice;
 use super::pages::phrase::PhraseForm;
 use super::pages::{dictionaries, phrase};
 use super::{Message, REPOSITORY_URL, Settings};
+
+/// 标题栏图标：exe 旁的 `cloudime.ico`（装机包装到 `{app}`，`build.rs` 也给开发时的 exe 旁拷一份）。
+/// `WindowVisuals::icon` 只收 `&'static str`，所以算一次绝对路径后 `Box::leak` 成静态串；
+/// 文件不在就没有图标（不报错）。
+fn window_icon() -> Option<&'static str> {
+    static ICON: OnceLock<Option<&'static str>> = OnceLock::new();
+    *ICON.get_or_init(|| {
+        let path = std::env::current_exe().ok()?.parent()?.join("cloudime.ico");
+        if !path.is_file() {
+            return None;
+        }
+        let leaked: &'static str = Box::leak(path.to_string_lossy().into_owned().into_boxed_str());
+        Some(leaked)
+    })
+}
 
 impl Component for Settings {
     type Input = ();
@@ -265,6 +281,10 @@ impl Component for Settings {
 
     fn view(&self, _input: &(), context: &mut ViewContext<Self>) -> View {
         context.window_title("云朵设置");
+        // WinUI 3 的标题栏图标不会自动取 exe 里嵌的资源，得显式给 `.ico` 文件路径。
+        if let Some(icon) = window_icon() {
+            context.window_visuals(WindowVisuals::new().icon(icon));
+        }
         let item = |tag: &str, label: &str, symbol| {
             KeyedView::new(
                 tag,

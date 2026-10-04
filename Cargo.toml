@@ -10,7 +10,7 @@ members = [
     "crates/cloudime-neural",
     "crates/cloudime-render",
     "crates/cloudime-update",
-    "apps/cli", "apps/windows/server", "apps/windows/tsf", "apps/windows/settings", "tools/dict-convert", "tools/release-sign",
+    "apps/cli", "apps/windows/server", "apps/windows/tsf", "apps/windows/settings", "tools/dict-convert", "tools/release-sign", "apps/windows/tools/cloudime-wordbank-transformer",
 ]
 
 [workspace.package]

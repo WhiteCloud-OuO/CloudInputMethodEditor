@@ -11,6 +11,7 @@ fn main() {
     }
     println!("cargo:rustc-env=CLOUDIME_VERSION={}", dev_version());
     embed_icon();
+    stage_icon();
     stage_windows_runtime();
 }
 
@@ -26,6 +27,28 @@ fn embed_icon() {
 
 #[cfg(not(windows))]
 fn embed_icon() {}
+
+/// 把窗口图标拷到 exe 旁一份：WinUI 3 设标题栏图标要的是**文件路径**（`AppWindow.SetIcon`），不会用
+/// exe 里的图标资源。装机包由 `cloudime.iss` 装到 `{app}\cloudime.ico`，开发时得自己给 exe 旁拷一份，
+/// 否则 `cargo run` 起来标题栏左侧是空的。失败只警告，别让编译挂掉（只是没图标）。
+#[cfg(windows)]
+fn stage_icon() {
+    const ICON: &str = "../tsf/resources/cloudime.ico";
+    println!("cargo:rerun-if-changed={ICON}");
+    // OUT_DIR 是 `{target}\{profile}\build\{包名}-{哈希}\out`，往上三层就是 exe 所在的 `{target}\{profile}`
+    let Some(profile) = std::env::var_os("OUT_DIR")
+        .map(std::path::PathBuf::from)
+        .and_then(|out| out.ancestors().nth(3).map(std::path::Path::to_path_buf))
+    else {
+        return;
+    };
+    if let Err(error) = std::fs::copy(ICON, profile.join("cloudime.ico")) {
+        println!("cargo:warning=拷贝窗口图标失败: {error}");
+    }
+}
+
+#[cfg(not(windows))]
+fn stage_icon() {}
 
 /// 自包含部署 Windows App Runtime，并让 exe 在 Windows 10 上也能加载（定位与取舍见 docs\notes\windows-win10.md）。
 ///

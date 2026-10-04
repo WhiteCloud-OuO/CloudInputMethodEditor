@@ -1,6 +1,7 @@
-//! 用户自造词库：数据目录下的 SQLite 文件（缺省 `UserWordBank.db`）。
+//! 用户自造词库：SQLite 文件（缺省 `UserWordBank.db`）。
 //!
 //! 自动造出的用户词连权重一起存这里；`FrequencyLearner` 把它和 `user-words.tsv` 合成一张用户词库给引擎查。
+//! 位置由壳决定（Server 按 `[word_bank] user_file` 解析，缺省在安装目录的 `WordBank\` 下；CLI 仍与词频文件同目录）。
 //! 表 `words`（词 + 语言 + 全拼 + 初始权重 + 重选次数）：当前权重 = 初始权重 × 增长比例^重选次数（撤销时退回一次）。
 //! 语言分两种：`中文` 按拼音音节查（进用户词库）、`英文` 整串大小写不敏感地匹配（进个人英文词表）。
 
@@ -11,7 +12,7 @@ use rusqlite::{Connection, params};
 
 use crate::error::LearningError;
 
-/// 缺省文件名（与词频文件同目录）。
+/// 缺省文件名（learner 缺省与词频文件同目录时才用）。
 pub const DEFAULT_FILE: &str = "UserWordBank.db";
 
 /// 自造词每多选一次涨的权重比例。

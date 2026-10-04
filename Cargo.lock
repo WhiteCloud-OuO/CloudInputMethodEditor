@@ -596,6 +596,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "cloudime-wordbank-transformer"
+version = "0.0.1"
+dependencies = [
+ "clap",
+ "cloudime-dictionary",
+ "rusqlite",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+]
+
+[[package]]
 name = "colorchoice"
 version = "1.0.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"

@@ -602,26 +602,47 @@ impl Engine {
         expanded
     }
 
-    /// 主词库与用户词一起查（每个位置多种写法）。用户词是用户自己选过的，排序上靠 weight 自然靠前。
+    /// 主词库与用户词一起查（每个位置多种写法），按 [`Self::all_dictionaries`] 的顺序跨词库去重。
     pub(super) fn lookup_all(
         &self,
         positions: &[Vec<cloudime_dictionary::SyllablePattern<'_>>],
     ) -> Vec<Match<'_>> {
-        let mut hits = self.dictionary.lookup_pattern_alt(positions);
-        for dictionary in self.all_dictionaries().into_iter().skip(1) {
-            hits.extend(dictionary.lookup_pattern_alt(positions));
-        }
-        hits
+        self.lookup_across_dictionaries(positions, false)
     }
 
-    /// 只要音节数正好等于位置数的词，主词库与用户词一起查。
+    /// 只要音节数正好等于位置数的词，主词库与用户词一起查，同样按词库顺序跨词库去重。
     pub(super) fn lookup_exact_all(
         &self,
         positions: &[Vec<cloudime_dictionary::SyllablePattern<'_>>],
     ) -> Vec<Match<'_>> {
-        let mut hits = self.dictionary.lookup_exact_alt(positions);
-        for dictionary in self.all_dictionaries().into_iter().skip(1) {
-            hits.extend(dictionary.lookup_exact_alt(positions));
+        self.lookup_across_dictionaries(positions, true)
+    }
+
+    /// 按 [`Self::all_dictionaries`] 的顺序逐本查词，做「跨词库、靠前优先」的过滤：处理第 N 本时，
+    /// `text` 在前 N-1 本里命中过的丢掉；**同一本里同一个 `text` 的不同命中照旧全收**，
+    /// 留给 [`crate::ranking::rank`] 按名次去重（它按 `text` 保留名次最高的一条）。
+    fn lookup_across_dictionaries(
+        &self,
+        positions: &[Vec<cloudime_dictionary::SyllablePattern<'_>>],
+        exact: bool,
+    ) -> Vec<Match<'_>> {
+        let mut hits = Vec::new();
+        let mut seen: HashSet<&str> = HashSet::new();
+        for dictionary in self.all_dictionaries() {
+            let found = if exact {
+                dictionary.lookup_exact_alt(positions)
+            } else {
+                dictionary.lookup_pattern_alt(positions)
+            };
+            let mut current: HashSet<&str> = HashSet::with_capacity(found.len());
+            for hit in found {
+                if seen.contains(hit.text) {
+                    continue;
+                }
+                current.insert(hit.text);
+                hits.push(hit);
+            }
+            seen.extend(current);
         }
         hits
     }

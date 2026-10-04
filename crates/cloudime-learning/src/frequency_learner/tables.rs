@@ -275,7 +275,7 @@ impl FrequencyLearner {
         self.words.len() + self.bank.len()
     }
 
-    /// 自造词库文件与词频文件同目录。
+    /// 自造词库的缺省路径（与词频文件同目录）；显式路径见 `from_path_with_user_word_bank`。
     pub(super) fn bank_path(frequency_path: &Path) -> PathBuf {
         frequency_path.with_file_name(user_word_bank::DEFAULT_FILE)
     }

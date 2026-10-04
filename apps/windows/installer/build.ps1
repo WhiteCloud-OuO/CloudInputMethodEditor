@@ -54,7 +54,8 @@ if (-not $SkipBuild) {
     Push-Location $Repo
     try {
         Invoke-Checked 'cargo' @('build', '--release', '--locked',
-            '-p', 'cloudime-windows-server', '-p', 'cloudime-windows-tsf', '-p', 'cloudime-windows-settings')
+            '-p', 'cloudime-windows-server', '-p', 'cloudime-windows-tsf', '-p', 'cloudime-windows-settings',
+            '-p', 'cloudime-wordbank-transformer')
         Invoke-Checked 'cargo' @('build', '--release', '--locked',
             '-p', 'cloudime-windows-tsf', '--target', 'i686-pc-windows-msvc')
         # TSF DLL 按位数起固定名（cloudime_tsf_x64.dll / cloudime_tsf_x86.dll，不带版本号）：

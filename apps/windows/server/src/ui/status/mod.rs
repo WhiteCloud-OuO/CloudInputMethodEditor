@@ -9,6 +9,8 @@
 mod arrangement;
 mod fullscreen;
 mod placement;
+mod tools;
+mod tooltip;
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -21,7 +23,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     DragDetect, GetKeyState, ReleaseCapture, VK_CAPITAL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, HTCAPTION, HTCLIENT, IDC_HAND,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, HTCAPTION, HTCLIENT, IDC_ARROW,
     KillTimer, LoadCursorW, MA_NOACTIVATE, PostThreadMessageW, SendMessageW, SetTimer,
     WM_EXITSIZEMOVE, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_TIMER,
     WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
@@ -32,6 +34,7 @@ use cloudime_render::StatusCell;
 
 use self::arrangement::{Arrangement, ButtonState};
 use self::placement::{Placement, StatusAction};
+use self::tooltip::Tooltip;
 use super::StatusEvents;
 use super::painter::SharedPainter;
 use super::window_class::WindowClass;
@@ -90,6 +93,9 @@ pub(super) struct StatusBar {
 
     /// 图标按钮的排布（exe 旁 `data\icons-arrangement.cfg`，改动后重绘时重读）。
     arrangement: RefCell<Arrangement>,
+
+    /// 图标按钮的悬停提示；建不出来就没有提示。
+    tooltip: Option<Tooltip>,
 }
 
 impl StatusBar {
@@ -98,7 +104,7 @@ impl StatusBar {
         CLASS.ensure(|| WNDCLASSEXW {
             lpfnWndProc: Some(wndproc),
             hInstance: super::module_handle(),
-            hCursor: unsafe { LoadCursorW(None, IDC_HAND) }.unwrap_or_default(),
+            hCursor: unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default(),
             lpszClassName: CLASS_NAME,
             ..Default::default()
         })?;
@@ -108,7 +114,7 @@ impl StatusBar {
             CreateWindowExW(
                 WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
                 CLASS_NAME,
-                w!("云朵状态条"),
+                w!("悬浮工具栏"),
                 WS_POPUP,
                 0,
                 0,
@@ -129,6 +135,7 @@ impl StatusBar {
             placement,
             painter,
             arrangement: RefCell::new(Arrangement::load()),
+            tooltip: Tooltip::new(hwnd),
         })
     }
 
@@ -218,6 +225,16 @@ impl StatusBar {
             .zip(arrangement.buttons.iter().map(|button| button.action))
             .map(|(edge, action)| (edge.round() as i32, action))
             .collect();
+        // 悬停提示：跟点击命中用同一套格子，文字按动作给。
+        if let Some(tooltip) = &self.tooltip {
+            let tips: Vec<(i32, &str)> = rendered
+                .cell_edges
+                .iter()
+                .zip(arrangement.buttons.iter().map(|button| button.action))
+                .map(|(edge, action)| (edge.round() as i32, tip_text(action)))
+                .collect();
+            tooltip.sync(&tips, margin, content.1);
+        }
         let anchor = self.anchor(content, margin);
         let updated = layered::present(
             self.hwnd,
@@ -255,6 +272,19 @@ impl Drop for StatusBar {
     fn drop(&mut self) {
         PLACEMENTS.with(|map| map.borrow_mut().remove(&(self.hwnd.0 as isize)));
         let _ = unsafe { DestroyWindow(self.hwnd) };
+    }
+}
+
+/// 状态条按钮的悬停提示：功能名，第二行是快捷键（没有就只一行）。
+fn tip_text(action: StatusAction) -> &'static str {
+    match action {
+        StatusAction::ToggleLang => "中 / 英切换\nShift",
+        StatusAction::TogglePunctuation => "中文 / 西文标点\nCtrl + Alt + 逗号",
+        StatusAction::ToggleCharWidthType => "全角 / 半角字符\nShift + 空格",
+        StatusAction::ToggleSimpTrad => "简体 / 繁体\nCtrl + Alt + 句号",
+        StatusAction::OpenOptions => "设置",
+        StatusAction::OpenWidgets => "工具\n【暂未完成】",
+        StatusAction::OpenSpecChars => "特殊字符输入器\n【暂未完成】",
     }
 }
 

@@ -33,7 +33,7 @@ cloudime/
 ├── crates/
 │   ├── cloudime-core/          # composition / parser / correction / candidate / ranking / sentence / engine …（下面单列）
 │   ├── cloudime-dictionary/    # 词库加载与查询
-│   ├── cloudime-learning/      # 用户词频、用户词、自造词库（UserWordBank.db）、个人英文词、个人 n-gram、个人敲错表（user.tsv / user-words.tsv / user-english.tsv / user-ngram.tsv / user-typos.tsv）、输入日志（input-log.jsonl）、输入统计（usage.tsv）、词汇记录（user-vocab.tsv）
+│   ├── cloudime-learning/      # 用户词频、用户词、自造词库（UserWordBank.db，缺省在安装目录 WordBank\ 下）、个人英文词、个人 n-gram、个人敲错表（user.tsv / user-words.tsv / user-english.tsv / user-ngram.tsv / user-typos.tsv）、输入日志（input-log.jsonl）、输入统计（usage.tsv）、词汇记录（user-vocab.tsv）
 │   ├── cloudime-lm/            # 整句转换的 bigram 语言模型：LanguageModel 的实现
 │   ├── cloudime-neural/        # 字级 Transformer 的本地推理（candle）：SentenceScorer 的实现，给整句前几条路径重打分
 │   ├── cloudime-format/        # .qj 数据容器：mmap 打开、零拷贝视图、写入器、可落盘的哈希索引（dictionary / lm 依赖它）
@@ -146,9 +146,10 @@ apps/*                     （组装：Engine::new(dict).with_learner(..).with_l
 
 ### 多词库
 
-Engine 查词的词库是一个列表：主词库（随包 `WordBank\Dict.db`，按语言与稀有度拆成 7 张表）、
-附加词库（`Engine::set_extra_dictionaries`，用户导入的第三方词库）、用户词（Learner 持有）。
-三者一起进词级查询和整句词图；附加词库不带语言模型，它的词在路径上按词频兜底打分（`sentence::fallback_log_prob`），
+Engine 查词的词库是一个列表，**按优先级从高到低**：用户词（Learner 持有）、主词库（随包 `WordBank\Dict.db`，按语言与稀有度拆成 7 张表；这里指普通中文组）、
+稀有词库（同一份 `Dict.db` 的稀有组，缺省关）、附加词库（`Engine::set_extra_dictionaries`，用户导入的第三方词库，**按添加顺序**）。
+它们一起进词级查询和整句词图，且**跨词库按词文本去重、靠前优先**：同一个词在靠前的词库里命中后，后面的词库不再产出这条
+（同一本词库内部的重复照旧全收，交给排序按名次去重）。附加词库不带语言模型，它的词在路径上按词频兜底打分（`sentence::fallback_log_prob`），
 所以导入的第三方词库只影响「有没有这个词」和它的词频，不改变语言模型的尺度。
 主词库装配成三份：普通中文（`Engine::new` 的主词库）、稀有中文（`Engine::with_rare`，`Engine::set_rare_enabled` 整组开关，缺省关，装配后按 `[word_bank] rare_items` 设置）、
 英文（`Engine::with_english`）给中英混输的英文候选与句末英文段用；中文两份仍是原来的内存二分词库。
@@ -156,7 +157,7 @@ Engine 查词的词库是一个列表：主词库（随包 `WordBank\Dict.db`，
 目录里有的全部加载（没有 List.dat 这种启用清单）。导入 = `cloudime_dictionary::import` 只收现成的 `.db`（读一遍校验后原样复制进目录），
 移除 = 文件挪到 `WordBank\removed\`，
 之后 Server 的热加载（`dispatch/reload`）按目录快照重新装配。设置 → 词库页只列导入的第三方词库，内置的 `Dict.db`（随包）与
-`UserWordBank.db`（数据目录）没有开关、始终加载、不出现在列表里。这也是第三方词库带着自己许可证单独分发的落点：
+`UserWordBank.db`（用户自造词库，缺省也在 `WordBank\`，位置由 `[word_bank] user_file` 决定）没有开关、始终加载、不出现在列表里。这也是第三方词库带着自己许可证单独分发的落点：
 词库元数据里有名称与许可证，设置 → 词库页里直接显示。用户短语另存数据目录的 SQLite（`Phrase.db`，见「用户短语」）。
 
 ### 数据文件：`.qj` 容器

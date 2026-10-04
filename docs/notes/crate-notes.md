@@ -39,7 +39,7 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 
 表达式：`shortcut::candidates` 以固定前缀 `v`（`EXPRESSION_PREFIX`）认表达式模式，算四则运算与中文数字；`rq` / `sj` / `xq` 出日期 / 时间 / 星期，候选是 `CandidateKind::Shortcut`，上屏吃掉整段作用域。`Engine::expression_mode` 决定组句中数字与运算符进缓冲区还是选词。
 
-`Engine` 是对外唯一门面，`Learner` trait 在 `engine` 模块；词库是「主词库 + 稀有词库（`with_rare` / `set_rare_enabled`，缺省关闭）+ 附加词库（`set_extra_dictionaries`）+ 用户词」的列表；繁体输出（`traditional` 开关与 `traditional_map` 映射）依赖 `ferrous-opencc`（`s2tw`）在出候选与上屏边界转换，内部保持简体。
+`Engine` 是对外唯一门面，`Learner` trait 在 `engine` 模块；词库是「用户词 + 主词库 + 稀有词库（`with_rare` / `set_rare_enabled`，缺省关闭）+ 附加词库（`set_extra_dictionaries`，按添加顺序）」的列表，**按优先级从高到低**；同一个词在靠前词库里命中后，后面的词库不再重复产出（跨词库去重、靠前优先：词级在 `Engine::lookup_across_dictionaries`，整句词图在 `sentence::span_candidates`，都按 `text` 挡重），**同一本词库内部的重复不去重**，留给 `ranking::rank` / `dedup_by` 按名次保留最高的一条。繁体输出（`traditional` 开关与 `traditional_map` 映射）依赖 `ferrous-opencc`（`s2tw`）在出候选与上屏边界转换，内部保持简体。
 - 候选排序分两级：先按**结构键**，同一结构下再按**权重**降序、`hit.text` 升序。结构键（`ranking::Scored`）依序：
   ① 覆盖的输入字母数降序（`kaif` 的 开发 先于只覆盖 `kai` 的 开）；② 非末尾的简拼音节数升序（`kai f a` 是 1、`kai fa` 是 0）；
   ③ 末音节完整匹配降序（`xian` 的 先 先于被当成没打完的 想）；④ 词库命中 `exact`（音节数正好等于查询位置数）降序；
@@ -87,7 +87,9 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
   回车原样上屏的英文词与选过的英文候选，与随包英文词表一起出候选且在前）、
   个人敲错表（`user-typos.tsv`，接受过的 (敲的, 要的) 音节对；上屏纠错读法时用它算敲错对，整句词图的音节级敲错边也按它给 `TypoCosts` 打折）与个人 n-gram（`user-ngram.tsv`，Core `sentence::UserNgram`，
   二元 + 三元在线计数，整句转换与词级排序里与静态模型插值）。`Learner::is_user_word`（在自造词库或导入的用户词里）给候选窗的「造」角标用。
-  自动造词另有单独的 SQLite 自造词库（`UserWordBank.db`，缺省与词频文件同目录，`user_word_bank`）：连着选出的两个词合起来词库没有、且连续两次
+  自动造词另有单独的 SQLite 自造词库（`UserWordBank.db`，`user_word_bank`）：位置由壳决定，Server 按 `[word_bank] user_file`
+  解析（缺省 `WordBank/UserWordBank.db`，即安装目录的 `WordBank\`；也可写绝对路径），CLI 缺省仍与词频文件同目录（`FrequencyLearner::from_path`）；
+  连着选出的两个词合起来词库没有、且连续两次
   （同一段拼音分次选完 / 分两段打，两条阈值都是 2）就记成用户词；初始权重 = 各字在词库里的词频最大值（上屏时 `Engine::initial_user_weight` 算好传给 `learn_word`），
   之后每重选一次 ×1.2、撤销退一次，权重直接当用户词库的词频用，与 `user-words.tsv` 合成一张小词库（`rank_weight` 对自造词返回 1、其余词按全局重复次数每次 ×1.15，撤销靠 `counts` 回落）。
   表里还有一列 `language`：`中文`（自动造词 / 整句收录，按拼音音节查、进用户词库）与 `英文`（Ctrl + 回车 收录的整串字母，进个人英文词表、大小写不敏感地整串匹配，
@@ -146,10 +148,13 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 `use_half_wide_punctuation_marks_after_digital`；`[general]` 里 `Shift` + 字母那一项已删（固定进组句，见上），`page_keys` 也已删（翻页键固定主键盘 `-` / `=`），
 `[shortcut]` 整节删除（表达式前缀固定 `v`，问字与删候选整体下线）；`[phrase]` 只有 `file`（短语库的位置，相对数据目录 `%APPDATA%\CloudIME`，缺省 `Phrase.db`），
 短语读写走 `phrase.rs` 的 `PhraseStore`（SQLite：`phrases` 表 + `meta`，写临时文件再改名）；
-`[word_bank]` 分节只剩 `rare_items`（缺省 `false`：开启后候选与整句才从稀有组取词，关闭更快；目录固定随包根的 `WordBank\`）；
-`word_bank.rs` 有 `locate` / `path` / `files` / `imported` / `is_builtin` / `describe` / `load_except` / `main` / `snapshot` / `snapshot_files`，
+`[word_bank]` 分节有 `rare_items`（缺省 `false`：开启后候选与整句才从稀有组取词，关闭更快；第三方词库目录固定随包根的 `WordBank\`）
+与 `user_file`（用户自造词库位置，相对安装目录、缺省 `WordBank/UserWordBank.db`，也认绝对路径；`DEFAULT_USER_WORD_BANK_FILE`）；
+`word_bank.rs` 有 `locate` / `path` / `user_file` / `files` / `imported` / `is_builtin` / `describe` / `load_except` / `main` / `snapshot` / `snapshot_files`
+（`user_file` 就按 `[word_bank] user_file` 解析：绝对路径直接用，相对路径相对随包根，即 `WordBank\` 的父目录），
 随包主词库是 `WordBank\Dict.db`（7 张表：中文普通组 / 稀有组 + 英文；附加词库按 `Dictionary::from_path` 整份读，不拆稀有组），
 设置 → 词库页只列导入的第三方词库（`imported` 过滤掉内置 `Dict.db` / `UserWordBank.db`；两者没有开关、始终加载），
+`load_except` 也把这两个内置排除在外——自造词库挪进 `WordBank\` 后不能再当第三方词库装一遍（它由 learner 专门管）；
 用户导入的附加词库是同目录下另外的 `.db`（目录里有的全部加载，没有 List.dat 启用清单）；
 原来的 `[dictionaries] domains / disabled` 与
 `%APPDATA%\CloudIME\dicts\` 都删了；
@@ -248,6 +253,7 @@ Server 装配直接退出，表现成「装完打不出候选、按键没反应�
 原来「高级」页的数据 / 日志入口（打开数据目录 / 打开日志目录 / 打包日志到桌面 / 清空输入日志四个按钮一行）与项目 GitHub 页面、详细日志、学习输入习惯、记录输入日志。
 「通用」页已删（`Shift` + 字母固定进组句，见 `dispatch/key/input.rs::apply_chinese`：字母进缓冲区、`Caps Lock` 亮着的仍直通），
 「统计」与「高级」两页并进「调试」；「关于」页已整体删除（版本在「数据与组件」里仍有一份，检查更新只剩 Server 侧与任务栏菜单，许可与数据署名看 `LICENSE` 与 `docs/design/landscape.md`）。
+设置窗口的标题栏图标走 `ViewContext::window_visuals(WindowVisuals::new().icon(path))`（`component.rs::window_icon`）——WinUI 3 不会自动取 exe 里的图标资源，必须显式 `AppWindow.SetIcon`，而那个接口只收 `&'static str`，所以算一次「exe 旁 `cloudime.ico`」的绝对路径再 `Box::leak`；装机包由 `cloudime.iss` 装这份 ico，开发时 `settings/build.rs` 往 exe 旁拷一份。
 
 「不显示候选框」名单（`[candidate] program_list_of_hiding_candidate`）：Server 按会话的 exe 名（`SessionInfo.app`）算出
 `InputSettings.raw_input` 下发给 DLL，DLL 彻底不吃键（`would_eat` / 断连时的兜底都放行），按键原样交给应用 —— 编辑器里
@@ -294,6 +300,10 @@ Server `dispatch/key/input.rs::ctrl_digit` 按键码认数字（按住 Ctrl 时 
 Server 按 exe 位置读同一份；因为 `target\debug\data\` 会让 `resources::bundled_root()` 误以为那是装机根，
 `has_resources` 现在要求 `data` 与 `assets` **都**在（装机包两者都有，开发时只剩仓库根命中）。点击按按钮换 `StatusEvent` 回 Router，
 Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己每 250ms 读一次 `GetKeyState`，变了让 UI 线程重画。
+鼠标是普通箭头（类光标 `IDC_ARROW`，不是手形）；悬停提示用系统 tooltip 控件（`tooltip.rs`，`InitCommonControlsEx` 注册类、`TTF_SUBCLASS` 自己盯鼠标），
+每次重画按各按钮格子同步一份「功能 + 快捷键」的文字，`sync` 里先删旧工具再挂新的。
+「工具」按钮弹的是 exe 旁 `tools\tools.list` 登记的工具菜单（`status/tools.rs`：一行 `短路径=名称`，短路径相对 `tools\`，文件不在的项跳过；用 `TrackPopupMenu` 在中键位置弹），
+启动时工作目录设成 `tools\`：**控制台程序**（PE 子系统 3 的 exe、`.bat` / `.cmd`）用 `cmd /k` 起——程序跑完控制台留着，看得见输出、还能接着敲命令（`cwt.exe` 不给参数只打用法，直接起会一闪而过）；窗口程序直接起。「特殊字符」仍是占位。
 
 TSF 原有数字 / OEM 标点 / 空格键码按当前布局用 `ToUnicodeEx` 解析（bit 2 避免改变键盘状态），
 仅接受单个非代理项 UTF-16 单元。字母、小键盘和 AltGr 处理不变，不保证组合音符输入。
@@ -345,3 +355,16 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
 - `rehead dict|lm|model <输入…>`：把改名前的 `.qj`（魔数 `QINGJIAN`）就地改成当前魔数 `CLOUDIME`，只改头 8 字节。
   改之前按容器完整校验一遍（版本、分节表、`META`）、改完再开一遍，坏文件原样报错不碰，已是新魔数的跳过；
   `tools/release/data-bundle.sh` 发包前拿同一套魔数当门禁，用法见 `docs/notes/release.md`「产品数据从哪来」。
+
+## apps/windows/tools/cloudime-wordbank-transformer
+
+命令行词库转换工具 `cwt.exe`（`cargo run --release -p cloudime-wordbank-transformer -- …`）：把第三方词库
+（`.yaml` Rime 词典 / `.tsv` / `.dat` 及其它制表符文本）转成云朵的 `.db`，用法与逐列含义见该目录的 `README.md`。
+输出走引擎的 **format 2**（单张 `words(text, pinyin, language, weight)` + `meta`，`meta.format = "2"`），`DictDb::from_path` 直接能读；
+语言按词里有没有汉字判（中文 `text` = 词、`pinyin` = 音节空格分隔；英文 `text` = 小写编码、`pinyin` = 原样写法），
+同一 `(词, 拼音)` 去重、权重大的胜出——与 `word-bank` / `DictDb::write` 那套一致。
+
+子目录 `cwt-gui/` 是同一工具的窗口外壳（VisualFreeBasic 源码 + 随仓库带的成品 `cwt-gui/release64/cwt-gui.exe`）：
+拖入 `.yaml` / `.tsv` / `.dat` 文件后调用**同目录的 `cwt.exe`** 转换、随后自行退出。成品是预编译的，构建时只拷不编
+（见根 `build-installer.ps1` 与 `installer/cloudime.iss`），装进 `{app}\tools\`；安装包的 `tools.list` 登记的就是
+`cwt-gui.exe`，因此**必须与 `cwt.exe` 同目录**。

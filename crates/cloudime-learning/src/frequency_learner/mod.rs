@@ -66,8 +66,11 @@ pub struct FrequencyLearner {
     /// 用户词自上次保存后是否有变化。
     words_dirty: bool,
 
-    /// 自造词库：词 → 全拼 + 用户权重，落盘到同目录的 `UserWordBank.db`。
+    /// 自造词库：词 → 全拼 + 用户权重，落盘到 `bank_path`。
     bank: BTreeMap<String, BankWord>,
+
+    /// 自造词库的落盘路径（`[word_bank] user_file` 解析结果；缺省与词频文件同目录）。
+    bank_path: Option<PathBuf>,
 
     /// 自造词库自上次保存后是否有变化。
     bank_dirty: bool,
@@ -127,12 +130,25 @@ impl FrequencyLearner {
 
     /// 从文件加载，之后 [`Learner::flush`] 会写回同一个文件。
     /// 文件不存在时返回空表，而不是报错：首次运行没有用户数据是正常的。
+    /// 自造词库缺省与词频文件同目录（`UserWordBank.db`），要放到别处用
+    /// [`Self::from_path_with_user_word_bank`]。
     ///
     /// 各文件按行容错：格式不对的行（崩溃写坏、手改错了）记一条警告跳过，其余照读，下次落盘时就没了；
     /// 编码坏掉的字节按替换字符读进来交给按行解析处理。只有真正的 io 错误（权限、坏盘）才返回 `Err`，
     /// 这时壳该退回只在内存里学习，别拿空表覆盖用户的文件。
     pub fn from_path(path: impl Into<PathBuf>) -> Result<Self, LearningError> {
         let path = path.into();
+        let bank = Self::bank_path(&path);
+        Self::from_path_with_user_word_bank(path, &bank)
+    }
+
+    /// 同 [`Self::from_path`]，但自造词库另放 `bank`（Server 按 `[word_bank] user_file` 解析出来的路径）。
+    /// 词频、用户词、个人 n-gram 等其余表仍跟词频文件同目录。
+    pub fn from_path_with_user_word_bank(
+        frequency: impl Into<PathBuf>,
+        bank: &Path,
+    ) -> Result<Self, LearningError> {
+        let path = frequency.into();
         let mut learner = Self::default();
         if let Some(source) = read_text_lossy(&path)? {
             let skipped = learner.load_counts(&source);
@@ -143,7 +159,7 @@ impl FrequencyLearner {
             let skipped = learner.load_words(&source);
             note_skipped(&words_path, skipped);
         }
-        let bank_path = Self::bank_path(&path);
+        let bank_path = bank.to_path_buf();
         match user_word_bank::load(&bank_path) {
             Ok(words) => learner.bank = words,
             Err(error) => {
@@ -174,6 +190,7 @@ impl FrequencyLearner {
             note_skipped(&typos_path, skipped);
         }
         learner.path = Some(path);
+        learner.bank_path = Some(bank_path);
         Ok(learner)
     }
 

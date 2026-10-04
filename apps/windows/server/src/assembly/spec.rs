@@ -18,6 +18,9 @@ pub struct AssemblySpec {
     /// 用户数据目录（`%APPDATA%\CloudIME`）；没有就都只在内存。
     pub user_dir: Option<PathBuf>,
 
+    /// 用户自造词库路径（`[word_bank] user_file` 解析结果）；没有时退回与词频文件同目录。
+    pub user_word_bank: Option<PathBuf>,
+
     /// 是否写输入日志（`[general] input_log`）。
     pub input_log: bool,
 }
@@ -29,6 +32,7 @@ impl AssemblySpec {
             language_model: None,
             word_bank: None,
             user_dir: None,
+            user_word_bank: None,
             input_log: false,
         }
     }

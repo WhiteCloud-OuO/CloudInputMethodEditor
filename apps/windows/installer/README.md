@@ -13,6 +13,7 @@ C:\Program Files\CloudIME\
     cloudime-settings.exe     设置界面
     Microsoft.UI.Xaml.dll …   设置程序自带的 Windows App Runtime（自包含部署，见下节；约 53 MB / 35 个文件）
     cloudime.ico              开始菜单 / 启动项快捷方式的图标（exe 里也嵌了一份）
+    tools\                    工具目录：cwt-gui.exe（词库转换工具，GUI）+ cwt.exe（同上的命令行版）+ tools.list（悬浮状态条「工具」按钮的菜单清单）
     data\generated\           lm.qj（语言模型；英文词表已在 Dict.db 里，不再单独装）
     WordBank\                 Dict.db（7 张表：中文普通组 / 稀有组 + 英文）与用户导入的附加词库（本目录对普通用户可写，导入 / 删除词库走它）
     data\icons-arrangement.cfg 悬浮状态条的按钮排布（哪个按钮、位置、图标）
@@ -25,6 +26,10 @@ Server 与设置程序按 **exe 相对**定位随包资源（`cloudime_platform:
 词库目录 `WordBank\` 按这个根找（装机时就是程序目录），主词库固定 `Dict.db`。
 `data\icons-arrangement.cfg` 与 `data\icons\` 例外：状态条按 exe 同目录找（`server/src/ui/status/arrangement.rs`），
 `cargo build` 由 `server/build.rs` 从 `apps\windows\server\src\ui\status\` 拷一份到 `target\{debug,release}\data\`。
+
+`tools\` 是悬浮状态条「工具」按钮的菜单目录：`tools.list` 一行一个 `短路径=名称`（相对 `tools\`，文件不存在的项不显示），
+装包只铺一份、升级不覆盖（用户自己加的工具与改过的清单留着）；控制台工具（如 `cwt.exe`）从菜单启动会留在控制台里，
+方便看输出、接着敲命令。卸载时 `{app}` 整棵删掉，所以用户自己塞进 `tools\` 的东西也会一起删。
 
 用户数据在 `%APPDATA%\CloudIME`（config.toml、用户短语 `Phrase.db`、学习数据、统计），三个进程的日志在 `%LOCALAPPDATA%\CloudIME\logs`（`server.` / `tsf.` / `settings.` 前缀，按天，留 7 天）；
 **卸载时这两处随 `[UninstallDelete]` 一并删除**（`{userappdata}` / `{localappdata}`，指运行卸载程序的那个用户；同一台机器上其他账户的数据要各自删）。

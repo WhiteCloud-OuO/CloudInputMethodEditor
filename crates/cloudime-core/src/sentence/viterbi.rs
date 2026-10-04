@@ -3,6 +3,8 @@
 //! 状态只按前一个词分（束宽内），个人三元要的前二词取前驱节点的回指（它那条最优路径上的前一个词）：
 //! 不扩状态，代价是三元上下文是近似的，个人数据量下够用。
 
+use std::collections::HashSet;
+
 use cloudime_dictionary::{Dictionary, Match, SyllablePattern};
 
 use super::{
@@ -332,14 +334,29 @@ fn span_candidates(
             .map(|(index, syllable)| cost(start + index, syllable))
             .sum::<f64>()
     };
+    // 跨词库去重：同一个 text 在靠前的词库里命中过，后面的词库就不再收（靠前优先）；
+    // 同一本词库内部的重复照收，最后随 score 排序用 dedup_by 处理（保留分数最高的那条）。
+    let mut hits: Vec<Match<'_>> = Vec::new();
+    let mut seen: HashSet<&str> = HashSet::new();
+    for dictionary in dictionaries {
+        let found = dictionary.lookup_exact_alt(span);
+        let mut current: HashSet<&str> = HashSet::with_capacity(found.len());
+        for hit in found {
+            if seen.contains(hit.text) {
+                continue;
+            }
+            current.insert(hit.text);
+            hits.push(hit);
+        }
+        seen.extend(current);
+    }
     // 得分先算好再排：单字母简拼的格子能命中几千条，比较器里每次查两张表会让排序占掉十几毫秒
-    let mut scored: Vec<(f64, f64, Match<'_>)> = dictionaries
-        .iter()
-        .flat_map(|d| d.lookup_exact_alt(span))
+    let mut scored: Vec<(f64, f64, Match<'_>)> = hits
+        .into_iter()
         .map(|m| {
-            let seen = weight(m.text) + personal.count(m.text);
+            let count = weight(m.text) + personal.count(m.text);
             let penalty = penalty_of(&m);
-            let score = f64::from(m.frequency) * (1.0 + f64::from(seen)) * (-penalty).exp();
+            let score = f64::from(m.frequency) * (1.0 + f64::from(count)) * (-penalty).exp();
             (score, penalty, m)
         })
         .collect();
@@ -676,6 +693,26 @@ mod tests {
         let again = cache.len();
         assert_eq!(run(&mut cache, &["wo", "xiang", "qu", "chi"]), fresh);
         assert_eq!(cache.len(), again);
+    }
+
+    /// 靠前词库的同名条目优先：同一个词在靠后词库里词频高得多、读法不同，词图里仍只收靠前那本的那条。
+    #[test]
+    fn earlier_dictionary_wins_across_duplicates() {
+        let base = Dictionary::parse("重开\tzhong kai\t100\n").unwrap();
+        let extra = Dictionary::parse("重开\tzong kai\t999999\n").unwrap();
+        let patterns = abbreviated(&["z", "k"]);
+        let conversion = convert(
+            &[&base, &extra],
+            &patterns,
+            &NoLanguageModel,
+            Personal::NONE,
+            |_| 0,
+            |_, _| 0.0,
+            &mut SpanCache::default(),
+        )
+        .unwrap();
+        assert_eq!(conversion.text, "重开");
+        assert_eq!(conversion.words[0].syllables, ["zhong", "kai"]);
     }
 
     /// 敲错变体是带代价的边：`gan xi` 在 `gan` 位多一种写法 `guan`（代价 4.5），原样凑不出像样的句子时 关系 胜出，
