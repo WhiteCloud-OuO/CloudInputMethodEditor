@@ -17,7 +17,8 @@ fn router(size: usize) -> Router {
                 .map(|position| CustomPhrase {
                     code: "qq".into(),
                     text: format!("第{position}项"),
-                    position: (position - 1) as u32,
+                    title: None,
+                    position,
                 })
                 .collect(),
         )

@@ -147,7 +147,7 @@ fn replay_commit(
     // 照着当时的选择上屏，让上下文往前走；不在候选里就原样清掉
     match position.map(|i| query.candidates.items[i].clone()) {
         Some(candidate) => {
-            engine.commit(&candidate);
+            let _ = engine.commit(&candidate);
             engine.clear();
         }
         None => engine.clear(),

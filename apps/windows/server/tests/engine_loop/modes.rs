@@ -314,7 +314,7 @@ fn single_key_symbol_mapping() {
 /// 半角标点（或 `{` 这类不在全角表里的键）下的成对补全。
 ///
 /// 这条路以前根本不调 `complete_pair`，所以 `()`、`{}` 这些半边永远补不上；
-/// 英文模式仍然纯直通、不补（编辑器自己的括号配对比我们更懂上下文）。
+/// 中英一致：只要开了成对补全、键没被全角表转换就补，英文 + 西文符号也一样（`()`）。
 /// 英文尖括号 `<>` 与英文单引号 `''` 不在位图里（中文模式下标点表会把它们转掉），不再测。
 #[test]
 fn pairwise_completion_also_covers_half_width_marks() {
@@ -347,12 +347,22 @@ fn pairwise_completion_also_covers_half_width_marks() {
         (KeyOutcome::Consumed, Some("{}"), -1)
     );
 
-    // 英文模式纯直通：不补，原样交给应用
+    // 英文 + 西文符号也补：`(` 补成 `()`、光标停在中间
     let mut router = router_with(RouterConfig {
         pairwise_completion: all,
         ..RouterConfig::default()
     });
     let (outcome, commit, caret, _, _) =
         press_full(&mut router, KeyEvent::new(0xBE, Some('('), ENGLISH));
-    assert_eq!((outcome, commit, caret), (KeyOutcome::Passthrough, None, 0));
+    assert_eq!(
+        (outcome, commit.as_deref(), caret),
+        (KeyOutcome::Consumed, Some("()"), -1)
+    );
+    // 英文模式下紧接着敲右半边 `)`：右半边已在文档里，跳过去、不再插一个
+    let (outcome, commit, caret, _, _) =
+        press_full(&mut router, KeyEvent::new(0xBE, Some(')'), ENGLISH));
+    assert_eq!(
+        (outcome, commit.as_deref(), caret),
+        (KeyOutcome::Consumed, None, 1)
+    );
 }

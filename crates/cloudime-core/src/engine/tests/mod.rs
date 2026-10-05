@@ -8,6 +8,7 @@ mod learning;
 mod lookup;
 mod privacy;
 mod raw;
+mod segmented;
 
 use std::collections::HashMap;
 

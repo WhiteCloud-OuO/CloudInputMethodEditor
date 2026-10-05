@@ -16,6 +16,10 @@ pub struct Candidate {
     /// 上屏文本。
     pub text: String,
 
+    /// 候选里显示的内容；为空时显示 [`Self::text`]，上屏始终用 `text`。
+    #[serde(default)]
+    pub display: Option<String>,
+
     /// 来源类型。
     pub kind: CandidateKind,
 
@@ -24,4 +28,11 @@ pub struct Candidate {
 
     /// 候选的辅助读音 / 标注；中文词库候选不使用。
     pub reading: Option<String>,
+}
+
+impl Candidate {
+    /// 候选里真正显示的内容：有 `display` 用它，否则用上屏文本。
+    pub fn display_text(&self) -> &str {
+        self.display.as_deref().unwrap_or(&self.text)
+    }
 }

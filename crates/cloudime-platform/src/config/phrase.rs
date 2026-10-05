@@ -1,25 +1,22 @@
-//! `[phrase]` 分节：用户短语的存放位置。
+//! `[phrase]` 分节：自定义短语的开关。
 //!
-//! 短语不再写在 config.toml 里，单独存在数据目录（`%APPDATA%\CloudIME`）下的 SQLite 文件里，
-//! config.toml 只记它在哪；「设置 → 短语」页负责增删改。
+//! 短语库固定在安装目录的 `Phrases\Phrase.db`（位置不可配）；这里只有「软件自带短语是否参与」一项。
+//! 「设置 → 短语」页负责增删改，Server 启动与热加载时读进引擎。
 
 use serde::{Deserialize, Serialize};
-
-/// 短语库的缺省文件名（相对数据目录）。
-pub const DEFAULT_PHRASE_FILE: &str = "Phrase.db";
 
 /// `[phrase]` 分节。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct PhraseConfig {
-    /// 短语库的位置（相对数据目录，如 `Phrase.db`；也可以写绝对路径）。
-    pub file: String,
+    /// 软件自带短语（`cloudime_default` 表）是否参与：关掉只用自己的短语。
+    pub use_default_phrases: bool,
 }
 
 impl Default for PhraseConfig {
     fn default() -> Self {
         Self {
-            file: DEFAULT_PHRASE_FILE.to_owned(),
+            use_default_phrases: true,
         }
     }
 }

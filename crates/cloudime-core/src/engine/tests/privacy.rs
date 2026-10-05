@@ -72,7 +72,7 @@ fn private_input_does_not_write_vocabulary_and_normal_input_recovers() {
         .cloned()
         .unwrap();
     engine.note_displayed(query.candidates.items.iter());
-    assert_eq!(engine.commit(&candidate), "开发");
+    assert_eq!(engine.commit(&candidate).as_deref(), Some("开发"));
     assert!(book.lock().unwrap().is_empty());
 
     engine.set_private(false);

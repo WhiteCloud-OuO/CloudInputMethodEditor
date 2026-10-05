@@ -14,6 +14,7 @@ cloudime-dictionary.workspace = true
 cloudime-format.workspace = true
 cloudime-lm.workspace = true
 cloudime-neural.workspace = true
+cloudime-platform.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 thiserror.workspace = true

@@ -43,7 +43,15 @@ mod session;
 ///
 /// v14 把中英的布尔换成三态 [`InputMode`]（中文 / 英文 / 禁用）：`ModeChanged` 与 `ModeSync` 的字段变了，
 /// 另外 [`IndicatorCommand`] 加了「全角 / 半角」与「简 / 繁」两项（`Shift + Space`、`Ctrl + Alt + .` 两个内置热键）。
-pub const PROTOCOL_VERSION: u32 = 14;
+///
+/// v15 给 [`IndicatorCommand`] 加了 [`IndicatorCommand::RestartServer`]（任务栏右键菜单的「重启输入法服务」）：
+/// 加枚举变体老 DLL / 老 Server 解不出来，整条帧失败、按键直接放行，必须 +1 并重装 DLL。老 Server 下点了
+/// 这一项没反应（它不认识这个变体，整帧解析失败）。
+///
+/// v15 之后给 [`cloudime_core::Candidate`] 加了 `display`（候选里显示的内容，上屏仍用 `text`）：给结构体加
+/// **带 `serde(default)` 的字段**两边仍能对话，且老 DLL 只读候选条数、不读这条内容（候选窗由 Server 自绘），
+/// 行为完全不变，所以不 +1。
+pub const PROTOCOL_VERSION: u32 = 15;
 
 /// 从哪个协议版本起 DLL 会在 `OpenSession` 后阻塞读一条 [`ServerMessage::SessionOpened`]。
 /// 门槛是固定值而不是当前版本：以后版本再升，没重启的应用里那些旧 DLL 仍在等这条回包，

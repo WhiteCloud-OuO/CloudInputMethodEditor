@@ -40,8 +40,8 @@
 失败（断网、验签不过、格式版本不认识）只记日志。结果落在数据目录的 `update.json`，装上新版后旧结果因为「不比当前新」自然失效。
 
 - Windows：Server 查并写 `update.json`（DLL 不联网）；设置里不再有检查更新的界面（「关于」页已删），「立即检查」与更新渠道一并去掉，开关也改配置文件的 `[update] check`。
-  任务栏「中 / 英」图标的右键菜单在查到新版本时多一项「有新版本，前往下载…」：Server 随 `ModeSync` 下发 `IndicatorState.update_available`，
-  点了发 `IndicatorCommand::OpenDownload`，由 Server 打开下载页（DLL 可能在 UWP 沙箱里起不了进程）。
+  查到新版本只落在 `update.json`，界面上不再提示：任务栏右键菜单已固定为「设置 / 重启输入法服务」，不再有更新入口。
+  协议里仍保留 `IndicatorState.update_available` 与 `IndicatorCommand::OpenDownload`（Server 照旧算、照旧能打开下载页），只是没有调用方了。
 
 ## 签名密钥
 

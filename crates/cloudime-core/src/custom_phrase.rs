@@ -1,15 +1,15 @@
-//! 用户短语（输入码 + 原样上屏的文本 + 固定的候选位置）；由 Core 匹配，平台负责存储与编辑。
+//! 用户短语（输入码 + 原样上屏的文本 + 可选的候选显示内容 + 固定的候选位置）；由 Core 匹配，平台负责存储与编辑。
 //!
-//! 输入码敲全时短语插到你指定的候选位置（`0` 第一位、`1` 第二位……），不再按权重排；同码多条位置相同的，
-//! 按保存顺序依次占位。
+//! 输入码敲全时短语插到你指定的候选位置（`1` 第一位、`2` 第二位……），不再按权重排；同码多条位置相同的，
+//! 按保存顺序依次占位。`title` 非空时候选里显示它，上屏仍是 `text`。
 
 use serde::{Deserialize, Serialize};
 
-/// 位置的缺省值：1 = 候选项的第二位。
-pub const DEFAULT_POSITION: u32 = 1;
+/// 位置的缺省值：2 = 候选项的第二位。
+pub const DEFAULT_POSITION: u32 = 2;
 
-/// 位置的下限：0 = 候选项的第一位。
-pub const MIN_POSITION: u32 = 0;
+/// 位置的下限：1 = 候选项的第一位。
+pub const MIN_POSITION: u32 = 1;
 
 /// 位置的上限；再靠后的位置没人翻，也不会出现。
 pub const MAX_POSITION: u32 = 9;
@@ -23,7 +23,11 @@ pub struct CustomPhrase {
     /// 原样上屏的文本，保留空格和换行。
     pub text: String,
 
-    /// 固定的候选位置：`0` 第一位、`1` 第二位……（[`MIN_POSITION`]–[`MAX_POSITION`]）。
+    /// 候选里显示的内容：为空时候选显示 [`Self::text`]，非空时显示它、上屏仍是 `text`。
+    #[serde(default)]
+    pub title: Option<String>,
+
+    /// 固定的候选位置：`1` 第一位、`2` 第二位……（[`MIN_POSITION`]–[`MAX_POSITION`]）。
     #[serde(default = "default_position")]
     pub position: u32,
 }
@@ -42,7 +46,7 @@ pub fn validate_phrases(phrases: &[CustomPhrase]) -> Result<(), String> {
         if phrase.text.is_empty() {
             return Err("自定义短语不能为空".into());
         }
-        if phrase.position > MAX_POSITION {
+        if !(MIN_POSITION..=MAX_POSITION).contains(&phrase.position) {
             return Err(format!("短语位置须为 {MIN_POSITION}–{MAX_POSITION}"));
         }
         if !seen.insert((&phrase.code, &phrase.text)) {
@@ -53,6 +57,18 @@ pub fn validate_phrases(phrases: &[CustomPhrase]) -> Result<(), String> {
         }
     }
     Ok(())
+}
+
+/// 把 `title` 去掉首尾空白，空串归一成 `None`；保存与加载共用。
+pub fn normalize_phrases(phrases: &mut [CustomPhrase]) {
+    for phrase in phrases {
+        phrase.title = phrase
+            .title
+            .as_deref()
+            .map(str::trim)
+            .filter(|title| !title.is_empty())
+            .map(str::to_owned);
+    }
 }
 
 /// 输入码能不能当自定义短语用：1–32 个小写英文字母。
@@ -78,6 +94,7 @@ pub fn merge_replacements<'a>(
         phrases.push(CustomPhrase {
             code: code.to_owned(),
             text: text.to_owned(),
+            title: None,
             position: DEFAULT_POSITION,
         });
     }
@@ -115,20 +132,22 @@ impl CustomPhrase {
 #[cfg(test)]
 mod tests {
     use super::{
-        CustomPhrase, DEFAULT_POSITION, MAX_POSITION, merge_replacements, validate_phrases,
+        CustomPhrase, DEFAULT_POSITION, MAX_POSITION, merge_replacements, normalize_phrases,
+        validate_phrases,
     };
 
     fn phrase(code: &str, text: &str, position: u32) -> CustomPhrase {
         CustomPhrase {
             code: code.into(),
             text: text.into(),
+            title: None,
             position,
         }
     }
 
     #[test]
     fn replacements_are_deduped_and_get_the_default_position() {
-        let base = vec![phrase("yx", "第一位", 0), phrase("ee", "：", 1)];
+        let base = vec![phrase("yx", "第一位", 1), phrase("ee", "：", 2)];
         let merged = merge_replacements(
             &base,
             [
@@ -156,13 +175,35 @@ mod tests {
     #[test]
     fn position_must_be_in_range() {
         assert!(validate_phrases(&[phrase("aa", "，", MAX_POSITION + 1)]).is_err());
-        assert!(validate_phrases(&[phrase("aa", "，", 0)]).is_ok());
+        assert!(validate_phrases(&[phrase("aa", "，", 0)]).is_err());
+        assert!(validate_phrases(&[phrase("aa", "，", DEFAULT_POSITION)]).is_ok());
         assert!(validate_phrases(&[phrase("aa", "，", MAX_POSITION)]).is_ok());
     }
 
     #[test]
     fn the_same_code_can_carry_several_texts() {
-        let phrases = vec![phrase("ee", "：", 0), phrase("ee", "；", 1)];
+        let phrases = vec![phrase("ee", "：", 1), phrase("ee", "；", 2)];
         assert!(validate_phrases(&phrases).is_ok());
+    }
+
+    #[test]
+    fn titles_are_trimmed_and_blank_ones_become_none() {
+        let mut phrases = vec![
+            CustomPhrase {
+                code: "aa".into(),
+                text: "正文".into(),
+                title: Some("  候选  ".into()),
+                position: 1,
+            },
+            CustomPhrase {
+                code: "bb".into(),
+                text: "正文".into(),
+                title: Some("   ".into()),
+                position: 2,
+            },
+        ];
+        normalize_phrases(&mut phrases);
+        assert_eq!(phrases[0].title.as_deref(), Some("候选"));
+        assert_eq!(phrases[1].title, None);
     }
 }

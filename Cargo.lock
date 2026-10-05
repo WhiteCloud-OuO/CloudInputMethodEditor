@@ -416,6 +416,7 @@ dependencies = [
  "cloudime-format",
  "cloudime-lm",
  "cloudime-neural",
+ "cloudime-platform",
  "jiff",
  "serde",
  "serde_json",

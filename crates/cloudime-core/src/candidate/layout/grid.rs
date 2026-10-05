@@ -35,7 +35,7 @@ impl Grid {
         let mut widths = vec![0.0_f32; columns];
         for (i, candidate) in layout.local().iter().enumerate() {
             let ems: f32 = candidate
-                .text
+                .display_text()
                 .chars()
                 .map(|c| if c.is_ascii() { NARROW_EMS } else { 1.0 })
                 .sum();
@@ -135,6 +135,7 @@ mod tests {
         let candidates = (0..count)
             .map(|i| Candidate {
                 text: format!("本{i}"),
+                display: None,
                 kind: CandidateKind::Chinese,
                 syllables: vec!["a".into()],
                 reading: None,
@@ -200,6 +201,7 @@ mod tests {
             .iter()
             .map(|text| Candidate {
                 text: (*text).into(),
+                display: None,
                 kind: CandidateKind::Chinese,
                 syllables: vec!["a".into()],
                 reading: None,

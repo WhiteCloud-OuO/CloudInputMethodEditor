@@ -329,6 +329,94 @@ fn raw_segment_takes_digits_and_keeps_the_space() {
     assert!(after.is_empty());
 }
 
+/// 选中前段只并进组句（不落文档），剩下拼音继续出候选；退格先撤回这次选择。
+#[test]
+fn selecting_a_prefix_merges_and_backspace_retracts_it() {
+    let mut router = router();
+    let (_, _, initial) = type_letters(&mut router, "xianzai");
+    let initial_preedit = preedit(&initial);
+    let position = initial
+        .candidates
+        .items
+        .iter()
+        .position(|c| c.text == "西安")
+        .expect("「西安」在候选页内");
+    let (outcome, commit, after) = press(&mut router, digit(position as u32 + 1));
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit, None, "选中只并进组句，不落文档");
+    assert_eq!(
+        preedit(&after),
+        "西安zai",
+        "组句变成「已选文本 + 剩余拼音」"
+    );
+    assert!(
+        after.candidates.items.iter().all(|c| c.text != "西安"),
+        "剩下的 zai 才出候选"
+    );
+
+    // 退格撤回选择：中文还原成拼音，组句回到没选之前
+    let (_, _, after) = press(&mut router, function_key(0x08));
+    assert_eq!(preedit(&after), initial_preedit);
+}
+
+/// 整段转换完时一次性落文档。
+#[test]
+fn selecting_every_part_commits_the_whole_text_at_once() {
+    let mut router = router();
+    let (_, _, frame) = type_letters(&mut router, "xianzai");
+    let position = frame
+        .candidates
+        .items
+        .iter()
+        .position(|c| c.text == "西安")
+        .unwrap();
+    let (_, commit, after) = press(&mut router, digit(position as u32 + 1));
+    assert_eq!(commit, None);
+    // 剩下的 zai 选 在：整段转换完，一次性上屏 西安在
+    let zai = after
+        .candidates
+        .items
+        .iter()
+        .position(|c| c.text == "在")
+        .expect("「在」在候选页内");
+    let (_, commit, after) = press(&mut router, digit(zai as u32 + 1));
+    assert_eq!(commit.as_deref(), Some("西安在"));
+    assert!(after.is_empty(), "整段上屏后收起候选");
+}
+
+/// 组句里敲标点：先选高亮候选、剩余拼音原样补完整体上屏，再落这个标点。
+#[test]
+fn punctuation_selects_then_flushes_the_whole_composition() {
+    // 剩下的 zhe 有候选 这：先选上它（整段转换完），再落标点
+    let mut completes = router();
+    let (_, _, frame) = type_letters(&mut completes, "kaifazhe");
+    let position = frame
+        .candidates
+        .items
+        .iter()
+        .position(|c| c.text == "开发")
+        .unwrap();
+    press(&mut completes, digit(position as u32 + 1));
+    let (outcome, commit, after) = press(&mut completes, punct(','));
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit.as_deref(), Some("开发这，"));
+    assert!(after.is_empty(), "标点把整段组句一起落下去");
+
+    // 高亮候选只吃掉一部分（zhe 吃掉、q 留下）：剩下的拼音原样补完一起上屏
+    let mut partial = router();
+    let (_, _, frame) = type_letters(&mut partial, "kaifazheq");
+    let position = frame
+        .candidates
+        .items
+        .iter()
+        .position(|c| c.text == "开发")
+        .unwrap();
+    press(&mut partial, digit(position as u32 + 1));
+    let (_, commit, after) = press(&mut partial, punct(','));
+    assert_eq!(commit.as_deref(), Some("开发这q，"));
+    assert!(after.is_empty());
+}
+
 #[test]
 fn digit_without_a_slot_joins_the_buffer() {
     // 这一页没有第 9 格：数字是内容（`gpt9`），不再被静默吞掉；成了直输段之后空格整段上屏。

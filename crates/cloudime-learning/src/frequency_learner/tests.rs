@@ -3,6 +3,7 @@ use super::*;
 fn candidate(text: &str) -> Candidate {
     Candidate {
         text: text.to_owned(),
+        display: None,
         kind: cloudime_core::CandidateKind::Chinese,
         syllables: Vec::new(),
         reading: None,
@@ -69,6 +70,7 @@ fn unrecord_reverses_each_kind_of_record() {
     let mut learner = FrequencyLearner::default();
     let candidate = Candidate {
         text: "开放".into(),
+        display: None,
         kind: cloudime_core::CandidateKind::Chinese,
         syllables: vec!["kai".into(), "fang".into()],
         reading: None,

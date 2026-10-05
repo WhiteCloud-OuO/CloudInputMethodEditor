@@ -32,7 +32,7 @@ pub use input::{
 };
 pub use layout_mode::LayoutMode;
 pub use log_level::LogLevel;
-pub use phrase::{DEFAULT_PHRASE_FILE, PhraseConfig};
+pub use phrase::PhraseConfig;
 pub use preedit_mode::PreeditMode;
 pub use status_bar::StatusBarConfig;
 pub use switch_key::{SwitchKey, SwitchKeys};
@@ -54,7 +54,7 @@ pub struct Config {
     /// 常规：拼音显示位置、Shift+字母、日志与学习开关（其余节还没搬完的暂放这里）。
     pub general: GeneralConfig,
 
-    /// 用户短语库（`Phrase.db`）的位置。
+    /// 自定义短语：软件自带短语是否参与（短语库固定在安装目录 `Phrases\Phrase.db`）。
     pub phrase: PhraseConfig,
 
     /// 词库：生僻项（稀有组）是否参与查询、用户自造词库的位置；第三方词库目录固定随包根的 `WordBank\`。
@@ -141,9 +141,10 @@ input_log = true
 learning = true
 
 [phrase]
-# 用户短语单独存在数据目录（%APPDATA%\CloudIME）下的 SQLite 文件里，这里只记它的位置（相对数据目录，也可写绝对路径）；
-# 输入码敲全时短语出现在你指定的候选位置（0 第一位、1 第二位……），同一位置的多条按保存顺序排。「设置 → 短语」页可以添加、编辑、删除
-file = "Phrase.db"
+# 短语库固定在安装目录的 Phrases\Phrase.db（不能改位置）；「设置 → 短语」页可以添加、编辑、删除。
+# 输入码敲全时短语出现在你指定的候选位置（1 第一位、2 第二位……），同一位置的多条按保存顺序排。
+# 启用软件自带短语：随安装包带的一份常用短语参与出候选；关掉只用自己的短语（自带的始终在库里，不占你的列表）
+use_default_phrases = true
 
 [word_bank]
 # 从词库中查询生僻项条目：开启后候选与整句才会从词库的生僻字 / 生僻词（方言字、罕见词等）里取词；

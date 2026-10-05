@@ -91,6 +91,7 @@ mod tests {
     fn candidate(text: &str, kind: CandidateKind) -> Candidate {
         Candidate {
             text: text.to_owned(),
+            display: None,
             kind,
             syllables: Vec::new(),
             reading: None,

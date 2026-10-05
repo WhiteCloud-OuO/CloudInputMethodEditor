@@ -17,7 +17,12 @@ pub enum IndicatorCommand {
     OpenSettings,
 
     /// 查到新版本时菜单里的「有新版本」：打开下载页，同样交给 Server。
+    /// 界面上已不再有入口（任务栏右键菜单固定四项），协议与 Server 处理保留。
     OpenDownload,
+
+    /// 重启输入法服务：Server 起一个新的 `cloudime-server.exe`（带 `--wait-pid` 等本进程退出再占管道），
+    /// 本进程回完这条消息后干净退出。
+    RestartServer,
 }
 
 /// 右键菜单打勾用的开关状态。DLL 不读配置文件（UWP 沙箱里读不到），由 Server 随

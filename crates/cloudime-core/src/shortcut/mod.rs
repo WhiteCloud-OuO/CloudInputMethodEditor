@@ -44,6 +44,7 @@ pub fn candidates(input: &str, now: &Zoned) -> Vec<Candidate> {
         .into_iter()
         .map(|text| Candidate {
             text,
+            display: None,
             kind: CandidateKind::Shortcut,
             syllables: Vec::new(),
             reading: None,

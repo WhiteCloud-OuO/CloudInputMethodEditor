@@ -57,7 +57,7 @@ cloudime/
 
 ```text
 cloudime-core
-├── composition     # 输入状态机：拼音缓冲、光标、上屏
+├── composition     # 输入状态机：未选拼音缓冲、已选文本段、光标；选中只并进组句，整段转换完才整体上屏
 ├── parser          # 拼音切分（全拼 / 简拼 / 模糊音）
 ├── candidate       # 候选数据模型（Candidate / CandidateKind）；layout 是分页排布，壳与设置程序共用
 ├── ranking         # 候选排序
@@ -92,8 +92,12 @@ cloudime-core
 `thiserror` 的 `#[error]` 文案用英文，日志与 UI 文案用中文。
 
 `Engine` 的会话 API：`set_input / push / backspace` 喂拼音，`query()` 返回不带译文的
-`Query { segmentations, candidates, timings }`，`annotate(&mut CandidateList)` 补译文，
-`commit(&Candidate)` 上屏并喂给 Learner（词频、词转移、自动造词）。`Learner::flush()` 由壳在退出 / 停用时调用，
+`Query { segmentations, candidates, timings }`，`annotate(&mut CandidateList)` 补译文。
+`commit(&Candidate) -> Option<String>` **选中**一个候选并立刻喂给 Learner（词频、词转移、自动造词，时机与以前一致）：
+候选只吃掉一部分拼音时返回 `None`，这一选择并进组句的已选段（`Composition::selected`），组句显示成
+「已选文本 + 未选拼音」，候选只对剩余拼音出，退格先撤回最后一次选择；整段转换完（未选拼音为空）时返回
+`Some(已选文本 + 本次)`，壳才一次性把整段交给应用。回车 / 组句中的标点走 `take_raw`（已选文本 + 剩余拼音原样）。
+`Learner::flush()` 由壳在退出 / 停用时调用，
 失败只记日志不返回错误；壳停用时还调 `break_chain()`，之后上屏的词按句首记；
 `Engine::flush_learning()` 把学习数据与输入日志一起落盘且不作废格子缓存，壳激活期间也定时调它。
 
@@ -158,7 +162,7 @@ Engine 查词的词库是一个列表，**按优先级从高到低**：用户词
 移除 = 文件挪到 `WordBank\removed\`，
 之后 Server 的热加载（`dispatch/reload`）按目录快照重新装配。设置 → 词库页只列导入的第三方词库，内置的 `Dict.db`（随包）与
 `UserWordBank.db`（用户自造词库，缺省也在 `WordBank\`，位置由 `[word_bank] user_file` 决定）没有开关、始终加载、不出现在列表里。这也是第三方词库带着自己许可证单独分发的落点：
-词库元数据里有名称与许可证，设置 → 词库页里直接显示。用户短语另存数据目录的 SQLite（`Phrase.db`，见「用户短语」）。
+词库元数据里有名称与许可证，设置 → 词库页里直接显示。用户短语另存安装目录的 SQLite（`Phrases\Phrase.db`，`user` / `cloudime_default` 两张表，见 `crates/cloudime-platform/src/phrase.rs`）。
 
 ### 数据文件：`.qj` 容器
 
@@ -232,6 +236,8 @@ bigram 语言模型 + Viterbi，加上简拼、模糊音。没有整句输入，
   另外一段拼音分几次选完（`CommitChain` 记着这段里上屏的每个词）时，合起来的文本按「整段字母 → 合成词」记一次选择（`user-choices.tsv`），
   记到两次且词库里没有、不超过 4 个字就造成用户词，下次整段打出来它靠权重直接排前：这是「用户手动拼了一遍整句」最直接的信号，
   比等个人 n-gram 一份一份累到翻过静态模型快得多（「挤掉了」靠 n-gram 要选四次）。
+  注意这只是**记学习**的时机没变：用户选中间某个词时不再立刻把它落进文档，而是并进组句的已选段（`云朵shurufa`），
+  等整段转换完、或按回车 / 敲标点时，才把「已选文本 + 剩余部分」一次性交给应用（见上文 `commit`）。
   词级排序只有一条规则：按权重降序，权重相同按文本升序。一个词的权重是
   `词频 × 用户权重因子 × (1+同输入串选择次数) × 上下文系数 × 纠错折扣 × 联想折扣`：上下文系数是
   `clamp(exp(log P(词 | 上一个上屏词) − 词频兜底), e^-4, e^4)`（个人 n-gram 插值，模型不认识时系数 1），
@@ -246,6 +252,8 @@ bigram 语言模型 + Viterbi，加上简拼、模糊音。没有整句输入，
   （`Learner::record_typo`，`user-typos.tsv`），敲错对只记录、不再参与打分。候选音节对回敲的字母（消耗、记敲错）用 `Engine::align`，模糊音命中也走它。
   退格撤销（`LastCommit`，Engine 留最近 4 次上屏 `recent_commits`）：上屏后壳把组句外的退格告诉 Engine（`note_backspace`），退格从最近一次往前数，
   一次上屏的字删光了就候着；接着重打其中一段拼音（或其前缀）选了别的词，就把那次记的选择次数、输入串选择、词转移、整段合成词的选择全部退回（`Learner::unrecord*`）。
+  组句里退格同理：有已选文本、光标又在未选拼音末尾时，`Engine::backspace` 先撤回最后一次选择（把中文还原成它的拼音，`Composition::unselect_last`），
+  并把那条上屏记录标成「已被删掉」；紧接着改选别的词由同一条 `apply_retraction` 退回它的学习，光标停在未选拼音中间时照旧删一个字符。
   删掉「沃德 书」两个词重打成「我的 书」也认得出（日志里这种错法一天十几次，以前只看最后一次上屏，一次都没撤回，错词越选越靠前）；
   重打后选的还是同一个词只把记录丢掉；重打的拼音谁都对不上就当在改别处，全忘掉；删得比记着的几次加起来还多也全忘掉。
   标点、英文词、原样上屏这些没学习的上屏也留一条只有长度的记录，退格数过它们才能数到更早的词。
@@ -278,7 +286,7 @@ bigram 语言模型 + Viterbi，加上简拼、模糊音。没有整句输入，
   切换键写死为单击 `shift`（Server 恒发 `SwitchKeys::default()`，设置里不再提供勾选项；协议仍带 `SwitchKeys`
   这一项，类型只为协议而留，缺省值就是 shift）、内置英文模式也不再可关（`[general] english_mode` 曾是它的开关，
   issue #81，现恒为开）。**模式全局一份、存在 Server**（`Router.english`，与搜狗一致）：
-  DLL 里用户切了（切换键、语言栏按钮、右键菜单、任务栏转换模式）用 `ModeChanged` 报上去；激活、线程得到焦点（`com/focus.rs` 的
+  DLL 里用户切了（切换键、语言栏按钮、任务栏转换模式）用 `ModeChanged` 报上去；激活、线程得到焦点（`com/focus.rs` 的
   `ITfThreadFocusSink`，切窗口时 `ITfKeyEventSink::OnSetFocus` 不触发）和每隔几拍的轮询用 `SyncMode` 取回并跟上
   （`service/mode.rs::adopt_mode`，不回报）；悬浮状态条上点「中 / 英」直接改 Server 那份。有 DLL 来取模式也就说明云朵输入法是当前输入法，
   状态条据此显示，`ImeSwitched` 收起。之前模式各应用各记一份、Server 只采纳「前台会话」的上报，后台线程激活、新应用继承都会让

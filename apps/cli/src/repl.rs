@@ -63,9 +63,10 @@ fn forget(engine: &mut Engine, last: Option<&Query>, index: usize) {
 /// 把上一次查询的第 `index` 个（从 1 数）候选上屏。
 fn commit(engine: &mut Engine, last: Option<Query>, index: usize) {
     match last.and_then(|q| q.candidates.items.into_iter().nth(index.wrapping_sub(1))) {
-        Some(candidate) => {
-            println!("上屏: {}", engine.commit(&candidate));
-        }
+        Some(candidate) => match engine.commit(&candidate) {
+            Some(text) => println!("上屏: {text}"),
+            None => println!("已并进组句，继续选"),
+        },
         None => println!("没有第 {index} 个候选"),
     }
 }

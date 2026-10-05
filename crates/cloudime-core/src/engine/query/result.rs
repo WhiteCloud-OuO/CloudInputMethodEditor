@@ -73,6 +73,10 @@ pub struct Query {
 
     /// Shift 敲的大写字母的显示字串（`Cpan`）：匹配按小写算，显示仍按敲的样子。有此值时 preedit 优先显示它。
     pub typed_display: Option<String>,
+
+    /// 组句里已选定的文本（`云朵`），显示在未选拼音之前，也是 `Typed` 段。
+    /// 拆成单独字段而非 `text` 的一部分：`text` 仍是未选拼音，候选与光标只对它算。
+    pub selected: String,
 }
 
 impl Query {
@@ -97,21 +101,27 @@ impl Query {
             .collect()
     }
 
-    /// [`Self::marked_text`] 的分段形式：敲的拼音一段（`Typed`），光标后剩下的拼音连同前面的 `'` 一段（`Rest`）。
-    /// 壳按段画样式；[`Self::segments_cursor`] 的位置按各段拼接后的字符数算。
+    /// [`Self::marked_text`] 的分段形式：已选文本一段（`Typed`，排在前面），敲的拼音一段（`Typed`），
+    /// 光标后剩下的拼音连同前面的 `'` 一段（`Rest`）。壳按段画样式；[`Self::segments_cursor`] 的位置按各段拼接后的字符数算。
+    ///
+    /// 已选文本刻意也用 `Typed`：DLL 把非 `Corrected` 段拼起来当组句文本，这样应用里自然显示
+    /// 「云朵shurufa」。以后想给已选文本单独样式再加 `MarkedKind` 变体并升 `PROTOCOL_VERSION`。
     pub fn marked_segments(&self) -> Vec<MarkedSegment> {
-        let mut segments = match &self.correction {
-            Some(correction) => correction.marked_segments(),
-            None => Vec::with_capacity(2),
-        };
-        if self.correction.is_none() {
-            let typed = if let Some(display) = &self.typed_display {
-                display.clone()
-            } else {
-                join_marked(&self.segmentations, &self.tail)
-            };
-            if !typed.is_empty() {
-                segments.push(MarkedSegment::new(typed, MarkedKind::Typed));
+        let mut segments = Vec::with_capacity(3);
+        if !self.selected.is_empty() {
+            segments.push(MarkedSegment::new(self.selected.clone(), MarkedKind::Typed));
+        }
+        match &self.correction {
+            Some(correction) => segments.extend(correction.marked_segments()),
+            None => {
+                let typed = if let Some(display) = &self.typed_display {
+                    display.clone()
+                } else {
+                    join_marked(&self.segmentations, &self.tail)
+                };
+                if !typed.is_empty() {
+                    segments.push(MarkedSegment::new(typed, MarkedKind::Typed));
+                }
             }
         }
         if !self.rest.is_empty() {
@@ -127,6 +137,7 @@ impl Query {
 
     /// 光标在 [`Self::marked_segments`] 拼接文本里的字符下标（候选窗口顶部拼音行使用）。
     pub fn segments_cursor(&self) -> usize {
+        let selected = self.selected.chars().count();
         // 纠错生效时显示串与敲的不一样长，作用域又总在光标前：光标就在敲的部分末尾
         // （光标在开头时作用域是整段，光标仍在开头）
         if self.correction.is_some() {
@@ -142,9 +153,12 @@ impl Query {
             .filter(|c| *c != '\'')
             .count();
         let after_apostrophe = self.text[..self.cursor.min(self.text.len())].ends_with('\'');
-        let segments_text: String = self
-            .marked_segments()
+        // 只在未选拼音那几段里数光标，跳过排在最前面的已选文本。
+        let segments = self.marked_segments();
+        let skip = usize::from(!self.selected.is_empty());
+        let segments_text: String = segments
             .iter()
+            .skip(skip)
             .map(|s| s.text.as_str())
             .collect();
         let chars: Vec<char> = segments_text.chars().collect();
@@ -159,7 +173,7 @@ impl Query {
         if after_apostrophe && chars.get(position) == Some(&'\'') {
             position += 1;
         }
-        position
+        selected + position
     }
 
     /// 光标在 [`Self::marked_text`] 里的字符下标（给平台层传给宿主应用输入框用的，所以按字符算，不是字节）。

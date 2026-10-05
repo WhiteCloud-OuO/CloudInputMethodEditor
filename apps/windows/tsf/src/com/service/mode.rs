@@ -153,7 +153,7 @@ impl TextService_Impl {
         }
     }
 
-    /// 向 Server 取一次全局模式跟上，顺路取回按键行为设置与菜单状态；没连着就什么都不做。
+    /// 向 Server 取一次全局模式跟上，顺路取回按键行为设置；没连着就什么都不做。
     pub(super) fn sync_mode_from_server(&self) {
         let reply = self
             .engine
@@ -163,7 +163,6 @@ impl TextService_Impl {
         match reply {
             Some(Ok(reply)) => {
                 self.apply_input_settings(reply.input);
-                self.indicator_state.set(reply.indicator);
                 if let Some(mode) = reply.mode {
                     self.adopt_mode(mode);
                 }

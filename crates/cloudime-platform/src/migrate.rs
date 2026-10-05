@@ -14,7 +14,9 @@
 //! - `[status_bar] enabled` → 删（状态条常开）
 //! - `[general] page_keys`、`[shortcut]`（`expression` / `question` / `question_mark` / `delete_candidate`）→ 删
 //!   （翻页键与表达式键已固定，问字与删候选整体下线）
-//! - `[[custom_phrases]]` → 短语库（`Phrase.db`），`position`（1–9）换成 0–8 的候选位置，停用的丢掉
+//! - `[[custom_phrases]]` → 短语库的 `user` 表（安装目录 `Phrases\Phrase.db`），`position`（1–9）直接夹到 1–9，停用的丢掉
+//! - 老数据目录（`%APPDATA%\CloudIME`）的 `Phrase.db`（单表 `phrases`）→ 新短语库的 `user` 表（位置换算成 1 基），
+//!   搬完把老文件改名成 `Phrase.db.migrated`；只在新的 `user` 表为空时才搬
 //! - `[dictionaries] domains / disabled` → 删（词库目录里有的都加载，不再要启用清单）
 
 use std::path::Path;
@@ -24,10 +26,8 @@ use cloudime_core::custom_phrase;
 use toml_edit::{DocumentMut, Item};
 
 use crate::config::write_with_template;
-use crate::{
-    Config, LayoutMode, MAX_CANDIDATE_COUNT, MIN_CANDIDATE_COUNT, PhraseStore, PreeditMode,
-    SimpTrad,
-};
+use crate::phrase::{self, PhraseStore};
+use crate::{Config, LayoutMode, MAX_CANDIDATE_COUNT, MIN_CANDIDATE_COUNT, PreeditMode, SimpTrad};
 
 /// 旧版数据迁移的结果。
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -37,55 +37,68 @@ pub struct Migration {
 
     /// 从 `[[custom_phrases]]` 搬进短语库的条数。
     pub phrases: usize,
+
+    /// 从老数据目录的 `Phrase.db` 搬进新短语库的条数。
+    pub legacy_phrases: usize,
 }
 
 impl Migration {
     /// 什么都没做。
     pub fn is_empty(&self) -> bool {
-        !self.config && self.phrases == 0
+        !self.config && self.phrases == 0 && self.legacy_phrases == 0
     }
 }
 
 /// 把旧版配置与数据迁到当前格式；幂等，没有旧内容时什么都不做。
 ///
-/// `config_path` 是 `config.toml`（数据目录由它的父目录推出来）。
+/// `config_path` 是 `config.toml`（数据目录由它的父目录推出来）。安装根用 [`crate::resources::bundled_root`]
+/// 定位短语库；拿不到就跳过新位置的短语迁移。
 pub fn migrate(config_path: &Path) -> Migration {
-    let Ok(source) = std::fs::read_to_string(config_path) else {
-        return Migration::default();
-    };
-    let Ok(document) = source.parse::<DocumentMut>() else {
-        tracing::warn!(path = %config_path.display(), "配置语法不对，跳过迁移");
-        return Migration::default();
-    };
-    if !has_legacy_keys(&document) {
-        return Migration::default();
-    }
+    migrate_inner(config_path, crate::resources::bundled_root().as_deref())
+}
+
+/// [`migrate`] 的可测形式：安装根由调用方给，测试不会写到真实安装目录。
+pub(crate) fn migrate_inner(config_path: &Path, bundled_root: Option<&Path>) -> Migration {
     let data_dir = config_path
         .parent()
         .unwrap_or_else(|| Path::new("."))
         .to_path_buf();
-    let legacy = Legacy::read(&document);
-
-    let backup = config_path.with_extension("toml.bak");
-    if let Err(error) = std::fs::copy(config_path, &backup) {
-        tracing::warn!(%error, path = %backup.display(), "备份旧配置失败，继续迁移");
-    }
-
-    let mut config = Config::load(config_path).unwrap_or_default();
-    legacy.apply(&mut config);
     let mut migration = Migration::default();
-    match write_with_template(config_path, &config) {
-        Ok(()) => {
-            migration.config = true;
-            tracing::info!(path = %config_path.display(), "配置已按新格式重写");
-        }
+    let mut config_phrases = Vec::new();
+
+    match std::fs::read_to_string(config_path) {
+        Ok(source) => match source.parse::<DocumentMut>() {
+            Ok(document) if has_legacy_keys(&document) => {
+                let backup = config_path.with_extension("toml.bak");
+                if let Err(error) = std::fs::copy(config_path, &backup) {
+                    tracing::warn!(%error, path = %backup.display(), "备份旧配置失败，继续迁移");
+                }
+                let legacy = Legacy::read(&document);
+                config_phrases = legacy.phrases.clone();
+                let mut config = Config::load(config_path).unwrap_or_default();
+                legacy.apply(&mut config);
+                match write_with_template(config_path, &config) {
+                    Ok(()) => {
+                        migration.config = true;
+                        tracing::info!(path = %config_path.display(), "配置已按新格式重写");
+                    }
+                    Err(error) => tracing::error!(%error, "重写配置失败，旧配置保持原样"),
+                }
+            }
+            Ok(_) => {}
+            Err(error) => {
+                tracing::warn!(%error, path = %config_path.display(), "配置语法不对，跳过配置迁移")
+            }
+        },
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {}
         Err(error) => {
-            tracing::error!(%error, "重写配置失败，旧配置保持原样");
-            return migration;
+            tracing::warn!(%error, path = %config_path.display(), "读配置失败，跳过配置迁移")
         }
     }
 
-    migration.phrases = migrate_phrases(&data_dir, &config, &legacy.phrases);
+    let (phrases, legacy_phrases) = migrate_phrases(bundled_root, &data_dir, &config_phrases);
+    migration.phrases = phrases;
+    migration.legacy_phrases = legacy_phrases;
     migration
 }
 
@@ -157,7 +170,7 @@ fn fuzzy_mask(document: &DocumentMut) -> u32 {
     mask
 }
 
-/// 旧 `[[custom_phrases]]`：`position`（1–9，越靠前）换成 0–8 的候选位置（0 = 第一位），停用的丢掉。
+/// 旧 `[[custom_phrases]]`：`position`（1–9，越靠前）直接夹到 1–9，停用的丢掉。
 fn old_phrases(document: &DocumentMut) -> Vec<CustomPhrase> {
     let mut phrases = Vec::new();
     let Some(tables) = document
@@ -179,11 +192,15 @@ fn old_phrases(document: &DocumentMut) -> Vec<CustomPhrase> {
         let position = table
             .get("position")
             .and_then(Item::as_integer)
-            .unwrap_or(1);
-        let position = (position - 1).clamp(0, i64::from(custom_phrase::MAX_POSITION)) as u32;
+            .unwrap_or(i64::from(custom_phrase::DEFAULT_POSITION))
+            .clamp(
+                i64::from(custom_phrase::MIN_POSITION),
+                i64::from(custom_phrase::MAX_POSITION),
+            ) as u32;
         phrases.push(CustomPhrase {
             code: code.to_owned(),
             text: text.to_owned(),
+            title: None,
             position,
         });
     }
@@ -269,15 +286,25 @@ fn parse_preedit(value: &str) -> Option<PreeditMode> {
         .find(|mode| mode.key() == value.trim())
 }
 
-/// 把旧短语并进短语库（已有的同码同文本不重复加）。
-fn migrate_phrases(data_dir: &Path, config: &Config, migrated: &[CustomPhrase]) -> usize {
-    if migrated.is_empty() {
-        return 0;
-    }
-    let store = PhraseStore::locate(data_dir, &config.phrase);
-    let mut phrases = store.load().unwrap_or_default();
-    let mut added = 0;
-    for phrase in migrated {
+/// 把配置里搬出的短语与老数据目录的 `Phrase.db` 并进短语库的 `user` 表。
+/// 返回 `(配置里的条数, 老库的条数)`；老库只在新的 `user` 表为空时读，读完改名成 `Phrase.db.migrated`。
+fn migrate_phrases(
+    bundled_root: Option<&Path>,
+    data_dir: &Path,
+    from_config: &[CustomPhrase],
+) -> (usize, usize) {
+    let Some(root) = bundled_root else {
+        if !from_config.is_empty() {
+            tracing::warn!("拿不到安装目录，配置里的旧短语没搬进短语库");
+        }
+        return (0, 0);
+    };
+    let store = PhraseStore::locate(root);
+    let mut phrases = store.load(false).unwrap_or_default();
+    let user_was_empty = phrases.is_empty();
+
+    let mut added_config = 0;
+    for phrase in from_config {
         if phrases
             .iter()
             .any(|existing| existing.code == phrase.code && existing.text == phrase.text)
@@ -285,19 +312,55 @@ fn migrate_phrases(data_dir: &Path, config: &Config, migrated: &[CustomPhrase]) 
             continue;
         }
         phrases.push(phrase.clone());
-        added += 1;
+        added_config += 1;
     }
-    if added == 0 {
-        return 0;
+
+    // 老数据目录的 Phrase.db：新 user 表为空时才搬，避免顶掉用户已经在新位置维护的短语。
+    let legacy_path = data_dir.join(phrase::PHRASE_FILE);
+    let mut read_legacy = false;
+    let mut added_legacy = 0;
+    if user_was_empty && legacy_path.is_file() && phrase::is_database(&legacy_path) {
+        match phrase::read_legacy(&legacy_path) {
+            Ok(old) => {
+                read_legacy = true;
+                for phrase in old {
+                    if phrases.iter().any(|existing| {
+                        existing.code == phrase.code && existing.text == phrase.text
+                    }) {
+                        continue;
+                    }
+                    phrases.push(phrase);
+                    added_legacy += 1;
+                }
+            }
+            Err(error) => {
+                tracing::warn!(%error, path = %legacy_path.display(), "旧短语库读不出来，跳过");
+            }
+        }
     }
-    match store.save(&phrases) {
+
+    if added_config == 0 && added_legacy == 0 {
+        return (0, 0);
+    }
+    match store.save_user(&phrases) {
         Ok(()) => {
-            tracing::info!(count = added, path = %store.path.display(), "旧短语已搬进短语库");
-            added
+            if read_legacy {
+                let migrated = legacy_path.with_extension("db.migrated");
+                if let Err(error) = std::fs::rename(&legacy_path, &migrated) {
+                    tracing::warn!(%error, "旧短语库改名失败，下次启动可能重复搬");
+                }
+            }
+            tracing::info!(
+                config = added_config,
+                legacy = added_legacy,
+                path = %store.path.display(),
+                "旧短语已搬进短语库"
+            );
+            (added_config, added_legacy)
         }
         Err(error) => {
             tracing::warn!(%error, "写短语库失败，旧短语没搬过去");
-            0
+            (0, 0)
         }
     }
 }
@@ -360,9 +423,10 @@ enabled = false
         let path = dir.join("config.toml");
         std::fs::write(&path, OLD_CONFIG).unwrap();
 
-        let migration = migrate(&path);
+        let migration = migrate_inner(&path, Some(&dir));
         assert!(migration.config);
         assert_eq!(migration.phrases, 1);
+        assert_eq!(migration.legacy_phrases, 0);
 
         let config = Config::load(&path).unwrap();
         // page_size = 3 夹到下限 5
@@ -389,16 +453,58 @@ enabled = false
         assert!(!rewritten.contains("page_keys"), "{rewritten}");
         assert!(!rewritten.contains("[shortcut]"), "{rewritten}");
 
-        let store = PhraseStore::locate(&dir, &config.phrase);
-        let phrases = store.load().unwrap();
+        let store = PhraseStore::locate(&dir);
+        let phrases = store.load(false).unwrap();
         assert_eq!(phrases.len(), 1);
         assert_eq!(phrases[0].code, "ww");
         assert_eq!(phrases[0].text, "；");
-        assert_eq!(phrases[0].position, 0);
+        assert_eq!(phrases[0].position, 1);
 
         // 旧配置留了备份，再跑一次没有旧键了
         assert!(dir.join("config.toml.bak").is_file());
-        assert!(migrate(&path).is_empty());
+        assert!(migrate_inner(&path, Some(&dir)).is_empty());
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn moves_the_legacy_phrase_database_once() {
+        let dir = scratch("legacy-db");
+        let path = dir.join("config.toml");
+        // 没有旧键的配置：只做短语库迁移
+        std::fs::write(&path, "[general]\nlearning = true\n").unwrap();
+
+        let legacy = dir.join("Phrase.db");
+        let connection = rusqlite::Connection::open(&legacy).unwrap();
+        connection
+            .execute_batch(
+                "CREATE TABLE phrases (id INTEGER PRIMARY KEY, code TEXT NOT NULL, text TEXT NOT NULL, position INTEGER NOT NULL);
+                 INSERT INTO phrases (code, text, position) VALUES ('aa', '甲', 0), ('bb', '乙', 3);",
+            )
+            .unwrap();
+        drop(connection);
+
+        let migration = migrate_inner(&path, Some(&dir));
+        assert!(!migration.config);
+        assert_eq!(migration.phrases, 0);
+        assert_eq!(migration.legacy_phrases, 2);
+
+        let store = PhraseStore::locate(&dir);
+        let phrases = store.load(false).unwrap();
+        assert_eq!(phrases.len(), 2);
+        assert_eq!(
+            phrases[0],
+            CustomPhrase {
+                code: "aa".into(),
+                text: "甲".into(),
+                title: None,
+                position: 1,
+            }
+        );
+        assert_eq!(phrases[1].position, 4);
+        // 老库改名，第二次不会再搬
+        assert!(!legacy.exists());
+        assert!(dir.join("Phrase.db.migrated").is_file());
+        assert!(migrate_inner(&path, Some(&dir)).is_empty());
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

@@ -22,17 +22,24 @@ pub use last::LastCommit;
 pub use transition::Transition;
 
 impl Engine {
-    /// 上屏：记入学习，从缓冲区消耗掉该候选对应的拼音，返回要提交给应用的文本。
+    /// 选中一个候选：记入学习，从缓冲区消耗掉它对应的拼音，并把这一选择并进组句。
     ///
-    /// 候选比输入短时（`kaifazhe` 选了 开发），剩余拼音留在缓冲区，壳应接着 [`Self::query`]。
-    /// 候选的最后一个音节比输入长时（`kaif` 选了 开发），把输入吃完。
-    pub fn commit(&mut self, candidate: &Candidate) -> String {
+    /// 返回 `None` 表示还留在组句里（这次选的文本并进已选段，后面还有未选拼音，壳应接着 [`Self::query`]）；
+    /// 返回 `Some(text)` 表示整段转换完了，`text` 是「已选文本 + 本次」拼起来的整体上屏文本，组句已清空。
+    ///
+    /// 候选比输入短时（`kaifazhe` 选了 开发），剩余拼音留在缓冲区；候选的最后一个音节比输入长时
+    /// （`kaif` 选了 开发），把输入吃完。选中不立刻落进文档，等整段转换完或回车 / 标点时再一次性交给应用。
+    pub fn commit(&mut self, candidate: &Candidate) -> Option<String> {
         self.commit_with(candidate, InputSource::from(candidate.kind))
     }
 
     /// [`Self::commit`] 的内部形式：`source` 写进输入日志（来源不同时的记录字段），
     /// 便于测试或壳在特殊来源下直接调用。
-    pub(super) fn commit_with(&mut self, candidate: &Candidate, source: InputSource) -> String {
+    pub(super) fn commit_with(
+        &mut self,
+        candidate: &Candidate,
+        source: InputSource,
+    ) -> Option<String> {
         let traditional_text = candidate.text.clone();
         let mut candidate_owned = candidate.clone();
         if self.traditional
@@ -90,8 +97,9 @@ impl Engine {
         if !self.private && matches!(candidate.kind, CandidateKind::Chinese) {
             self.vocabulary.record_commit(&candidate.text);
         }
-        self.composition.drain_prefix(consumed);
-        let buffer_left = !self.composition.is_empty();
+        // 选中：拼音移出缓冲区、并进已选段；`buffer_left` 看的是还没转换的未选拼音。
+        self.composition.select_prefix(&traditional_text, consumed);
+        let buffer_left = !self.composition.text().is_empty();
         match candidate.kind {
             CandidateKind::Chinese => {
                 self.record_word(
@@ -165,7 +173,15 @@ impl Engine {
             plain
         };
         self.remember_commit(commit);
-        traditional_text
+        if buffer_left {
+            // 还有未选拼音：这次选择只是并进组句，等后面选完或回车 / 标点再整体交给应用。
+            None
+        } else {
+            // 整段转换完：已选文本（这次选择的文本已并进去）+ 本次一起交给应用，组句清空。
+            let selected = self.composition.selected_text();
+            self.composition.clear();
+            Some(selected)
+        }
     }
 
     /// 一段拼音分几次选完了（`jidiaole` 先选 挤、剩下的走整句 掉了）：这几个词合起来就是用户对这段拼音的答案。
@@ -186,6 +202,7 @@ impl Engine {
         self.learner.record_choice(&key, &text);
         let candidate = Candidate {
             text,
+            display: None,
             kind: CandidateKind::Chinese,
             syllables,
             reading: None,
@@ -520,6 +537,7 @@ impl Engine {
         }
         let candidate = Candidate {
             text: joined,
+            display: None,
             kind: CandidateKind::Chinese,
             syllables: joined_syllables,
             reading: None,

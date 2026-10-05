@@ -19,7 +19,7 @@ pub(crate) fn from_candidate(
     }
     Row {
         index: style.format(position + 1),
-        text: candidate.text.clone(),
+        text: candidate.display_text().to_owned(),
         annotation,
         badge: badge.map(String::from),
     }

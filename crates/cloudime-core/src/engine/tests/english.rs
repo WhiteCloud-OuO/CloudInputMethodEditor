@@ -27,7 +27,7 @@ fn english_word_ranks_first_when_input_is_unlikely_pinyin() {
     assert_eq!(query.candidates.items[0].text, "github");
     assert_eq!(query.candidates.items[0].kind, CandidateKind::English);
     let word = query.candidates.items[0].clone();
-    assert_eq!(engine.commit(&word), "github");
+    assert_eq!(engine.commit(&word).as_deref(), Some("github"));
     assert!(engine.composition().is_empty());
 
     // china 是干净的 chi na，中文候选（词库里没有就只有英文）排前；这里词库没有 chi na，英文仍在第一位
@@ -195,7 +195,7 @@ fn hyphen_turns_the_buffer_into_a_raw_english_segment() {
     assert_eq!(query.candidates.items[0].kind, CandidateKind::English);
     assert_eq!(query.tail, "no-way");
     let raw = query.candidates.items[0].clone();
-    assert_eq!(engine.commit(&raw), "no-way");
+    assert_eq!(engine.commit(&raw).as_deref(), Some("no-way"));
     assert!(engine.composition().is_empty());
     // 表达式模式优先
     engine.set_input("v1-2");
@@ -254,7 +254,7 @@ fn english_mode_suggests_from_the_word_list_and_keeps_the_typed_text() {
     // 选中的词记次数，下次同样的前缀它靠前
     engine.set_input("comp");
     let compare = engine.query().unwrap().candidates.items[1].clone();
-    assert_eq!(engine.commit(&compare), "compare");
+    assert_eq!(engine.commit(&compare).as_deref(), Some("compare"));
     assert!(engine.composition().is_empty());
     engine.set_input("comp");
     assert_eq!(texts_of(&engine), ["compare", "company"]);
@@ -363,7 +363,7 @@ fn english_word_at_the_end_of_pinyin_joins_the_sentence() {
     assert_eq!(query.marked_text(), "kai'fa'rust");
     // 头段的词照常出（逐词上屏也行）
     assert!(query.candidates.items.iter().any(|c| c.text == "开发"));
-    assert_eq!(engine.commit(&first), "开发rust");
+    assert_eq!(engine.commit(&first).as_deref(), Some("开发rust"));
     assert!(engine.composition().is_empty());
 
     // 两个字母的尾段只认缩写词：ID 行，to 不行（`kaifato` 按拼音读）
@@ -458,6 +458,6 @@ fn pinyin_like_english_tail_competes_with_the_plain_reading() {
         .find(|c| c.text == "我的database")
         .unwrap();
     assert_eq!(mixed.syllables, ["wo", "de", "database"]);
-    assert_eq!(engine.commit(&mixed), "我的database");
+    assert_eq!(engine.commit(&mixed).as_deref(), Some("我的database"));
     assert!(engine.composition().is_empty());
 }

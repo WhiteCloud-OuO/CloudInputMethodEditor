@@ -23,7 +23,7 @@ use windows::Win32::UI::TextServices::{
 };
 use windows::core::{ComObject, implement};
 
-use cloudime_platform::protocol::{IndicatorState, InputMode, InputSettings};
+use cloudime_platform::protocol::{InputMode, InputSettings};
 
 use super::composition::Shared;
 use super::key::KeyTap;
@@ -87,9 +87,6 @@ pub struct TextService {
     /// 上一次应用过的按键行为设置；与 Server 下发的一致时就不重复应用
     /// （每一拍 `SyncMode` 都带着它，见 [`TextService_Impl::apply_input_settings`]）。
     input_settings: Cell<Option<InputSettings>>,
-
-    /// 右键菜单打勾用的开关状态，Server 随 `SyncMode` 每一拍带下来。
-    indicator_state: Cell<IndicatorState>,
 
     /// 激活后一小段时间内忽略转换模式 compartment 的变化，见 [`TextService_Impl::sync_from_conversion_mode`]。
     conversion_guard_until: Cell<Option<Instant>>,
@@ -161,11 +158,6 @@ pub(super) fn on_input_settings(input: InputSettings) {
     with_active(|service| service.apply_input_settings(input));
 }
 
-/// 轮询取回了右键菜单打勾用的开关状态。
-pub(super) fn on_indicator_state(state: IndicatorState) {
-    with_active(|service| service.indicator_state.set(state));
-}
-
 impl TextService {
     #[allow(clippy::new_without_default)] // 有 lock_module 副作用
     pub fn new() -> Self {
@@ -188,7 +180,6 @@ impl TextService {
             switch_preserved: Cell::new(false),
             hotkeys_preserved: Cell::new(false),
             input_settings: Cell::new(None),
-            indicator_state: Cell::new(IndicatorState::default()),
             conversion_guard_until: Cell::new(None),
         }
     }

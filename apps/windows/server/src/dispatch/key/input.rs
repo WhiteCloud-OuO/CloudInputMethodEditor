@@ -74,13 +74,13 @@ impl Router {
         let candidate = self.layout_candidate(index)?;
         if candidate.kind == CandidateKind::Custom {
             // 短语原样上屏，与敲它的序号一样
-            return Some(Effect::Changed(Some(self.engine.commit(&candidate))));
+            return Some(Effect::Changed(self.engine.commit(&candidate)));
         }
         if candidate.kind == CandidateKind::Sentence {
             // 整句：先记一次（记够两次收进用户自造词库），再照常上屏
             let learned = self.engine.remember_sentence(&candidate);
             tracing::debug!(text = %candidate.text, learned, "Ctrl+数字 上屏整句候选");
-            return Some(Effect::Changed(Some(self.engine.commit(&candidate))));
+            return Some(Effect::Changed(self.engine.commit(&candidate)));
         }
         if !matches!(
             candidate.kind,
@@ -215,12 +215,9 @@ impl Router {
         }
         self.engine.note_passthrough(c);
         // 没转换的左半边也要补全：半角标点模式下 `(` 不走全角表，`{` 这类干脆不在表里，
-        // 它们的成对补全（`()`、`{}`）只能在这条路上做。中文模式才补——英文模式是纯直通，
-        // 编辑器自己的括号配对比我们更懂上下文，别去抢。
-        if !english
-            && !keypad
-            && let Some(close) = pairwise_completion(self.config.pairwise_completion, c)
-        {
+        // 它们的成对补全（`()`、`{}`）只能在这条路上做。中英一致：只要开了成对补全、且这个键
+        // 没被全角表转换，就补（英文 + 西文符号就是这条路）。
+        if !keypad && let Some(close) = pairwise_completion(self.config.pairwise_completion, c) {
             return self.insert_pair(c, c, close);
         }
         self.passthrough(c)
@@ -287,7 +284,8 @@ impl Router {
         }
     }
 
-    /// 组句中的可打印键：数字选当前页第 N 个（没有这一格就进直输段），翻页键翻页，空格上屏高亮，其余进英文直输段；已在直输段里就一律追加。
+    /// 组句中的可打印键：数字选当前页第 N 个（没有这一格就进直输段），翻页键翻页，空格选上高亮候选，
+    /// 标点先选高亮候选再把整段补完上屏，其余进英文直输段；已在直输段里就一律追加。
     /// 表达式模式（`v1+2`）里数字和运算符进算式。
     fn apply_printable(&mut self, c: char, event: &KeyEvent) -> Effect {
         let expression = self.engine.expression_mode();
@@ -299,9 +297,9 @@ impl Router {
         // 空格整段原样上屏，空格本身也要在（`hello, world`）。
         if self.engine.raw_mode() {
             if c == ' ' {
-                let committed = self.commit_highlighted();
+                let committed = self.finish_composition();
                 self.engine.note_passthrough(c);
-                return with_prefix(Some(committed), Effect::Passthrough, c);
+                return with_prefix(committed, Effect::Passthrough, c);
             }
             if c.is_ascii_graphic() {
                 self.engine.push(c);
@@ -317,26 +315,34 @@ impl Router {
             self.page(step);
             return Effect::Navigated;
         }
+        // 空格选中高亮候选：和数字一样只是并进组句，剩下拼音继续出候选；整段转换完才整体上屏。
+        // 没有任何候选时（`v`、切不动的串）仍把拼音原样上屏，与以前一致。
         if c == ' ' {
-            return Effect::Changed(Some(self.commit_highlighted()));
+            if self.candidate_count() == 0 {
+                let raw = self.engine.take_raw();
+                return Effect::Changed((!raw.is_empty()).then_some(raw));
+            }
+            return Effect::Changed(self.commit_index(self.highlight));
         }
-        // 表达式模式下的其他字符不进缓冲区：先把高亮候选上屏，再按没在组句处理这个键、标点按组句外语义转全角
+        // 表达式以外的字符不进缓冲区、也不是选词键：先把高亮候选选上、剩余拼音补完整体上屏，
+        // 再按没在组句处理这个键（标点按组句外语义转全角）。
         if c != '\'' && expression {
-            let committed = self.commit_highlighted();
+            let committed = self.finish_composition();
             let effect = self.apply_punctuation(c, event);
-            return with_prefix(Some(committed), effect, c);
+            return with_prefix(committed, effect, c);
         }
         // 反引号：候选里有英文词时轮换英文候选的大小写（原样 → 全大写 → 首字母大写），不上屏标点
         if c == '`' && self.has_english_candidate() {
             self.engine.cycle_english_case();
             return Effect::Changed(None);
         }
-        // 组句里敲标点：先把高亮候选上屏，再按「没在组句」处理这一键（走符号映射 / 全角标点 / 成对补全）。
-        // `-` / `=` 是翻页键（上面已处理），`_` / `+` 与 `'` 由 [`is_commit_punctuation`] 排除，仍进缓冲区。
+        // 组句里敲标点：先把高亮候选选上、剩余拼音补完整体上屏，再按「没在组句」处理这一键
+        // （走符号映射 / 全角标点 / 成对补全）。`-` / `=` 是翻页键（上面已处理），`_` / `+` 与 `'`
+        // 由 [`is_commit_punctuation`] 排除，仍进缓冲区。
         if is_commit_punctuation(c) {
-            let committed = self.commit_highlighted();
+            let committed = self.finish_composition();
             let effect = self.apply_punctuation(c, event);
-            return with_prefix(Some(committed), effect, c);
+            return with_prefix(committed, effect, c);
         }
         self.engine.push(c);
         Effect::Changed(None)
@@ -357,11 +363,15 @@ impl Router {
         })
     }
 
-    /// 上屏高亮候选；没有候选时缓冲原样上屏。
-    fn commit_highlighted(&mut self) -> String {
+    /// 把当前组句整段交给应用：先选上高亮候选（可能并进组句），再把剩下的未选拼音原样补完一起上屏。
+    /// 返回要交给应用的文本；没有候选时就是缓冲原样上屏。调用后组句已清空。
+    fn finish_composition(&mut self) -> Option<String> {
         match self.commit_index(self.highlight) {
-            Some(text) => text,
-            None => self.engine.take_raw(),
+            Some(text) => Some(text),
+            None => {
+                let raw = self.engine.take_raw();
+                (!raw.is_empty()).then_some(raw)
+            }
         }
     }
 

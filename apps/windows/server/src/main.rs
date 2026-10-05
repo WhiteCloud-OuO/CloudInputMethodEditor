@@ -2,6 +2,7 @@
 //! release 编成 GUI 子系统（登录自启静默跑，日志走文件）；debug 保留控制台看 stderr。
 #![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
 
+use std::ffi::OsString;
 use std::path::{Path, PathBuf};
 
 use cloudime_core::Engine;
@@ -39,6 +40,42 @@ fn load_config() -> Config {
 fn sample_dict(root: &Path) -> PathBuf {
     root.join("assets/sample/dict.tsv")
 }
+
+/// 解析 `--wait-pid <pid>`：新起的 Server 用它等旧进程退出再占命名管道。没有这个参数、缺值或值不是
+/// 数字都返回 `None`（照常启动，不阻塞）。做成纯函数便于单测。
+fn restart_wait_pid(args: impl Iterator<Item = OsString>) -> Option<u32> {
+    let mut args = args;
+    while let Some(arg) = args.next() {
+        if arg.to_str() == Some("--wait-pid") {
+            return args.next()?.to_str()?.parse().ok();
+        }
+    }
+    None
+}
+
+/// 新起的 Server 等旧进程退出再占命名管道：`OpenProcess` 拿同步句柄，最多等 15 秒兜底。
+/// 拿不到句柄（进程已退 / 权限）就跳过、照常启动。
+#[cfg(windows)]
+fn wait_for_process_exit(pid: u32) {
+    use windows::Win32::Foundation::CloseHandle;
+    use windows::Win32::System::Threading::{
+        OpenProcess, PROCESS_SYNCHRONIZE, WaitForSingleObject,
+    };
+    const TIMEOUT_MS: u32 = 15_000;
+    let handle = match unsafe { OpenProcess(PROCESS_SYNCHRONIZE, false, pid) } {
+        Ok(handle) if !handle.is_invalid() => handle,
+        _ => {
+            tracing::warn!(pid, "拿不到旧 Server 的进程句柄，直接启动");
+            return;
+        }
+    };
+    let waited = unsafe { WaitForSingleObject(handle, TIMEOUT_MS) };
+    let _ = unsafe { CloseHandle(handle) };
+    tracing::info!(pid, ?waited, "新 Server 已等旧进程退出（或超时），继续启动");
+}
+
+#[cfg(not(windows))]
+fn wait_for_process_exit(_pid: u32) {}
 
 /// 正式词库装配失败回落样例词库，连样例都装不起来才报错。
 /// 语言模型坏掉在 [`assembly::assemble`] 里就地降级、不走这里——数据坏了只该掉效果，不该让 Server 起不来
@@ -112,8 +149,13 @@ fn main() {
         tracing::info!(
             config = migration.config,
             phrases = migration.phrases,
+            legacy_phrases = migration.legacy_phrases,
             "旧版配置与短语已迁移"
         );
+    }
+    // 托盘菜单点了「重启输入法服务」：本进程是先起的新实例，等旧进程退出再占管道（超时 15 秒兜底）
+    if let Some(pid) = restart_wait_pid(std::env::args_os().skip(1)) {
+        wait_for_process_exit(pid);
     }
     // 词库在随包根的 WordBank\ 下（主词库 Dict.db），用户导入的附加词库也一起加载；一个都没有时回落样例
     let word_bank = WordBank::locate(&root);
@@ -150,12 +192,17 @@ fn main() {
     engine.set_learning(config.general.learning);
     // 生僻项（词库稀有组）缺省不查，由 [word_bank] rare_items 决定；热加载同款
     engine.set_rare_enabled(config.word_bank.rare_items);
-    // 用户短语在数据目录的短语库里（`[phrase] file`）；读不出来只按没有短语处理
-    let phrase_store = PhraseStore::locate(
-        &user_dir().unwrap_or_else(|| PathBuf::from(".")),
-        &config.phrase,
-    );
-    match phrase_store.load() {
+    // 短语库固定在安装目录的 Phrases\Phrase.db；软件自带短语是否参与看 [phrase] use_default_phrases。
+    // 读不出来只按没有短语处理。
+    let phrase_store = PhraseStore::locate(&root);
+    // 内置短语随升级更新：安装包只覆盖同步源 data\phrase-default.db（保住 Phrases\Phrase.db 里的用户短语），
+    // 这里启动时把它的 cloudime_default 同步进去（与当前相同就不动）。
+    match phrase_store.sync_defaults(&root.join(cloudime_platform::phrase::DEFAULT_SOURCE_FILE)) {
+        Ok(true) => tracing::info!("内置短语已按随包同步源更新"),
+        Ok(false) => {}
+        Err(error) => tracing::warn!(%error, "内置短语同步失败，用当前已有的"),
+    }
+    match phrase_store.load(config.phrase.use_default_phrases) {
         Ok(phrases) => {
             if let Err(error) = engine.set_custom_phrases(phrases) {
                 tracing::warn!(%error, "短语库内容不合法，本次不启用短语");
@@ -250,4 +297,33 @@ fn serve(mut router: Router) {
 #[cfg(not(windows))]
 fn serve(_router: Router) {
     tracing::warn!("命名管道传输仅 Windows 提供；本平台只装配 Engine 供测试");
+}
+
+#[cfg(test)]
+mod tests {
+    use std::ffi::OsString;
+
+    use super::restart_wait_pid;
+
+    fn args(items: &[&str]) -> impl Iterator<Item = OsString> {
+        items
+            .iter()
+            .map(|item| OsString::from(*item))
+            .collect::<Vec<_>>()
+            .into_iter()
+    }
+
+    #[test]
+    fn parses_wait_pid_flag() {
+        assert_eq!(restart_wait_pid(args(&["--wait-pid", "4321"])), Some(4321));
+        // 前面还有别的参数
+        assert_eq!(
+            restart_wait_pid(args(&["--foo", "--wait-pid", "7"])),
+            Some(7)
+        );
+        // 有参数缺值、值不是数字、根本没有这个参数
+        assert_eq!(restart_wait_pid(args(&["--wait-pid"])), None);
+        assert_eq!(restart_wait_pid(args(&["--wait-pid", "abc"])), None);
+        assert_eq!(restart_wait_pid(args(&[])), None);
+    }
 }

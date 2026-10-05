@@ -98,8 +98,8 @@ fn data_lines(settings: &Settings) -> Vec<String> {
         .main()
         .map(|(stem, _)| stem)
         .unwrap_or_else(|| "无（回落样例）".to_owned());
-    let phrases = PhraseStore::locate(data_dir, &settings.config.phrase)
-        .load()
+    let phrases = PhraseStore::locate(&root)
+        .load(false)
         .map_or(0, |phrases| phrases.len());
     vec![
         format!(

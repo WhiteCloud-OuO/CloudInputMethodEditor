@@ -63,6 +63,7 @@ impl Router {
             dictionary_files,
             phrase_files,
             update: config.update.clone(),
+            use_default_phrases: config.phrase.use_default_phrases,
             updates,
         });
     }
@@ -151,14 +152,15 @@ impl Router {
             return;
         };
         reload.update = config.update.clone();
-        // `[phrase] file` 可能换了位置：按新配置重新定位，再从短语库重读一遍
-        if let Some(user) = self
+        reload.use_default_phrases = config.phrase.use_default_phrases;
+        // 短语库固定在安装目录；自带短语开关可能变了，重新定位并从短语库重读一遍
+        if let Some(root) = self
             .reload
             .as_ref()
-            .and_then(|reload| reload.dirs.user_root.clone())
+            .and_then(|reload| reload.dirs.root.clone())
         {
             if let Some(reload) = &mut self.reload {
-                reload.dirs.phrase = Some(PhraseStore::locate(&user, &config.phrase));
+                reload.dirs.phrase = Some(PhraseStore::locate(&root));
                 reload.phrase_files = reload.dirs.phrase_snapshot();
             }
             self.reload_phrases();
@@ -167,14 +169,14 @@ impl Router {
 
     /// 从短语库重装短语；读不出来或内容不合法时保持原短语。
     pub(super) fn reload_phrases(&mut self) {
-        let Some(store) = self
-            .reload
-            .as_ref()
-            .and_then(|reload| reload.dirs.phrase.clone())
-        else {
+        let Some(reload) = self.reload.as_ref() else {
             return;
         };
-        match store.load() {
+        let Some(store) = reload.dirs.phrase.clone() else {
+            return;
+        };
+        let use_default = reload.use_default_phrases;
+        match store.load(use_default) {
             Ok(phrases) => {
                 if let Err(error) = self.engine.set_custom_phrases(phrases) {
                     tracing::warn!(%error, "短语库内容不合法，保持原短语");

@@ -105,6 +105,11 @@ impl Router {
             }
             IndicatorCommand::OpenSettings => self.status.open_settings(),
             IndicatorCommand::OpenDownload => self.status.open_download(),
+            IndicatorCommand::RestartServer => {
+                tracing::info!("任务栏菜单：重启输入法服务");
+                spawn_replacement_server();
+                self.restart_pending = true;
+            }
         }
     }
 
@@ -144,3 +149,39 @@ impl Router {
         }
     }
 }
+
+/// 起一个新的 Server 实例接替本进程：带 `--wait-pid <本进程 pid>` 让它等本进程退出后再占命名管道
+///（两个 Server 建管道时第二个会被 `FILE_FLAG_FIRST_PIPE_INSTANCE` 挡下）。工作目录设为 exe 所在目录，
+/// 随包数据按 exe 位置找；`CREATE_NO_WINDOW` 避免弹控制台。UiAccess 的 exe 由同样带 UiAccess 的 Server 起没问题。
+#[cfg(windows)]
+fn spawn_replacement_server() {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    let exe = match std::env::current_exe() {
+        Ok(exe) => exe,
+        Err(error) => {
+            tracing::error!(%error, "取当前 Server 路径失败，无法重启输入法服务");
+            return;
+        }
+    };
+    let mut command = std::process::Command::new(&exe);
+    command
+        .arg("--wait-pid")
+        .arg(std::process::id().to_string())
+        .creation_flags(CREATE_NO_WINDOW);
+    if let Some(dir) = exe.parent() {
+        command.current_dir(dir);
+    }
+    match command.spawn() {
+        Ok(child) => {
+            tracing::info!(
+                pid = child.id(),
+                "已启动新的 cloudime-server，本进程退出后由它接管"
+            )
+        }
+        Err(error) => tracing::error!(%error, "启动新的 cloudime-server 失败"),
+    }
+}
+
+#[cfg(not(windows))]
+fn spawn_replacement_server() {}

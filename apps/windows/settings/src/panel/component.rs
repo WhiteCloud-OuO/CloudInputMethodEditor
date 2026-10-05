@@ -43,8 +43,8 @@ impl Component for Settings {
         let migration = cloudime_platform::migrate::migrate(&path);
         if !migration.is_empty() {
             crate::log::info(format!(
-                "旧版配置与短语已迁移：配置 {}，短语 {}",
-                migration.config, migration.phrases
+                "旧版配置与短语已迁移：配置 {}，配置短语 {}，老短语库 {}",
+                migration.config, migration.phrases, migration.legacy_phrases
             ));
         }
         let config = Config::load(&path).unwrap_or_default();
@@ -52,10 +52,8 @@ impl Component for Settings {
             .parent()
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("."));
-        let (phrases, phrase_status) = phrase::load(&cloudime_platform::PhraseStore::locate(
-            &data_dir,
-            &config.phrase,
-        ));
+        let root = cloudime_platform::resources::bundled_root().unwrap_or_else(|| data_dir.clone());
+        let (phrases, phrase_status) = phrase::load(&cloudime_platform::PhraseStore::locate(&root));
         Self {
             config,
             path,
@@ -220,8 +218,12 @@ impl Component for Settings {
             }
 
             // 短语页
+            Message::UseDefaultPhrases(on) => {
+                self.save("phrase", "use_default_phrases", on);
+            }
             Message::PhraseCode(text) => self.phrase_form.code = text,
             Message::PhraseText(text) => self.phrase_form.text = text,
+            Message::PhraseTitle(text) => self.phrase_form.title = text,
             Message::PhrasePosition(Some(value)) => self.phrase_form.position = value,
             Message::PhraseSave => phrase::save(self),
             Message::PhraseCancel => {

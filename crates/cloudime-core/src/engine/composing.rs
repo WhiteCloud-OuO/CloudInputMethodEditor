@@ -182,10 +182,31 @@ impl Engine {
         }
     }
 
-    /// 退格。删掉光标前的一个字符；光标在开头时返回 `false`。
+    /// 退格。有已选文本、且未选拼音的光标停在末尾时，先撤回最后一次选择（把中文还原成它的拼音）；
+    /// 否则删掉光标前的一个字符。光标在开头、也没有已选段时返回 `false`。
     pub fn backspace(&mut self) -> bool {
         self.note_edit();
+        if self.composition.has_selected()
+            && self.composition.cursor() == self.composition.buffer_len()
+        {
+            self.retract_selection();
+            return true;
+        }
         self.composition.backspace()
+    }
+
+    /// 撤回最后一次选择：把它的拼音还原回缓冲区，并把对应的那次上屏记录标成「已被删掉」，
+    /// 紧接着选了别的词时由 [`Self::apply_retraction`] 把学习退回去。
+    fn retract_selection(&mut self) {
+        if let Some(commit) = self
+            .recent_commits
+            .iter_mut()
+            .rev()
+            .find(|c| !c.is_erased())
+        {
+            commit.erased = commit.chars;
+        }
+        self.composition.unselect_last();
     }
 
     pub fn clear(&mut self) {
@@ -276,25 +297,30 @@ impl Engine {
         }
     }
 
-    /// 放弃当前拼音，原样返回给壳（通常是用户按回车要上屏字母本身）。手敲的拼音分隔符 `'` 一并去掉。
+    /// 放弃当前组句，原样返回给壳（通常是用户按回车要上屏字母本身）：
+    /// 已选文本 + 剩余拼音原样（Shift 还原、去掉手敲的分隔符 `'`）。
     pub fn take_raw(&mut self) -> String {
-        let raw = strip_apostrophes(&self.raw_preedit().text);
+        let selected = self.composition.selected_text();
+        let keys = strip_apostrophes(&self.composition.typed_text());
+        let mut raw = selected;
+        raw.push_str(&keys);
         if raw.is_empty() {
             // 壳在回车 / 失焦时不管有没有在组句都会来一趟：空的不记日志、不计统计
             self.clear();
             self.chain.reset();
             return raw;
         }
-        self.log_commit(&raw, &raw, InputSource::Raw);
+        // 已选段在选中时已各自记过一条上屏记录，这里只补未选拼音那一段，删应用文字时逐条对得上。
+        self.log_commit(&keys, &keys, InputSource::Raw);
         // 原样上屏的是个英文词（`gist`）：记进个人英文词表，下次直接出候选。
-        let english_word = looks_like_english_word(&raw, self.english_mode);
+        let english_word = looks_like_english_word(&keys, self.english_mode);
         if english_word {
-            self.learner.learn_english(&raw);
+            self.learner.learn_english(&keys);
         }
         self.meter_commit(&raw, InputSource::Raw, english_word);
         self.composition.clear();
         self.traditional_map.borrow_mut().clear();
-        self.remember_commit(LastCommit::plain(&raw));
+        self.remember_commit(LastCommit::plain(&keys));
         self.punctuation.note_committed(&raw);
         self.history.record(&raw);
         self.chain.reset();
@@ -304,14 +330,14 @@ impl Engine {
     /// Ctrl + 回车：与 [`Self::take_raw`] 一样原样上屏，但先把这一串记一次；同一串（大小写不敏感）记够
     /// [`AUTO_WORD_THRESHOLD_SAME_BUFFER`] 次就作为英文自造词收进用户词库，权重 [`ENGLISH_WORD_WEIGHT`]。
     pub fn take_raw_english(&mut self) -> String {
-        let raw = strip_apostrophes(&self.raw_preedit().text);
-        if !raw.is_empty() {
+        let keys = strip_apostrophes(&self.composition.typed_text());
+        if !keys.is_empty() {
             // 记录键用小写：同一串大小写不同也算同一串
-            let key = raw.to_ascii_lowercase();
+            let key = keys.to_ascii_lowercase();
             self.learner.record_choice(&key, &key);
             if self.learner.choice_weight(&key, &key) >= AUTO_WORD_THRESHOLD_SAME_BUFFER {
-                tracing::debug!(raw, "原样字母记够两次，收进用户词库（英文）");
-                self.learner.learn_english_word(&raw, ENGLISH_WORD_WEIGHT);
+                tracing::debug!(raw = %keys, "原样字母记够两次，收进用户词库（英文）");
+                self.learner.learn_english_word(&keys, ENGLISH_WORD_WEIGHT);
             }
         }
         self.take_raw()

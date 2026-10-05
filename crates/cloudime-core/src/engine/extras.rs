@@ -1,6 +1,7 @@
 //! 附加候选：日期时间等快捷项、中英混输的英文词与补全。
 
 use super::*;
+use crate::custom_phrase;
 
 impl Engine {
     /// 精确匹配自定义输入码时，数字键应选择候选。
@@ -12,8 +13,9 @@ impl Engine {
                 .any(|p| p.code == self.composition.scope())
     }
 
-    /// 精确匹配输入码的短语插到你指定的候选位置：`0` 第一位、`1` 第二位……；
+    /// 精确匹配输入码的短语插到你指定的候选位置：`1` 第一位、`2` 第二位……；
     /// 同码多条按位置升序占位，位置相同的按保存顺序依次往后排，越界的排到最后。
+    /// `title` 非空时把它作为候选的显示内容，上屏仍是短语文本。
     pub(super) fn insert_custom_phrases(&self, items: &mut Vec<Candidate>) {
         if self.english_mode {
             return;
@@ -32,13 +34,14 @@ impl Engine {
             let index = match last {
                 // 位置撞车：后面那条往后挪一格，保持保存顺序
                 Some((position, index)) if position == phrase.position => index + 1,
-                _ => phrase.position as usize,
+                _ => phrase.position.saturating_sub(custom_phrase::MIN_POSITION) as usize,
             };
             let index = index.min(items.len());
             items.insert(
                 index,
                 Candidate {
                     text: phrase.text.clone(),
+                    display: phrase.title.clone(),
                     kind: CandidateKind::Custom,
                     syllables: Vec::new(),
                     reading: None,

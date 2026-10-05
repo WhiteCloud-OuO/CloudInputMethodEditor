@@ -8,6 +8,7 @@
 //! - `pack dict|lm|model`：TSV → 词库存档 / `.qj` 容器（`dict` 写 SQLite `.db`，`lm` 写 `lm.qj`），带名称 / 许可证 / 署名元数据；
 //!   `model` 把本地整句模型的三件套目录打成一个 `model.qjm`
 //! - `word-bank`：合并中文 / 英文 / 品牌 / 中英混杂词源，写出 `WordBank\Dict.db`（引擎按 `language` 分流加载）
+//! - `phrase-db`：写出空的自定义短语库 `Phrases\Phrase.db`（`user` / `cloudime_default` 两张空表）
 //! - `rehead`：把改名前的 `.qj`（魔数 `QINGJIAN`）就地改成当前魔数 `CLOUDIME`，只改头 8 字节，见 `rehead.rs`
 //!
 //! 输出默认写到仓库根目录 `data/generated/`（gitignore）。
@@ -104,6 +105,15 @@ fn run() -> Result<(), ConvertError> {
             },
             &args.out_dir,
         ),
+        Command::PhraseDb { path, force } => {
+            // 随包那份的 cloudime_default 表是手写进去的产品数据，默认不覆盖
+            if path.exists() && !force {
+                return Err(ConvertError::PhraseDbExists { path });
+            }
+            cloudime_platform::phrase::create_empty(&path)?;
+            tracing::info!(out = %path.display(), "已写出空短语库");
+            Ok(())
+        }
         Command::Phrases {
             corpus,
             dialogue,

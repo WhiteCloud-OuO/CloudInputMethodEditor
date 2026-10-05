@@ -213,6 +213,19 @@ pub enum Command {
         data_version: String,
     },
 
+    /// 写出一份空的自定义短语库（`Phrases\Phrase.db`，含 `user` 与 `cloudime_default` 两张空表），
+    /// 只用来第一次生成随包的那份。文件已存在时拒绝覆盖：随包那份的 `cloudime_default` 表是手写进去的
+    /// 产品数据（内置短语），整份换成空库会把它们抹掉；真要重来加 `--force`
+    PhraseDb {
+        /// 输出路径
+        #[arg(default_value = "Phrases/Phrase.db")]
+        path: PathBuf,
+
+        /// 已存在也整份替换成空库（会丢掉里面的内置短语）
+        #[arg(long)]
+        force: bool,
+    },
+
     /// 把改名前的 `.qj`（魔数 `QINGJIAN`）就地改成当前魔数 `CLOUDIME`：容器布局一字未动，只改头 8 字节。
     /// 改之前按容器完整校验一遍、改完再开一遍，坏文件原样报错；已是新魔数的跳过。
     /// `data-v1` / `data-v2` 这类旧数据要重发新号时先跑（`data-bundle.sh` 拒绝旧魔数，见 docs/notes/release.md）

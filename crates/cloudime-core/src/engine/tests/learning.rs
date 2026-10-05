@@ -159,7 +159,7 @@ fn commit_feeds_learner_and_reorders() {
         .find(|c| c.text == "开发")
         .unwrap()
         .clone();
-    assert_eq!(engine.commit(&kaifa), "开发");
+    assert_eq!(engine.commit(&kaifa).as_deref(), Some("开发"));
     assert!(engine.composition().is_empty());
 
     // 同一输入串再打：选过的 开发 压过词频更高的 开放
@@ -242,8 +242,8 @@ fn input_log_records_commits_with_their_context_and_retractions() {
         assert_eq!(commit.top[0], "开发者");
         assert!(!commit.corrected);
     }
-    // 剩下的 zhe 回车原样上屏
-    assert_eq!(engine.take_raw(), "zhe");
+    // 已选的 开发 加上剩下的 zhe 一起回车原样上屏
+    assert_eq!(engine.take_raw(), "开发zhe");
     // 整个退格删掉 开发 再重打同一段拼音换选 开放：记一条撤销
     engine.set_input("kaifa");
     engine.query().unwrap();
@@ -525,7 +525,7 @@ fn logged_engine() -> (Engine, Arc<Mutex<Vec<InputLogEntry>>>) {
     (engine, entries)
 }
 
-fn commit_first(engine: &mut Engine) -> String {
+fn commit_first(engine: &mut Engine) -> Option<String> {
     let query = engine.query().unwrap();
     let first = query.candidates.items[0].clone();
     engine.commit(&first)
@@ -557,7 +557,7 @@ fn input_log_records_a_retype_when_keys_change_after_backspace_in_composition() 
         .find(|c| c.text == "开发")
         .cloned()
         .unwrap();
-    assert_eq!(engine.commit(&kaifa), "开发");
+    assert_eq!(engine.commit(&kaifa).as_deref(), Some("开发"));
     let entries = entries.lock().unwrap();
     let InputLogEntry::Commit(commit) = &entries[0] else {
         panic!("expected a commit");

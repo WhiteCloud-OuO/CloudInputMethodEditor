@@ -33,10 +33,13 @@ impl Router {
                 }
             }
             None => {
-                let composition = self.engine.composition();
-                let text = composition.text().to_owned();
-                let cursor = text[..composition.cursor()].chars().count();
-                Composed::Raw { text, cursor }
+                // 查询失败也带上已选文本（`云朵shurufa` 里拼音段切不动时仍在组句）。
+                let raw = self.engine.raw_preedit();
+                let cursor = raw.text[..raw.cursor_bytes].chars().count();
+                Composed::Raw {
+                    text: raw.text,
+                    cursor,
+                }
             }
         });
         self.schedule_rescoring();
@@ -87,9 +90,11 @@ impl Router {
         }
     }
 
+    /// 选中第 `index` 个候选：候选把整段转换完时返回要上屏的文本，只吃一部分时返回 `None`
+    /// （这一选择并进组句，壳重画预编辑即可）。没有这一格也返回 `None`。
     pub(super) fn commit_index(&mut self, index: usize) -> Option<String> {
         let candidate = self.layout_candidate(index)?;
-        Some(self.engine.commit(&candidate))
+        self.engine.commit(&candidate)
     }
 
     /// 按当前状态生成一帧：没在组句给空帧；否则给高亮所在的那一页。

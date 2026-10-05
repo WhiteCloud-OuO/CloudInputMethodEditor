@@ -75,7 +75,7 @@ fn accepted_correction_reading_aligns_and_records_the_typo() {
         .find(|c| c.text == "你好吗")
         .cloned()
         .expect("纠错读法带出 你好吗");
-    assert_eq!(engine.commit(&nihaoma), "你好吗");
+    assert_eq!(engine.commit(&nihaoma).as_deref(), Some("你好吗"));
     assert_eq!(engine.learner().typo_count("hoa", "hao"), 1);
 }
 
@@ -110,7 +110,11 @@ fn correction_readings_join_the_pool_without_replacing_the_original() {
         .find(|c| c.text == "你好")
         .cloned()
         .expect("你好");
-    assert_eq!(engine.commit(&nihao), "你好");
+    // 你好 只吃掉拼音前段（`nihoa`，剩下 ma）：选中是并进组句，不立刻上屏
+    assert_eq!(engine.commit(&nihao), None);
+    assert_eq!(engine.composition().selected_text(), "你好");
+    // 回车把已选文本 + 剩余拼音原样整体上屏
+    assert_eq!(engine.take_raw(), "你好ma");
 }
 
 #[test]

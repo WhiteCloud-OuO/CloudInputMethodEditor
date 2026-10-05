@@ -138,6 +138,7 @@ impl Engine {
         Some((
             Candidate {
                 text: format!("{}{}", conversion.text, tail.word),
+                display: None,
                 kind: CandidateKind::Sentence,
                 syllables,
                 reading: None,

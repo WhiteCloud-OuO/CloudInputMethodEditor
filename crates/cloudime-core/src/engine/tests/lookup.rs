@@ -165,7 +165,7 @@ fn keyboard_u_umlaut_spelling_matches_canonical_dictionary_keys() {
     assert_eq!(query.candidates.items[0].text, "策略");
     assert_eq!(query.candidates.items[0].syllables, ["ce", "lve"]);
     let strategy = query.candidates.items[0].clone();
-    assert_eq!(engine.commit(&strategy), "策略");
+    assert_eq!(engine.commit(&strategy).as_deref(), Some("策略"));
     assert!(engine.composition().is_empty());
 
     engine.set_input("nuedai");
@@ -195,11 +195,13 @@ fn commit_consumes_only_the_candidate_syllables() {
         .find(|c| c.text == "开发")
         .unwrap()
         .clone();
-    assert_eq!(engine.commit(&kaifa), "开发");
+    // 开发 只吃掉前段 `kaifa`（剩下 zhe）：选中并进组句，返回 None
+    assert_eq!(engine.commit(&kaifa), None);
     assert_eq!(engine.composition().text(), "zhe");
+    assert_eq!(engine.composition().selected_text(), "开发");
 
     engine.set_input("kaif");
-    assert_eq!(engine.commit(&kaifa), "开发");
+    assert_eq!(engine.commit(&kaifa).as_deref(), Some("开发"));
     assert!(engine.composition().is_empty());
 
     engine.set_input("xi'an");
@@ -247,7 +249,7 @@ fn sentence_conversion_competes_with_word_hits_by_weight() {
     assert_eq!(sentence.text, "想开发");
     assert_eq!(sentence.syllables, ["xiang", "kai", "fa"]);
     // 整句权重是路径词权重的几何平均：想 9000 与 开发 9000 → 9000
-    assert_eq!(engine.commit(&sentence), "想开发");
+    assert_eq!(engine.commit(&sentence).as_deref(), Some("想开发"));
     assert!(engine.composition().is_empty());
 
     // 整段本身是一个词：不出整句，词只出现一次
@@ -320,7 +322,7 @@ fn expression_mode_skips_pinyin_and_evaluates() {
     assert_eq!(query.candidates.items[0].kind, CandidateKind::Shortcut);
     assert_eq!(query.candidates.items[1].text, "1+2=3");
     let result = query.candidates.items[0].clone();
-    assert_eq!(engine.commit(&result), "3");
+    assert_eq!(engine.commit(&result).as_deref(), Some("3"));
     assert!(engine.composition().is_empty());
 
     // 只有 v：候选为空但不报错，preedit 照显示

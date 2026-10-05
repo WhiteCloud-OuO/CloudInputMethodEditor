@@ -8,6 +8,8 @@
 .playwright-mcp/
 /.idea
 /WordBank
+/Phrases/*
+!/Phrases/Phrase.db
 tree.md
 version.txt
 cargo-build.ps1

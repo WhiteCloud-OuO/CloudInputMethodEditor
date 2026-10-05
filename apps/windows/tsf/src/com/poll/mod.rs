@@ -175,7 +175,6 @@ fn sync_mode(context: &PollContext) {
     drop(guard);
     // 按键行为设置每一拍都带（DLL 不读配置文件），切换键与内置英文模式开关改完靠它生效。
     super::service::on_input_settings(reply.input);
-    super::service::on_indicator_state(reply.indicator);
     if let Some(mode) = reply.mode {
         super::service::on_mode_sync(mode);
     }

@@ -10,7 +10,7 @@ use cloudime_platform::protocol::IndicatorCommand;
 
 use super::TextService_Impl;
 use crate::com::log::log;
-use crate::com::mode::menu::{self, MenuChoice, MenuState};
+use crate::com::mode::menu;
 
 impl TextService_Impl {
     pub(super) fn show_indicator_menu(&self, point: POINT) {
@@ -18,30 +18,8 @@ impl TextService_Impl {
             log("右键菜单：找不到本线程的窗口，不弹");
             return;
         };
-        // 先跟上全局模式，菜单上的勾与悬浮状态条一致（悬浮条上刚点过、还没到轮询那一拍时）
-        self.sync_mode_from_server();
-        let english = self.mode_state.english();
-        let indicator = self.indicator_state.get();
-        let state = MenuState {
-            english,
-            disabled: self.mode_state.disabled(),
-            english_enabled: self.mode_state.enabled(),
-            full_width: if english {
-                indicator.english_full_width_punctuation
-            } else {
-                indicator.full_width_punctuation
-            },
-            update_available: indicator.update_available,
-        };
-        match menu::track(owner, point, &state) {
-            Some(MenuChoice::Mode { english })
-                if english != self.mode_state.english() || self.mode_state.disabled() =>
-            {
-                self.switch_source.set("语言栏 / 状态条右键菜单");
-                self.set_english_mode(english);
-            }
-            Some(MenuChoice::Server(command)) => self.send_indicator(command),
-            _ => {}
+        if let Some(command) = menu::track(owner, point) {
+            self.send_indicator(command);
         }
     }
 

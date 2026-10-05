@@ -43,7 +43,7 @@ fn raw_preedit_keeps_suffix_after_editing() {
 }
 
 #[test]
-fn raw_preedit_only_contains_the_uncommitted_remainder() {
+fn raw_preedit_includes_the_selected_text_before_the_remaining_pinyin() {
     let mut engine = engine();
     engine.set_input("kaifazhe");
     let candidate = engine
@@ -54,8 +54,9 @@ fn raw_preedit_only_contains_the_uncommitted_remainder() {
         .into_iter()
         .find(|c| c.text == "开发" && c.kind == CandidateKind::Chinese)
         .unwrap();
-    assert_eq!(engine.commit(&candidate), "开发");
-    assert_raw(&mut engine, "zhe", 3);
+    // 选中 开发 只是并进组句：预编辑是「已选文本 + 剩余拼音」，光标在拼音末尾
+    assert_eq!(engine.commit(&candidate), None);
+    assert_raw(&mut engine, "开发zhe", "开发".len() + 3);
 }
 
 #[test]

@@ -53,10 +53,14 @@ pub(crate) enum Message {
     ImportDictionary,
 
     // 短语页
+    /// 启用软件自带短语（`[phrase] use_default_phrases`）。
+    UseDefaultPhrases(bool),
     /// 表单里触发字母串的输入。
     PhraseCode(String),
     /// 表单里短语内容的输入。
     PhraseText(String),
+    /// 表单里候选显示内容（title）的输入。
+    PhraseTitle(String),
     /// 表单里候选位置的输入。
     PhrasePosition(Option<f64>),
     /// 添加一条 / 保存修改中的那条。

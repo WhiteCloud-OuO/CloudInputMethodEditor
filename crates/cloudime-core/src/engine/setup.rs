@@ -64,8 +64,12 @@ impl Engine {
         self.punctuation.set_half_after_digit(on);
     }
 
-    /// 原子更新自定义短语，非法规则保持旧值。
-    pub fn set_custom_phrases(&mut self, phrases: Vec<crate::CustomPhrase>) -> Result<(), String> {
+    /// 原子更新自定义短语，非法规则保持旧值。`title` 在这里统一去掉首尾空白、空串归一成 `None`。
+    pub fn set_custom_phrases(
+        &mut self,
+        mut phrases: Vec<crate::CustomPhrase>,
+    ) -> Result<(), String> {
+        crate::custom_phrase::normalize_phrases(&mut phrases);
         crate::custom_phrase::validate_phrases(&phrases)?;
         self.custom_phrases = phrases;
         Ok(())

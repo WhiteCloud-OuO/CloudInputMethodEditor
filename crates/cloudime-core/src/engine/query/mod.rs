@@ -19,7 +19,7 @@ impl Engine {
     /// 解析当前缓冲区并生成排好序的候选。**不带译文**，译文由 [`Self::annotate`] 补。
     ///
     /// 光标停在拼音中间时只按光标前的那段算候选（`ni|hao` 出 你），光标后的拼音留着，
-    /// 上屏之后接着组句；见 [`Composition::scope`]。
+    /// 选上之后接着组句；见 [`Composition::scope`]。
     pub fn query(&self) -> Result<Query, ParseError> {
         self.last_rescored.set(false);
         let mut query = match self.query_inner() {
@@ -40,6 +40,8 @@ impl Engine {
                 )
             }
         };
+        // 已选文本显示在未选拼音之前；候选与光标只对未选拼音算。
+        query.selected = self.composition.selected_text();
         self.insert_custom_phrases(&mut query.candidates.items);
         // 给输入日志留个摘要：上屏时才知道选了什么，这里才知道看到了什么
         let pinyin = match &query.correction {
@@ -137,6 +139,7 @@ impl Engine {
                     cursor: self.composition.cursor(),
                     rest,
                     typed_display: None,
+                    selected: String::new(),
                     correction: None,
                     timings: Timings {
                         parse: start.elapsed(),
@@ -336,6 +339,7 @@ impl Engine {
             cursor: self.composition.cursor(),
             rest,
             typed_display,
+            selected: String::new(),
             correction: None,
             timings: Timings {
                 parse,
@@ -352,6 +356,7 @@ impl Engine {
         if let Some(word) = self.english.as_ref().and_then(|english| english.get(scope)) {
             items.push(Candidate {
                 text: word.to_owned(),
+                display: None,
                 kind: CandidateKind::English,
                 syllables: Vec::new(),
                 reading: None,
@@ -365,6 +370,7 @@ impl Engine {
             cursor: self.composition.cursor(),
             rest,
             typed_display: None,
+            selected: String::new(),
             correction: None,
             timings: Timings {
                 parse: Duration::ZERO,
@@ -378,6 +384,7 @@ impl Engine {
     pub(super) fn query_raw(&self, scope: &str, rest: String, start: Instant) -> Query {
         let items = vec![Candidate {
             text: scope.to_owned(),
+            display: None,
             kind: CandidateKind::English,
             syllables: Vec::new(),
             reading: None,
@@ -390,6 +397,7 @@ impl Engine {
             cursor: self.composition.cursor(),
             rest,
             typed_display: None,
+            selected: String::new(),
             correction: None,
             timings: Timings {
                 parse: Duration::ZERO,
@@ -411,6 +419,7 @@ impl Engine {
         .into_iter()
         .map(|text| Candidate {
             text,
+            display: None,
             kind: CandidateKind::English,
             syllables: Vec::new(),
             reading: None,
@@ -424,6 +433,7 @@ impl Engine {
             cursor: self.composition.cursor(),
             rest,
             typed_display: None,
+            selected: String::new(),
             correction: None,
             timings: Timings {
                 parse: Duration::ZERO,
@@ -512,6 +522,7 @@ impl Engine {
         Some((
             Candidate {
                 text: conversion.text,
+                display: None,
                 kind,
                 syllables: conversion.syllables,
                 reading: None,
@@ -680,6 +691,7 @@ impl Engine {
                 pool.push((
                     Candidate {
                         text,
+                        display: None,
                         kind: CandidateKind::English,
                         syllables: Vec::new(),
                         reading: None,
@@ -788,6 +800,7 @@ fn abbreviated_count(patterns: &[cloudime_dictionary::SyllablePattern<'_>]) -> u
 fn chinese_candidate(item: &Scored<'_>) -> Candidate {
     Candidate {
         text: item.hit.text.to_owned(),
+        display: None,
         kind: CandidateKind::Chinese,
         syllables: item.hit.syllables().map(str::to_owned).collect(),
         reading: None,

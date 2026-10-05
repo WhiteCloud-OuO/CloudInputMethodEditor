@@ -71,7 +71,12 @@ pub fn serve_pipe(
         }
         match receiver.recv_timeout(due - now) {
             Ok(Work::Client(message, reply)) => {
-                let _ = reply.send(router.handle(message));
+                let response = router.handle(message);
+                let _ = reply.send(response);
+                // 托盘菜单点了「重启输入法服务」：这条消息的回包已经写出，再退出让新实例接管。
+                if router.take_restart_pending() {
+                    break;
+                }
             }
             Ok(Work::Status(event)) => router.handle_status_event(event),
             Err(RecvTimeoutError::Timeout) => continue,

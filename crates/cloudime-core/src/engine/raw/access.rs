@@ -7,8 +7,8 @@ impl Engine {
     /// 保留实际键串、大小写及显式分隔符。
     /// 首位始终为 0，末位始终为完整文本末尾。
     pub fn raw_preedit(&self) -> RawPreedit {
-        let text = self.composition.typed_text();
-        let mut cursor_bytes = self.composition.cursor().min(text.len());
+        let text = self.composition.raw_text();
+        let mut cursor_bytes = self.composition.raw_cursor().min(text.len());
         while !text.is_char_boundary(cursor_bytes) {
             cursor_bytes -= 1;
         }

@@ -105,6 +105,12 @@ Source: "{#Repo}\data\generated\lm.qj";          DestDir: "{app}\data\generated"
 ; —— 词库：主词库 Dict.db（中文 + 英文合一份）与用户导入的附加词库都放 WordBank\ ——
 ; Excludes 挡掉开发机自己的 UserWordBank.db（用户自造词库，运行时生成，绝不能进包）。
 Source: "{#Repo}\WordBank\*.db";   DestDir: "{app}\WordBank"; Flags: ignoreversion; Excludes: "UserWordBank.db"
+; —— 短语库：安装目录 Phrases\Phrase.db（user 与 cloudime_default 两张表）——
+; onlyifdoesntexist：升级别覆盖用户自己的短语；文件随仓库带（内置短语写在 cloudime_default 表里）。
+Source: "{#Repo}\Phrases\Phrase.db"; DestDir: "{app}\Phrases"; Flags: onlyifdoesntexist
+; 内置短语的同步源：同一份文件换个名字装进 data\，每次升级都覆盖；Server 启动时把它的 cloudime_default
+; 同步进 Phrases\Phrase.db（只在不同时替换，user 表不动），升级也能拿到新的内置短语。
+Source: "{#Repo}\Phrases\Phrase.db"; DestDir: "{app}\data"; DestName: "phrase-default.db"; Flags: ignoreversion
 ; —— 本地整句模型（data\local_models\ 下的 *.qjm；没有就不装，Server 不重排）——
 ; 目录里可以有多份（不同用途），Server 自己优先词表含汉字的字级模型（见 cloudime-neural 的 find_model），所以整目录带上。
 Source: "{#Repo}\data\local_models\*.qjm"; DestDir: "{app}\data\local_models"; Flags: ignoreversion skipifsourcedoesntexist
@@ -133,6 +139,9 @@ Filename: "{sys}\icacls.exe"; Parameters: """{app}"" /grant *S-1-15-2-1:(OI)(CI)
 ; ①.5 词库目录对普通用户可写：导入 / 删除词库要走这里（Program Files 默认只有管理员能写）。S-1-5-32-545 = BUILTIN\Users。
 Filename: "{sys}\icacls.exe"; Parameters: """{app}\WordBank"" /grant *S-1-5-32-545:(OI)(CI)M /T /C /Q"; \
   Flags: runhidden waituntilterminated; StatusMsg: "配置词库目录权限…"
+; ①.6 短语目录对普通用户可写：「设置 → 短语」页的增删改要写 Phrases\Phrase.db（同样在 Program Files 下）。
+Filename: "{sys}\icacls.exe"; Parameters: """{app}\Phrases"" /grant *S-1-5-32-545:(OI)(CI)M /T /C /Q"; \
+  Flags: runhidden waituntilterminated; StatusMsg: "配置短语目录权限…"
 ; ② 注册文本服务（写 HKCR + 图标到 %ProgramData%\CloudIME\cloudime.ico）。注册的是本版本的 DLL，
 ;    InprocServer32 指向新文件；旧版本的 DLL **不能** regsvr32 /u（那会把整个 CLSID 注销掉）。
 Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\{#TsfDll}"""; \

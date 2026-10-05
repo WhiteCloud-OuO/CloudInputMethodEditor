@@ -22,7 +22,7 @@ pub struct DataDirs {
     /// 主词库路径；它不再当附加词库加载一遍。
     pub main_dict: Option<PathBuf>,
 
-    /// 用户短语库（`[phrase] file`，数据目录下的 `Phrase.db`）。
+    /// 短语库（安装目录下的 `Phrases\Phrase.db`）。
     pub phrase: Option<PhraseStore>,
 }
 
@@ -66,6 +66,9 @@ pub(crate) struct ConfigReload {
 
     /// 当前的 `[update]`。
     pub(super) update: UpdateConfig,
+
+    /// 软件自带短语是否参与（`[phrase] use_default_phrases`）。
+    pub(super) use_default_phrases: bool,
 
     /// 检查更新：结果写进用户目录的 `update.json`，设置程序的「关于」页读它；拿不到用户目录时没有。
     pub(super) updates: Option<cloudime_update::Checker>,

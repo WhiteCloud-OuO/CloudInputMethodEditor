@@ -33,7 +33,7 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 
 ## crates/cloudime-core
 
-模块：`composition`（缓冲区与光标；中文模式下 Shift+字母按小写进 `buffer` 参与匹配、大写记在 `shifted`，`typed_text` 还原后用于原样上屏）/ `parser` / `correction`（拼写纠错：一处编辑的换位 / 相邻键替换读法进候选池按权重打折，`typo` 音节级变体的多敲 / 少敲写法还进整句词图，见下）/
+模块：`composition`（未选拼音缓冲区、已选文本段与光标；中文模式下 Shift+字母按小写进 `buffer` 参与匹配、大写记在 `shifted`，`typed_text` 还原后用于原样上屏；选中一个候选不立刻落文档，`select_prefix` 把「显示文本 + 它消耗的原样拼音」并进 `selected`，`unselect_last` 供退格撤回）/ `parser` / `correction`（拼写纠错：一处编辑的换位 / 相邻键替换读法进候选池按权重打折，`typo` 音节级变体的多敲 / 少敲写法还进整句词图，见下）/
 `candidate` / `ranking`（候选排序：结构键 + 权重，见下） / `shortcut` / `sentence` / `fuzzy` /
 `english`（英文候选：中文模式里的中英混输与前缀补全）/ `engine`（`query::EnglishTail`：句末英文词并入整句，`woxiangxuehaorust` → 我想学好rust，尾段也像拼音时按分数与拼音读法比）。
 
@@ -54,11 +54,15 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 - 中英混输的英文词、整句与中文词一起进同一个池子按上面的键排。英文词没有音节读法，结构键借用整段读法的简拼数与末音节完整性
   （敲的是同一串字母），否则英文词会凭「没有简拼、末音节必然完整」天然压过同覆盖的中文简拼读法（`mp` 的 MP 压 门票）；
   英文权重 = 英文词频 × (1+选过次数)，没有词频按 1.0。句末英文词并入整句（`EnglishTail`）不受影响。
-- `custom_phrase`（`CustomPhrase` = 输入码 + 文本 + 固定候选位置）：`validate_phrases` 保存与加载共用（输入码 1–32 个小写字母、
-  文本非空、位置 0–9、同码同文本不重复）；`insert_custom_phrases` 把敲全的输入码对应的短语插到指定位置（0 第一位、1 第二位……），
-  同码多条按位置升序占位、位置相同的按保存顺序往后排、越界的排到最后；`merge_replacements` 仍把外部给的「输入码 → 短语」表并进来（新条目用缺省位置 1），Core 不管数据从哪来。
-  短语不再进配置文件，存在数据目录的 SQLite（`cloudime_platform::phrase::PhraseStore`，缺省 `Phrase.db`），
-  旧库那一列叫 `weight`：按同码内的名次换算成位置后照读。Server 启动与热加载（看文件 mtime）时经 `set_custom_phrases` 装进引擎；`CandidateKind::Custom` 不带位置载荷。
+- `custom_phrase`（`CustomPhrase` = 输入码 + 上屏文本 + 可选候选显示内容 `title` + 固定候选位置）：`validate_phrases` 保存与加载共用
+  （输入码 1–32 个小写字母、文本非空、位置 1–9、同码同文本不重复；`normalize_phrases` 把 `title` 去首尾空白、空串归一成 `None`）；
+  `insert_custom_phrases` 把敲全的输入码对应的短语插到指定位置（1 第一位、2 第二位……），同码多条按位置升序占位、位置相同的按保存顺序往后排、越界的排到最后；
+  候选的 `display` 取 `title`（为空时渲染侧回退到 `text`，上屏始终是 `text`）。`merge_replacements` 仍把外部给的「输入码 → 短语」表并进来（新条目用缺省位置 2），Core 不管数据从哪来。
+  短语不再进配置文件，存在安装目录的 SQLite（`cloudime_platform::phrase::PhraseStore`，固定 `Phrases\Phrase.db`，两张表 `user` / `cloudime_default`）；
+  内置那份随升级更新的做法是**同步源**：安装包把同一份文件另存为 `{安装根}\data\phrase-default.db`（每次升级都覆盖），
+  `Phrases\Phrase.db` 用 `onlyifdoesntexist` 保住用户短语；Server 启动时 `sync_defaults` 把源里的 `cloudime_default`
+  与当前比对，不同才整表替换（`user` 不动），相同 / 源不在则什么都不做。
+  旧数据目录里单表 `phrases` 的库由迁移读一次（位置列 `position` 旧 0 基或 `weight` 都换算成 1 基）。Server 启动与热加载（看文件 mtime）时经 `set_custom_phrases` 装进引擎；`CandidateKind::Custom` 不带位置载荷。
 - 整句候选同样进这个池子：整句按整段读法给结构键（覆盖满、无简拼、末音节完整、`exact` 为真）；整句权重 = 路径词权重（`词频 × (1+选择次数) × 联想折扣`）
   的几何平均 × 模型系数（`rescore_paths` 里 `clamp(exp(λ·(神经分 − 静态分)), e^-4, e^4)`，没拿到神经分 1.0）。Viterbi 为每条部分路径累计 `log_weight`，
   `Conversion` 带 `log_weight` / `neural_factor`；同文本同读音的词候选不重复插、同文本不同读音的去掉词级那条、整句顶上。
@@ -76,7 +80,7 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 
 `EngineSession` 保存可挂起的组句、标点、历史与学习链，`Engine::swap_session` 在同一个引擎里交换输入状态，共用词库与落盘服务。切换上下文时清除查询及异步重排缓存，并由平台恢复各自私密状态。
 
-`Engine::raw_preedit()`（`engine/raw/`）只读返回 `RawPreedit { text, cursor_bytes }`：完整未上屏组合及 UTF-8 字节光标，与随后 `take_raw()` 共用文本生成，保留大小写、显式分隔符及光标后的剩余内容；不运行候选查询、不学习、不记日志、统计、历史或展示回报。首位固定 0，末位固定完整文本长度；`take_raw()` 的提交和清理顺序不变。
+`Engine::raw_preedit()`（`engine/raw/`）只读返回 `RawPreedit { text, cursor_bytes }`：完整未上屏组合（已选文本 + 未选拼音）及 UTF-8 字节光标，与随后 `take_raw()` 共用文本生成，保留大小写、显式分隔符及光标后的剩余内容；不运行候选查询、不学习、不记日志、统计、历史或展示回报。首位固定 0，末位固定完整文本长度；`take_raw()` 的提交和清理顺序不变（回车 = 已选文本 + 剩余拼音原样，去掉手敲的 `'`；已选段在选中时已各自记过输入日志，这里只补未选拼音那一段）。
 
 `Engine::discard_input` / `EngineSession::discard_input` 用于隐私能力变化时无痕清理输入，包括透传缓冲、学习链和暂存词汇曝光；`set_private` 只切换写入开关，保留已输入的组句。
 
@@ -146,8 +150,8 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 `[input.punctuation_marks_mapping]`（位图：`/`→`、` 1、小键盘 `/`→`÷` 2、小键盘 `*`→`×` 4、`~`→`～` 8、`·`→`` ` `` 16，
 `PUNCTUATION_MAPPING_BITS`，只做单键替换；老配置里的表与 `~=` 这类两键规则已下线，读到表退回缺省位图）、`punctuation_marks_pairwise_completion`（位图）、
 `use_half_wide_punctuation_marks_after_digital`；`[general]` 里 `Shift` + 字母那一项已删（固定进组句，见上），`page_keys` 也已删（翻页键固定主键盘 `-` / `=`），
-`[shortcut]` 整节删除（表达式前缀固定 `v`，问字与删候选整体下线）；`[phrase]` 只有 `file`（短语库的位置，相对数据目录 `%APPDATA%\CloudIME`，缺省 `Phrase.db`），
-短语读写走 `phrase.rs` 的 `PhraseStore`（SQLite：`phrases` 表 + `meta`，写临时文件再改名）；
+`[shortcut]` 整节删除（表达式前缀固定 `v`，问字与删候选整体下线）；`[phrase]` 只有 `use_default_phrases`（缺省 `true`：软件自带短语是否参与；短语库固定在安装目录 `Phrases\Phrase.db`，不再有 `file`），
+短语读写走 `phrase.rs` 的 `PhraseStore`（SQLite：`user` / `cloudime_default` 两张同构表，字段 `id / code / text / title / position`；`load(use_default)` 先读 `user`、自带那份里 `code` 已被用户占了的丢掉，`save_user` 只覆盖 `user`——先把现有文件拷到同目录临时文件再在临时文件上重写，`cloudime_default` 原样保留——连接都设 busy timeout）；
 `[word_bank]` 分节有 `rare_items`（缺省 `false`：开启后候选与整句才从稀有组取词，关闭更快；第三方词库目录固定随包根的 `WordBank\`）
 与 `user_file`（用户自造词库位置，相对安装目录、缺省 `WordBank/UserWordBank.db`，也认绝对路径；`DEFAULT_USER_WORD_BANK_FILE`）；
 `word_bank.rs` 有 `locate` / `path` / `user_file` / `files` / `imported` / `is_builtin` / `describe` / `load_except` / `main` / `snapshot` / `snapshot_files`
@@ -163,17 +167,20 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 `migrate.rs` 是升级时的一次性迁移（`cloudime_platform::migrate::migrate(config_path)`，Server 与设置程序都在读配置前调一次，
 幂等）：旧 `[general] page_size / layout / font / preedit / traditional / page_keys`、`[fuzzy]`、`[model] enabled`、`[status_bar] enabled`、
 整个 `[shortcut]`（`expression` / `question` / `question_mark` / `delete_candidate`）、
-`[[custom_phrases]]` 与 `[dictionaries] domains / disabled` 分别搬进新分节与短语库，
-写回前留一份 `config.toml.bak`；重写用 `config::write_with_template`（从模板起步保住注释，再把序列化出来的值覆盖上去）；
+`[[custom_phrases]]`（位置 1–9 直接夹到 1–9）与老数据目录的 `Phrase.db`（单表 `phrases`，位置换算成 1 基；只在新的 `user` 表为空时搬，搬完改名 `Phrase.db.migrated`）搬进短语库的 `user` 表，
+`[dictionaries] domains / disabled` 删，写回前留一份 `config.toml.bak`；重写用 `config::write_with_template`（从模板起步保住注释，再把序列化出来的值覆盖上去）；
 `protocol` 模块是 Windows Server ↔ TSF DLL 的 IPC 协议类型
 （`ClientMessage` / `ServerMessage` / `Frame` / `PreeditSegment`，全 serde，两端共用，见 `docs/design/architecture.md`「Windows：TSF」；
-`PROTOCOL_VERSION` = 14（v9 删掉 `CandidateKind::Emoji` 变体——删枚举变体老 DLL 同样整条帧解析失败；
+`PROTOCOL_VERSION` = 15（v9 删掉 `CandidateKind::Emoji` 变体——删枚举变体老 DLL 同样整条帧解析失败；
 v10 给 `InputSettings` 加了 `full_width_chars`；v11 给 `ServerMessage::KeyResult` 加了 `caret_shift` 与 `delete_before`
 （成对补全把光标停在括号中间、两键符号规则撤掉上一个键的输出）；v12 给 `InputSettings` 加了 `raw_input`（「不显示候选框」名单里的
 程序完全不接管）；v13 去掉 `CandidateKind::Custom` 的固定位置载荷（短语改成按权重整体排在最前）；
 v14 把中英的布尔换成三态 `InputMode`（中文 / 英文 / 禁用，`ModeChanged` 与 `ModeSync` 的字段跟着变），
-`IndicatorCommand` 加了 `ToggleCharWidthType` 与 `ToggleSimpTrad`（`Shift + Space`、`Ctrl + Alt + .` 两个内置热键）——删字段 / 改变体形状老 DLL
-同样整条帧解析失败，必须 +1 并重装 DLL）。
+`IndicatorCommand` 加了 `ToggleCharWidthType` 与 `ToggleSimpTrad`（`Shift + Space`、`Ctrl + Alt + .` 两个内置热键）；
+v15 给 `IndicatorCommand` 加了 `RestartServer`（托盘菜单的「重启输入法服务」，见 apps/windows 一节）——加 / 删枚举变体
+与删字段一样，老 DLL 整条帧解析失败、必须 +1 并重装 DLL，老 Server 下点了这一项没反应）。
+v15 之后给 `Candidate` 加了 `display`（候选里显示的内容，上屏仍用 `text`）：带 `serde(default)` 的新字段两边仍能对话，
+老 DLL 只读候选条数、不读内容，行为不变，所以没有 +1。
 
 ## crates/cloudime-render
 
@@ -228,7 +235,7 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 Server 装配直接退出，表现成「装完打不出候选、按键没反应、状态条也不显示」。
 本地整句模型：`dispatch/rescore/` 按 `[candidate] use_local_sentence_organization_model` 在后台线程加载预热、停键后重排，见 `docs/design/architecture.md`「本地整句模型」。
 热加载的 `WordBank\` 目录与启动同款（按 `WordBank\Dict.db` 与附加词库的 mtime / 长度快照重装）；
-短语库（`[phrase] file`）也按文件 mtime 单独热重读。不合成一个 crate，因为 DLL 不能带 Engine 的依赖树，见 `apps/windows/README.md`；
+短语库（安装目录 `Phrases\Phrase.db`）也按文件 mtime 单独热重读；`[phrase] use_default_phrases` 变了也重读一遍。不合成一个 crate，因为 DLL 不能带 Engine 的依赖树，见 `apps/windows/README.md`；
 协议类型在 `cloudime-platform::protocol`，设计见 `docs/design/architecture.md`「Windows：TSF」。
 中英模式的两项值（`InputSettings::switch_mode` 切换键、`InputSettings::english_mode` 内置英文模式开关）
 由 Server 经协议下发给 DLL（`InputSettings`，见本节末尾），**恒为固定值**（`SwitchKeys::default()` 单击 shift 与 `true`，设置里已没有对应选项）；
@@ -248,12 +255,21 @@ Server 装配直接退出，表现成「装完打不出候选、按键没反应�
 「输入」页在 `settings/src/panel/pages/input.rs`，
 对应 `[input]` 那八项（模糊音位图、简繁单选、标点全半角下拉、符号映射只读列表等）；「候选」页在 `pages/candidates.rs`，
 对应 `[candidate]`（本地整句模型开关、排布单选、个数滑轨（右侧跟一个当前值数字）、联想候选项目上限滑轨 0–4、三个「字体…」按钮弹系统字体对话框 `font_dialog.rs`、
-序号样式下拉、最小宽度、展示更多候选项、按程序隐藏的名单）；「短语」页在 `pages/phrase.rs`（表单 + 三列列表，读写 `Phrase.db`）；
+序号样式下拉、最小宽度、展示更多候选项、按程序隐藏的名单）；「短语」页在 `pages/phrase.rs`（顶部「启用软件自带短语」开关，表单 + 三列列表，读写安装目录 `Phrases\Phrase.db` 的 `user` 表）；
 「调试」页在 `pages/debugging.rs`：**原「统计」页整页搬来的输入统计面板**（末尾是「数据与组件」说明）与紧随其后的 `[debugging]` 自动隐藏开关、
 原来「高级」页的数据 / 日志入口（打开数据目录 / 打开日志目录 / 打包日志到桌面 / 清空输入日志四个按钮一行）与项目 GitHub 页面、详细日志、学习输入习惯、记录输入日志。
 「通用」页已删（`Shift` + 字母固定进组句，见 `dispatch/key/input.rs::apply_chinese`：字母进缓冲区、`Caps Lock` 亮着的仍直通），
-「统计」与「高级」两页并进「调试」；「关于」页已整体删除（版本在「数据与组件」里仍有一份，检查更新只剩 Server 侧与任务栏菜单，许可与数据署名看 `LICENSE` 与 `docs/design/landscape.md`）。
+「统计」与「高级」两页并进「调试」；「关于」页已整体删除（版本在「数据与组件」里仍有一份，检查更新只剩 Server 侧（查并写 `update.json`，界面上不再提示），许可与数据署名看 `LICENSE` 与 `docs/design/landscape.md`）。
 设置窗口的标题栏图标走 `ViewContext::window_visuals(WindowVisuals::new().icon(path))`（`component.rs::window_icon`）——WinUI 3 不会自动取 exe 里的图标资源，必须显式 `AppWindow.SetIcon`，而那个接口只收 `&'static str`，所以算一次「exe 旁 `cloudime.ico`」的绝对路径再 `Box::leak`；装机包由 `cloudime.iss` 装这份 ico，开发时 `settings/build.rs` 往 exe 旁拷一份。
+
+托盘「中 / 英」图标的右键菜单（`tsf/src/com/mode/menu.rs`，`TrackPopupMenuEx` 挂输入框所在窗口）固定四项、不再切中英：
+灰显的「云朵输入法」标题、分隔线、「设置」（`IndicatorCommand::OpenSettings`）、「重启输入法服务」（`IndicatorCommand::RestartServer`）。
+DLL 只把选中的命令发给 Server（`com/service/menu.rs::show_indicator_menu`），原菜单上的中 / 英、全角标点与「有新版本」入口一并去掉；
+协议里 `IndicatorState` / `ModeSync.indicator` / `IndicatorCommand::OpenDownload` 都保留，Server 仍算 `update_available`，只是界面上没有入口。
+「重启输入法服务」在 Server（`dispatch/status/mod.rs::handle_indicator`）：起一个新实例（`current_exe()` + `--wait-pid <本进程 pid>` +
+`CREATE_NO_WINDOW`、工作目录设为 exe 所在目录），置 `Router.restart_pending`；`ipc/pipe.rs::serve_pipe` 把这次回包写出后 `break`、
+进程正常返回（日志刷盘，比 `process::exit` 干净）。新实例在 `main.rs` 装好日志后按 `--wait-pid`（纯函数 `restart_wait_pid`）用
+`OpenProcess` + `WaitForSingleObject` 最多等旧进程 15 秒再占管道，避开 `FILE_FLAG_FIRST_PIPE_INSTANCE` 的抢管道失败。
 
 「不显示候选框」名单（`[candidate] program_list_of_hiding_candidate`）：Server 按会话的 exe 名（`SessionInfo.app`）算出
 `InputSettings.raw_input` 下发给 DLL，DLL 彻底不吃键（`would_eat` / 断连时的兜底都放行），按键原样交给应用 —— 编辑器里
@@ -264,10 +280,10 @@ Server 装配直接退出，表现成「装完打不出候选、按键没反应�
 （`set_mixture_input` 关掉 `insert_english` 与 `split_english_tail`）、中文模式符号映射（`Punctuation::symbol`，两键规则返回
 `MappedSymbol { text, delete_before }`，壳把它变成协议里的 `delete_before` 让 DLL 删掉上一个键的输出）、成对补全
 （`dispatch/key/input.rs::complete_pair` 按**转换后**的字符查位图，补上右半边并置 `caret_shift = -1`；右半边又敲一次就置 `+1` 跳过，
-靠 `Router.pending_close`。没转换的左半边（半角标点、英文模式之外的 `{` 这类不在全角表里的键）也在这条路上补 ASCII 的一对；
-英文模式不补，留给编辑器自己的括号配对）。成对补全位图按界面顺序连续排（`()` 1、`[]` 2、`{}` 4、`""` 8、`（）` 16、`【】` 32、`｛｝` 64、`《》` 128、`“”` 256、`‘’` 512）。
-组句里敲标点（`,` `.` `?` 等可打印 ASCII 标点）先上屏当前高亮候选、再按「没在组句」处理这一键（走符号映射 / 全角标点 / 成对补全），
-见 `dispatch/key/input.rs::is_commit_punctuation`：`-` `=` 是翻页键，它们上档的 `_` `+`（标识符里常见）与拼音分隔符 `'` 排除在外、仍进英文直输段。
+靠 `Router.pending_close`。没转换的左半边（半角标点、`{` 这类不在全角表里的键）也在这条路上补 ASCII 的一对；
+中英一致——只要开了成对补全、键没被全角表转换就补，英文 + 西文符号就是这条路）。成对补全位图按界面顺序连续排（`()` 1、`[]` 2、`{}` 4、`""` 8、`（）` 16、`【】` 32、`｛｝` 64、`《》` 128、`“”` 256、`‘’` 512）。
+组句里敲标点（`,` `.` `?` 等可打印 ASCII 标点）先选上当前高亮候选、把剩余拼音原样补完整体上屏，再按「没在组句」处理这一键（走符号映射 / 全角标点 / 成对补全），
+见 `dispatch/key/input.rs::{is_commit_punctuation, finish_composition}`：`-` `=` 是翻页键，它们上档的 `_` `+`（标识符里常见）与拼音分隔符 `'` 排除在外、仍进英文直输段。
 候选与标点由 `with_prefix` 合成一次 `Changed`，否则应用会先插标点再插词（Windows 放行是同步的、上屏走异步编辑会话）。
 组句中的 `Ctrl + 数字`：用户短语直接上屏、整句候选记录一次再上屏（同一整句记够两次由 `Engine::remember_sentence` 收进
 `UserWordBank.db`，与逐词拼共用阈值 2 与初始权重）、其余中文 / 英文候选是**杀词**——
@@ -352,6 +368,9 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
   中文行 `language` = `中文`、`pinyin` 是音节空格分隔；英文行 `language` = `英文`、`text` 是小写编码、`pinyin` 是原样写法、进 `words_english`。
   同一 `(text, pinyin, language)` 先去重（权重大的胜出、相同则先到先得）再归表。命令：
   `cargo run --release -p cloudime-dict-convert -- word-bank --name 云朵基础词库 --license "MIT AND Unicode-3.0" --source assets/lexicon`。
+- `phrase-db [路径] [--force]`：写出一份空的自定义短语库（缺省 `Phrases/Phrase.db`，含 `user` / `cloudime_default` 两张空表），
+  只用来第一次生成这份文件。仓库根的 `Phrases/Phrase.db` 是**随仓库追踪的产品数据**（`cloudime_default` 表里的内置短语直接在里面手写），
+  所以已存在时拒绝覆盖（加 `--force` 才整份换成空库，会丢掉内置短语）。安装包按 `onlyifdoesntexist` 装它。
 - `rehead dict|lm|model <输入…>`：把改名前的 `.qj`（魔数 `QINGJIAN`）就地改成当前魔数 `CLOUDIME`，只改头 8 字节。
   改之前按容器完整校验一遍（版本、分节表、`META`）、改完再开一遍，坏文件原样报错不碰，已是新魔数的跳过；
   `tools/release/data-bundle.sh` 发包前拿同一套魔数当门禁，用法见 `docs/notes/release.md`「产品数据从哪来」。

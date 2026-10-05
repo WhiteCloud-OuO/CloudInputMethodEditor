@@ -16,6 +16,10 @@ C:\Program Files\CloudIME\
     tools\                    工具目录：cwt-gui.exe（词库转换工具，GUI）+ cwt.exe（同上的命令行版）+ tools.list（悬浮状态条「工具」按钮的菜单清单）
     data\generated\           lm.qj（语言模型；英文词表已在 Dict.db 里，不再单独装）
     WordBank\                 Dict.db（7 张表：中文普通组 / 稀有组 + 英文）与用户导入的附加词库（本目录对普通用户可写，导入 / 删除词库走它）
+    Phrases\Phrase.db         自定义短语库（user 与 cloudime_default 两张表；本目录对普通用户可写，「设置 → 短语」页走它；
+                              随仓库带一份成品，升级不覆盖用户短语）
+    data\phrase-default.db    内置短语的同步源（与上面同一份文件换个名字，每次升级都覆盖；Server 启动时把它的
+                              cloudime_default 同步进 Phrases\Phrase.db，用户短语不受影响）
     data\icons-arrangement.cfg 悬浮状态条的按钮排布（哪个按钮、位置、图标）
     data\icons\*.svg          那些按钮的图标（20×20）
     assets\                   sample\
@@ -31,7 +35,7 @@ Server 与设置程序按 **exe 相对**定位随包资源（`cloudime_platform:
 装包只铺一份、升级不覆盖（用户自己加的工具与改过的清单留着）；控制台工具（如 `cwt.exe`）从菜单启动会留在控制台里，
 方便看输出、接着敲命令。卸载时 `{app}` 整棵删掉，所以用户自己塞进 `tools\` 的东西也会一起删。
 
-用户数据在 `%APPDATA%\CloudIME`（config.toml、用户短语 `Phrase.db`、学习数据、统计），三个进程的日志在 `%LOCALAPPDATA%\CloudIME\logs`（`server.` / `tsf.` / `settings.` 前缀，按天，留 7 天）；
+用户数据在 `%APPDATA%\CloudIME`（config.toml、学习数据、统计），用户短语在安装目录的 `Phrases\Phrase.db`，三个进程的日志在 `%LOCALAPPDATA%\CloudIME\logs`（`server.` / `tsf.` / `settings.` 前缀，按天，留 7 天）；
 **卸载时这两处随 `[UninstallDelete]` 一并删除**（`{userappdata}` / `{localappdata}`，指运行卸载程序的那个用户；同一台机器上其他账户的数据要各自删）。
 只想保留数据的话把 `cloudime.iss` 里那两条 `{userappdata}` / `{localappdata}` 注释掉。
 图标由 `regsvr32` 写到 `%ProgramData%\CloudIME\cloudime.ico`（DLL 里 include_bytes 内嵌），反注册时删掉，`[UninstallDelete]` 顺带清掉空目录。
@@ -67,7 +71,7 @@ Server 与设置程序按 **exe 相对**定位随包资源（`cloudime_platform:
 卸载反向：杀 Server / 设置程序 → 反注册当前版本 DLL（DLL 自己删掉 `%ProgramData%\CloudIME\cloudime.ico`）→ 删文件。
 输入法 DLL 被加载在**每个用过输入法的进程**里（连 explorer.exe 都在内），文件锁着删不掉：卸载器对删不掉的
 `cloudime_tsf*.dll` 调用 `RestartReplace`（`MoveFileEx` 的 `DELAY_UNTIL_REBOOT`）登记到重启后由系统删除，并在结束前提示重启；
-`[UninstallDelete]` 清掉整个安装目录（含用户导入的词库）与用户数据（`%APPDATA%\CloudIME`、`%LOCALAPPDATA%\CloudIME`、`%ProgramData%\CloudIME`）。
+`[UninstallDelete]` 清掉整个安装目录（含用户导入的词库与 `Phrases\Phrase.db` 里的用户短语）与用户数据（`%APPDATA%\CloudIME`、`%LOCALAPPDATA%\CloudIME`、`%ProgramData%\CloudIME`）。
 
 ## 升级：DLL 被占用怎么办
 
@@ -98,8 +102,13 @@ AppModel API 把框架包加进进程包图，Windows 10 上没有那两个函�
 
 ## 打包（在编译机上）
 
+数据取自仓库 `data\generated`、`assets`、`WordBank\` 与 `Phrases\`。打包前先确保 `.qj` 与 `Phrases\Phrase.db` 是最新的
+（`Phrases\Phrase.db` 是随仓库追踪的：内置短语手写在它的 `cloudime_default` 表里，改它就等于改内置短语；
+`Phrases\` 下除 `Phrase.db` 外一律 gitignore；第一次生成空库用
+`cargo run --release -p cloudime-dict-convert -- phrase-db Phrases/Phrase.db`，文件已存在时该命令会拒绝覆盖）。
+
 ```powershell
-# 需要 MSVC 工具链 + Inno Setup。数据取自仓库 data\generated 与 assets，打包前先确保 .qj 是最新的。
+# 需要 MSVC 工具链 + Inno Setup
 powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1
 ```
 

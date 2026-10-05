@@ -107,6 +107,9 @@ pub struct Router {
 
     /// 上一键成对补全补上的右半边（用户敲的那个键）；紧接着又敲它一下就是「跳过」。
     pending_close: Option<char>,
+
+    /// 任务栏菜单点了「重启输入法服务」：`serve_pipe` 回完这条消息就退出，让新起的实例接管。
+    restart_pending: bool,
 }
 
 impl Router {
@@ -141,6 +144,7 @@ impl Router {
             caret_shift: 0,
             delete_before: 0,
             pending_close: None,
+            restart_pending: false,
         }
     }
 
@@ -200,5 +204,11 @@ impl Router {
     pub fn flush_learning(&mut self) {
         self.engine.flush_learning();
         self.last_flush = Instant::now();
+    }
+
+    /// 取走「待重启」标志：任务栏菜单点了「重启输入法服务」，`serve_pipe` 回完这条消息就退出，
+    /// 进程正常返回（日志刷盘），比在处理器里直接 `process::exit` 干净。
+    pub fn take_restart_pending(&mut self) -> bool {
+        std::mem::take(&mut self.restart_pending)
     }
 }

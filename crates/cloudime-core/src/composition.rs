@@ -1,20 +1,40 @@
-//! 输入状态机：拼音缓冲区与光标。
+//! 输入状态机：拼音缓冲区、已选文本与光标。
 //!
-//! 只维护「用户已经敲了什么、光标在哪」，不理解拼音，也不知道候选。
-//! 缓冲区只含 ASCII 小写字母和 `'`（表达式模式下还有数字与运算符，见 `shortcut`），所以字节下标即字符下标。
-//! 中文模式下 Shift+字母按**小写**进缓冲区参与匹配（`Cpan` 与 `cpan` 一样出 C盘），
+//! 只维护「用户已经敲了什么、选了哪些、光标在哪」，不理解拼音，也不知道候选。
+//! 缓冲区只含未选拼音（ASCII 小写字母和 `'`，表达式模式下还有数字与运算符，见 `shortcut`），
+//! 所以字节下标即字符下标。中文模式下 Shift+字母按**小写**进缓冲区参与匹配（`Cpan` 与 `cpan` 一样出 C盘），
 //! 敲的是大写记在 `shifted` 里，原样上屏时用 [`Composition::typed_text`] 还原。
+//!
+//! 中文模式选中一个候选**不立刻上屏**：它并进 [`Composition::select_prefix`] 记下的已选段，
+//! 组句显示成「已选文本 + 未选拼音」（`云朵shurufa`），等整段转换完或回车 / 标点时再整体交给应用；
+//! 退格先 [`Composition::unselect_last`] 撤回最后一次选择（把中文还原成它的拼音）。
 
 #[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Composition {
-    /// 用户已敲入、尚未上屏的拼音，匹配用的小写形式。
+    /// 用户已敲入、尚未选中的拼音，匹配用的小写形式。
     buffer: String,
 
     /// 与 `buffer` 的字符一一对应：该位是按住 Shift 敲的大写字母。
     shifted: Vec<bool>,
 
-    /// 光标位置（字节下标，`0..=buffer.len()`），插入和退格都相对它。
+    /// 光标位置（字节下标，`0..=buffer.len()`），插入和退格都相对它。只落在未选拼音范围内。
     cursor: usize,
+
+    /// 组句里已经选定、还没整体上屏的段，按选择顺序排列，显示在未选拼音之前。
+    selected: Vec<Selected>,
+}
+
+/// 一段已选文本：显示文本 + 它消耗掉的原样拼音（退格撤回时还原）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct Selected {
+    /// 显示文本（可能是繁体）。
+    text: String,
+
+    /// 被消耗掉的小写拼音（与 [`Composition::buffer`] 同格式）。
+    pinyin: String,
+
+    /// 与 `pinyin` 的字符一一对应：该位是按 Shift 敲的大写字母。
+    shifted: Vec<bool>,
 }
 
 impl Composition {
@@ -23,7 +43,35 @@ impl Composition {
     }
 
     pub fn is_empty(&self) -> bool {
-        self.buffer.is_empty()
+        self.selected.is_empty() && self.buffer.is_empty()
+    }
+
+    /// 缓冲区（未选拼音）的字节长度。
+    pub fn buffer_len(&self) -> usize {
+        self.buffer.len()
+    }
+
+    /// 组句里有没有已选段。
+    pub fn has_selected(&self) -> bool {
+        !self.selected.is_empty()
+    }
+
+    /// 已选文本按顺序拼起来。
+    pub fn selected_text(&self) -> String {
+        self.selected.iter().map(|s| s.text.as_str()).collect()
+    }
+
+    /// 完整未上屏组合（已选文本 + 未选拼音原样），回车原样上屏用。
+    pub fn raw_text(&self) -> String {
+        let mut text = self.selected_text();
+        text.push_str(&self.typed(self.buffer.len()));
+        text
+    }
+
+    /// [`Self::raw_text`] 里的 UTF-8 字节光标：已选文本之后，再加上未选拼音的光标。
+    pub fn raw_cursor(&self) -> usize {
+        let selected: usize = self.selected.iter().map(|s| s.text.len()).sum();
+        selected + self.cursor.min(self.buffer.len())
     }
 
     pub fn cursor(&self) -> usize {
@@ -167,6 +215,36 @@ impl Composition {
         self.buffer.clear();
         self.shifted.clear();
         self.cursor = 0;
+        self.selected.clear();
+    }
+
+    /// 选中作用域前 `consumed` 字节的拼音为文本 `text`：拼音移出缓冲区、记进已选段，
+    /// 光标随之落在剩余拼音里。选中只是并进组句，不立刻交给应用（见文件头）。
+    pub fn select_prefix(&mut self, text: &str, consumed: usize) {
+        let len = consumed.min(self.buffer.len());
+        let removed = self.char_index(len);
+        let pinyin = self.buffer[..len].to_owned();
+        let shifted: Vec<bool> = self.shifted.drain(..removed).collect();
+        self.buffer.drain(..len);
+        self.cursor = self.cursor.saturating_sub(len).min(self.buffer.len());
+        self.selected.push(Selected {
+            text: text.to_owned(),
+            pinyin,
+            shifted,
+        });
+    }
+
+    /// 撤回最后一次选择：把它的拼音还原回缓冲区开头，光标落在还原段之后。没有已选段返回 `false`。
+    pub fn unselect_last(&mut self) -> bool {
+        let Some(segment) = self.selected.pop() else {
+            return false;
+        };
+        self.buffer.insert_str(0, &segment.pinyin);
+        let mut shifted = segment.shifted;
+        shifted.append(&mut self.shifted);
+        self.shifted = shifted;
+        self.cursor = segment.pinyin.len();
+        true
     }
 
     /// 删掉开头 `len` 个字节（上屏消耗掉的拼音），光标随之前移；
