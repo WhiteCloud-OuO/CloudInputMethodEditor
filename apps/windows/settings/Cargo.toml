@@ -1,6 +1,6 @@
 [package]
 name = "cloudime-windows-settings"
-version = "0.0.2"
+version = "0.0.3-dev"
 description = "Windows 输入法的设置界面：左侧导航栏 + 各分节表单，读写 %APPDATA%\\CloudIME\\config.toml"
 edition.workspace = true
 license.workspace = true
