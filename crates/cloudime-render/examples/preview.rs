@@ -262,6 +262,7 @@ fn matrix() -> Frame {
         }),
         rows,
         highlighted: Some(12),
+        highlight_animation: None,
         columns: 9,
         column_ems: (0..9)
             .map(|column| {
@@ -325,6 +326,7 @@ fn nihao() -> Frame {
             ),
         ],
         highlighted: Some(0),
+        highlight_animation: None,
         columns: 0,
         column_ems: Vec::new(),
         footer: Some("1/6".to_owned()),
@@ -377,6 +379,7 @@ fn corrected_japanese() -> Frame {
             ),
         ],
         highlighted: Some(1),
+        highlight_animation: None,
         columns: 0,
         column_ems: Vec::new(),
         footer: None,
@@ -390,6 +393,7 @@ fn probe() -> Frame {
         preedit: None,
         rows: vec![Row::plain(0, "云朵输入法 hello 🙂 日本語 骨直曜")],
         highlighted: None,
+        highlight_animation: None,
         columns: 0,
         column_ems: Vec::new(),
         footer: None,

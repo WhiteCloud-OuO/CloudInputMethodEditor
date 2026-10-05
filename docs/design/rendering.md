@@ -102,6 +102,7 @@
 - **状态条**：`render_status` 画一排 `StatusCell::Icon`：整份 `<svg>` 源码交给 `svg.rs`（resvg 解析 + 光栅化成 `BUTTON_SIZE` = 20 pt 方按钮，按 SVG 宽高比等比缩放居中），按钮之间与四周各留 `BUTTON_GAP` = 6 pt，没有文字格也没有分隔线；返回位图与各按钮右边界供点击命中。按钮的顺序、显隐与图标来自 exe 旁 `data\icons-arrangement.cfg`（Server 侧 `ui/status/arrangement.rs` 解析，`pos=-1` 不显示）。resvg 关掉默认特性：图标里没有文字，不引入系统字体扫描、svgz 解压与光栅图解码（usvg 因此一个可选特性都没开）；源码解析不了就让整帧渲染报 `RenderError::InvalidSvg`。
 - **配置**：`[general] font` 经 `CandidateSink::configure` 送到 UI 线程，装上时与热加载变了时各送一次；字族名按 DirectWrite 的系统字体集合找文件（`cloudime_render::system_fonts`），设置程序的「字体」框也从它列字族。
 - **候选行类型**：壳直接用渲染器的 `Row` / `Tone`，不再有自己的一份。
+- **高亮条移动动画**：展示模型（`Frame::highlight_animation`：起点矩形 + 缓动进度）让渲染器在旧 / 新两行（矩阵里是两格）的矩形之间逐边插值，三种布局都先把各行 / 各格的高亮矩形量好、画在文字之前，并把这份矩形放进 `Rendered::highlight_rects` 交给壳；壳按当前视觉位置续滑、按约 16 ms 的 `WM_TIMER` 重算进度原地重贴，约 150 ms 的 ease-out 后收尾；高亮没变的新帧不打断动画，翻页 / 新查询 / 隐藏直接画或取消。纯展示，不涉及协议，不改窗口位置大小。
 
 真机结果（Windows 11 26200，2026-09-15）：候选窗口深色 / 浅色、竖排 / 横排、Segoe UI Emoji（COLRv0）彩色、阴影，悬浮状态条与矢量齿轮，「字体」设置项与热切换（换成 Maple Mono NF CN 立即生效），均通过。灰度抗锯齿与微软雅黑回退看着与原生绘制没有可感差异；Yu Gothic 回退与首帧耗时没有单独测。
 排查中顺带发现并修掉的与渲染器无关的问题：TSF DLL 动态链 `vcruntime140.dll`，AppContainer 进程（任务栏搜索等）读不到系统里那份时整个 DLL 加载失败、系统切回上一个输入法，已改成静态 CRT（仓库根 `.cargo/config.toml`）。

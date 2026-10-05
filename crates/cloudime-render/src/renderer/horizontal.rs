@@ -1,9 +1,9 @@
 //! 横排：候选排成一行，高亮那个下面单独一行译文，页码在行尾。
 
 use super::item::Item;
-use super::{BADGE_GAP, HIGHLIGHT_INSET, INDEX_GAP, Metrics, Renderer};
+use super::{BADGE_GAP, HIGHLIGHT_INSET, INDEX_GAP, Metrics, Renderer, highlight_rect};
 use crate::canvas::Canvas;
-use crate::frame::{Frame, Row};
+use crate::frame::{Frame, HighlightRect, Row};
 
 /// 一项的内容宽度：序号 + 候选词 +（有角标时）间距 + 角标。
 fn item_width(item: &Item, m: &Metrics) -> f32 {
@@ -82,21 +82,38 @@ impl Renderer {
         left: f32,
         y: f32,
         content_width: f32,
-    ) {
+    ) -> Vec<HighlightRect> {
         if frame.rows.is_empty() {
-            return;
+            return Vec::new();
         }
         // 量尺寸时已整形过一遍，这里再整形一遍；等渲染器定型再把结果从 render 传下来。
         let (items, row_height) = self.items(&frame.rows, m);
         let top = y + m.row_padding();
         let text_height = m.px(m.theme.text_font.line_height);
         let inset = m.px(HIGHLIGHT_INSET);
+        // 先把各项的条子量好、画在文字之前：滑动中的条子会盖到别的项。
+        // 矩形用内容区坐标（`left` 是内容区左边，纵向同样从内容区顶边算），交给壳续滑用。
+        let mut x = m.padding() + inset;
+        let rects: Vec<HighlightRect> = items
+            .iter()
+            .map(|item| {
+                let width = item_width(item, m);
+                let rect = HighlightRect::new(
+                    x - inset,
+                    y - left,
+                    x - inset + width + inset * 2.0,
+                    y - left + row_height,
+                );
+                x += width + m.column_gap();
+                rect
+            })
+            .collect();
+        if let Some(rect) = highlight_rect(frame, &rects) {
+            self.fill_highlight(canvas, m, rect, left);
+        }
         let mut x = left + m.padding() + inset;
-        for (i, (row, item)) in frame.rows.iter().zip(&items).enumerate() {
+        for (row, item) in frame.rows.iter().zip(&items) {
             let width = item_width(item, m);
-            if Some(i) == frame.highlighted {
-                self.fill_highlight(canvas, m, x - inset, y, width + inset * 2.0, row_height);
-            }
             self.draw_text(
                 canvas,
                 &row.index,
@@ -128,5 +145,6 @@ impl Renderer {
                 x += self.draw_text(canvas, segment, &style, x, annotation_top);
             }
         }
+        rects
     }
 }

@@ -2,6 +2,8 @@
 
 use tiny_skia::Pixmap;
 
+use crate::frame::HighlightRect;
+
 pub struct Rendered {
     /// 预乘 RGBA 位图，含阴影边。
     pub pixmap: Pixmap,
@@ -18,6 +20,10 @@ pub struct Rendered {
 
     /// 渲染用的倍数，壳把像素换回点用。
     pub scale: f32,
+
+    /// 每行 / 每格的高亮条矩形（内容区坐标），下标与帧的 `rows` 对齐。
+    /// 壳按它算连按时滑动的起点；没有高亮的帧为空。
+    pub highlight_rects: Vec<HighlightRect>,
 }
 
 impl Rendered {

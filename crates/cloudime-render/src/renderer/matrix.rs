@@ -2,10 +2,10 @@
 //! 超宽的候选截尾加「…」；网格下面固定留一行信息：高亮候选被截断时的完整文本、它的译文，页码在行尾。
 //! 整个窗口的宽度只由列宽决定，信息行放不下的也截断——高亮怎么移、视口怎么滚，窗口都不跳。
 
-use super::{HIGHLIGHT_INSET, INDEX_GAP, Metrics, Renderer};
+use super::{HIGHLIGHT_INSET, INDEX_GAP, Metrics, Renderer, highlight_rect};
 use crate::canvas::Canvas;
 use crate::color::Color;
-use crate::frame::Frame;
+use crate::frame::{Frame, HighlightRect};
 use crate::text::TextStyle;
 
 /// 帧没给列宽时，一格里候选词最多多宽（按候选字号的倍数）。
@@ -66,15 +66,33 @@ impl Renderer {
         left: f32,
         y: f32,
         content_width: f32,
-    ) {
+    ) -> Vec<HighlightRect> {
         if frame.rows.is_empty() {
-            return;
+            return Vec::new();
         }
         let cells = self.matrix_cells(frame, m);
         let columns = frame.columns.max(1);
         let text_height = m.px(m.theme.text_font.line_height);
         let inset = m.px(HIGHLIGHT_INSET);
         let origin = left + m.padding() + inset;
+        // 先把各格的条子量好、画在文字之前：滑动中的条子会盖到别的格。
+        // 矩形用内容区坐标（`left` 是内容区左边，纵向同样从内容区顶边算），交给壳续滑用。
+        let rects: Vec<HighlightRect> = (0..frame.rows.len())
+            .map(|i| {
+                let cell_width = cells.column_widths[i % columns];
+                let x = origin - left + cells.offset(i % columns, m.column_gap());
+                let row_y = y - left + cells.row_height * (i / columns) as f32;
+                HighlightRect::new(
+                    x - inset,
+                    row_y,
+                    x - inset + cell_width + inset * 2.0,
+                    row_y + cells.row_height,
+                )
+            })
+            .collect();
+        if let Some(rect) = highlight_rect(frame, &rects) {
+            self.fill_highlight(canvas, m, rect, left);
+        }
         for (i, row) in frame.rows.iter().enumerate() {
             let (text, _) = &cells.texts[i];
             if text.is_empty() && row.index.is_empty() {
@@ -84,16 +102,6 @@ impl Renderer {
             let x = origin + cells.offset(i % columns, m.column_gap());
             let row_y = y + cells.row_height * (i / columns) as f32;
             let top = row_y + m.row_padding();
-            if Some(i) == frame.highlighted {
-                self.fill_highlight(
-                    canvas,
-                    m,
-                    x - inset,
-                    row_y,
-                    cell_width + inset * 2.0,
-                    cells.row_height,
-                );
-            }
             if !row.index.is_empty() {
                 self.draw_text(
                     canvas,
@@ -134,10 +142,10 @@ impl Renderer {
         }
         let mut x = origin;
         let Some(index) = frame.highlighted else {
-            return;
+            return rects;
         };
         let Some(row) = frame.rows.get(index) else {
-            return;
+            return rects;
         };
         if cells.texts[index].1 {
             let used = self.draw_clipped(
@@ -161,6 +169,7 @@ impl Renderer {
             x += used;
             budget -= used;
         }
+        rects
     }
 
     /// 在信息行里画一段小字，宽度超过 `budget` 就截断；返回画了多宽。

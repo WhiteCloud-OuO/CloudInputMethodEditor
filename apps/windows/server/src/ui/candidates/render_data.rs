@@ -3,11 +3,12 @@
 use cloudime_platform::ItemNumberStyle;
 use cloudime_platform::LayoutMode;
 use cloudime_platform::protocol::{Frame, PreeditKind};
-use cloudime_render::{Preedit, PreeditSegment, PreeditStyle, Row};
+use cloudime_render::{HighlightAnimation, Preedit, PreeditSegment, PreeditStyle, Row};
 
 use super::row;
 
 /// 一次绘制要用的全部内容。
+#[derive(Clone)]
 pub(crate) struct RenderData {
     /// 顶部拼音行的各段。
     pub(super) preedit: Vec<(String, PreeditKind)>,
@@ -73,8 +74,12 @@ impl RenderData {
         self.notice = frame.notice.clone();
     }
 
-    /// 渲染器要的帧。提示（删了什么词）在渲染器里画在拼音行右侧。
-    pub(super) fn render_frame(&self) -> cloudime_render::Frame {
+    /// 渲染器要的帧。提示（删了什么词）在渲染器里画在拼音行右侧；`highlight_animation` 是纯展示的
+    /// 高亮条滑动信息，`None` 直接画在高亮行。
+    pub(super) fn render_frame(
+        &self,
+        highlight_animation: Option<HighlightAnimation>,
+    ) -> cloudime_render::Frame {
         let preedit = (!self.preedit.is_empty()).then(|| Preedit {
             segments: self
                 .preedit
@@ -95,6 +100,7 @@ impl RenderData {
             rows: self.rows.clone(),
             // 协议里 usize::MAX 表示不高亮。
             highlighted: (self.highlight != usize::MAX).then_some(self.highlight),
+            highlight_animation,
             columns: 0,
             column_ems: Vec::new(),
             footer: self.footer.clone(),

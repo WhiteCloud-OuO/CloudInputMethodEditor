@@ -1,11 +1,31 @@
 //! Tab 与分页的三端约定。
-use crate::dispatch::{Router, RouterConfig};
+use std::sync::{Arc, Mutex};
+
+use crate::dispatch::{CandidateSink, RenderSettings, Router, RouterConfig};
 use cloudime_core::{CandidateKind, CustomPhrase, Engine};
 use cloudime_dictionary::{Dictionary, WordList};
 use cloudime_platform::protocol::{
-    ClientMessage, Frame, KeyEvent, KeyModifiers, KeyOutcome, PROTOCOL_VERSION, ServerMessage,
-    SessionId,
+    ClientMessage, Frame, KeyEvent, KeyModifiers, KeyOutcome, PROTOCOL_VERSION, ScreenRect,
+    ServerMessage, SessionId,
 };
+
+/// 记下每次 `show` 的帧与矩形，验证「位置变了但帧没变」的重画。
+#[derive(Default)]
+struct Recorded {
+    shows: Mutex<Vec<(Frame, ScreenRect)>>,
+}
+
+struct RecordingSink(Arc<Recorded>);
+
+impl CandidateSink for RecordingSink {
+    fn show(&self, frame: Frame, _badges: Vec<Option<char>>, rect: ScreenRect) {
+        self.0.shows.lock().unwrap().push((frame, rect));
+    }
+
+    fn hide(&self) {}
+
+    fn configure(&self, _settings: RenderSettings) {}
+}
 
 fn router(size: usize) -> Router {
     let mut engine = Engine::new(Dictionary::parse("你\tni\t100\n").unwrap()).with_english(
@@ -234,4 +254,40 @@ fn backtick_cycles_english_candidate_case() {
         assert_eq!(result.1, None);
         assert_eq!(english(&result.2).as_deref(), Some(expected));
     }
+}
+
+/// 方向键之后，同一次按键的异步编辑会话补报的组句矩形也会让候选窗重画一遍：
+/// 帧（含高亮）一模一样，只有矩形变了。壳侧 `set_content` 会收到这个「高亮没变」的帧，
+/// 曾经的实现会顺手把正在跑的高亮滑动清掉，这正是「第一次按方向键不动画」的来源。
+#[test]
+fn a_later_candidate_rect_resends_an_identical_frame() {
+    let rect = |right| ScreenRect {
+        left: 100,
+        top: 100,
+        right,
+        bottom: 120,
+    };
+    let mut r = router(9);
+    let recorded = Arc::new(Recorded::default());
+    r.set_candidate_sink(Box::new(RecordingSink(recorded.clone())));
+    let normal = KeyModifiers::default();
+    compose(&mut r, "qq", normal);
+    // 光标矩形还没报来时窗口不显示；报来后画出高亮第 0 项。
+    let position = |r: &mut Router, right| {
+        r.handle(ClientMessage::PositionCandidates {
+            session: SessionId(1),
+            rect: rect(right),
+        });
+    };
+    position(&mut r, 140);
+    assert_eq!(recorded.shows.lock().unwrap().len(), 1);
+    // 第一次方向键：高亮 0 → 1，起滑动。
+    assert_eq!(key(&mut r, 0x28, None, normal).2.highlight, 1);
+    assert_eq!(recorded.shows.lock().unwrap().len(), 2);
+    // 上一次按键补报的组句矩形：位置变了、帧一模一样。
+    position(&mut r, 160);
+    let shows = recorded.shows.lock().unwrap();
+    assert_eq!(shows.len(), 3);
+    assert_eq!(shows[1].0, shows[2].0);
+    assert_ne!(shows[1].1, shows[2].1);
 }

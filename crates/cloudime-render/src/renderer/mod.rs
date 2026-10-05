@@ -15,7 +15,7 @@ use crate::canvas::Canvas;
 use crate::color::Color;
 use crate::error::RenderError;
 use crate::fonts::FontLibrary;
-use crate::frame::{Frame, Row, Tone};
+use crate::frame::{Frame, HighlightRect, Row, Tone};
 use crate::layout::Layout;
 use crate::shadow::Shadow;
 use crate::text::{TextPainter, TextSize, TextStyle};
@@ -175,17 +175,17 @@ impl Renderer {
         );
         let mut y = margin + metrics.padding();
         y += self.draw_top_line(&mut canvas, frame, &metrics, margin, y);
-        match layout {
+        let highlight_rects = match layout {
             Layout::Vertical => {
-                self.draw_vertical(&mut canvas, frame, &metrics, margin, y, content_width);
+                self.draw_vertical(&mut canvas, frame, &metrics, margin, y, content_width)
             }
             Layout::Horizontal if frame.columns > 0 => {
-                self.draw_matrix(&mut canvas, frame, &metrics, margin, y, content_width);
+                self.draw_matrix(&mut canvas, frame, &metrics, margin, y, content_width)
             }
             Layout::Horizontal => {
-                self.draw_horizontal(&mut canvas, frame, &metrics, margin, y, content_width);
+                self.draw_horizontal(&mut canvas, frame, &metrics, margin, y, content_width)
             }
-        }
+        };
         Ok(Rendered {
             pixmap: canvas.into_pixmap(),
             content_x: margin as u32,
@@ -193,6 +193,7 @@ impl Renderer {
             content_width: content_width.ceil() as u32,
             content_height: content_height.ceil() as u32,
             scale,
+            highlight_rects,
         })
     }
 
@@ -272,22 +273,85 @@ impl Renderer {
         x
     }
 
+    /// 画高亮条。`rect` 用内容区坐标；`origin` 是内容区左上角在画布里的像素坐标，画前搬过去。
     fn fill_highlight(
         &mut self,
         canvas: &mut Canvas,
         m: &Metrics,
-        x: f32,
-        y: f32,
-        width: f32,
-        height: f32,
+        rect: HighlightRect,
+        origin: f32,
     ) {
+        let rect = rect.translated(origin, origin);
         canvas.fill_round_rect(
-            x,
-            y,
-            width,
-            height,
+            rect.left,
+            rect.top,
+            rect.width(),
+            rect.height(),
             m.corner_radius() / 2.0,
             m.theme.colors.highlight,
         );
+    }
+}
+
+/// 目标高亮条的矩形（内容区坐标）：有动画信息时从它的起点矩形 lerp 到目标行矩形，否则就是目标行矩形。
+/// `rects` 是各候选行 / 格的高亮矩形，下标与 `frame.rows` 对齐。
+fn highlight_rect(frame: &Frame, rects: &[HighlightRect]) -> Option<HighlightRect> {
+    let to = frame.highlighted?;
+    let target = *rects.get(to)?;
+    let Some(animation) = frame.highlight_animation else {
+        return Some(target);
+    };
+    Some(HighlightRect::lerp(
+        animation.from,
+        target,
+        animation.progress,
+    ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::highlight_rect;
+    use crate::frame::{Frame, HighlightAnimation, HighlightRect};
+
+    fn rects() -> [HighlightRect; 3] {
+        [
+            HighlightRect::new(0.0, 0.0, 10.0, 10.0),
+            HighlightRect::new(0.0, 10.0, 10.0, 20.0),
+            HighlightRect::new(0.0, 20.0, 10.0, 30.0),
+        ]
+    }
+
+    /// 没有动画时高亮条就是目标行的矩形；第 0 行也要能取到。
+    #[test]
+    fn without_animation_the_target_row_is_used() {
+        let frame = Frame {
+            highlighted: Some(0),
+            ..Frame::default()
+        };
+        assert_eq!(highlight_rect(&frame, &rects()), Some(rects()[0]));
+    }
+
+    /// 起点用显式矩形，从第 0 行滑到第 1 行：进度 0.5 时落在两行中间。
+    #[test]
+    fn animation_lerps_between_explicit_start_and_target() {
+        let frame = Frame {
+            highlighted: Some(1),
+            highlight_animation: Some(HighlightAnimation {
+                from: rects()[0],
+                progress: 0.5,
+            }),
+            ..Frame::default()
+        };
+        assert_eq!(
+            highlight_rect(&frame, &rects()),
+            Some(HighlightRect::new(0.0, 5.0, 10.0, 15.0))
+        );
+    }
+
+    /// 没有高亮行（`highlighted == None`）时返回 `None`。
+    #[test]
+    fn no_highlight_row_draws_nothing() {
+        let frame = Frame::default();
+        assert_eq!(highlight_rect(&frame, &rects()), None);
     }
 }

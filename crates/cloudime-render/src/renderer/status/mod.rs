@@ -73,6 +73,7 @@ impl Renderer {
                 content_width: content_width as u32,
                 content_height: content_height as u32,
                 scale,
+                highlight_rects: Vec::new(),
             },
             cell_edges: edges,
         })

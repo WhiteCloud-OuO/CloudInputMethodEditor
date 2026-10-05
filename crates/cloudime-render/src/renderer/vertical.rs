@@ -1,9 +1,9 @@
 //! 竖排：一行一个候选，序号 / 候选词 / 译文三列，页码在右下角。
 
 use super::columns::Columns;
-use super::{Metrics, Renderer};
+use super::{Metrics, Renderer, highlight_rect};
 use crate::canvas::Canvas;
-use crate::frame::{Frame, Row};
+use crate::frame::{Frame, HighlightRect, Row};
 
 impl Renderer {
     pub(super) fn vertical_size(&mut self, frame: &Frame, m: &Metrics) -> (f32, f32) {
@@ -59,27 +59,33 @@ impl Renderer {
         frame: &Frame,
         m: &Metrics,
         left: f32,
-        mut y: f32,
+        y: f32,
         content_width: f32,
-    ) {
+    ) -> Vec<HighlightRect> {
         // 量尺寸时已整形过一遍，这里再整形一遍；等渲染器定型再把结果从 render 传下来。
         let columns = self.columns(&frame.rows, m);
         let text_x = left + m.padding() + columns.index_width + m.column_gap();
         let annotation_x = text_x + columns.text_width + m.column_gap();
         let badge_right = left + content_width - m.padding();
         let text_height = m.px(m.theme.text_font.line_height);
+        // 先把各行的条子量好、画在文字之前：滑动中的条子可能盖到别的行，必须在它们下面。
+        // 矩形用内容区坐标（`left` 是内容区左边，纵向同样从内容区顶边算），交给壳续滑用。
+        let rects: Vec<HighlightRect> = (0..frame.rows.len())
+            .map(|i| {
+                let row_top = y - left + columns.row_height * i as f32;
+                HighlightRect::new(
+                    m.padding() / 2.0,
+                    row_top,
+                    content_width - m.padding() / 2.0,
+                    row_top + columns.row_height,
+                )
+            })
+            .collect();
+        if let Some(rect) = highlight_rect(frame, &rects) {
+            self.fill_highlight(canvas, m, rect, left);
+        }
         for (i, row) in frame.rows.iter().enumerate() {
-            if Some(i) == frame.highlighted {
-                self.fill_highlight(
-                    canvas,
-                    m,
-                    left + m.padding() / 2.0,
-                    y,
-                    content_width - m.padding(),
-                    columns.row_height,
-                );
-            }
-            let top = y + m.row_padding();
+            let top = y + columns.row_height * i as f32 + m.row_padding();
             let small_offset = m.small_offset(text_height);
             self.draw_text(
                 canvas,
@@ -102,7 +108,6 @@ impl Renderer {
                 top,
                 text_height,
             );
-            y += columns.row_height;
         }
         if let Some(footer) = frame.footer.as_deref() {
             let style = m.footer_style();
@@ -112,8 +117,9 @@ impl Renderer {
                 footer,
                 &style,
                 left + content_width - m.padding() - size.width,
-                y + m.row_padding(),
+                y + columns.row_height * frame.rows.len() as f32 + m.row_padding(),
             );
         }
+        rects
     }
 }

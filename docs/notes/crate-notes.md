@@ -200,6 +200,9 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 候选行右侧的**来源角标**：`Row.badge`（Server `dispatch/candidates/mod.rs::badges_of` 按 `kind == Custom` 判「短」、
 `kind == Sentence` 判「句」、`Learner::is_user_word` 判「造」，其余没有），用序号字体、`Palette.badge` = `#888888` 右对齐画在候选格内（间距 4 pt）；
 横排按项宽、竖排按行宽给它留出位置。
+**高亮条移动动画**：`Frame::highlight_animation`（`HighlightAnimation`，起点矩形 + 进度 0..=1）让渲染器从起点矩形 lerp 到目标行矩形
+（`frame/highlight/rect.rs` 的 `HighlightRect`，内容区坐标，`HighlightRect::lerp`）；没有它就画在高亮行。三种布局都先把各行 / 各格的高亮矩形量好再把条子画在文字之前，
+并把这份矩形随 `Rendered::highlight_rects` 交给壳（壳连按方向键时按当前视觉位置续滑）。纯展示，不影响排序与按键。
 
 ## crates/cloudime-update
 
@@ -320,6 +323,12 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 每次重画按各按钮格子同步一份「功能 + 快捷键」的文字，`sync` 里先删旧工具再挂新的。
 「工具」按钮弹的是 exe 旁 `tools\tools.list` 登记的工具菜单（`status/tools.rs`：一行 `短路径=名称`，短路径相对 `tools\`，文件不在的项跳过；用 `TrackPopupMenu` 在中键位置弹），
 启动时工作目录设成 `tools\`：**控制台程序**（PE 子系统 3 的 exe、`.bat` / `.cmd`）用 `cmd /k` 起——程序跑完控制台留着，看得见输出、还能接着敲命令（`cwt.exe` 不给参数只打用法，直接起会一闪而过）；窗口程序直接起。「特殊字符」仍是占位。
+
+候选窗（`server/src/ui/candidates/`）只在高亮移动时做动画：方向键页内挪高亮、且行内容与拼音行都没变时，`set_content` 按
+`Rendered::highlight_rects` 从「上一段的当前视觉矩形」或「上一高亮行矩形」起滑（连按是连续续滑）；高亮没变的新帧（重排、
+异步编辑会话补报的组句矩形）不打断正在跑的动画；翻页 / 新查询 / 隐藏直接画或取消。窗口过程按 16 ms 的 `WM_TIMER` 算进度原地重贴，
+约 150 ms 的 cubic ease-out 后收尾。
+窗口过程按 HWND 从 UI 线程的表里找回窗口（`attach`）。纯展示，不改窗口位置大小、不涉及协议。
 
 TSF 原有数字 / OEM 标点 / 空格键码按当前布局用 `ToUnicodeEx` 解析（bit 2 避免改变键盘状态），
 仅接受单个非代理项 UTF-16 单元。字母、小键盘和 AltGr 处理不变，不保证组合音符输入。

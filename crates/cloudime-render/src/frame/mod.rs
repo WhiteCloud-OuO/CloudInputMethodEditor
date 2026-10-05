@@ -1,9 +1,11 @@
 //! 一帧要画的全部内容：顶部拼音行、候选行、高亮、页脚、右侧状态。只是展示形态，不含排序或查词。
 
+mod highlight;
 mod preedit;
 mod row;
 mod tone;
 
+pub use highlight::{HighlightAnimation, HighlightRect};
 pub use preedit::{Preedit, PreeditSegment, PreeditStyle};
 pub use row::Row;
 pub use tone::Tone;
@@ -18,6 +20,9 @@ pub struct Frame {
 
     /// 高亮行；`None` 不高亮。
     pub highlighted: Option<usize>,
+
+    /// 高亮条移动动画；`None` 直接画在 `highlighted`。见 [`HighlightAnimation`]。
+    pub highlight_animation: Option<HighlightAnimation>,
 
     /// 横排展开成矩阵时每行几格，`rows` 按行优先排开、空位是空行；0 为没展开。
     pub columns: usize,

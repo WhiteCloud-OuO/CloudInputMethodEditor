@@ -146,13 +146,15 @@ fn run(commands: Receiver<UiCommand>, ready: &Sender<Option<u32>>, on_status: St
     let painter: SharedPainter = Rc::new(RefCell::new(None));
     // 先建窗口再报 id：建窗口顺带建起本线程的消息队列，之后 PostThreadMessageW 才有处可投。
     let window = match CandidateWindow::new(painter.clone()) {
-        Ok(window) => window,
+        Ok(window) => Rc::new(window),
         Err(error) => {
             tracing::error!(%error, "建候选窗口失败，Server 将不显示候选框");
             let _ = ready.send(None);
             return;
         }
     };
+    // 登记给窗口过程：高亮滑动动画的定时器要按 HWND 找回它。
+    window.attach();
     let status = match StatusBar::new(on_status, painter.clone()) {
         Ok(status) => Some(status),
         Err(error) => {
