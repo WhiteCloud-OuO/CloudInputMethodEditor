@@ -95,6 +95,9 @@ Source: "{#Repo}\target\release\cloudime-settings.exe"; DestDir: "{app}"; Flags:
 ; 文件由 build.ps1 按 settings-runtime.txt 从 target\release 挑进 target\installer\settings-runtime，必须与 exe 同级。
 Source: "{#Repo}\target\installer\settings-runtime\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Repo}\apps\windows\tsf\resources\cloudime.ico"; DestDir: "{app}"; Flags: ignoreversion
+; 特殊字符输入器：随仓库带的 VFB 成品（apps\windows\ssi\release64\，构建时只拷不编），装在 {app} 根目录。
+; Server 按自己 exe 旁的固定名起它（悬浮状态条「特殊字符」按钮，ui/mod.rs 的 open_spec_chars）。
+Source: "{#Repo}\apps\windows\ssi\release64\SpecialSymbolsInserter.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; —— 命令行工具：exe 与「工具」菜单清单装进 {app}\tools；清单只在没有时铺一份，用户自己加的工具与改过的清单升级时留着 ——
 Source: "{#Repo}\target\release\cwt.exe"; DestDir: "{app}\tools"; Flags: ignoreversion
 ; cwt-gui.exe 是随仓库带的可执行文件（VB6 编的成品，放在 cwt-gui\release64\，构建时只拷不编）
@@ -123,8 +126,8 @@ Source: "{#Repo}\apps\windows\server\src\ui\status\icons\*.svg";           DestD
 Source: "{#Repo}\target\release\cloudime-server.exe";   DestDir: "{app}"; Flags: ignoreversion
 
 [Icons]
-Name: "{group}\设置 云朵输入法"; Filename: "{app}\cloudime-settings.exe"; IconFilename: "{app}\cloudime.ico"
-Name: "{group}\卸载 云朵输入法"; Filename: "{uninstallexe}"
+Name: "{group}\云朵输入法 设置"; Filename: "{app}\cloudime-settings.exe"; IconFilename: "{app}\cloudime.ico"
+Name: "{group}\云朵输入法 卸载"; Filename: "{uninstallexe}"
 ; 登录自启：登录时 Explorer 走 ShellExecute 拉起本快捷方式 → AppInfo 授予 uiAccess，候选窗才能盖过商店 / 任务栏搜索。
 ; 用 {commonstartup}（所有用户「启动」文件夹）而非 {userstartup}：本安装器是 admin 机器级安装，
 ; admin 模式下写每用户区会落到「谁提权就写谁」的 profile（Inno 会告警且可能不是目标用户）；
@@ -174,6 +177,11 @@ Type: filesandordirs; Name: "{userprograms}\云朵输入法"
 Type: files; Name: "{commonstartup}\CloudIME Server.lnk"
 ; 更早版本装在当前用户「启动」文件夹里的自启快捷方式：与机器级那份并存会起两个 Server（两条状态条）。
 Type: files; Name: "{userstartup}\CloudIME Server.lnk"
+; 两个快捷方式都改过名（原「设置 云朵输入法」「卸载 云朵输入法」）：升级时删掉旧的，免得开始菜单里留两份。
+Type: files; Name: "{commonprograms}\CloudIME\设置 云朵输入法.lnk"
+Type: files; Name: "{userprograms}\CloudIME\设置 云朵输入法.lnk"
+Type: files; Name: "{commonprograms}\CloudIME\卸载 云朵输入法.lnk"
+Type: files; Name: "{userprograms}\CloudIME\卸载 云朵输入法.lnk"
 ; 更早版本把模型装在 data\model\（三件套或单个 model.qjm）：现在搬到 data\local_models\，旧目录整棵清掉，免得多占几十 MB。
 Type: filesandordirs; Name: "{app}\data\model"
 ; 0.0.1 开发版的随包码表旧位置

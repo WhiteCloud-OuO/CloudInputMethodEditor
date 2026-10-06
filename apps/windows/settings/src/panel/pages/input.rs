@@ -6,45 +6,30 @@ use cloudime_platform::{
 };
 use windows_reactor::*;
 
-use crate::panel::controls::{field, page};
+use crate::panel::controls::{field, field_top, page, radio_row, scroll_list};
 use crate::panel::{Message, Settings};
 
-/// 勾选一个位（`width` 按这一组一行放几个来定）。
-fn check_cell(
-    stem: &str,
+/// 一个「复选框（自带文本）」的列表项。
+///
+/// windows-reactor 没有 XAML 那种 `DataTemplate` / `ItemsSource`，所谓「项目模板」就是在 Rust 里给
+/// 每一项建一份 `ListViewItem`；文本直接给 `CheckBox`（它是 `ContentControl`，自带内容区），
+/// 不用再套 `TextBlock`。子项带 key，勾选状态变化后重渲染靠 key 找回来原地改，不会丢焦点。
+fn check_item(
+    key: String,
     label: &str,
-    index: usize,
     on: bool,
-    width: f64,
-    message: impl Fn(usize, bool) -> Message + 'static,
+    message: impl Fn(bool) -> Message + 'static,
     context: &mut ViewContext<Settings>,
 ) -> KeyedView {
     KeyedView::new(
-        format!("{stem}-{index}"),
-        CheckBox::new()
-            .is_checked(on)
-            .on_is_checked_changed(context.callback(move |value| message(index, value)))
-            .width(width)
-            .content(label),
+        key,
+        ListViewItem::new().content(
+            CheckBox::new()
+                .is_checked(on)
+                .on_is_checked_changed(context.callback(message))
+                .content(label),
+        ),
     )
-}
-
-/// 每行 `per_row` 个地把勾选排开。
-fn check_grid(mut cells: Vec<KeyedView>, per_row: usize) -> View {
-    let mut rows: Vec<KeyedView> = Vec::new();
-    while !cells.is_empty() {
-        let take = cells.len().min(per_row);
-        let row: Vec<KeyedView> = cells.drain(..take).collect();
-        let stem = format!("row-{}", rows.len());
-        rows.push(KeyedView::new(
-            stem,
-            StackPanel::new()
-                .orientation(Orientation::Horizontal)
-                .spacing(12.0)
-                .keyed_children(row),
-        ));
-    }
-    StackPanel::new().spacing(8.0).keyed_children(rows)
 }
 
 /// 符号映射的界面写法：`/ → 、`、`小键盘 * → ×`。
@@ -67,13 +52,11 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
         .iter()
         .enumerate()
         .map(|(index, (bit, label))| {
-            check_cell(
-                "fuzzy",
+            check_item(
+                format!("fuzzy-{index}"),
                 label,
-                index,
                 input.mo_hu_yin_list & bit != 0,
-                190.0,
-                Message::MoHuYin,
+                move |value| Message::MoHuYin(index, value),
                 context,
             )
         })
@@ -82,13 +65,11 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
         .iter()
         .enumerate()
         .map(|(index, (bit, label, ..))| {
-            check_cell(
-                "pair",
+            check_item(
+                format!("pair-{index}"),
                 label,
-                index,
                 input.punctuation_marks_pairwise_completion & bit != 0,
-                120.0,
-                Message::PairwiseCompletion,
+                move |value| Message::PairwiseCompletion(index, value),
                 context,
             )
         })
@@ -98,13 +79,11 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
         .enumerate()
         .map(|(index, (bit, notation, text))| {
             let label = mapping_label(notation, text);
-            check_cell(
-                "map",
+            check_item(
+                format!("map-{index}"),
                 &label,
-                index,
                 input.punctuation_marks_mapping & bit != 0,
-                130.0,
-                Message::PunctuationMapping,
+                move |value| Message::PunctuationMapping(index, value),
                 context,
             )
         })
@@ -117,23 +96,23 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
                 .is_on(input.use_jian_pin)
                 .on_toggled(context.callback(Message::UseJianPin)),
         ),
-        field(
+        field_top(
             "模糊音",
             "勾选项的两种读音互用（如「ZE」可以同时匹配「泽」和「折」）。使用模糊音匹配到的候选项排在完全匹配的候选项之后。\
              如果全部没有勾选，表示关闭模糊音。",
-            check_grid(fuzzy, 3),
+            scroll_list(fuzzy),
         ),
         field(
             "简体中文 / 繁體中文切换",
             "",
-            RadioButtons::new()
-                .items_source(SimpTrad::ALL.iter().map(|mode| mode.label()))
-                .selected_index(
-                    SimpTrad::ALL
-                        .iter()
-                        .position(|mode| *mode == input.simp_trad_chinese_chars_toggle),
-                )
-                .on_selection_changed(context.callback(Message::SimpTrad)),
+            radio_row(
+                "simp-trad",
+                SimpTrad::ALL
+                    .iter()
+                    .map(|mode| (mode.label(), *mode == input.simp_trad_chinese_chars_toggle)),
+                Message::SimpTrad,
+                context,
+            ),
         ),
         field(
             "中英文混合输入",
@@ -158,15 +137,15 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
                 )
                 .on_selection_changed(context.callback(Message::FullHalfPunctuation)),
         ),
-        field(
+        field_top(
             "中文模式下符号映射",
             "选中项会进行映射：按按键出现的是对应映射的符号。英文模式不受影响。",
-            check_grid(mapping, 5),
+            scroll_list(mapping),
         ),
-        field(
+        field_top(
             "符号成对补全",
             "选中项左边符号输入时会补上右半边，光标停在中间；再敲一次右半边就跳过去。",
-            check_grid(pairwise, 5),
+            scroll_list(pairwise),
         ),
         field(
             "数字后标点符号使用半角",

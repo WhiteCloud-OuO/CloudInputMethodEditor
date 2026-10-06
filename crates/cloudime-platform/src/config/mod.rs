@@ -27,7 +27,7 @@ pub use debugging::DebuggingConfig;
 pub use general::{GeneralConfig, MAX_PAGE_SIZE};
 pub use input::{
     DEFAULT_PUNCTUATION_MAPPING, FullHalfPunctuation, InputConfig, MO_HU_YIN_BITS,
-    PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, SimpTrad, fuzzy_bits, pair_bit,
+    PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, SimpTrad, fuzzy_bits, pair_bit, pair_open,
     pairwise_completion,
 };
 pub use layout_mode::LayoutMode;
@@ -71,7 +71,7 @@ pub struct Config {
 }
 
 /// 首次运行写出的模板：默认值全部列出并注释，用户改一处即可。
-pub const TEMPLATE: &str = r#"# 云朵输入法配置。保存后自动生效；也可以在「云朵设置」里改。
+pub const TEMPLATE: &str = r#"# 云朵输入法配置。保存后自动生效；也可以在「云朵输入法 设置」里改。
 
 [input]
 # 使用简拼：中文模式下打出 YD 就能得到「云朵」，不必打全 YUNDUO。关掉只认完整音节（末尾没打完的照样算）
@@ -156,7 +156,9 @@ user_file = "WordBank/UserWordBank.db"
 
 [status_bar]
 # 桌面上常驻、可拖动的悬浮状态条（Windows）：一排图标按钮——中 / 英、中文标点 / 英文标点、全角 / 半角、
-# 简 / 繁、设置（按钮与顺序见安装目录 data\icons-arrangement.cfg）。常开，只跟「当前输入法是不是云朵输入法」走
+# 简 / 繁、设置（按钮与顺序见安装目录 data\icons-arrangement.cfg）。只跟「当前输入法是不是云朵输入法」走
+# 在屏幕上显示悬浮工具栏；关掉后桌面上不再出现这条工具条
+show_status_bar = true
 # 记住的屏幕位置（物理像素，拖动后自动写入）；留空则首次出现在屏幕右下角
 # x = 0
 # y = 0
@@ -388,13 +390,24 @@ mod tests {
     }
 
     #[test]
+    fn status_bar_shows_by_default_when_the_key_is_missing() {
+        // 老配置里没有这一项：缺省应当显示（`#[serde(default)]` 取的是 `Default`，不是 `bool::default()`）
+        let config: Config = toml::from_str("[status_bar]\nx = 0\n").unwrap();
+        assert!(config.status_bar.show_status_bar);
+        let off: Config = toml::from_str("[status_bar]\nshow_status_bar = false\n").unwrap();
+        assert!(!off.status_bar.show_status_bar);
+    }
+
+    #[test]
     fn input_section_parses() {
         let config: Config = toml::from_str(
             "[input]\nuse_jian_pin = false\nmo_hu_yin_list = 5\nfull_half_punctuation_marks_toggle = \"half\"\n",
         )
         .unwrap();
         assert!(!config.input.use_jian_pin);
-        assert!(config.input.fuzzy_rules().z_zh && config.input.fuzzy_rules().an_ang);
+        // 5 = 1 + 4：zh/z 与 sh/s 两个位（现在一位一条规则）
+        let fuzzy = config.input.fuzzy_rules();
+        assert!(fuzzy.z_zh && fuzzy.s_sh && !fuzzy.c_ch && !fuzzy.an_ang);
         assert_eq!(
             config.input.full_half_punctuation_marks_toggle,
             FullHalfPunctuation::Half

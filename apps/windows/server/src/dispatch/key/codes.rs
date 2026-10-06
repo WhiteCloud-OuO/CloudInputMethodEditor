@@ -6,6 +6,9 @@ pub(crate) const BACK: u32 = 0x08;
 pub(crate) const TAB: u32 = 0x09;
 pub(crate) const RETURN: u32 = 0x0D;
 pub(crate) const ESCAPE: u32 = 0x1B;
+
+/// Insert：上屏组句里已选的部分、丢掉未选的拼音。
+pub(crate) const INSERT: u32 = 0x2D;
 pub(crate) const PRIOR: u32 = 0x21;
 pub(crate) const NEXT: u32 = 0x22;
 pub(crate) const END: u32 = 0x23;

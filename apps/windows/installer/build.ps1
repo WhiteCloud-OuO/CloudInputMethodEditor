@@ -84,6 +84,10 @@ foreach ($t in $targets) {
     if (-not (Test-Path $p)) { throw "缺产物 $p，先跑一次不带 -SkipBuild 的构建" }
 }
 
+# 特殊字符输入器是随仓库带的成品（VFB 编，不参与 cargo 构建）：缺了 Inno 编到 [Files] 那行才报错，这里先说清楚。
+$ssiExe = Join-Path $Repo 'apps\windows\ssi\release64\SpecialSymbolsInserter.exe'
+if (-not (Test-Path $ssiExe)) { throw "缺特殊字符输入器：$ssiExe（随仓库带的 VFB 成品，构建时只拷不编）" }
+
 # 1.2) 自包含 Windows App Runtime：设置程序不再依赖机器上装的框架包（Windows 10 上框架依赖的引导用不了，
 #      见 apps\windows\settings\build.rs）。cargo 构建时 windows-reactor-setup 已按清单把运行时铺到
 #      target\release\，这里挑进暂存目录；target\release 里还有 deps\ 之类的中间产物，不能整个目录装。

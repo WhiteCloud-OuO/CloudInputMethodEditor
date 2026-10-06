@@ -14,7 +14,7 @@ use super::TextService_Impl;
 use super::next::Next;
 use crate::com::composition::{Update, preedit_string};
 use crate::com::key::event::{
-    caps_lock_on, clear_caps_lock, is_edit, is_letter, is_nav, shift_down, to_key_event,
+    caps_lock_on, clear_caps_lock, ctrl_down, is_edit, is_letter, is_nav, shift_down, to_key_event,
 };
 use crate::com::key::preserved;
 use crate::com::log::log;
@@ -115,15 +115,21 @@ impl TextService_Impl {
     }
 
     fn note_key_down(&self, vk: u32, lparam: LPARAM) {
-        self.key_tap
-            .key_down(vk, lparam, self.mode_state.switch_keys());
+        let keys = self.mode_state.switch_keys();
+        // 勾着的切换键这一刻**物理按着**没有：`Shift + "` 里的 Shift 就是被当修饰键用的，
+        // 抬起时不算单击（TSF 对修饰键的投递顺序不保证，光靠 tap 里「别的键一动就作废」会漏）。
+        let switch_held = (keys.shift && shift_down()) || (keys.control && ctrl_down());
+        self.key_tap.key_down(vk, lparam, keys, switch_held);
     }
 
     fn note_key_up(&self, vk: u32) {
         if vk == u32::from(VK_CAPITAL.0) {
             self.mode_state.notify();
         }
-        let tapped = self.key_tap.key_up(vk, self.mode_state.switch_keys());
+        let keys = self.mode_state.switch_keys();
+        // 切换键还物理按着的那次抬起是 TSF 的重复通知，不作数也不清标记（见 `KeyTap::key_up`）
+        let switch_held = (keys.shift && shift_down()) || (keys.control && ctrl_down());
+        let tapped = self.key_tap.key_up(vk, keys, switch_held);
         if !tapped || self.mode_state.disabled() {
             return;
         }

@@ -4,28 +4,34 @@ use cloudime_core::FuzzyRules;
 use cloudime_core::punctuation::Mapping;
 use serde::{Deserialize, Serialize};
 
-/// 模糊音各位（`mo_hu_yin_list` 是勾选项数值的和）：zh/z+ch/c+sh/s。
-pub const MO_HU_YIN_ZH_Z: u32 = 1;
-
-/// 模糊音各位：r/l + n/l。
-pub const MO_HU_YIN_R_L: u32 = 2;
-
-/// 模糊音各位：ng/n（an/ang、en/eng、in/ing 都算）。
-pub const MO_HU_YIN_NG_N: u32 = 4;
-
-/// 模糊音各位：ü/u。
-pub const MO_HU_YIN_V_U: u32 = 8;
-
-/// 模糊音各位：f/h。
-pub const MO_HU_YIN_F_H: u32 = 16;
+/// 模糊音各位（`mo_hu_yin_list` 是勾选项数值的和）：**一位一条规则**，按界面顺序 2^0…2^11。
+pub const MO_HU_YIN_ZH_Z: u32 = 1 << 0; // zh/z
+pub const MO_HU_YIN_CH_C: u32 = 1 << 1; // ch/c
+pub const MO_HU_YIN_SH_S: u32 = 1 << 2; // sh/s
+pub const MO_HU_YIN_R_L: u32 = 1 << 3; // r/l
+pub const MO_HU_YIN_N_L: u32 = 1 << 4; // n/l
+pub const MO_HU_YIN_F_H: u32 = 1 << 5; // f/h
+pub const MO_HU_YIN_U_V: u32 = 1 << 6; // u/ü
+pub const MO_HU_YIN_UO_O: u32 = 1 << 7; // uo/o
+pub const MO_HU_YIN_AN_ANG: u32 = 1 << 8; // an/ang
+pub const MO_HU_YIN_EN_ENG: u32 = 1 << 9; // en/eng
+pub const MO_HU_YIN_IN_ING: u32 = 1 << 10; // in/ing
+pub const MO_HU_YIN_WANG_HUANG: u32 = 1 << 11; // wang/huang
 
 /// 模糊音全部可选位，按界面顺序。
-pub const MO_HU_YIN_BITS: [(u32, &str); 5] = [
-    (MO_HU_YIN_ZH_Z, "zh/z · ch/c · sh/s"),
-    (MO_HU_YIN_R_L, "r/l · n/l"),
-    (MO_HU_YIN_NG_N, "ng/n"),
-    (MO_HU_YIN_V_U, "ü/u"),
+pub const MO_HU_YIN_BITS: [(u32, &str); 12] = [
+    (MO_HU_YIN_ZH_Z, "zh/z"),
+    (MO_HU_YIN_CH_C, "ch/c"),
+    (MO_HU_YIN_SH_S, "sh/s"),
+    (MO_HU_YIN_R_L, "r/l"),
+    (MO_HU_YIN_N_L, "n/l"),
     (MO_HU_YIN_F_H, "f/h"),
+    (MO_HU_YIN_U_V, "u/ü"),
+    (MO_HU_YIN_UO_O, "uo/o"),
+    (MO_HU_YIN_AN_ANG, "an/ang"),
+    (MO_HU_YIN_EN_ENG, "en/eng"),
+    (MO_HU_YIN_IN_ING, "in/ing"),
+    (MO_HU_YIN_WANG_HUANG, "wang/huang"),
 ];
 
 /// 成对补全各位（`punctuation_marks_pairwise_completion` 是勾选项数值的和），按界面顺序。
@@ -49,6 +55,15 @@ pub fn pairwise_completion(mask: u32, open: char) -> Option<char> {
         .iter()
         .find(|(bit, _, opening, _)| mask & *bit != 0 && *opening == open)
         .map(|(_, _, _, close)| *close)
+}
+
+/// `close` 是某对成对补全的右半边时，对应的左半边。智能引号这类标点是**交替**给出收符号的
+/// （`"` 第一次给 `“`、第二次给 `”`），配成对时要靠它把收符号换回开符号。
+pub fn pair_open(mask: u32, close: char) -> Option<char> {
+    PAIRWISE_COMPLETION_BITS
+        .iter()
+        .find(|(bit, _, _, closing)| mask & *bit != 0 && *closing == close)
+        .map(|(_, _, opening, _)| *opening)
 }
 
 /// `(`、`（` 这类左符号对应的位；不在表里返回 `None`。
@@ -205,24 +220,26 @@ where
     Ok(<u32 as Deserialize>::deserialize(deserializer).unwrap_or(DEFAULT_PUNCTUATION_MAPPING))
 }
 
-/// Core 的模糊音规则 → 位图（CLI 的 `--fuzzy` 按规则名开完之后回写配置用）。
-/// 一组的任意一条开着就把这一组的位打上：`an_ang` 与 `in_ing` 都归 `ng/n` 那一位。
+/// Core 的模糊音规则 → 位图（CLI 的 `--fuzzy` 按规则名开完之后回写配置用）。一位一条，与界面一一对应。
 pub fn fuzzy_bits(rules: &FuzzyRules) -> u32 {
     let mut bits = 0;
-    if rules.z_zh || rules.c_ch || rules.s_sh {
-        bits |= MO_HU_YIN_ZH_Z;
-    }
-    if rules.n_l || rules.l_r {
-        bits |= MO_HU_YIN_R_L;
-    }
-    if rules.an_ang || rules.en_eng || rules.in_ing {
-        bits |= MO_HU_YIN_NG_N;
-    }
-    if rules.u_v {
-        bits |= MO_HU_YIN_V_U;
-    }
-    if rules.f_h {
-        bits |= MO_HU_YIN_F_H;
+    for (on, bit) in [
+        (rules.z_zh, MO_HU_YIN_ZH_Z),
+        (rules.c_ch, MO_HU_YIN_CH_C),
+        (rules.s_sh, MO_HU_YIN_SH_S),
+        (rules.l_r, MO_HU_YIN_R_L),
+        (rules.n_l, MO_HU_YIN_N_L),
+        (rules.f_h, MO_HU_YIN_F_H),
+        (rules.u_v, MO_HU_YIN_U_V),
+        (rules.uo_o, MO_HU_YIN_UO_O),
+        (rules.an_ang, MO_HU_YIN_AN_ANG),
+        (rules.en_eng, MO_HU_YIN_EN_ENG),
+        (rules.in_ing, MO_HU_YIN_IN_ING),
+        (rules.wang_huang, MO_HU_YIN_WANG_HUANG),
+    ] {
+        if on {
+            bits |= bit;
+        }
     }
     bits
 }
@@ -231,18 +248,19 @@ impl InputConfig {
     /// 模糊音位图 → Core 的模糊音规则。
     pub fn fuzzy_rules(&self) -> FuzzyRules {
         let bit = |mask: u32| self.mo_hu_yin_list & mask != 0;
-        let initials = bit(MO_HU_YIN_ZH_Z);
         FuzzyRules {
-            z_zh: initials,
-            c_ch: initials,
-            s_sh: initials,
-            n_l: bit(MO_HU_YIN_R_L),
+            z_zh: bit(MO_HU_YIN_ZH_Z),
+            c_ch: bit(MO_HU_YIN_CH_C),
+            s_sh: bit(MO_HU_YIN_SH_S),
             l_r: bit(MO_HU_YIN_R_L),
-            an_ang: bit(MO_HU_YIN_NG_N),
-            en_eng: bit(MO_HU_YIN_NG_N),
-            in_ing: bit(MO_HU_YIN_NG_N),
+            n_l: bit(MO_HU_YIN_N_L),
             f_h: bit(MO_HU_YIN_F_H),
-            u_v: bit(MO_HU_YIN_V_U),
+            u_v: bit(MO_HU_YIN_U_V),
+            uo_o: bit(MO_HU_YIN_UO_O),
+            an_ang: bit(MO_HU_YIN_AN_ANG),
+            en_eng: bit(MO_HU_YIN_EN_ENG),
+            in_ing: bit(MO_HU_YIN_IN_ING),
+            wang_huang: bit(MO_HU_YIN_WANG_HUANG),
         }
     }
 
@@ -263,22 +281,24 @@ mod tests {
 
     #[test]
     fn bitmaps_map_to_fuzzy_rules() {
-        // 5 = 1 + 4：zh/z·ch/c·sh/s 与 ng/n
+        // 一位一条规则，位与规则一一对应（zh/z、sh/s、in/ing）
         let config = InputConfig {
-            mo_hu_yin_list: 5,
+            mo_hu_yin_list: MO_HU_YIN_ZH_Z | MO_HU_YIN_SH_S | MO_HU_YIN_IN_ING,
             ..InputConfig::default()
         };
         let rules = config.fuzzy_rules();
-        assert!(rules.z_zh && rules.c_ch && rules.s_sh);
-        assert!(rules.an_ang && rules.en_eng && rules.in_ing);
-        assert!(!rules.n_l && !rules.l_r && !rules.f_h && !rules.u_v);
-        // 16 + 8：f/h 与 ü/u
+        assert!(rules.z_zh && rules.s_sh && rules.in_ing);
+        assert!(!rules.c_ch && !rules.l_r && !rules.n_l && !rules.f_h);
+        assert!(!rules.u_v && !rules.uo_o && !rules.an_ang && !rules.en_eng && !rules.wang_huang);
+        // f/h 与 ü/u
         let config = InputConfig {
-            mo_hu_yin_list: MO_HU_YIN_F_H | MO_HU_YIN_V_U,
+            mo_hu_yin_list: MO_HU_YIN_F_H | MO_HU_YIN_U_V,
             ..InputConfig::default()
         };
         let rules = config.fuzzy_rules();
         assert!(rules.f_h && rules.u_v && !rules.z_zh);
+        // 位图 → 规则 → 位图 是恒等的
+        assert_eq!(fuzzy_bits(&rules), MO_HU_YIN_F_H | MO_HU_YIN_U_V);
     }
 
     #[test]

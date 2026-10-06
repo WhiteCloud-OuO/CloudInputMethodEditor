@@ -1,8 +1,8 @@
 //! 把 TSF 送来的虚拟键码翻成协议的 [`KeyEvent`]，以及「组句中哪些键要吃」的判定。
 
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, VIRTUAL_KEY, VK_BACK, VK_CAPITAL, VK_CONTROL, VK_ESCAPE, VK_LWIN, VK_MENU,
-    VK_RETURN, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB,
+    GetKeyState, VIRTUAL_KEY, VK_BACK, VK_CAPITAL, VK_CONTROL, VK_ESCAPE, VK_INSERT, VK_LWIN,
+    VK_MENU, VK_RETURN, VK_RWIN, VK_SHIFT, VK_SPACE, VK_TAB,
 };
 
 use cloudime_platform::protocol::{KeyEvent, KeyModifiers};
@@ -21,11 +21,11 @@ pub(crate) fn is_letter(vk: u32) -> bool {
     (0x41..=0x5A).contains(&vk)
 }
 
-/// 组句中要吃的功能键：退格 / Tab / 回车 / Esc / 空格 / 数字。Tab 由 Router 决定接受整句补全或翻页，Shift+Tab 上一页。
+/// 组句中要吃的功能键：退格 / Tab / 回车 / Esc / 空格 / Insert / 数字。Tab 由 Router 决定接受整句补全或翻页，Shift+Tab 上一页。
 pub(crate) fn is_edit(vk: u32) -> bool {
     matches!(
         VIRTUAL_KEY(vk as u16),
-        VK_BACK | VK_TAB | VK_RETURN | VK_ESCAPE | VK_SPACE
+        VK_BACK | VK_TAB | VK_RETURN | VK_ESCAPE | VK_SPACE | VK_INSERT
     ) || is_digit(vk)
 }
 
@@ -76,6 +76,11 @@ pub(crate) fn clear_caps_lock() {
 /// Shift 按下没有。
 pub(crate) fn shift_down() -> bool {
     key_down(VK_SHIFT)
+}
+
+/// Ctrl 按下没有。
+pub(crate) fn ctrl_down() -> bool {
+    key_down(VK_CONTROL)
 }
 
 /// 高位为 1（返回值为负）表示按下。

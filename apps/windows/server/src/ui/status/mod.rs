@@ -284,7 +284,7 @@ fn tip_text(action: StatusAction) -> &'static str {
         StatusAction::ToggleSimpTrad => "简体 / 繁体\nCtrl + Alt + 句号",
         StatusAction::OpenOptions => "设置",
         StatusAction::OpenWidgets => "工具",
-        StatusAction::OpenSpecChars => "特殊字符输入器\n【暂未完成】",
+        StatusAction::OpenSpecChars => "特殊字符输入器",
     }
 }
 

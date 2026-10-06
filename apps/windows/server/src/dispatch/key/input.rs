@@ -131,6 +131,8 @@ impl Router {
                 self.engine.clear();
                 Effect::Changed(None)
             }
+            // Insert：已选的中文上屏，还没选的拼音丢掉（`云朵shurufa` → 上屏 `云朵`）
+            codes::INSERT => Effect::Changed(self.engine.take_selected()),
             codes::RETURN => Effect::Changed(Some(self.engine.take_raw())),
             codes::TAB if event.modifiers.shift => {
                 self.page(-1);
@@ -235,7 +237,11 @@ impl Router {
         // 永远补不上（真机上报过）。
         let open = match pairwise_completion(self.config.pairwise_completion, open) {
             Some(_) => open,
-            None => typed,
+            // 转换给的是**收**符号（智能引号交替给出 `“` 和 `”`）：先找回它对应的开符号，
+            // 否则会退回下面「按敲的那个键补 ASCII 的一对」，真机表现就是双引号在 “” 和 "" 之间交替
+            None => {
+                cloudime_platform::pair_open(self.config.pairwise_completion, open).unwrap_or(typed)
+            }
         };
         match pairwise_completion(self.config.pairwise_completion, open) {
             Some(close) => self.insert_pair(typed, open, close),

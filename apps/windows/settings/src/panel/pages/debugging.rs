@@ -173,6 +173,13 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             .spacing(6.0)
             .keyed_children(usage_panel(settings)),
         field(
+            "在屏幕上显示悬浮工具栏",
+            "关掉后桌面上不再出现这条工具条（任务栏的语言栏按钮不受影响）。",
+            ToggleSwitch::new()
+                .is_on(settings.config.status_bar.show_status_bar)
+                .on_toggled(context.callback(Message::ShowStatusBar)),
+        ),
+        field(
             "自动隐藏悬浮工具栏（实验性功能）",
             "启用后，当处于全屏幕状态，或者用户切换输入法为其他输入法，或者禁用输入法时自动隐藏。",
             ToggleSwitch::new()

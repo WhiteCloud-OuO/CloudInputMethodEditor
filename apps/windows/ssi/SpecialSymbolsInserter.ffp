@@ -1,0 +1,129 @@
+﻿#VisualFreeBasic_Project#  Version=5.8.4
+NumObjects=11
+ProjectName=SpecialSymbolsInserter
+CompilationMode=0
+CompilationDebug=0
+CharSet=1
+CodePage=936
+ProjectType=GUI
+UseGDIPlus=1
+ShowConsole=0
+MultiLanguage=0
+OmitInformation=0
+StartupIcon=
+UseWinXPthemes=-1
+StrUnicode=0
+UseAdminPriv=0
+DeleteGeneratedCode=-1
+Namespace=0
+AddCompOps= -gen gas64
+LastRunFilename=SpecialSymbolsInserter.exe
+ImageManager=icon.ico
+ImageManager=
+Major=1
+Minor=0
+Revision=0
+Build=0
+FileMajor=1
+FileMinor=0
+FileRevision=0
+FileBuild=43
+AutoIncrement=-1
+DefaultCompiler=64
+Comments=
+CompanyName=
+FileDescription=
+LegalCopyrights=
+LegalTrademarks=
+ProductName=
+
+[Objects]
+Form=.\forms\Form1.frm|0|0|Startup|Yes|
+Form=.\forms\Form2.frm|0|0||Yes|
+Form=.\forms\Form3.frm|0|0||Yes|
+Form=.\forms\Form4.frm|0|0||Yes|
+Form=.\forms\Form5.frm|0|0||Yes|
+Form=.\forms\Form6.frm|0|231||Yes|
+Form=.\forms\Form7.frm|0|0||Yes|
+Module=.\modules\SpecialCharInput.inc|0|0||Yes|
+
+TopTab=.\forms\Form1.frm|False|1|0|0
+TopTab=.\forms\Form2.frm|False|1|0|0
+TopTab=.\forms\Form3.frm|False|1|0|0
+TopTab=.\forms\Form4.frm|False|1|0|0
+TopTab=.\forms\Form5.frm|True|1|0|0
+TopTab=.\forms\Form6.frm|False|0|0|231
+TopTab=.\forms\Form7.frm|False|1|0|0
+#END_MAIN_PROPERTIES#
+
+
+[FF_APPSTART_START]
+'************ 应用程序起始模块 ************
+' 这里是打开软件后最初被执行代码的地方，此时软件内部还未初始化。（注：一般情况EXE包含DLL的，DLL先于EXE执行DLL自己的起始代码）
+' 不管是EXE还是DLL，都从这里开始执行，然后到【程序入口函数】执行，整个软件结束或DLL被卸载就执行【程序出口】过程。(这里的EXE、DLL表示自己程序)
+' 一般情况在这里写 DLL 声明、自定义声明、常量和#Include的包含文件。由于很多初始化代码未执行，这里不建议写用户代码。
+
+#define UNICODE                 '表示WIN的API默认使用 W系列，宽字符处理，如果删除（使用ASCII字符）会造成控件和API使用的代码编写方式，影响深远。
+#lang "FB"                      '表示为标准FB格式
+#include Once "windows.bi"      'WIN系统基础库，主要是WIN系统常用的API，不使用API可以不包含它。
+#include Once "win/shlobj.bi"   'WIN系统对象库，shell32.dll的头文件，主要涉及shell及通用对话框等。
+#include Once "afx/CWindow.inc" 'WinFBX 库，是WIN系统增强基础库，使用窗口和控件必须要用到它。
+#include Once "vbcompat.bi"     '一些兼容VB的语句和常数，不包含就会无法使用它们了。
+#include Once "fbthread.bi"     'VisualFreeBasic线程语句支持库，要用线程语句，就必须包含。
+
+'以上 包含文件 会影响最终编译生成文件的大小，而不会影响运行效率，对于文件大小比较敏感的，可以根据需要调整。
+
+
+[FF_APPSTART_END]
+[FF_WINMAIN_START]
+Function FF_WINMAIN(ByVal hInstance As HINSTANCE) As Long '程序入口函数
+   'hInstance EXE或DLL的模块句柄，就是在内存中的地址，EXE 通常固定为 &H400000  DLL 一般不固定 
+   '编译为 LIB静态库时，这里是无任何用处 
+   ' -------------------------------------------------------------------------------------------
+   '  DLL 例题 ********  函数无需返回值
+   '  DLL被加载到内存时，不要执行太耗时间的代码，若需要耗时就用多线程。
+   '        AfxMsg "DLL被加载到内存时"
+   ' -------------------------------------------------------------------------------------------
+   '  EXE 例题 ********   
+   '        AfxMsg "EXE刚启动"
+   ' 如果这个函数返回TRUE（非零），将会结束该软件。如果没有启动窗口，那么此函数过后，也会终止软件。
+   ' 您可以在此函数做程序初始化。
+   ' -------------------------------------------------------------------------------------------
+   ' (这里的EXE、DLL表示自己程序，无法获取其它EXE、DLL入口和出口)
+
+   Function = False   
+End Function
+
+Sub FF_WINEND(ByVal hInstance As HINSTANCE) '程序出口，程序终止后的最后代码。
+   'hInstance EXE或DLL的模块句柄，就是在内存中的地址，EXE 通常固定为 &H400000  DLL 一般不固定 
+   '编译为 LIB静态库时，这里是无任何用处 
+   ' -------------------------------------------------------------------------------------------
+   '  DLL 例题 ********    
+   '    卸载DLL，DLL被卸载，需要快速完成，不能用进程锁。
+   '    AfxMsg "DLL被卸载时" 
+   ' -------------------------------------------------------------------------------------------
+   '  EXE 例题 ********   
+   '   程序即将结束，这里是最后要执行的代码，（：无法停止被退出的命运。
+   '      AfxMsg "EXE退出"
+   ' -------------------------------------------------------------------------------------------
+   ' (这里的EXE、DLL表示自己程序，无法获取其它EXE、DLL入口和出口)
+
+End Sub
+
+
+[FF_WINMAIN_END]
+[FF_PUMPHOOK_START]
+Function FF_PUMPHOOK( uMsg As Msg ) As Long '消息钩子
+   '所有窗口消息都经过这里，你可以在这里拦截消息。
+
+   ' 如果这个函数返回 FALSE（零），那么 VisualFreeBasic 消息泵将继续进行。
+   ' 返回 TRUE（非零）将绕过消息泵（屏蔽消息），就是吃掉这消息不给窗口和控件处理。
+   ' 
+
+   Function = False    '如果你需要屏蔽消息，返回 TRUE 。
+
+End Function
+
+
+[FF_PUMPHOOK_END]
+

@@ -133,8 +133,10 @@ impl Router {
     }
 
     /// 云朵输入法在前台、且没被禁用就显示，否则收起。热加载后也调一次。
+    /// `[status_bar] show_status_bar` 关掉时始终收起（这条工具条不出现）。
     pub(super) fn reconcile_status(&mut self) {
-        match (self.ime_active && !self.mode.disabled()).then_some(self.mode.english()) {
+        let show = self.config.show_status_bar && self.ime_active && !self.mode.disabled();
+        match show.then_some(self.mode.english()) {
             Some(english) => {
                 self.status.show_status(StatusView {
                     english,

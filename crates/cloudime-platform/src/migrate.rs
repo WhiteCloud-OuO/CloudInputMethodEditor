@@ -9,7 +9,7 @@
 //! - `[general] font` → 三个字体的 `family`
 //! - `[general] preedit` → `[candidate] preedit`
 //! - `[general] traditional` → `[input] simp_trad_chinese_chars_toggle`
-//! - `[fuzzy]` 各开关 → `[input] mo_hu_yin_list`（位图，规则被合并的组只要有一项开着就置位）
+//! - `[fuzzy]` 各开关 → `[input] mo_hu_yin_list`（位图，一位一条规则）
 //! - `[model] enabled` → `[candidate] use_local_sentence_organization_model`
 //! - `[status_bar] enabled` → 删（状态条常开）
 //! - `[general] page_keys`、`[shortcut]`（`expression` / `question` / `question_mark` / `delete_candidate`）→ 删
@@ -22,6 +22,7 @@
 use std::path::Path;
 
 use cloudime_core::CustomPhrase;
+use cloudime_core::FuzzyRules;
 use cloudime_core::custom_phrase;
 use toml_edit::{DocumentMut, Item};
 
@@ -145,29 +146,18 @@ fn text(document: &DocumentMut, section: &str, key: &str) -> Option<String> {
         .map(str::to_owned)
 }
 
-/// 旧 `[fuzzy]` 的开关合成新位图：组里只要有一项开着就置位。
+/// 旧 `[fuzzy]` 的开关合成新位图：键名与 Core 的 [`FuzzyRules`] 字段同名，交给它认，再翻成位图。
 fn fuzzy_mask(document: &DocumentMut) -> u32 {
     let Some(fuzzy) = table(document, "fuzzy") else {
         return 0;
     };
-    let on = |key: &str| fuzzy.get(key).and_then(Item::as_bool).unwrap_or(false);
-    let mut mask = 0;
-    if on("z_zh") || on("c_ch") || on("s_sh") {
-        mask |= 1;
+    let mut rules = FuzzyRules::default();
+    for (key, value) in fuzzy.iter() {
+        if let Some(on) = value.as_bool() {
+            rules.set(key, on);
+        }
     }
-    if on("n_l") || on("l_r") {
-        mask |= 2;
-    }
-    if on("an_ang") || on("en_eng") || on("in_ing") {
-        mask |= 4;
-    }
-    if on("u_v") {
-        mask |= 8;
-    }
-    if on("f_h") {
-        mask |= 16;
-    }
-    mask
+    crate::fuzzy_bits(&rules)
 }
 
 /// 旧 `[[custom_phrases]]`：`position`（1–9，越靠前）直接夹到 1–9，停用的丢掉。
@@ -443,8 +433,8 @@ enabled = false
             config.input.simp_trad_chinese_chars_toggle,
             SimpTrad::Traditional
         );
-        // z_zh + u_v 两组置位
-        assert_eq!(config.input.mo_hu_yin_list, 1 | 8);
+        // z_zh + u_v 两位置位（1 = zh/z、64 = u/ü）
+        assert_eq!(config.input.mo_hu_yin_list, 1 | 64);
         // 没搬的键原样保留
         assert!(!config.general.learning);
         assert_eq!(config.status_bar.x, Some(10));

@@ -26,7 +26,7 @@ pub(super) fn pick_font(current: &FontChoice) -> Option<FontChoice> {
     }
     let mut chooser = CHOOSEFONTW {
         lStructSize: size_of::<CHOOSEFONTW>() as u32,
-        hwndOwner: unsafe { FindWindowW(None, w!("云朵设置")) }.unwrap_or_default(),
+        hwndOwner: unsafe { FindWindowW(None, w!("云朵输入法 设置")) }.unwrap_or_default(),
         lpLogFont: &mut logfont,
         Flags: CF_SCREENFONTS | CF_INITTOLOGFONTSTRUCT,
         ..Default::default()

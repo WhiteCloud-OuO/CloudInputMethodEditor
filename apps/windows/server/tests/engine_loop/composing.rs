@@ -384,6 +384,36 @@ fn selecting_every_part_commits_the_whole_text_at_once() {
     assert!(after.is_empty(), "整段上屏后收起候选");
 }
 
+/// Insert：已选的中文上屏，还没选的拼音直接丢掉。
+#[test]
+fn insert_commits_the_selected_part_and_drops_the_rest() {
+    let mut router = router();
+    let (_, _, frame) = type_letters(&mut router, "xianzai");
+    let position = frame
+        .candidates
+        .items
+        .iter()
+        .position(|c| c.text == "西安")
+        .unwrap();
+    let (_, commit, after) = press(&mut router, digit(position as u32 + 1));
+    assert_eq!(commit, None);
+    assert_eq!(preedit(&after), "西安zai");
+
+    // Insert：上屏「西安」，剩下的 zai 丢掉
+    let (outcome, commit, after) = press(&mut router, function_key(0x2D));
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit.as_deref(), Some("西安"));
+    assert!(after.is_empty(), "Insert 之后组句清空");
+
+    // 一段都没选时按 Insert：只把拼音丢掉，不往文档里写东西
+    let (_, _, frame) = type_letters(&mut router, "nihao");
+    assert_eq!(preedit(&frame), "ni'hao");
+    let (outcome, commit, after) = press(&mut router, function_key(0x2D));
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit, None);
+    assert!(after.is_empty());
+}
+
 /// 组句里敲标点：先选高亮候选、剩余拼音原样补完整体上屏，再落这个标点。
 #[test]
 fn punctuation_selects_then_flushes_the_whole_composition() {

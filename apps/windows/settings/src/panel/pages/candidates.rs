@@ -6,7 +6,7 @@ use cloudime_platform::{
 };
 use windows_reactor::*;
 
-use crate::panel::controls::{field, labeled, note, page};
+use crate::panel::controls::{field, field_top, labeled, note, page, radio_row, scroll_list};
 use crate::panel::{Message, Settings};
 
 /// 本地整句模型文件在不在这里：用户目录 `%APPDATA%\CloudIME\local_models\` 优先，其次随包 `data\local_models\`。
@@ -148,40 +148,57 @@ fn mode_combo<T: PartialEq + Copy>(
         .on_selection_changed(callback)
 }
 
-/// 「不显示候选框」的程序名单：一个输入框 + 添加按钮，下面每行一个带「移除」。
+/// 「不显示候选框」的程序名单：一个输入框 + 添加按钮；下面每行是一个 2 列 `Grid`（程序名 / 删除），
+/// 最多同时显示 5 行，多的靠列表内滚动。
 fn program_list(settings: &Settings, context: &mut ViewContext<Settings>) -> View {
     let query = settings.program_query.clone().unwrap_or_default();
-    let mut rows: Vec<KeyedView> = vec![KeyedView::new(
-        "program-add",
-        StackPanel::new()
-            .orientation(Orientation::Horizontal)
-            .spacing(12.0)
-            .children((
-                TextBox::new()
-                    .width(260.0)
-                    .text(query)
-                    .placeholder_text("例如 notepad.exe")
-                    .on_text_changed(context.callback(Message::ProgramQuery)),
-                Button::new()
-                    .on_click(context.message(Message::ProgramAdd))
-                    .content("添加"),
-            )),
-    )];
+    let add = StackPanel::new()
+        .orientation(Orientation::Horizontal)
+        .spacing(12.0)
+        .children((
+            TextBox::new()
+                .width(260.0)
+                .text(query)
+                .placeholder_text("例如 notepad.exe")
+                .on_text_changed(context.callback(Message::ProgramQuery)),
+            Button::new()
+                .on_click(context.message(Message::ProgramAdd))
+                .content("添加"),
+        ));
+    let mut items: Vec<KeyedView> = Vec::new();
     for program in &settings.config.candidate.program_list_of_hiding_candidate {
-        rows.push(KeyedView::new(
+        items.push(KeyedView::new(
             program.clone(),
-            StackPanel::new()
-                .orientation(Orientation::Horizontal)
-                .spacing(12.0)
-                .children((
-                    TextBlock::new().text(program.clone()),
-                    Button::new()
-                        .on_click(context.message(Message::ProgramRemove(program.clone())))
-                        .content("移除"),
-                )),
+            ListViewItem::new().content(
+                // 第一列吃剩余宽度放程序名，第二列按内容宽放按钮。
+                Grid::new()
+                    .columns([GridLength::STAR, GridLength::Auto])
+                    .column_spacing(12.0)
+                    .keyed_children([
+                        KeyedView::new(
+                            "name",
+                            TextBlock::new()
+                                .text(program.clone())
+                                .vertical_alignment(VerticalAlignment::Center)
+                                .grid_column(0),
+                        ),
+                        KeyedView::new(
+                            "remove",
+                            Button::new()
+                                .on_click(context.message(Message::ProgramRemove(program.clone())))
+                                .grid_column(1)
+                                .content("删除"),
+                        ),
+                    ]),
+            ),
         ));
     }
-    StackPanel::new().spacing(8.0).keyed_children(rows)
+    if items.is_empty() {
+        return add;
+    }
+    StackPanel::new()
+        .spacing(8.0)
+        .children((add, scroll_list(items)))
 }
 
 pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> View {
@@ -191,14 +208,14 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
         field(
             "候选项排布方向",
             "横排时只给高亮的候选单独一行。",
-            RadioButtons::new()
-                .items_source(LayoutMode::ALL.iter().map(|mode| mode.label()))
-                .selected_index(
-                    LayoutMode::ALL
-                        .iter()
-                        .position(|mode| *mode == c.candidate_arrangement_direction),
-                )
-                .on_selection_changed(context.callback(Message::Arrangement)),
+            radio_row(
+                "arrangement",
+                LayoutMode::ALL
+                    .iter()
+                    .map(|mode| (mode.label(), *mode == c.candidate_arrangement_direction)),
+                Message::Arrangement,
+                context,
+            ),
         ),
         slider_field(
             "候选项个数",
@@ -259,7 +276,7 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
                 .is_on(c.show_more_candidate_items)
                 .on_toggled(context.callback(Message::ShowMoreCandidates)),
         ),
-        field(
+        field_top(
             "在下列程序中不显示候选框（使用原始输入）",
             "开启后，在这些程序里输入法完全不接管、按键原样交给应用，候选框与拼音行都不出现，避免遮挡它们自己的补全列表。写 exe 文件名，不区分大小写。",
             program_list(settings, context),

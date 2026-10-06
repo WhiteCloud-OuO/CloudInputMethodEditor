@@ -19,9 +19,9 @@ pub(crate) enum StatusAction {
     /// 设置：打开设置程序（UI 线程直接起进程，不经 Router）。
     OpenOptions,
 
-    /// 工具页：程序还没做，点了只记日志。
+    /// 工具页：弹出「工具」菜单（exe 旁 `tools\tools.list` 里登记的工具）。
     OpenWidgets,
 
-    /// 特殊字符页：程序还没做，点了只记日志。
+    /// 特殊字符页：起随包带的特殊字符输入器（exe 旁 `SpecialSymbolsInserter.exe`）。
     OpenSpecChars,
 }

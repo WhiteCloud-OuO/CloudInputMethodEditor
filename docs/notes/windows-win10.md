@@ -2,7 +2,7 @@
 
 ## 起因
 
-Windows 10 22H2 上点开始菜单的「云朵设置」，弹的是系统错误框：
+Windows 10 22H2 上点开始菜单的「云朵输入法 设置」，弹的是系统错误框：
 
 > cloudime-settings.exe - 无法找到入口
 > 无法定位程序输入点 TryCreatePackageDependency 于动态链接库 C:\Program Files\CloudIME\cloudime-settings.exe 上。

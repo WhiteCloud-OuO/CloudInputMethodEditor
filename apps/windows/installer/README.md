@@ -13,6 +13,7 @@ C:\Program Files\CloudIME\
     cloudime-settings.exe     设置界面
     Microsoft.UI.Xaml.dll …   设置程序自带的 Windows App Runtime（自包含部署，见下节；约 53 MB / 35 个文件）
     cloudime.ico              开始菜单 / 启动项快捷方式的图标（exe 里也嵌了一份）
+    SpecialSymbolsInserter.exe 特殊字符输入器（随包带的独立小工具，悬浮状态条「特殊字符」按钮起它）
     tools\                    工具目录：cwt-gui.exe（词库转换工具，GUI）+ cwt.exe（同上的命令行版）+ tools.list（悬浮状态条「工具」按钮的菜单清单）
     data\generated\           lm.qj（语言模型；英文词表已在 Dict.db 里，不再单独装）
     WordBank\                 Dict.db（7 张表：中文普通组 / 稀有组 + 英文）与用户导入的附加词库（本目录对普通用户可写，导入 / 删除词库走它）
@@ -43,7 +44,7 @@ Server 与设置程序按 **exe 相对**定位随包资源（`cloudime_platform:
 ## 安装位置与开始菜单
 
 默认装到 `{sd}\Program Files\CloudIME`（系统盘的 Program Files，64 位安装下与 `{autopf}` 等价）；开始菜单里建的是
-**`CloudIME` 目录**（`DefaultGroupName=CloudIME`，不跟显示名「云朵输入法」走），里面是「云朵设置」与「卸载云朵输入法」。
+**`CloudIME` 目录**（`DefaultGroupName=CloudIME`，不跟显示名「云朵输入法」走），里面是「云朵输入法 设置」与「云朵输入法 卸载」。
 
 安装向导**总是显示选择目录那一页**（`DisableDirPage=no`）让用户能改：Inno 的缺省 `auto` 会在重装 / 升级同一个 AppId 时
 自动跳过它，用户想换目录就没机会。

@@ -16,4 +16,5 @@ cargo-build.ps1
 reconfigure.ps1
 build-installer.ps1
 git-push.ps1
+clear-products.ps1
 .gitignore

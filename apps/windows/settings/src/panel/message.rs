@@ -86,6 +86,8 @@ pub(crate) enum Message {
     OpenRepository,
 
     // 调试页
+    /// 在屏幕上显示悬浮工具栏（`[status_bar] show_status_bar`）。
+    ShowStatusBar(bool),
     /// 自动隐藏悬浮工具栏（`[debugging] auto_hide_float_tool_bar`）。
     AutoHideFloatToolBar(bool),
     /// 「组件」入口：功能还没做，只记一条日志。设置里已不显示这个入口、代码留着，所以允许未构造。

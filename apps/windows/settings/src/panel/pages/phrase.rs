@@ -11,10 +11,16 @@ use windows_reactor::*;
 use crate::panel::controls::{field, note, page};
 use crate::panel::{Message, Settings};
 
-/// 列表三列的宽度（与表头一致），单位 DIP。
+/// 短语内容输入框（表单里）的宽度；列表里这一列改成吃剩余宽度，不再用固定值。
 const CONTENT_WIDTH: f64 = 320.0;
+
+/// 表格固定列宽（与表头一致），单位 DIP。
+/// 最后一列（编辑 / 删除）也钉死：要是用 `Auto`，表头那行没有按钮、这一列会塌成 0，
+/// 第一列（`Star`）就会多占一截，导致表头与数据行错位。
+const TITLE_WIDTH: f64 = 200.0;
 const CODE_WIDTH: f64 = 110.0;
 const POSITION_WIDTH: f64 = 70.0;
+const ACTION_WIDTH: f64 = 120.0;
 
 /// 列表里预览文本保留几个字符。
 const PREVIEW_CHARS: usize = 24;
@@ -125,31 +131,53 @@ fn persist(settings: &mut Settings, phrases: Vec<CustomPhrase>, ok: &str) {
     }
 }
 
-/// 表头 / 单元格：固定宽度对齐三列。
-fn cell(text: &str, width: f64, bold: bool) -> View {
-    let block = TextBlock::new()
+/// 表格的一行：5 列的 `Grid`（短语内容 / 候选内容 / 触发字母串 / 位置 / 操作），列宽与表头一致。
+///
+/// 单元格靠 `grid_column(i)` 定位；`Grid` 自己带 `ColumnDefinitions`，比原来用固定宽度的
+/// `TextBlock` 拼横排 `StackPanel` 更像表格——第一列是 `Star`，会随窗口宽度伸缩并支持换行。
+fn row(cells: impl IntoIterator<Item = KeyedView>) -> View {
+    Grid::new()
+        .columns([
+            GridLength::STAR,
+            GridLength::Pixel(TITLE_WIDTH),
+            GridLength::Pixel(CODE_WIDTH),
+            GridLength::Pixel(POSITION_WIDTH),
+            GridLength::Pixel(ACTION_WIDTH),
+        ])
+        .column_spacing(12.0)
+        .keyed_children(cells)
+}
+
+/// 单元格文本：`column` 是第几列；`wrap` 为真时换行、最多 3 行，超出打省略号。
+fn text_cell(key: &str, text: impl Into<String>, column: i32, bold: bool, wrap: bool) -> KeyedView {
+    let mut block = TextBlock::new()
         .text(text)
-        .width(width)
-        .text_wrapping(TextWrapping::NoWrap);
-    if bold {
-        block.font_weight(FontWeight::SEMI_BOLD).into()
+        .vertical_alignment(VerticalAlignment::Center)
+        .grid_column(column);
+    block = if wrap {
+        block
+            .text_wrapping(TextWrapping::Wrap)
+            .max_lines(3)
+            .text_trimming(TextTrimming::CharacterEllipsis)
     } else {
-        block.into()
+        block.text_wrapping(TextWrapping::NoWrap)
+    };
+    if bold {
+        block = block.font_weight(FontWeight::SEMI_BOLD);
     }
+    KeyedView::new(key, block)
 }
 
 pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> View {
     let store = store(settings);
     let mut rows: Vec<KeyedView> = vec![KeyedView::new(
         "header",
-        StackPanel::new()
-            .orientation(Orientation::Horizontal)
-            .spacing(12.0)
-            .children((
-                cell("短语内容", CONTENT_WIDTH, true),
-                cell("触发字母串", CODE_WIDTH, true),
-                cell("位置", POSITION_WIDTH, true),
-            )),
+        row([
+            text_cell("header-content", "短语内容", 0, true, false),
+            text_cell("header-title", "候选内容", 1, true, false),
+            text_cell("header-code", "触发字母串", 2, true, false),
+            text_cell("header-position", "位置", 3, true, false),
+        ]),
     )];
     if settings.phrases.is_empty() {
         rows.push(KeyedView::new(
@@ -158,30 +186,35 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
         ));
     }
     for (index, phrase) in settings.phrases.iter().enumerate() {
-        let content = match &phrase.title {
-            Some(title) => format!(
-                "{}（上屏：{}）",
-                CustomPhrase::preview(title, PREVIEW_CHARS),
-                CustomPhrase::preview(&phrase.text, PREVIEW_CHARS)
-            ),
-            None => CustomPhrase::preview(&phrase.text, PREVIEW_CHARS),
-        };
+        // 第五列：编辑 / 删除两个按钮（原来是直接排在横排 StackPanel 末尾）。
+        let actions = StackPanel::new()
+            .orientation(Orientation::Horizontal)
+            .spacing(8.0)
+            .vertical_alignment(VerticalAlignment::Center)
+            .grid_column(4)
+            .children((
+                Button::new()
+                    .on_click(context.message(Message::PhraseEdit(index)))
+                    .content("编辑"),
+                Button::new()
+                    .on_click(context.message(Message::PhraseRemove(index)))
+                    .content("删除"),
+            ));
         rows.push(KeyedView::new(
             format!("phrase-{index}"),
-            StackPanel::new()
-                .orientation(Orientation::Horizontal)
-                .spacing(12.0)
-                .children((
-                    cell(&content, CONTENT_WIDTH, false),
-                    cell(&phrase.code, CODE_WIDTH, false),
-                    cell(&phrase.position.to_string(), POSITION_WIDTH, false),
-                    Button::new()
-                        .on_click(context.message(Message::PhraseEdit(index)))
-                        .content("编辑"),
-                    Button::new()
-                        .on_click(context.message(Message::PhraseRemove(index)))
-                        .content("删除"),
-                )),
+            row([
+                text_cell("content", phrase.text.clone(), 0, false, true),
+                text_cell(
+                    "title",
+                    phrase.title.clone().unwrap_or_default(),
+                    1,
+                    false,
+                    true,
+                ),
+                text_cell("code", phrase.code.clone(), 2, false, false),
+                text_cell("position", phrase.position.to_string(), 3, false, false),
+                KeyedView::new("actions", actions),
+            ]),
         ));
     }
 

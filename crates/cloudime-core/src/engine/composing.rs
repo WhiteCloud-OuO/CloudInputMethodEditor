@@ -297,6 +297,14 @@ impl Engine {
         }
     }
 
+    /// Insert：只上屏组句里**已经选定**的部分，未选的拼音直接丢掉；一段都没选返回 `None`
+    ///（那就只是把拼音丢掉，不往文档里写东西）。已选段在选中时已各自记过上屏记录，这里不再补记。
+    pub fn take_selected(&mut self) -> Option<String> {
+        let text = self.composition.selected_text();
+        self.clear();
+        (!text.is_empty()).then_some(text)
+    }
+
     /// 放弃当前组句，原样返回给壳（通常是用户按回车要上屏字母本身）：
     /// 已选文本 + 剩余拼音原样（Shift 还原、去掉手敲的分隔符 `'`）。
     pub fn take_raw(&mut self) -> String {

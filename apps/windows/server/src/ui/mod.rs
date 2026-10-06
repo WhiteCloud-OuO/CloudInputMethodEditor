@@ -131,6 +131,16 @@ pub(crate) fn open_settings() {
     }
 }
 
+/// 起与本 exe 同目录的特殊字符输入器（随安装包带的独立小工具，`SpecialSymbolsInserter.exe`）。
+/// 它自己画成置顶、不抢焦点的窗口，点里面的字符直接注入当前输入框，所以不必把前台权让给它。
+pub(crate) fn open_spec_chars() {
+    let exe = std::env::current_exe().map(|exe| exe.with_file_name("SpecialSymbolsInserter.exe"));
+    let spawned = exe.and_then(|exe| std::process::Command::new(exe).spawn());
+    if let Err(error) = spawned {
+        tracing::warn!(%error, "打开特殊字符输入器失败");
+    }
+}
+
 /// 本进程 exe 的模块句柄（注册窗口类 / 建窗口用）。
 pub(super) fn module_handle() -> HINSTANCE {
     let module = unsafe { GetModuleHandleW(None) }.unwrap_or_default();

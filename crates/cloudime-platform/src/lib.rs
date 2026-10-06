@@ -19,7 +19,7 @@ pub use config::{
     MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MAX_PAGE_SIZE, MIN_ASSOCIATION_COUNTS,
     MIN_CANDIDATE_COUNT, MO_HU_YIN_BITS, PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS,
     PhraseConfig, PreeditMode, SimpTrad, SwitchKey, SwitchKeys, UpdateChannel, UpdateConfig,
-    WordBankConfig, fuzzy_bits, pair_bit, pairwise_completion,
+    WordBankConfig, fuzzy_bits, pair_bit, pair_open, pairwise_completion,
 };
 pub use error::ConfigError;
 pub use migrate::Migration;

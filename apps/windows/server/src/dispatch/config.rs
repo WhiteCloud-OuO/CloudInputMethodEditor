@@ -54,6 +54,9 @@ pub struct RouterConfig {
     /// 状态条记住的位置（`[status_bar] x` / `y`，内容左上角物理像素）。
     pub status_pos: Option<(i32, i32)>,
 
+    /// 在屏幕上显示悬浮工具栏（`[status_bar] show_status_bar`）：关掉后桌面上不再出现那条工具条。
+    pub show_status_bar: bool,
+
     /// 自动隐藏悬浮工具栏（`[debugging] auto_hide_float_tool_bar`）：前台全屏时收起。
     /// 切到别的输入法、云朵被禁用时始终收起，与这一项无关。
     pub auto_hide_float_tool_bar: bool,
@@ -114,6 +117,7 @@ impl From<&Config> for RouterConfig {
             punctuation_mapping: input.punctuation_mapping(),
             pairwise_completion: input.punctuation_marks_pairwise_completion,
             status_pos: config.status_bar.x.zip(config.status_bar.y),
+            show_status_bar: config.status_bar.show_status_bar,
             auto_hide_float_tool_bar: config.debugging.auto_hide_float_tool_bar,
         }
     }

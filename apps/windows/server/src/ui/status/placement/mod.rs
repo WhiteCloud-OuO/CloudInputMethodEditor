@@ -79,10 +79,8 @@ impl Placement {
             Some(StatusAction::OpenOptions) => crate::ui::open_settings(),
             // 「工具」：弹出 tools.list 里登记的工具菜单，选了就起它
             Some(StatusAction::OpenWidgets) => super::tools::show_menu(self.hwnd),
-            // 特殊字符页的程序还没做：按钮照画，点了只留一条日志
-            Some(action @ StatusAction::OpenSpecChars) => {
-                tracing::debug!(?action, "状态条：这个按钮的功能还没做");
-            }
+            // 「特殊字符」：起随包带的特殊字符输入器（exe 旁 SpecialSymbolsInserter.exe）
+            Some(StatusAction::OpenSpecChars) => crate::ui::open_spec_chars(),
             None => {}
         }
     }

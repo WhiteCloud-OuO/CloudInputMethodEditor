@@ -38,6 +38,12 @@ pub struct FuzzyRules {
 
     /// ü ↔ u（`nü` 与 `nu`、`lü` 与 `lu` 互用；拼音里 ü 写作 v）。
     pub u_v: bool,
+
+    /// uo ↔ o（`luo` 与 `lo` 这类；写法不合法时会被滤掉，实际生效的是 `luo`/`lo`）。
+    pub uo_o: bool,
+
+    /// wang ↔ huang（王 / 黄这一对；只有完整音节才换，前缀上没意义）。
+    pub wang_huang: bool,
 }
 
 impl FuzzyRules {
@@ -53,6 +59,8 @@ impl FuzzyRules {
         en_eng: true,
         in_ing: true,
         u_v: true,
+        uo_o: true,
+        wang_huang: true,
     };
 
     pub fn any(&self) -> bool {
@@ -60,8 +68,19 @@ impl FuzzyRules {
     }
 
     /// 全部规则的配置键名，与 `[fuzzy]` 分节的字段名一致；菜单按这个顺序列出。
-    pub const NAMES: [&'static str; 10] = [
-        "z_zh", "c_ch", "s_sh", "n_l", "f_h", "l_r", "an_ang", "en_eng", "in_ing", "u_v",
+    pub const NAMES: [&'static str; 12] = [
+        "z_zh",
+        "c_ch",
+        "s_sh",
+        "l_r",
+        "n_l",
+        "f_h",
+        "u_v",
+        "uo_o",
+        "an_ang",
+        "en_eng",
+        "in_ing",
+        "wang_huang",
     ];
 
     /// 按名字开一条规则（`z-zh` / `z_zh` / `zzh` 都认），CLI 参数用；不认识返回 `false`。
@@ -103,6 +122,8 @@ impl FuzzyRules {
             "eneng" => &mut self.en_eng,
             "ining" => &mut self.in_ing,
             "uv" => &mut self.u_v,
+            "uoo" | "uo" => &mut self.uo_o,
+            "wanghuang" | "whu" => &mut self.wang_huang,
             _ => return None,
         })
     }
@@ -221,6 +242,18 @@ impl FuzzyRules {
             if self.in_ing {
                 swap_final("ing", "in");
             }
+            // uo ↔ o：`luo` ↔ `lo`（别的 uo 音节换成 o 不合法，会被下面的过滤器滤掉）
+            if self.uo_o {
+                swap_final("uo", "o");
+            }
+            // 王 / 黄：整音节成对互换，只有完整音节才换（前缀上没有「半个 huang」这回事）
+            if self.wang_huang {
+                match form {
+                    "wang" => out.push("huang".to_owned()),
+                    "huang" => out.push("wang".to_owned()),
+                    _ => {}
+                }
+            }
         }
         out.retain(|f| {
             !f.is_empty()
@@ -241,6 +274,36 @@ mod tests {
 
     fn forms(rules: &FuzzyRules, pattern: SyllablePattern<'_>) -> Vec<String> {
         rules.alternatives(pattern)
+    }
+
+    #[test]
+    fn uo_o_and_wang_huang_are_separate_switches() {
+        let mut rules = FuzzyRules::default();
+        assert!(rules.enable("uo_o"));
+        assert!(rules.enable("wang-huang"));
+        // luo ↔ lo：两边都认得对方
+        assert_eq!(
+            forms(&rules, SyllablePattern::complete("luo")),
+            ["luo", "lo"]
+        );
+        assert_eq!(
+            forms(&rules, SyllablePattern::complete("lo")),
+            ["lo", "luo"]
+        );
+        // 别的 uo 音节换成 o 不合法（拼音里没有 do），不出
+        assert_eq!(forms(&rules, SyllablePattern::complete("duo")), ["duo"]);
+        // 王 / 黄
+        assert_eq!(
+            forms(&rules, SyllablePattern::complete("wang")),
+            ["wang", "huang"]
+        );
+        assert_eq!(
+            forms(&rules, SyllablePattern::complete("huang")),
+            ["huang", "wang"]
+        );
+        // 这一对只管 wang/huang，不牵连同声母的别的音节
+        assert_eq!(forms(&rules, SyllablePattern::complete("hua")), ["hua"]);
+        assert_eq!(forms(&rules, SyllablePattern::complete("wan")), ["wan"]);
     }
 
     #[test]
