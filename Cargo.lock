@@ -375,7 +375,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 
 [[package]]
 name = "cloudime-cli"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "clap",
  "cloudime-core",
@@ -394,7 +394,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-core"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "cloudime-dictionary",
  "ferrous-opencc",
@@ -408,7 +408,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-dict-convert"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "clap",
  "cloudime-core",
@@ -427,7 +427,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-dictionary"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "cloudime-format",
  "rusqlite",
@@ -438,7 +438,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-format"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "memmap2",
  "serde",
@@ -450,7 +450,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-learning"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "cloudime-core",
  "cloudime-dictionary",
@@ -465,7 +465,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-lm"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "cloudime-core",
  "cloudime-format",
@@ -476,7 +476,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-neural"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "candle-core",
  "candle-nn",
@@ -490,7 +490,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-platform"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "cloudime-core",
  "cloudime-dictionary",
@@ -505,7 +505,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-release-sign"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "base64 0.23.1",
  "clap",
@@ -516,7 +516,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-render"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "clap",
  "cosmic-text",
@@ -530,7 +530,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-update"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "base64 0.23.1",
  "cloudime-platform",
@@ -545,7 +545,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-windows-server"
-version = "0.0.3-dev"
+version = "0.0.3"
 dependencies = [
  "cloudime-core",
  "cloudime-dictionary",
@@ -567,7 +567,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-windows-settings"
-version = "0.0.3-dev"
+version = "0.0.3"
 dependencies = [
  "cloudime-core",
  "cloudime-dictionary",
@@ -585,7 +585,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-windows-tsf"
-version = "0.0.3-dev"
+version = "0.0.3"
 dependencies = [
  "cloudime-core",
  "cloudime-platform",
@@ -598,7 +598,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-wordbank-transformer"
-version = "0.0.2"
+version = "0.0.3"
 dependencies = [
  "clap",
  "cloudime-dictionary",
