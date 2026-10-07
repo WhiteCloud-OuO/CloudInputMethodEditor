@@ -20,7 +20,8 @@ pub(super) fn shadow_margin(dpi: u32) -> i32 {
 }
 
 /// 把渲染器出的预乘 RGBA 位图（已含阴影边）贴到分层窗口上，`win_pos` 是位图左上角的屏幕坐标。
-pub(super) fn present(hwnd: HWND, pixmap: &Pixmap, win_pos: (i32, i32)) -> Result<()> {
+/// `alpha` 是整张位图的额外不透明度（255 = 原样），候选窗展开 / 收起过渡淡入时用。
+pub(super) fn present(hwnd: HWND, pixmap: &Pixmap, win_pos: (i32, i32), alpha: u8) -> Result<()> {
     let (w, h) = (pixmap.width() as i32, pixmap.height() as i32);
     if w <= 0 || h <= 0 {
         return Err(Error::from(E_INVALIDARG));
@@ -33,11 +34,17 @@ pub(super) fn present(hwnd: HWND, pixmap: &Pixmap, win_pos: (i32, i32)) -> Resul
         dst[2] = src.red();
         dst[3] = src.alpha();
     }
-    update(hwnd, canvas.dc(), win_pos, (w, h))
+    update(hwnd, canvas.dc(), win_pos, (w, h), alpha)
 }
 
 /// `UpdateLayeredWindow`：整张位图按预乘 alpha 贴上并挪到 `win_pos`。
-fn update(hwnd: HWND, hdc: HDC, win_pos: (i32, i32), win_size: (i32, i32)) -> Result<()> {
+fn update(
+    hwnd: HWND,
+    hdc: HDC,
+    win_pos: (i32, i32),
+    win_size: (i32, i32),
+    alpha: u8,
+) -> Result<()> {
     let (w, h) = win_size;
     let dst = POINT {
         x: win_pos.0,
@@ -48,7 +55,7 @@ fn update(hwnd: HWND, hdc: HDC, win_pos: (i32, i32), win_size: (i32, i32)) -> Re
     let blend = BLENDFUNCTION {
         BlendOp: AC_SRC_OVER as u8,
         BlendFlags: 0,
-        SourceConstantAlpha: 255,
+        SourceConstantAlpha: alpha,
         AlphaFormat: AC_SRC_ALPHA as u8,
     };
     unsafe {

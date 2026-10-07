@@ -99,9 +99,21 @@ pub enum ClientMessage {
 
     /// 取全局中英模式：激活、得到焦点时各一次，前台、没在组句时再定时问（别的应用或悬浮状态条可能切过）。
     /// 回 [`super::ServerMessage::ModeSync`]；有 DLL 来取也说明云朵输入法是当前输入法。
+    ///
+    /// 顺路带上本线程此刻的焦点状态：Server 侧的状态切换提示要靠它判断「在不在输入状态」，
+    /// 以及 Caps Lock 是否亮着（Caps 的按键根本不经过 Server）。
     SyncMode {
         /// 会话标识。
         session: SessionId,
+
+        /// 焦点在不在一个可输入文本区域里（`ITfThreadMgr::GetFocus` 拿不到文档、或上下文被标成
+        /// `EMPTYCONTEXT` / `KEYBOARD_DISABLED` 都算不在）。老 DLL 不带此字段，读成 `false`。
+        #[serde(default)]
+        in_text_input: bool,
+
+        /// Caps Lock 亮着没有。老 DLL 读成 `false`。
+        #[serde(default)]
+        caps: bool,
     },
 
     /// 宿主线程把输入法切成了别的（微软拼音等）：Server 收起悬浮状态条。应用退出时不发（那时状态条该留着），

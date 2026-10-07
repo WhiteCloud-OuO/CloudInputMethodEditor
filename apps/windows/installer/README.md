@@ -13,7 +13,10 @@ C:\Program Files\CloudIME\
     cloudime-settings.exe     设置界面
     Microsoft.UI.Xaml.dll …   设置程序自带的 Windows App Runtime（自包含部署，见下节；约 53 MB / 35 个文件）
     cloudime.ico              开始菜单 / 启动项快捷方式的图标（exe 里也嵌了一份）
+    tutorial.md               使用手册（键盘、鼠标、候选窗的全部用法；随仓库根目录的 tutorial.md，发版前同步）
     SpecialSymbolsInserter.exe 特殊字符输入器（随包带的独立小工具，悬浮状态条「特殊字符」按钮起它）
+    LocalDictionary\          本地词典（翻译 Tip 用）：dictionaries.list（一行「显示名=文件名」）+ glossary-*.qj / *.db；
+                              「设置 → 翻译 → 本地词典」的选项就是清单里的显示名，Server 与设置程序都从这儿读（约 50 MB，按需要留哪几份）
     tools\                    工具目录：cwt-gui.exe（词库转换工具，GUI）+ cwt.exe（同上的命令行版）+ tools.list（悬浮状态条「工具」按钮的菜单清单）
     data\generated\           lm.qj（语言模型；英文词表已在 Dict.db 里，不再单独装）
     WordBank\                 Dict.db（7 张表：中文普通组 / 稀有组 + 英文）与用户导入的附加词库（本目录对普通用户可写，导入 / 删除词库走它）

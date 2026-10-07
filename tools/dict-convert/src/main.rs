@@ -9,6 +9,7 @@
 //!   `model` 把本地整句模型的三件套目录打成一个 `model.qjm`
 //! - `word-bank`：合并中文 / 英文 / 品牌 / 中英混杂词源，写出 `WordBank\Dict.db`（引擎按 `language` 分流加载）
 //! - `phrase-db`：写出空的自定义短语库 `Phrases\Phrase.db`（`user` / `cloudime_default` 两张空表）
+//! - `glossary-db`：青简那套释义表 `.qj` → 翻译 Tip 用的 `.db`（总表 `words` + 副表 `contents`，拼音从词库填）
 //! - `rehead`：把改名前的 `.qj`（魔数 `QINGJIAN`）就地改成当前魔数 `CLOUDIME`，只改头 8 字节，见 `rehead.rs`
 //!
 //! 输出默认写到仓库根目录 `data/generated/`（gitignore）。
@@ -17,6 +18,7 @@ mod args;
 mod bigram;
 mod english;
 mod error;
+mod glossary_db;
 mod lexicon;
 mod oov_filter;
 mod pack;
@@ -133,6 +135,11 @@ fn run() -> Result<(), ConvertError> {
             &args.out_dir,
         ),
         Command::Rehead { kind, input } => rehead::rehead(kind, &input),
+        Command::GlossaryDb {
+            input,
+            word_bank,
+            out,
+        } => glossary_db::convert(&input, word_bank.as_deref(), out.as_deref()),
         Command::Pack {
             kind,
             input,

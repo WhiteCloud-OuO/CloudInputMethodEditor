@@ -18,6 +18,8 @@ pub(crate) enum Message {
     /// 符号映射的位下标（见 `PUNCTUATION_MAPPING_BITS`）+ 新值。
     PunctuationMapping(usize, bool),
     HalfWideAfterDigit(bool),
+    /// 状态切换提示（`[input] show_status_change_tip`）。
+    ShowStatusChangeTip(bool),
 
     // 候选页
     /// 本地整句模型开关（`[candidate] use_local_sentence_organization_model`）。
@@ -72,6 +74,16 @@ pub(crate) enum Message {
     /// 删除第 `index` 条。
     PhraseRemove(usize),
 
+    // 翻译页
+    /// 启用翻译 Tip（`[translate] enabled`）。
+    TranslateEnabled(bool),
+    /// 选中的本地词典（清单里的下标）。
+    TranslateDictionary(Option<usize>),
+    /// 学会所需上屏次数（滑轨）。
+    TranslateNeedTimes(f64),
+    /// 重置这份词典的学习内容（`[translate] reset_counter` 加 1，Server 见到就清）。
+    ResetTranslateLearning,
+
     // 调试页：文件 / 日志 / 学习（原「高级」页）
     VerboseLog(bool),
     InputLog(bool),
@@ -84,12 +96,16 @@ pub(crate) enum Message {
     ClearInputLog,
     /// 打开项目 GitHub 页面。
     OpenRepository,
+    /// 用系统默认程序打开随包的使用手册（`tutorial.md`）。
+    OpenTutorial,
 
     // 调试页
     /// 在屏幕上显示悬浮工具栏（`[status_bar] show_status_bar`）。
     ShowStatusBar(bool),
     /// 自动隐藏悬浮工具栏（`[debugging] auto_hide_float_tool_bar`）。
     AutoHideFloatToolBar(bool),
+    /// 不处于输入状态时自动禁用输入法（`[debugging] auto_disable_without_text_input`）。
+    AutoDisableWithoutTextInput(bool),
     /// 「组件」入口：功能还没做，只记一条日志。设置里已不显示这个入口、代码留着，所以允许未构造。
     #[allow(dead_code)]
     OpenComponents,

@@ -22,6 +22,9 @@ pub(crate) struct TextStyle {
     /// 画删除线（纠错改掉的拼音）。
     pub strike: bool,
 
+    /// 斜体（翻译 Tip 的词性）。
+    pub italic: bool,
+
     /// 覆盖率 gamma，见 `Theme::text_gamma`。
     pub gamma: f32,
 }
@@ -36,6 +39,7 @@ impl TextStyle {
             family: None,
             color,
             strike: false,
+            italic: false,
             gamma,
         }
     }
@@ -43,6 +47,12 @@ impl TextStyle {
     /// 指定字族。
     pub(crate) fn with_family(mut self, family: Option<&String>) -> Self {
         self.family = family.cloned();
+        self
+    }
+
+    /// 斜体。
+    pub(crate) fn italic(mut self) -> Self {
+        self.italic = true;
         self
     }
 

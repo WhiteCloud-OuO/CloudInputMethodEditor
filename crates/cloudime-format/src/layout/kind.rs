@@ -8,6 +8,9 @@ pub enum Kind {
     /// 词级 bigram 语言模型（`cloudime-lm::BigramModel`）。
     LanguageModel = 2,
 
+    /// 释义表 / 本地词典（`cloudime-translate::Glossary`）：编号沿用青简那套。
+    Glossary = 3,
+
     /// 英文词表。
     WordList = 5,
 
@@ -20,6 +23,7 @@ impl Kind {
         Some(match code {
             1 => Self::Dictionary,
             2 => Self::LanguageModel,
+            3 => Self::Glossary,
             5 => Self::WordList,
             6 => Self::Model,
             _ => return None,

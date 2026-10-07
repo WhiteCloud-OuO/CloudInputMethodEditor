@@ -15,6 +15,45 @@ pub(super) fn open_with_explorer(target: &str) {
     }
 }
 
+/// 用系统默认程序打开一份**文档**（如随包的使用手册 `tutorial.md`）。
+///
+/// 与 [`open_with_explorer`] 的区别：没有默认打开方式的文件类型（`.md` 在很多机器上就没有）
+/// 直接退回记事本，别让 Windows 先弹一个「你要如何打开这个文件？」。
+pub(super) fn open_document(path: &std::path::Path) {
+    if has_open_association(path) {
+        open_with_explorer(&path.to_string_lossy());
+        return;
+    }
+    if let Err(error) = std::process::Command::new("notepad.exe").arg(path).spawn() {
+        log::warn(format!("用记事本打开 {} 失败: {error}", path.display()));
+    }
+}
+
+/// 这个文件类型在系统里有没有「默认打开方式」。问 shell 要关联程序的可执行文件路径，
+/// 只问长度（`pszout` 给 null 时它把需要的大小写进 `size`）；没关联时是 0。
+fn has_open_association(path: &std::path::Path) -> bool {
+    use windows::Win32::UI::Shell::{ASSOCF_NONE, ASSOCSTR_EXECUTABLE, AssocQueryStringW};
+    use windows::core::{HSTRING, PCWSTR};
+
+    let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
+        return false;
+    };
+    let extension = HSTRING::from(format!(".{extension}"));
+    let mut size = 0u32;
+    let queried = unsafe {
+        AssocQueryStringW(
+            ASSOCF_NONE,
+            ASSOCSTR_EXECUTABLE,
+            PCWSTR(extension.as_ptr()),
+            PCWSTR::null(),
+            None,
+            &mut size,
+        )
+    };
+    // 「要给多大缓冲」是 S_FALSE，也算成功；真没关联时 size 为 0
+    queried.is_ok() && size > 1
+}
+
 /// 三个进程共用的日志目录，没有就建出来（Server 没跑过时它还不存在）。
 pub(super) fn log_dir() -> Option<PathBuf> {
     let dir = cloudime_platform::dirs::log_dir()?;
@@ -235,8 +274,38 @@ pub(super) fn radio_row(
         .keyed_children(items)
 }
 
+/// 一个「滑轨 + 右侧数字」的整数值项：拖动即时更新，数字定宽、垂直居中，不把滑轨顶来顶去。
+pub(super) fn slider_field(
+    label: &str,
+    hint: &str,
+    value: usize,
+    min: usize,
+    max: usize,
+    message: impl Fn(f64) -> Message + 'static,
+    context: &mut ViewContext<Settings>,
+) -> View {
+    let slider = Slider::new()
+        .width(260.0)
+        .minimum(min as f64)
+        .maximum(max as f64)
+        .step_frequency(1.0)
+        .value(value as f64)
+        .on_value_changed(context.callback(message));
+    let number = TextBlock::new()
+        .text(value.to_string())
+        .width(20.0)
+        .vertical_alignment(VerticalAlignment::Center);
+    field(
+        label,
+        hint,
+        StackPanel::new()
+            .orientation(Orientation::Horizontal)
+            .spacing(12.0)
+            .children((slider, number)),
+    )
+}
+
 /// 勾选 / 名单列表的通用外壳：`ListView` 装给定的项，不要选中行为，最多同时显示 5 行。
-///
 /// windows-reactor 没有 XAML 那种 `DataTemplate` / `ItemsSource`，所谓「项目模板」就是在 Rust 里
 /// 给每一项建好一份视图（`ListViewItem` 之类）再用 `collection_slot` 交给列表。
 pub(super) fn scroll_list(items: impl IntoIterator<Item = KeyedView>) -> View {

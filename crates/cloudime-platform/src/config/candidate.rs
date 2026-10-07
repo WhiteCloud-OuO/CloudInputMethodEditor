@@ -17,7 +17,7 @@ pub const MIN_ASSOCIATION_COUNTS: usize = 0;
 pub const MAX_ASSOCIATION_COUNTS: usize = 4;
 
 /// 候选框最小宽度的缺省值（物理像素，只在竖排时起作用）。
-pub const DEFAULT_CANDIDATE_BOX_MINIMUM_WIDTH: u32 = 320;
+pub const DEFAULT_CANDIDATE_BOX_MINIMUM_WIDTH: u32 = 180;
 
 /// 一种字体的用法：字族名 + 字号（点）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -150,6 +150,9 @@ pub struct CandidateConfig {
     /// 候选项序号字体。
     pub item_number_font: FontChoice,
 
+    /// 翻译字体：候选窗底部那一行左侧的翻译 Tip。
+    pub translate_font: FontChoice,
+
     /// 候选项序号样式。
     pub item_number_style: ItemNumberStyle,
 
@@ -159,7 +162,8 @@ pub struct CandidateConfig {
     /// 候选框最小宽度（物理像素，只在竖排时有效）。
     pub candidate_box_minimum_width: u32,
 
-    /// 展示更多候选项（按 Tab）：功能暂未实现，先保留设置项。
+    /// 展示更多候选项（按 Tab）：组句里 Tab 把候选窗展开成一整屏（竖排 5 列 / 横排 5 行，
+    /// 另一个方向就是 [`candidate_count`](Self::candidate_count)）；关掉时 Tab 吃掉但不展开。
     pub show_more_candidate_items: bool,
 
     /// 在下列程序中不显示候选框（完全不接管输入，按键原样交给应用）。
@@ -172,14 +176,15 @@ impl Default for CandidateConfig {
             use_local_sentence_organization_model: true,
             candidate_arrangement_direction: LayoutMode::default(),
             candidate_count: MAX_CANDIDATE_COUNT,
-            candidate_association_counts: MAX_ASSOCIATION_COUNTS,
+            candidate_association_counts: 2,
             pinyin_font: FontChoice::new(DEFAULT_FAMILY, 11.0),
-            candidate_font: FontChoice::new(DEFAULT_FAMILY, 14.0),
-            item_number_font: FontChoice::new(DEFAULT_FAMILY, 9.0),
+            candidate_font: FontChoice::new(DEFAULT_FAMILY, 13.0),
+            item_number_font: FontChoice::new(DEFAULT_FAMILY, 11.0),
+            translate_font: FontChoice::new(DEFAULT_FAMILY, 11.0),
             item_number_style: ItemNumberStyle::default(),
             preedit: crate::config::PreeditMode::default(),
             candidate_box_minimum_width: DEFAULT_CANDIDATE_BOX_MINIMUM_WIDTH,
-            show_more_candidate_items: true,
+            show_more_candidate_items: false,
             program_list_of_hiding_candidate: Vec::new(),
         }
     }

@@ -51,19 +51,32 @@ mod session;
 /// v15 之后给 [`cloudime_core::Candidate`] 加了 `display`（候选里显示的内容，上屏仍用 `text`）：给结构体加
 /// **带 `serde(default)` 的字段**两边仍能对话，且老 DLL 只读候选条数、不读这条内容（候选窗由 Server 自绘），
 /// 行为完全不变，所以不 +1。
-pub const PROTOCOL_VERSION: u32 = 15;
+///
+/// v16 给 [`ServerMessage::Update`] 加了 `commit`（鼠标点候选窗上屏）：候选窗是 Server 自绘的、收不到按键，
+/// 只能等 DLL 那一拍 `Poll` 时把要上屏的文本带回去。老 DLL 会忽略它，表现成「点了候选窗没反应、组句还
+/// 悄悄清掉了」——静默少了半个功能，必须 +1 并重装 DLL。同一版里给 [`Frame`] 加了 `columns`
+/// （展开「更多候选项」的网格列数）：它只影响 Server 自绘，加字段本身不改老 DLL 的行为，跟着这次一起走。
+///
+/// v17 给 [`ClientMessage::SyncMode`] 加了 `in_text_input` 与 `caps`（「状态切换提示」判断在不在输入状态、
+/// Caps Lock 亮不亮用）：老 DLL 不带这两个字段，读成 `false`，表现成「在那台机器上提示条从来不弹」——
+/// 同样是静默少一个功能，所以 +1 并重装 DLL。
+pub const PROTOCOL_VERSION: u32 = 17;
 
 /// 从哪个协议版本起 DLL 会在 `OpenSession` 后阻塞读一条 [`ServerMessage::SessionOpened`]。
 /// 门槛是固定值而不是当前版本：以后版本再升，没重启的应用里那些旧 DLL 仍在等这条回包，
 /// 不回它们会卡在 `open()` 里（宿主 UI 线程）。
 pub const SESSION_OPENED_SINCE: u32 = 6;
 
+/// 从哪个协议版本起 DLL 认 [`ServerMessage::Update`] 里的 `commit`（鼠标点候选窗上屏）。
+/// 老 DLL 收不到这段文本却又会跟着把组句清掉，所以 Server 宁可整条鼠标上屏都拦下来（见 `supports_candidate_click`）。
+pub const CANDIDATE_CLICK_SINCE: u32 = 16;
+
 pub mod frame;
 pub mod key;
 
 pub use client::ClientMessage;
 pub use codec::{CodecError, DEFAULT_PIPE_NAME, read_message, write_message};
-pub use frame::{Frame, PreeditKind, PreeditSegment};
+pub use frame::{Frame, PreeditKind, PreeditSegment, TipChoices};
 pub use indicator::{IndicatorCommand, IndicatorState};
 pub use key::{KeyEvent, KeyModifiers, KeyOutcome};
 pub use mode::InputMode;

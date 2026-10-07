@@ -20,6 +20,8 @@ pub struct RouterConfig {
     /// 序号字体。
     pub item_number_font: (String, f32),
 
+    /// 翻译 Tip 的字体（`[candidate] translate_font`）。
+    pub translate_font: (String, f32),
     /// 序号的写法（`[candidate] item_number_style`）。
     pub item_number_style: ItemNumberStyle,
 
@@ -28,6 +30,21 @@ pub struct RouterConfig {
 
     /// 拼音显示位置（`[candidate] preedit`）。
     pub preedit: PreeditMode,
+
+    /// 「展示更多候选项」（`[candidate] show_more_candidate_items`）：组句里 Tab 把候选窗展开成
+    /// 一屏（竖排 5 列 / 横排 5 行）；关掉时 Tab 吃掉但什么也不做。
+    pub show_more_candidate_items: bool,
+
+    /// 启用翻译 Tip（`[translate] enabled`）。
+    pub translate_enabled: bool,
+
+    /// 选中的本地词典文件名（`[translate] dictionary`）。
+    pub translate_dictionary: String,
+
+    /// 学会所需上屏次数（`[translate] need_times`，3–10）。
+    pub translate_need_times: u32,
+    /// 「重置学习内容」的次数（`[translate] reset_counter`）：变了就清空该词典的学习记录。
+    pub translate_reset_counter: u64,
 
     /// 在「不显示候选框」名单里的程序（`[candidate] program_list_of_hiding_candidate`，exe 文件名）。
     pub hiding_candidates: Vec<String>,
@@ -60,6 +77,13 @@ pub struct RouterConfig {
     /// 自动隐藏悬浮工具栏（`[debugging] auto_hide_float_tool_bar`）：前台全屏时收起。
     /// 切到别的输入法、云朵被禁用时始终收起，与这一项无关。
     pub auto_hide_float_tool_bar: bool,
+
+    /// 不处于输入状态时自动禁用输入法（`[debugging] auto_disable_without_text_input`）。
+    /// Server 只把它下发给 DLL，判断与动作都在 DLL（那边才拿得到 TSF 的焦点与上下文）。
+    pub auto_disable_without_text_input: bool,
+
+    /// 状态切换提示（`[input] show_status_change_tip`）：状态一变在光标附近弹一个 1 秒的提示条。
+    pub show_status_change_tip: bool,
 }
 
 impl RouterConfig {
@@ -69,6 +93,7 @@ impl RouterConfig {
             pinyin_font: self.pinyin_font.clone(),
             candidate_font: self.candidate_font.clone(),
             item_number_font: self.item_number_font.clone(),
+            translate_font: self.translate_font.clone(),
             min_width_pixels: self.min_width_pixels,
             item_number_style: self.item_number_style,
         }
@@ -105,9 +130,18 @@ impl From<&Config> for RouterConfig {
                 candidate.item_number_font.family.clone(),
                 candidate.item_number_font.size,
             ),
+            translate_font: (
+                candidate.translate_font.family.clone(),
+                candidate.translate_font.size,
+            ),
             item_number_style: candidate.item_number_style,
             min_width_pixels: candidate.candidate_box_minimum_width as f32,
             preedit: candidate.preedit,
+            show_more_candidate_items: candidate.show_more_candidate_items,
+            translate_enabled: config.translate.enabled,
+            translate_dictionary: config.translate.dictionary.clone(),
+            translate_need_times: config.translate.need_times(),
+            translate_reset_counter: config.translate.reset_counter,
             hiding_candidates: candidate.program_list_of_hiding_candidate.clone(),
             // 「标点全 / 半角」的初值：follow 中文全角、英文半角，full / half 一律；之后还能用状态条那一格会话内切
             full_width_punctuation: punctuation.full_width(false),
@@ -119,6 +153,8 @@ impl From<&Config> for RouterConfig {
             status_pos: config.status_bar.x.zip(config.status_bar.y),
             show_status_bar: config.status_bar.show_status_bar,
             auto_hide_float_tool_bar: config.debugging.auto_hide_float_tool_bar,
+            auto_disable_without_text_input: config.debugging.auto_disable_without_text_input,
+            show_status_change_tip: input.show_status_change_tip,
         }
     }
 }

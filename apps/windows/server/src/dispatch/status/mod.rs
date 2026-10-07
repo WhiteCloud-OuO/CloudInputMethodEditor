@@ -22,6 +22,7 @@ impl Router {
         self.mode = mode;
         self.ime_active = true;
         self.reconcile_status();
+        self.check_status_tip();
     }
 
     /// 有 DLL 来取模式：云朵输入法是当前输入法。
@@ -89,6 +90,7 @@ impl Router {
             }
         }
         self.reconcile_status();
+        self.check_status_tip();
     }
 
     /// 任务栏图标右键菜单 / DLL 侧内置热键：标点切换只改会话内状态，全角字符与简繁同状态条那两格。
@@ -150,6 +152,68 @@ impl Router {
             None => self.status.hide_status(),
         }
     }
+
+    /// 当前这组状态（状态切换提示的比较 / 定位用）。
+    pub(super) fn tip_state(&self) -> TipState {
+        let english = self.mode.english();
+        TipState {
+            english,
+            caps: self.caps,
+            full_width_chars: self.config.full_width_chars,
+            traditional: self.config.traditional,
+            full_width_punctuation: self.full_width_punctuation_for(english),
+        }
+    }
+
+    /// 状态切换提示（`[input] show_status_change_tip`）：中 / 英、Caps、全 / 半角、简 / 繁、中 / 西文标点
+    /// 任一变了，就在光标附近弹一个 1 秒的提示条（[`crate::ui`] 的 `status_tip`）。
+    ///
+    /// 只在云朵输入法在前台、没被禁用、且焦点确实在可输入文本区域里（DLL 每拍报上来的）时才弹；
+    /// 还没拿到过光标矩形（这次运行还没组过句）也不弹 —— 没地方摆。
+    pub(super) fn check_status_tip(&mut self) {
+        let state = self.tip_state();
+        // 第一次观察只是把当前状态记下来（Server 刚起来不该冒一个提示）。
+        let Some(previous) = self.last_tip.replace(state) else {
+            return;
+        };
+        if previous == state {
+            return;
+        }
+        let english = state.english;
+        if !self.config.show_status_change_tip
+            || !self.ime_active
+            || self.mode.disabled()
+            || !self.in_text_input
+        {
+            return;
+        }
+        let Some(rect) = self.last_caret else {
+            return;
+        };
+        tracing::debug!(?state, "状态切换提示");
+        self.status.show_status_tip(
+            StatusView {
+                english,
+                full_width_punctuation: state.full_width_punctuation,
+                full_width_chars: state.full_width_chars,
+                traditional: state.traditional,
+                anchor: None,
+                auto_hide_fullscreen: false,
+            },
+            self.caps,
+            rect,
+        );
+    }
+}
+
+/// 状态切换提示要比较的一组状态：任一不同就弹一次。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) struct TipState {
+    english: bool,
+    caps: bool,
+    full_width_chars: bool,
+    traditional: bool,
+    full_width_punctuation: bool,
 }
 
 /// 起一个新的 Server 实例接替本进程：带 `--wait-pid <本进程 pid>` 让它等本进程退出后再占命名管道

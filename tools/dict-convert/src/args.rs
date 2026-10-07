@@ -146,8 +146,7 @@ pub enum Command {
         max_chars: usize,
     },
 
-    /// 把 TSV 打包成词库存档 / `.qj` 容器：`dict` 读一个 TSV 写单份中文 `.db`，`lm` 读 lm-unigram/bigram.tsv 写 lm.qj；
-    /// `model` 把训练仓库导出的三件套目录（缺省 data/local_models）打成一个 model.qjm（`--out-dir data/local_models` 就写回原目录，随包带该目录下的全部 `*.qjm`）
+    /// 把 TSV 打包成词库存档 / `.qj` 容器：`dict` 读一个 TSV 写单份中文 `.db`，`lm` 读 lm-unigram/bigram.tsv 写 lm.qj；    /// `model` 把训练仓库导出的三件套目录（缺省 data/local_models）打成一个 model.qjm（`--out-dir data/local_models` 就写回原目录，随包带该目录下的全部 `*.qjm`）
     Pack {
         /// 打包哪种数据
         kind: DataKind,
@@ -224,6 +223,22 @@ pub enum Command {
         /// 已存在也整份替换成空库（会丢掉里面的内置短语）
         #[arg(long)]
         force: bool,
+    },
+
+    /// 本地词典（翻译 Tip 用）：把青简那套释义表 `.qj` 转成 `.db`（总表 `words` + 副表 `contents`）。
+    /// 中文词与译词照搬，拼音 / 首字母从词库查（查不到留空）。输出文件名沿用输入的主名，扩展名换成 `.db`
+    GlossaryDb {
+        /// 输入的释义表 `.qj`（可给多个，各写一份 `.db`）
+        #[arg(required = true, num_args = 1..)]
+        input: Vec<PathBuf>,
+
+        /// 查拼音 / 首字母的词库（云朵 TSV / `.db` / `.qj` 都认；装机目录的 `WordBank\Dict.db` 就是 `.db`）
+        #[arg(long)]
+        word_bank: Option<PathBuf>,
+
+        /// 输出到哪儿：给目录就放进去，给路径就当完整文件名；缺省与输入同目录
+        #[arg(long)]
+        out: Option<PathBuf>,
     },
 
     /// 把改名前的 `.qj`（魔数 `QINGJIAN`）就地改成当前魔数 `CLOUDIME`：容器布局一字未动，只改头 8 字节。

@@ -17,16 +17,17 @@ use windows::core::BOOL;
 
 use cloudime_platform::{
     Config, FullHalfPunctuation, ItemNumberStyle, LayoutMode, LogLevel, MAX_ASSOCIATION_COUNTS,
-    MAX_CANDIDATE_COUNT, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MO_HU_YIN_BITS,
-    PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PreeditMode, SimpTrad,
+    MAX_CANDIDATE_COUNT, MAX_NEED_TIMES, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT,
+    MIN_NEED_TIMES, MO_HU_YIN_BITS, PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS,
+    PreeditMode, SimpTrad,
 };
 use windows_reactor::*;
 
-use super::controls::{export_logs, log_dir, open_with_explorer};
+use super::controls::{export_logs, log_dir, open_document, open_with_explorer};
 use super::font_dialog;
 use super::notice::Notice;
 use super::pages::phrase::PhraseForm;
-use super::pages::{dictionaries, phrase};
+use super::pages::{dictionaries, phrase, translate};
 use super::{Message, REPOSITORY_URL, Settings};
 
 /// 标题栏图标：exe 旁的 `cloudime.ico`（装机包装到 `{app}`，`build.rs` 也给开发时的 exe 旁拷一份）。
@@ -156,6 +157,13 @@ fn center_window_once() {
 /// 所以直接写死：本机（2560×1440、100% 缩放）系统给的默认客户区是 1912×1028，「宽取 2/3、
 /// 高不变」即 1275×1028。小屏由 [`clamp_to_work_area`] 兜住。
 const WINDOW_CLIENT_SIZE: (f64, f64) = (1275.0, 1028.0);
+
+/// 随包的使用手册：安装目录根的 `tutorial.md`（开发时就是仓库根那份，`bundled_root` 会退到那儿）。
+/// 文件不在（老版本装的包）返回 `None`，调用方只记一条日志。
+fn tutorial_path() -> Option<std::path::PathBuf> {
+    let path = cloudime_platform::resources::bundled_root()?.join("tutorial.md");
+    path.is_file().then_some(path)
+}
 
 /// 把想要的客户区尺寸夹进主显示器工作区（DIP），别在小屏上顶出屏幕。
 fn clamp_to_work_area((width, height): (f64, f64)) -> (f64, f64) {
@@ -288,6 +296,7 @@ impl Component for Settings {
             Message::HalfWideAfterDigit(on) => {
                 self.save("input", "use_half_wide_punctuation_marks_after_digital", on)
             }
+            Message::ShowStatusChangeTip(on) => self.save("input", "show_status_change_tip", on),
 
             // 候选页
             Message::LocalModel(on) => {
@@ -393,6 +402,25 @@ impl Component for Settings {
             }
             Message::PhraseRemove(index) => phrase::remove(self, index),
 
+            // 翻译页
+            Message::TranslateEnabled(on) => self.save("translate", "enabled", on),
+            Message::TranslateDictionary(Some(index)) => {
+                let manifest = translate::manifest(self);
+                if let Some(item) = manifest.items().get(index) {
+                    self.save("translate", "dictionary", item.file.clone());
+                }
+            }
+            Message::TranslateNeedTimes(value) => {
+                let times = (value.round() as i64)
+                    .clamp(i64::from(MIN_NEED_TIMES), i64::from(MAX_NEED_TIMES));
+                self.save("translate", "need_times", times);
+            }
+            Message::ResetTranslateLearning => {
+                // 设置程序只写配置文件：把这个计数加 1，Server 见到值变了就把学习记录清空
+                let next = self.config.translate.reset_counter.wrapping_add(1);
+                self.save("translate", "reset_counter", next as i64);
+            }
+
             // 调试页（文件 / 日志 / 学习那几项，原「高级」页）
             Message::VerboseLog(on) => {
                 let level = if on { LogLevel::Debug } else { LogLevel::Info };
@@ -422,10 +450,19 @@ impl Component for Settings {
             // 调试页：打开项目 GitHub 页面
             Message::OpenRepository => open_with_explorer(REPOSITORY_URL),
 
+            // 调试页：用系统默认程序打开随包的使用手册；没有默认打开方式时退回记事本
+            Message::OpenTutorial => match tutorial_path() {
+                Some(path) => open_document(&path),
+                None => crate::log::warn("找不到使用手册 tutorial.md（老版本装的包可能没有）"),
+            },
+
             // 调试页
             Message::ShowStatusBar(on) => self.save("status_bar", "show_status_bar", on),
             Message::AutoHideFloatToolBar(on) => {
                 self.save("debugging", "auto_hide_float_tool_bar", on);
+            }
+            Message::AutoDisableWithoutTextInput(on) => {
+                self.save("debugging", "auto_disable_without_text_input", on);
             }
             Message::OpenComponents => {
                 crate::log::info("「组件」页还没有做，点了只记一条日志");
@@ -469,6 +506,7 @@ impl Component for Settings {
             item("candidates", "候选", Symbol::DockBottom),
             item("dictionaries", "词库", Symbol::Library),
             item("phrase", "短语", Symbol::Comment),
+            item("translate", "翻译", Symbol::Character),
             item("debugging", "调试", Symbol::Repair),
         ];
         NavigationView::new()

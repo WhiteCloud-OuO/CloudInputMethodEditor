@@ -154,6 +154,13 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
                 .is_on(input.use_half_wide_punctuation_marks_after_digital)
                 .on_toggled(context.callback(Message::HalfWideAfterDigit)),
         ),
+        field(
+            "状态切换提示",
+            "中 / 英、大写锁定、全 / 半角、简 / 繁、中文 / 西文标点变化时，在输入光标附近显示一个停留 1 秒的提示条。只在处于输入状态（焦点在可输入的文本框里）时显示。",
+            ToggleSwitch::new()
+                .is_on(input.show_status_change_tip)
+                .on_toggled(context.callback(Message::ShowStatusChangeTip)),
+        ),
         crate::panel::controls::feedback(&settings.notice),
     ]);
     page("输入", body)

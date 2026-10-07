@@ -31,6 +31,15 @@ pub enum ConvertError {
     #[error(transparent)]
     Container(#[from] cloudime_format::FormatError),
 
+    #[error(transparent)]
+    Translate(#[from] cloudime_translate::TranslateError),
+
+    #[error(transparent)]
+    Sqlite(#[from] rusqlite::Error),
+
+    #[error("写完自查没通过：{0}")]
+    Verify(String),
+
     /// `phrase-db` 要覆盖已有文件，但没给 `--force`。
     #[error(
         "{path} 已存在：随包的 Phrases\\Phrase.db 里有手写的内置短语，整份换成空库会把它们抹掉；真要重来加 --force"

@@ -53,6 +53,7 @@ impl Engine {
             InputSource::English
             | InputSource::Custom
             | InputSource::Shortcut
+            | InputSource::Translation
             | InputSource::Raw => 0,
         };
         if source == InputSource::Raw && !english_word {

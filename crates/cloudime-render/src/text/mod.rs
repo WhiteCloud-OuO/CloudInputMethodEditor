@@ -5,7 +5,7 @@ mod style;
 
 use std::collections::HashMap;
 
-use cosmic_text::fontdb::{Family, ID};
+use cosmic_text::fontdb::{Family, ID, Style};
 use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping, SwashCache, SwashContent};
 
 use crate::canvas::Canvas;
@@ -146,6 +146,11 @@ impl TextPainter {
         let attrs = match &style.family {
             Some(family) => Attrs::new().family(Family::Name(family)),
             None => Attrs::new().family(UI_FAMILY),
+        };
+        let attrs = if style.italic {
+            attrs.style(Style::Italic)
+        } else {
+            attrs
         };
         let attrs = attrs.color(style.color.to_cosmic());
         self.buffer

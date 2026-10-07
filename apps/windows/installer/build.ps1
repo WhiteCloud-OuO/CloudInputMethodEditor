@@ -88,6 +88,12 @@ foreach ($t in $targets) {
 $ssiExe = Join-Path $Repo 'apps\windows\ssi\release64\SpecialSymbolsInserter.exe'
 if (-not (Test-Path $ssiExe)) { throw "缺特殊字符输入器：$ssiExe（随仓库带的 VFB 成品，构建时只拷不编）" }
 
+# 本地词典（翻译 Tip）：清单与词典文件一起随包装进 {app}\LocalDictionary\。
+$localDict = Join-Path $Repo 'LocalDictionary'
+if (-not (Test-Path (Join-Path $localDict 'dictionaries.list'))) {
+    throw "缺本地词典清单：$localDict\dictionaries.list（翻译 Tip 的选项就是它里面的显示名）"
+}
+
 # 1.2) 自包含 Windows App Runtime：设置程序不再依赖机器上装的框架包（Windows 10 上框架依赖的引导用不了，
 #      见 apps\windows\settings\build.rs）。cargo 构建时 windows-reactor-setup 已按清单把运行时铺到
 #      target\release\，这里挑进暂存目录；target\release 里还有 deps\ 之类的中间产物，不能整个目录装。
@@ -159,6 +165,15 @@ if (-not $iscc) { throw '找不到 ISCC.exe：装 Inno Setup 7 或用 CLOUDIME_I
 Write-Host "用 $iscc" -ForegroundColor Cyan
 
 # 4) 编安装包。
+# 打包前提醒一句：tutorial.md（使用手册）随包装进 {app}\tutorial.md，用户可见的改动要写进它；
+# 拿 CHANGELOG.md 的修改时间当参照，只提醒不拦（修 bug 的发版可能确实不用动它）。
+$tutorial = Join-Path $Repo 'tutorial.md'
+$changelog = Join-Path $Repo 'CHANGELOG.md'
+if ((Test-Path $tutorial) -and (Test-Path $changelog) -and
+    (Get-Item $tutorial).LastWriteTime -lt (Get-Item $changelog).LastWriteTime) {
+    Write-Host 'tutorial.md（使用手册）比 CHANGELOG.md 旧：确认这一版有没有用户可见的改动要写进手册。' -ForegroundColor Yellow
+}
+
 Invoke-Checked $iscc @("/DAppVersion=$Version", "/DAppVersionNumeric=$VersionNumeric", $Iss)
 
 $out = Join-Path $Repo "target\installer\cloudime-$Version-windows-x86_64-setup.exe"

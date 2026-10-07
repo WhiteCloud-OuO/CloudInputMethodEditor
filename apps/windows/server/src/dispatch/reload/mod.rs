@@ -138,6 +138,11 @@ impl Router {
         let english_full_width_punctuation = self.config.english_full_width_punctuation;
         let full_width_chars = self.config.full_width_chars;
         self.config = RouterConfig::from(config);
+        // 本地词典 / 学习状态跟着配置走：换词典、重置学习内容都在这里落地
+        self.translate.configure(
+            &self.config.translate_dictionary,
+            self.config.translate_reset_counter,
+        );
         self.config.full_width_punctuation = full_width_punctuation;
         self.config.english_full_width_punctuation = english_full_width_punctuation;
         self.config.full_width_chars = full_width_chars;

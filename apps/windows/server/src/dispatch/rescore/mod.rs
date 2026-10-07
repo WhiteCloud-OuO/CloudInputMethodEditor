@@ -173,7 +173,12 @@ impl Router {
             return;
         }
         self.rescore.stop();
-        if self.highlight >= self.config.page_size || self.navigated {
+        // 多释义选择开着时不重排：`Choices.index` 是布局下标，重排后会对到别的候选上
+        // （选中那条释义时就会消耗错的拼音）。选完退出后组句再变一次，那时才轮到重排。
+        if self.highlight >= self.page_size()
+            || self.navigated
+            || self.translate.choices().is_some()
+        {
             return;
         }
         self.requery_rescored();
@@ -184,6 +189,7 @@ impl Router {
         let Ok(query) = self.engine.query() else {
             return;
         };
+        let page_size = self.page_size();
         let Some(Composed::Candidates {
             preedit,
             cursor,
@@ -192,7 +198,7 @@ impl Router {
         else {
             return;
         };
-        *layout = CandidateLayout::new(query.candidates.items.clone(), self.config.page_size);
+        *layout = CandidateLayout::new(query.candidates.items.clone(), page_size);
         (*preedit, *cursor) = marked_parts(&query);
         let frame = self.self_drawn_frame();
         self.reconcile_candidates(&frame);

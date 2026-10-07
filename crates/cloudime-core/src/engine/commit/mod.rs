@@ -30,15 +30,28 @@ impl Engine {
     /// 候选比输入短时（`kaifazhe` 选了 开发），剩余拼音留在缓冲区；候选的最后一个音节比输入长时
     /// （`kaif` 选了 开发），把输入吃完。选中不立刻落进文档，等整段转换完或回车 / 标点时再一次性交给应用。
     pub fn commit(&mut self, candidate: &Candidate) -> Option<String> {
-        self.commit_with(candidate, InputSource::from(candidate.kind))
+        self.commit_with(candidate, InputSource::from(candidate.kind), None)
+    }
+
+    /// 上屏这个候选的**译文**（本地词典的翻译 Tip）：拼音消耗、学习、个人 n-gram、自动造词都按**候选**
+    /// 来（用户选的是它），只有落进文档 / 日志 / 历史的文本换成 `translation`。
+    ///
+    /// 返回同上：`None` 还在组句里，`Some(text)` 是整段交给应用。
+    pub fn commit_translation(
+        &mut self,
+        candidate: &Candidate,
+        translation: &str,
+    ) -> Option<String> {
+        self.commit_with(candidate, InputSource::Translation, Some(translation))
     }
 
     /// [`Self::commit`] 的内部形式：`source` 写进输入日志（来源不同时的记录字段），
-    /// 便于测试或壳在特殊来源下直接调用。
+    /// `translation` 是「落进文档的文本」与候选不同的那一档（翻译 Tip），普通上屏传 `None`。
     pub(super) fn commit_with(
         &mut self,
         candidate: &Candidate,
         source: InputSource,
+        translation: Option<&str>,
     ) -> Option<String> {
         let traditional_text = candidate.text.clone();
         let mut candidate_owned = candidate.clone();
@@ -48,6 +61,8 @@ impl Engine {
             candidate_owned.text = simp.clone();
         }
         let candidate = &candidate_owned;
+        // 落进文档的文本：普通上屏就是候选（含简体 / 繁体映射），翻译上屏是词典给的那条译文
+        let text = translation.unwrap_or(&traditional_text);
         // 整句不是一个词，不记词频；按路径上的词逐条记转移（喂个人 n-gram），路径要在拼音消耗前重算
         let sentence_words = (candidate.kind == CandidateKind::Sentence)
             .then(|| self.sentence_words(candidate))
@@ -91,14 +106,14 @@ impl Engine {
         }
         let keys =
             self.composition.scope()[..consumed.min(self.composition.scope().len())].to_owned();
-        let log_id = self.log_commit(&keys, &candidate.text, source);
-        self.meter_commit(&candidate.text, source, false);
+        let log_id = self.log_commit(&keys, text, source);
+        self.meter_commit(text, source, false);
         // 上屏的中文词记进词汇记录（英文候选、整句等不算「一个词」）
         if !self.private && matches!(candidate.kind, CandidateKind::Chinese) {
             self.vocabulary.record_commit(&candidate.text);
         }
         // 选中：拼音移出缓冲区、并进已选段；`buffer_left` 看的是还没转换的未选拼音。
-        self.composition.select_prefix(&traditional_text, consumed);
+        self.composition.select_prefix(text, consumed);
         let buffer_left = !self.composition.text().is_empty();
         match candidate.kind {
             CandidateKind::Chinese => {
@@ -148,15 +163,15 @@ impl Engine {
         } else {
             None
         };
-        self.punctuation.note_committed(&candidate.text);
-        self.history.record(&candidate.text);
+        self.punctuation.note_committed(text);
+        self.history.record(text);
         let learned = matches!(
             candidate.kind,
             CandidateKind::Chinese | CandidateKind::Sentence
         );
         let commit = if learned {
             LastCommit {
-                text: candidate.text.clone(),
+                text: text.to_owned(),
                 chars: traditional_text.chars().count(),
                 input,
                 chosen: matches!(candidate.kind, CandidateKind::Chinese)
@@ -168,7 +183,7 @@ impl Engine {
                 phrase,
             }
         } else {
-            let mut plain = LastCommit::plain(&candidate.text);
+            let mut plain = LastCommit::plain(text);
             plain.chars = traditional_text.chars().count();
             plain
         };

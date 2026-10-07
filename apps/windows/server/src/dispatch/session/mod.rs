@@ -68,6 +68,11 @@ impl Router {
         self.notice = None;
         self.highlight = 0;
         self.navigated = false;
+        // 展开只活在一次组句里；攒着还没被 DLL 取走的鼠标上屏也一并作废
+        self.show_more = false;
+        self.hover_cell = None;
+        self.pending_commit = None;
+        self.translate.end_choices();
         self.hide_candidate_window();
     }
 }

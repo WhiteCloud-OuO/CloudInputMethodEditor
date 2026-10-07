@@ -12,7 +12,10 @@ fn fonts_dir() -> PathBuf {
 pub(super) fn ui_fonts() -> Vec<PathBuf> {
     vec![
         fonts_dir().join("segoeui.ttf"),
+        // 词性（`n.` `adj.`…）要真斜体：Segoe UI 的斜体面得单独加载，光请求 Italic 会回落到正体
+        fonts_dir().join("segoeuii.ttf"),
         fonts_dir().join("arial.ttf"),
+        fonts_dir().join("ariali.ttf"),
     ]
 }
 

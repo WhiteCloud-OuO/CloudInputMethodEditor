@@ -13,6 +13,15 @@ pub struct ModeSyncReply {
     pub indicator: IndicatorState,
 }
 
+/// Server 对一次组句轮询的答复。
+pub struct PollReply {
+    /// 最新的组句状态（候选窗由 Server 自绘，DLL 只取拼音行）。
+    pub frame: Frame,
+
+    /// 不用按键的上屏文本：鼠标点了 Server 自绘的候选窗上的一格。
+    pub commit: Option<String>,
+}
+
 /// Server 对一次按键的处理结果。
 pub struct KeyResponse {
     /// 吃掉还是放行给应用。

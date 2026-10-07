@@ -383,9 +383,10 @@ fn eats_key(
         .is_some_and(|c| c.is_ascii_punctuation() || c.is_ascii_digit())
 }
 
-/// 组句里 Ctrl 组合能吃进 Server 的键：数字（杀词 / 上屏短语与整句）与回车（原样上屏并记一次）。
+/// 组句里 Ctrl 组合能吃进 Server 的键：数字（杀词 / 上屏短语与整句）、回车（原样上屏并记一次）、
+/// 反引号（本地词典的翻译 Tip：上屏译文）。
 fn is_ctrl_command_key(vk: u32) -> bool {
-    matches!(vk, 0x31..=0x39 | 0x61..=0x69 | 0x0D)
+    matches!(vk, 0x31..=0x39 | 0x61..=0x69 | 0x0D | 0xC0)
 }
 
 #[cfg(test)]

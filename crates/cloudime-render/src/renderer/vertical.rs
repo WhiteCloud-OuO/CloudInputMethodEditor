@@ -1,7 +1,7 @@
 //! 竖排：一行一个候选，序号 / 候选词 / 译文三列，页码在右下角。
 
 use super::columns::Columns;
-use super::{Metrics, Renderer, highlight_rect};
+use super::{BADGE_GAP, Metrics, Renderer, highlight_rect};
 use crate::canvas::Canvas;
 use crate::frame::{Frame, HighlightRect, Row};
 
@@ -17,10 +17,9 @@ impl Renderer {
         }
         let mut height = columns.row_height * frame.rows.len() as f32;
         if let Some(footer) = frame.footer.as_deref() {
-            let footer_size = self.measure(footer, &m.footer_style());
-            width = width.max(footer_size.width);
-            height += footer_size.height + m.row_padding();
+            width = width.max(self.measure(footer, &m.footer_style()).width);
         }
+        height += self.bottom_line_height(frame, m);
         (width, height)
     }
 
@@ -100,26 +99,25 @@ impl Renderer {
                 let style = m.annotation_style(m.tone_color(*tone));
                 x += self.draw_text(canvas, segment, &style, x, top + small_offset);
             }
+            // 竖排的角标在自己的那一列里，右对齐、与格右边缘留 `BADGE_GAP`（与横排的规则不同）
+            let badge_width = self.badge_width(row.badge.as_deref(), m);
             self.draw_badge(
                 canvas,
                 m,
                 row.badge.as_deref(),
-                badge_right,
+                badge_right - m.px(BADGE_GAP) - badge_width,
                 top,
-                text_height,
             );
         }
-        if let Some(footer) = frame.footer.as_deref() {
-            let style = m.footer_style();
-            let size = self.measure(footer, &style);
-            self.draw_text(
-                canvas,
-                footer,
-                &style,
-                left + content_width - m.padding() - size.width,
-                y + columns.row_height * frame.rows.len() as f32 + m.row_padding(),
-            );
-        }
+        // 底部那一行：左侧翻译 Tip、右侧页码
+        self.draw_bottom_line(
+            canvas,
+            frame,
+            m,
+            left,
+            y + columns.row_height * frame.rows.len() as f32 + m.row_padding(),
+            content_width,
+        );
         rects
     }
 }

@@ -173,6 +173,14 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             .spacing(6.0)
             .keyed_children(usage_panel(settings)),
         field(
+            "不处于输入状态时自动禁用输入法（实验性功能）",
+            "焦点不在可输入文本区域（只读视图、密码框、没有文本焦点）时自动禁用，回到文本区域再启用；\
+             自己手动按 Ctrl + Space 禁用不受影响。",
+            ToggleSwitch::new()
+                .is_on(d.auto_disable_without_text_input)
+                .on_toggled(context.callback(Message::AutoDisableWithoutTextInput)),
+        ),
+        field(
             "在屏幕上显示悬浮工具栏",
             "关掉后桌面上不再出现这条工具条（任务栏的语言栏按钮不受影响）。",
             ToggleSwitch::new()
@@ -206,9 +214,14 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
         StackPanel::new()
             .orientation(Orientation::Horizontal)
             .spacing(8.0)
-            .children([Button::new()
-                .on_click(context.message(Message::OpenRepository))
-                .content("GitHub页面")]),
+            .children((
+                Button::new()
+                    .on_click(context.message(Message::OpenRepository))
+                    .content("GitHub页面"),
+                Button::new()
+                    .on_click(context.message(Message::OpenTutorial))
+                    .content("帮助手册"),
+            )),
         field(
             "启用详细日志",
             "排查问题时打开，会记下敲的拼音与上屏文字。",

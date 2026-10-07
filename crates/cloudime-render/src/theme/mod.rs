@@ -22,10 +22,16 @@ pub struct Theme {
     /// 序号字体。
     pub index_font: FontSpec,
 
+    /// 翻译 Tip 的字体（候选窗口底部那一行左侧）。
+    pub translate_font: FontSpec,
+
     /// 拼音串、候选词、序号三个字体各自的字族名；`None` 用系统界面字体。
     pub pinyin_family: Option<String>,
     pub text_family: Option<String>,
     pub index_family: Option<String>,
+
+    /// 翻译 Tip 的字族名；`None` 用系统界面字体。
+    pub translate_family: Option<String>,
 
     /// 配色。
     pub colors: Palette,
@@ -63,9 +69,11 @@ impl Theme {
             text_font: FontSpec::new(16.0, 19.0),
             annotation_font: FontSpec::new(12.0, 15.0),
             index_font: FontSpec::new(11.0, 14.0),
+            translate_font: FontSpec::new(11.0, 14.0),
             pinyin_family: None,
             text_family: None,
             index_family: None,
+            translate_family: None,
             colors: Palette::new(),
             padding: 8.0,
             row_padding: 4.0,
@@ -77,12 +85,13 @@ impl Theme {
         }
     }
 
-    /// 换上拼音串 / 候选词 / 序号三项字体（字族名 + 字号，点）。空字族名表示系统界面字体。
+    /// 换上拼音串 / 候选词 / 序号 / 翻译 Tip 四项字体（字族名 + 字号，点）。空字族名表示系统界面字体。
     pub fn set_fonts(
         &mut self,
         pinyin: (Option<String>, f32),
         candidate: (Option<String>, f32),
         index: (Option<String>, f32),
+        translate: (Option<String>, f32),
     ) {
         self.pinyin_family = pinyin.0;
         self.pinyin_font = FontSpec::with_size(pinyin.1);
@@ -90,6 +99,8 @@ impl Theme {
         self.text_font = FontSpec::with_size(candidate.1);
         self.index_family = index.0;
         self.index_font = FontSpec::with_size(index.1);
+        self.translate_family = translate.0;
+        self.translate_font = FontSpec::with_size(translate.1);
     }
 }
 

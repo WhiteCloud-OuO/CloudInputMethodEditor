@@ -88,6 +88,10 @@ pub struct TextService {
     /// （每一拍 `SyncMode` 都带着它，见 [`TextService_Impl::apply_input_settings`]）。
     input_settings: Cell<Option<InputSettings>>,
 
+    /// 「不处于输入状态时自动禁用输入法」当前是不是我们关掉的：只放回自己关掉的，
+    /// 用户手动 Ctrl + Space 禁用的不碰（见 [`TextService_Impl::sync_auto_disable`]）。
+    auto_disabled: Cell<bool>,
+
     /// 激活后一小段时间内忽略转换模式 compartment 的变化，见 [`TextService_Impl::sync_from_conversion_mode`]。
     conversion_guard_until: Cell<Option<Instant>>,
 
@@ -100,11 +104,25 @@ thread_local! {
     static ACTIVE: RefCell<Option<ComObject<TextService>>> = const { RefCell::new(None) };
 }
 
-fn with_active(f: impl FnOnce(&TextService_Impl)) {
+pub(super) fn with_active(f: impl FnOnce(&TextService_Impl)) {
     let service = ACTIVE.with(|active| active.borrow().clone());
     if let Some(service) = service {
         f(&service);
     }
+}
+
+/// 本线程此刻的焦点状态：在不在可输入文本区域、Caps Lock 亮不亮。轮询取模式时顺路带给 Server
+/// （状态切换提示据此判断「在不在输入状态」、以及给「中 / 英」按钮选「A」图标）。
+pub(super) fn text_focus_state() -> (bool, bool) {
+    let mut in_text_input = false;
+    with_active(|service| {
+        in_text_input = service
+            .thread_mgr
+            .borrow()
+            .as_ref()
+            .is_some_and(crate::com::context::in_text_input);
+    });
+    (in_text_input, crate::com::key::event::caps_lock_on())
 }
 
 /// 用户点了语言栏的中 / 英按钮（见 [`ModeButton`](crate::com::mode::ModeButton)）：中英翻转；
@@ -180,6 +198,7 @@ impl TextService {
             switch_preserved: Cell::new(false),
             hotkeys_preserved: Cell::new(false),
             input_settings: Cell::new(None),
+            auto_disabled: Cell::new(false),
             conversion_guard_until: Cell::new(None),
         }
     }

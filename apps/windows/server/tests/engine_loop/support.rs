@@ -7,7 +7,7 @@ pub use cloudime_core::sentence::SentenceScorer;
 pub use cloudime_platform::PreeditMode;
 pub use cloudime_platform::protocol::{
     ClientMessage, Frame, InputMode, KeyEvent, KeyModifiers, KeyOutcome, PROTOCOL_VERSION,
-    ServerMessage, SessionId,
+    ScreenRect, ServerMessage, SessionId,
 };
 pub use cloudime_windows_server::dispatch::{StatusEvent, StatusSink, StatusView};
 pub use cloudime_windows_server::{AssemblySpec, Router, RouterConfig, assembly};
@@ -182,28 +182,40 @@ pub fn preedit(frame: &Frame) -> String {
     frame.preedit.iter().map(|s| s.text.as_str()).collect()
 }
 
-/// 记录状态条调用：`Some(视图)` 是显示（按当时的模式与开关）、`None` 是收起。
+/// 记录状态条调用：`Some(视图)` 是显示（按当时的模式与开关）、`None` 是收起；另记状态切换提示。
 #[derive(Clone, Default)]
-pub struct RecordingStatus(pub Arc<Mutex<Vec<Option<StatusView>>>>);
+pub struct RecordingStatus {
+    calls: Arc<Mutex<Vec<Option<StatusView>>>>,
+    tips: Arc<Mutex<Vec<(StatusView, bool, ScreenRect)>>>,
+}
 
 impl RecordingStatus {
     pub fn calls(&self) -> Vec<Option<StatusView>> {
-        self.0.lock().unwrap().clone()
+        self.calls.lock().unwrap().clone()
     }
 
     /// 最后显示的那个视图（收起时是 `None`）。
     pub fn shown(&self) -> Option<StatusView> {
         self.calls().last().copied().flatten()
     }
+
+    /// 收到过的状态切换提示：视图、Caps Lock 亮灭、光标矩形。
+    pub fn tips(&self) -> Vec<(StatusView, bool, ScreenRect)> {
+        self.tips.lock().unwrap().clone()
+    }
 }
 
 impl StatusSink for RecordingStatus {
     fn show_status(&self, view: StatusView) {
-        self.0.lock().unwrap().push(Some(view));
+        self.calls.lock().unwrap().push(Some(view));
     }
 
     fn hide_status(&self) {
-        self.0.lock().unwrap().push(None);
+        self.calls.lock().unwrap().push(None);
+    }
+
+    fn show_status_tip(&self, view: StatusView, caps: bool, anchor: ScreenRect) {
+        self.tips.lock().unwrap().push((view, caps, anchor));
     }
 }
 

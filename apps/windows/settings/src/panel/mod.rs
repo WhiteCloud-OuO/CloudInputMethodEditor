@@ -18,7 +18,7 @@ pub(crate) use self::message::Message;
 use self::notice::Notice;
 use self::pages::candidates::FontRole;
 use self::pages::phrase::PhraseForm;
-use self::pages::{candidates, debugging, dictionaries, input, phrase};
+use self::pages::{candidates, debugging, dictionaries, input, phrase, translate};
 
 /// CLOUDIME_VERSION 由 build.rs 给：-dev 版接 git 短哈希。
 pub(crate) const VERSION: &str = env!("CLOUDIME_VERSION");
@@ -105,6 +105,7 @@ impl Settings {
             FontRole::Pinyin => "candidate.pinyin_font",
             FontRole::Candidate => "candidate.candidate_font",
             FontRole::ItemNumber => "candidate.item_number_font",
+            FontRole::Translate => "candidate.translate_font",
         };
         let family = choice.family.trim();
         if let Err(error) = Config::set_value(&self.path, section, "family", family) {
@@ -130,6 +131,7 @@ impl Settings {
             "candidates" => candidates::view(self, context),
             "dictionaries" => dictionaries::view(self, context),
             "phrase" => phrase::view(self, context),
+            "translate" => translate::view(self, context),
             "debugging" => debugging::view(self, context),
             _ => input::view(self, context),
         }

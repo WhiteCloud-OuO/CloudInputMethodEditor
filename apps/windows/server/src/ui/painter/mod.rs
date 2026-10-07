@@ -39,6 +39,7 @@ impl Painter {
             &settings.candidate_font,
             &settings.pinyin_font,
             &settings.item_number_font,
+            &settings.translate_font,
         ] {
             let family = family.trim();
             if family.is_empty()
@@ -80,6 +81,10 @@ impl Painter {
             (
                 family(&settings.item_number_font.0),
                 settings.item_number_font.1,
+            ),
+            (
+                family(&settings.translate_font.0),
+                settings.translate_font.1,
             ),
         );
         theme.min_width_pixels = settings.min_width_pixels;
@@ -150,7 +155,8 @@ fn family(name: &str) -> Option<String> {
 /// 两个窗口都用渲染器画阴影（分层窗口没有系统阴影）。
 const SHADOW: Shadow = Shadow::panel();
 
-/// 点 → 像素的倍数。
+/// 点 → 像素的倍数。候选窗把滚轮缩放也折进这个 DPI 里，所以这里不能再拿 96 当下限
+/// （缩小时倍数会小于 1），只挡住 0。
 fn scale(dpi: u32) -> f32 {
-    dpi.max(96) as f32 / 96.0
+    dpi.max(1) as f32 / 96.0
 }

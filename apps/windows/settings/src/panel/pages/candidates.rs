@@ -6,7 +6,9 @@ use cloudime_platform::{
 };
 use windows_reactor::*;
 
-use crate::panel::controls::{field, field_top, labeled, note, page, radio_row, scroll_list};
+use crate::panel::controls::{
+    field, field_top, labeled, note, page, radio_row, scroll_list, slider_field,
+};
 use crate::panel::{Message, Settings};
 
 /// 本地整句模型文件在不在这里：用户目录 `%APPDATA%\CloudIME\local_models\` 优先，其次随包 `data\local_models\`。
@@ -80,6 +82,9 @@ pub(crate) enum FontRole {
 
     /// 候选项序号。
     ItemNumber,
+
+    /// 翻译 Tip（候选窗口底部那一行左侧）。
+    Translate,
 }
 
 impl FontRole {
@@ -89,41 +94,12 @@ impl FontRole {
             Self::Pinyin => &config.pinyin_font,
             Self::Candidate => &config.candidate_font,
             Self::ItemNumber => &config.item_number_font,
+            Self::Translate => &config.translate_font,
         }
     }
 }
 
 /// 一个「滑轨 + 右侧数字」的整数值项：拖动即时更新，数字定宽、垂直居中，不把滑轨顶来顶去。
-fn slider_field(
-    label: &str,
-    hint: &str,
-    value: usize,
-    min: usize,
-    max: usize,
-    message: impl Fn(f64) -> Message + 'static,
-    context: &mut ViewContext<Settings>,
-) -> View {
-    let slider = Slider::new()
-        .width(260.0)
-        .minimum(min as f64)
-        .maximum(max as f64)
-        .step_frequency(1.0)
-        .value(value as f64)
-        .on_value_changed(context.callback(message));
-    let number = TextBlock::new()
-        .text(value.to_string())
-        .width(20.0)
-        .vertical_alignment(VerticalAlignment::Center);
-    field(
-        label,
-        hint,
-        StackPanel::new()
-            .orientation(Orientation::Horizontal)
-            .spacing(12.0)
-            .children((slider, number)),
-    )
-}
-
 /// 「字体…」按钮：上面显示当前的字族与字号。
 fn font_button(
     role: FontRole,
@@ -250,6 +226,7 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             "",
             font_button(FontRole::ItemNumber, c, context),
         ),
+        field("翻译字体", "", font_button(FontRole::Translate, c, context)),
         field(
             "候选项序号样式",
             "",

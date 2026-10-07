@@ -3,7 +3,10 @@
 use cloudime_platform::ItemNumberStyle;
 use cloudime_platform::LayoutMode;
 use cloudime_platform::protocol::{Frame, PreeditKind};
-use cloudime_render::{HighlightAnimation, Preedit, PreeditSegment, PreeditStyle, Row};
+use cloudime_render::{
+    HighlightAnimation, Preedit, PreeditSegment, PreeditStyle, Row, TipSegment, Tone,
+};
+use cloudime_translate::Sense;
 
 use super::row;
 
@@ -31,8 +34,14 @@ pub(crate) struct RenderData {
     /// 候选排布。
     pub(super) layout: LayoutMode,
 
+    /// 展开「更多候选项」时一行几格（矩阵）；`0` = 没展开。
+    pub(super) columns: usize,
+
     /// 序号的写法。
     pub(super) index_style: ItemNumberStyle,
+
+    /// 底部那一行左侧的翻译 Tip（词性斜体、释义常规），没有译文时为空。
+    pub(super) tip: Vec<TipSegment>,
 }
 
 impl RenderData {
@@ -45,7 +54,9 @@ impl RenderData {
             footer: None,
             notice: None,
             layout: LayoutMode::default(),
+            columns: 0,
             index_style: ItemNumberStyle::default(),
+            tip: Vec::new(),
         }
     }
 
@@ -56,29 +67,66 @@ impl RenderData {
         index_style: ItemNumberStyle,
     ) {
         self.layout = frame.layout;
+        self.columns = frame.columns;
         self.index_style = index_style;
-        self.preedit = window_preedit(frame);
-        self.cursor = frame.cursor;
-        self.rows = frame
-            .candidates
-            .items
-            .iter()
-            .enumerate()
-            .map(|(i, candidate)| {
-                row::from_candidate(i, candidate, badges.get(i).copied().flatten(), index_style)
-            })
-            .collect();
-        self.highlight = frame.highlight;
-        self.footer =
-            (frame.page_count > 1).then(|| format!("{}/{}", frame.page + 1, frame.page_count));
+        self.tip = tip_segments(frame);
+        // 多释义选择（Ctrl + 反引号之后）：顶部那一行换成被翻译的词条、候选行换成各条释义
+        match &frame.tip_choices {
+            Some(choices) => {
+                self.preedit = vec![(choices.word.clone(), PreeditKind::Typed)];
+                self.cursor = choices.word.chars().count();
+                self.rows = choices
+                    .senses
+                    .iter()
+                    .enumerate()
+                    .map(|(index, sense)| chooser_row(index, sense, index_style))
+                    .collect();
+                // 高亮第几条释义：鼠标悬停挪它，圆角矩形跟着滑（动画走的是候选窗那一套）
+                self.highlight = frame.highlight;
+            }
+            None => {
+                self.preedit = window_preedit(frame);
+                self.cursor = frame.cursor;
+                self.rows = frame
+                    .candidates
+                    .items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, candidate)| {
+                        row::from_candidate(
+                            i,
+                            candidate,
+                            badges.get(i).copied().flatten(),
+                            index_style,
+                        )
+                    })
+                    .collect();
+                self.highlight = frame.highlight;
+            }
+        }
+        // 展开「更多候选项」时不画序号：候选密排成格子，序号既挤又用不上
+        // （数字键那时是跳页，不再选词）。
+        if self.columns > 0 {
+            for row in &mut self.rows {
+                row.index.clear();
+            }
+        }
+        // 页码一直显示（只有一页也显示 `1/1`）：底部那一行（翻译 Tip 在左）的位置总在。
+        // 释义选择那一屏不是候选页，没有页码（也就没有底部那一行）。
+        self.footer = frame
+            .tip_choices
+            .is_none()
+            .then(|| format!("{}/{}", frame.page + 1, frame.page_count));
         self.notice = frame.notice.clone();
     }
 
     /// 渲染器要的帧。提示（删了什么词）在渲染器里画在拼音行右侧；`highlight_animation` 是纯展示的
-    /// 高亮条滑动信息，`None` 直接画在高亮行。
+    /// 高亮条滑动信息，`None` 直接画在高亮行；`min_cell_width` 是展开成网格时每格的最小宽度，见
+    /// [`cloudime_render::Frame::min_cell_width`]。
     pub(super) fn render_frame(
         &self,
         highlight_animation: Option<HighlightAnimation>,
+        min_cell_width: f32,
     ) -> cloudime_render::Frame {
         let preedit = (!self.preedit.is_empty()).then(|| Preedit {
             segments: self
@@ -101,12 +149,61 @@ impl RenderData {
             // 协议里 usize::MAX 表示不高亮。
             highlighted: (self.highlight != usize::MAX).then_some(self.highlight),
             highlight_animation,
-            columns: 0,
-            column_ems: Vec::new(),
+            columns: self.columns,
+            min_cell_width,
             footer: self.footer.clone(),
+            tip: (!self.tip.is_empty()).then(|| self.tip.clone()),
             status: self.notice.clone(),
         }
     }
+}
+
+/// 多释义选择里的一行：序号 + 译文 + `(词性)` 注解（没有词性就只有译文）。
+fn chooser_row(index: usize, sense: &Sense, style: ItemNumberStyle) -> Row {
+    Row {
+        index: style.format(index + 1),
+        text: sense.text.clone(),
+        annotation: sense
+            .pos
+            .as_ref()
+            .map(|pos| vec![(format!("({pos})"), Tone::Faint)])
+            .unwrap_or_default(),
+        badge: None,
+    }
+}
+
+/// 底部那一行左侧的翻译 Tip 的段落：词性斜体、释义常规（颜色按词条学没学会）、词性与分隔符最浅。
+fn tip_segments(frame: &Frame) -> Vec<TipSegment> {
+    let Some(tip) = frame.tip.as_ref() else {
+        return Vec::new();
+    };
+    let tone = if tip.learned {
+        Tone::TranslateLearned
+    } else {
+        Tone::TranslateFresh
+    };
+    let mut segments = Vec::new();
+    for (index, sense) in tip.senses.iter().enumerate() {
+        if index > 0 {
+            segments.push(TipSegment::new("; ", Tone::TranslateMeta, false));
+        }
+        if let Some(pos) = &sense.pos {
+            segments.push(TipSegment::new(
+                format!("{pos} "),
+                Tone::TranslateMeta,
+                true,
+            ));
+        }
+        segments.push(TipSegment::new(sense.text.clone(), tone, false));
+        if let Some(reading) = &sense.reading {
+            segments.push(TipSegment::new(
+                format!("({reading})"),
+                Tone::TranslateMeta,
+                false,
+            ));
+        }
+    }
+    segments
 }
 
 /// 窗口顶部要画的拼音行：`[general] preedit` 配成「只在行内」时为空（拼音已经在应用里）；

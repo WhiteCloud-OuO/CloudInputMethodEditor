@@ -1,11 +1,11 @@
 use std::io::{Read, Write};
 
 use cloudime_platform::protocol::{
-    ClientMessage, Frame, IndicatorCommand, InputMode, InputSettings, KeyEvent, PROTOCOL_VERSION,
+    ClientMessage, IndicatorCommand, InputMode, InputSettings, KeyEvent, PROTOCOL_VERSION,
     ScreenRect, ServerMessage, SessionId, read_message, write_message,
 };
 
-use super::{KeyResponse, ModeSyncReply};
+use super::{KeyResponse, ModeSyncReply, PollReply};
 use crate::error::ClientError;
 
 /// 连 Server 的一个会话客户端，开在一条已连好的双工流上（Windows 下是命名管道，测试里是内存流）。
@@ -85,12 +85,13 @@ impl<S: Read + Write> EngineClient<S> {
         }
     }
 
-    /// 组句期间定时轮询最新一帧（本地整句重排到达后候选顺序可能变了）。
-    pub fn poll(&mut self) -> Result<Frame, ClientError> {
+    /// 组句期间定时轮询最新一帧（本地整句重排到达后候选顺序可能变了），
+    /// 顺路取回「不用按键的上屏」（鼠标点了 Server 自绘的候选窗）。
+    pub fn poll(&mut self) -> Result<PollReply, ClientError> {
         match self.call(&ClientMessage::Poll {
             session: self.session,
         })? {
-            ServerMessage::Update { frame, .. } => Ok(frame),
+            ServerMessage::Update { frame, commit, .. } => Ok(PollReply { frame, commit }),
             _ => Err(ClientError::Unexpected("expected update for poll")),
         }
     }
@@ -136,9 +137,16 @@ impl<S: Read + Write> EngineClient<S> {
     }
 
     /// 问 Server 有没有待处理的目标模式，顺路取回最新的按键行为设置（每一拍都带）。
-    pub fn sync_mode(&mut self) -> Result<ModeSyncReply, ClientError> {
+    /// `in_text_input` / `caps` 是本线程此刻的焦点状态（状态切换提示用，见 [`ClientMessage::SyncMode`]）。
+    pub fn sync_mode(
+        &mut self,
+        in_text_input: bool,
+        caps: bool,
+    ) -> Result<ModeSyncReply, ClientError> {
         match self.call(&ClientMessage::SyncMode {
             session: self.session,
+            in_text_input,
+            caps,
         })? {
             ServerMessage::ModeSync {
                 mode,

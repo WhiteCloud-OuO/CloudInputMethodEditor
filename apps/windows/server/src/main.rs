@@ -275,13 +275,17 @@ fn serve(mut router: Router) {
     use cloudime_windows_server::ipc::{Work, pipe};
     use cloudime_windows_server::ui::UiHandle;
     grant_appcontainer_log_access();
-    // 工人循环的活：各连接的消息 + 状态条上的操作（UI 线程投进来）。
+    // 工人循环的活：各连接的消息 + UI 线程发来的状态条操作与候选窗鼠标操作。
     let (work_tx, work_rx) = std::sync::mpsc::channel::<Work>();
     let status_events = work_tx.clone();
     let on_status = Box::new(move |event| {
         let _ = status_events.send(Work::Status(event));
     });
-    match UiHandle::spawn(on_status) {
+    let candidate_events = work_tx.clone();
+    let on_candidates = Box::new(move |event| {
+        let _ = candidate_events.send(Work::Candidate(event));
+    });
+    match UiHandle::spawn(on_status, on_candidates) {
         Ok(ui) => {
             router.set_candidate_sink(Box::new(ui.clone()));
             router.set_status_sink(Box::new(ui));

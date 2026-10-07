@@ -78,8 +78,9 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let shadow = (!args.no_shadow).then_some(Shadow::panel());
 
-    let scenes: [(&str, Frame, Layout); 6] = [
+    let scenes: [(&str, Frame, Layout); 7] = [
         ("matrix-horizontal", matrix(), Layout::Horizontal),
+        ("matrix-vertical", matrix(), Layout::Vertical),
         ("nihao-vertical", nihao(), Layout::Vertical),
         ("nihao-horizontal", nihao(), Layout::Horizontal),
         ("corrected-vertical", corrected_japanese(), Layout::Vertical),
@@ -252,6 +253,9 @@ fn matrix() -> Frame {
         ("phr. ".into(), Tone::Faint),
         ("is it because we didn't go today".into(), Tone::Gloss),
     ];
+    // 给一格挂个来源角标：预览里能同时看到横排的「角标与候选词最小间隔 2 个字宽」与
+    // 「每格最小宽度 6 个字宽 + 角标」。
+    rows[0].badge = Some("造".into());
     Frame {
         preedit: Some(Preedit {
             segments: vec![PreeditSegment {
@@ -264,23 +268,15 @@ fn matrix() -> Frame {
         highlighted: Some(12),
         highlight_animation: None,
         columns: 9,
-        column_ems: (0..9)
-            .map(|column| {
-                words
-                    .iter()
-                    .skip(column)
-                    .step_by(9)
-                    .map(|word| word.chars().count().min(4) as f32)
-                    .fold(0.0, f32::max)
-            })
-            .collect(),
+        min_cell_width: 0.0,
+        tip: None,
         footer: Some("2/12".into()),
         status: None,
     }
 }
 
 fn nihao() -> Frame {
-    Frame {
+    let mut frame = Frame {
         preedit: Some(Preedit::plain("ni'hao", 6)),
         rows: vec![
             annotated(
@@ -328,10 +324,15 @@ fn nihao() -> Frame {
         highlighted: Some(0),
         highlight_animation: None,
         columns: 0,
-        column_ems: Vec::new(),
+        min_cell_width: 0.0,
+        tip: None,
         footer: Some("1/6".to_owned()),
         status: None,
-    }
+    };
+    // 第一项挂个来源角标：横排预览里能看出「角标与候选词的间隔 = 2 个字宽」
+    // （竖排仍按原来的 4pt，角标在自己的列里）。
+    frame.rows[0].badge = Some("短".to_owned());
+    frame
 }
 
 /// 纠错后的拼音行（删除线 + 淡色剩余）加日文注解（汉字注假名）。
@@ -381,7 +382,8 @@ fn corrected_japanese() -> Frame {
         highlighted: Some(1),
         highlight_animation: None,
         columns: 0,
-        column_ems: Vec::new(),
+        min_cell_width: 0.0,
+        tip: None,
         footer: None,
         status: Some("已删除「开放」".to_owned()),
     }
@@ -395,7 +397,8 @@ fn probe() -> Frame {
         highlighted: None,
         highlight_animation: None,
         columns: 0,
-        column_ems: Vec::new(),
+        min_cell_width: 0.0,
+        tip: None,
         footer: None,
         status: None,
     }

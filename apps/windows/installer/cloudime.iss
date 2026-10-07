@@ -98,6 +98,10 @@ Source: "{#Repo}\apps\windows\tsf\resources\cloudime.ico"; DestDir: "{app}"; Fla
 ; 特殊字符输入器：随仓库带的 VFB 成品（apps\windows\ssi\release64\，构建时只拷不编），装在 {app} 根目录。
 ; Server 按自己 exe 旁的固定名起它（悬浮状态条「特殊字符」按钮，ui/mod.rs 的 open_spec_chars）。
 Source: "{#Repo}\apps\windows\ssi\release64\SpecialSymbolsInserter.exe"; DestDir: "{app}"; Flags: ignoreversion
+; —— 本地词典（翻译 Tip 用）：词典文件（`.qj` / `.db`）与清单 `dictionaries.list` 一起装进 {app}\LocalDictionary\ ——
+; 文件随仓库带（与 cwt-gui、SpecialSymbolsInserter 一样，构建时只拷不编）；Server 与设置程序都从这儿读，
+; 设置页「翻译 → 本地词典」的选项就是清单里的显示名。体积不小（三份约 50 MB），换词典直接替换这里的文件即可。
+Source: "{#Repo}\LocalDictionary\*"; DestDir: "{app}\LocalDictionary"; Flags: ignoreversion
 ; —— 命令行工具：exe 与「工具」菜单清单装进 {app}\tools；清单只在没有时铺一份，用户自己加的工具与改过的清单升级时留着 ——
 Source: "{#Repo}\target\release\cwt.exe"; DestDir: "{app}\tools"; Flags: ignoreversion
 ; cwt-gui.exe 是随仓库带的可执行文件（VB6 编的成品，放在 cwt-gui\release64\，构建时只拷不编）
@@ -118,6 +122,7 @@ Source: "{#Repo}\Phrases\Phrase.db"; DestDir: "{app}\data"; DestName: "phrase-de
 ; 目录里可以有多份（不同用途），Server 自己优先词表含汉字的字级模型（见 cloudime-neural 的 find_model），所以整目录带上。
 Source: "{#Repo}\data\local_models\*.qjm"; DestDir: "{app}\data\local_models"; Flags: ignoreversion skipifsourcedoesntexist
 ; —— 随 git 的资源 ——
+Source: "{#Repo}\tutorial.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Repo}\assets\sample\dict.tsv";        DestDir: "{app}\assets\sample"; Flags: ignoreversion
 ; 悬浮状态条的图标按钮：排布表与 icons\ 装在 data\ 下，Server 按 exe 位置读 {app}\data\icons-arrangement.cfg
 Source: "{#Repo}\apps\windows\server\src\ui\status\icons-arrangement.cfg"; DestDir: "{app}\data"; Flags: ignoreversion

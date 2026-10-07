@@ -3,11 +3,13 @@
 mod highlight;
 mod preedit;
 mod row;
+mod tip;
 mod tone;
 
 pub use highlight::{HighlightAnimation, HighlightRect};
 pub use preedit::{Preedit, PreeditSegment, PreeditStyle};
 pub use row::Row;
+pub use tip::TipSegment;
 pub use tone::Tone;
 
 #[derive(Debug, Clone, Default, PartialEq)]
@@ -24,14 +26,18 @@ pub struct Frame {
     /// 高亮条移动动画；`None` 直接画在 `highlighted`。见 [`HighlightAnimation`]。
     pub highlight_animation: Option<HighlightAnimation>,
 
-    /// 横排展开成矩阵时每行几格，`rows` 按行优先排开、空位是空行；0 为没展开。
+    /// 展开成矩阵时每行几格，`rows` 按行优先排开；0 为没展开（按竖排 / 横排画）。
     pub columns: usize,
 
-    /// 矩阵各列要留几个候选字宽（壳按整份候选估的，滚动、移动高亮时不变，窗口才不跳）；空着就按视口里的内容实测。
-    pub column_ems: Vec<f32>,
+    /// 矩阵每格的最小宽度（内容区像素），`0` 不限。壳把「收起时候选高亮条有多宽」传进来：
+    /// 展开成网格后每格就以它为准——比它还长的候选截尾加「…」，短的原样留白。
+    pub min_cell_width: f32,
 
     /// 右下角页码。
     pub footer: Option<String>,
+
+    /// 底部那一行左侧的翻译 Tip（一段一段画）；`None` 表示这个词条没有译文。
+    pub tip: Option<Vec<TipSegment>>,
 
     /// 拼音行右侧的一句临时状态（删了什么词）。
     pub status: Option<String>,

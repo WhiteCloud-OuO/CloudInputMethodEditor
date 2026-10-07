@@ -7,6 +7,7 @@ members = [
     "crates/cloudime-platform",
     "crates/cloudime-lm",
     "crates/cloudime-format",
+    "crates/cloudime-translate",
     "crates/cloudime-neural",
     "crates/cloudime-render",
     "crates/cloudime-update",
@@ -30,6 +31,7 @@ cloudime-learning = { path = "crates/cloudime-learning" }
 cloudime-platform = { path = "crates/cloudime-platform" }
 cloudime-lm = { path = "crates/cloudime-lm" }
 cloudime-format = { path = "crates/cloudime-format" }
+cloudime-translate = { path = "crates/cloudime-translate" }
 cloudime-neural = { path = "crates/cloudime-neural" }
 cloudime-render = { path = "crates/cloudime-render" }
 cloudime-update = { path = "crates/cloudime-update" }

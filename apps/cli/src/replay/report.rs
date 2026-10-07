@@ -51,7 +51,8 @@ impl Report {
             InputSource::Sentence => Some(&mut self.sentence),
             InputSource::English => Some(&mut self.english),
             InputSource::Shortcut => Some(&mut self.other),
-            InputSource::Custom | InputSource::Raw => None,
+            // 翻译 Tip 上屏的是译文、不是候选，跟「原样上屏」一样不参与排序评测
+            InputSource::Custom | InputSource::Translation | InputSource::Raw => None,
         }
     }
 

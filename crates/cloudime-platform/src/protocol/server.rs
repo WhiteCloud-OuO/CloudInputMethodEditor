@@ -35,6 +35,11 @@ pub struct InputSettings {
     /// 所有按键原样交给应用（应用自己的补全列表照旧），也不出候选与拼音行。
     #[serde(default)]
     pub raw_input: bool,
+
+    /// 不处于输入状态时自动禁用输入法（`[debugging] auto_disable_without_text_input`）：焦点不在
+    /// 可输入文本区域时关掉系统的「输入法开 / 关」，回到文本区域再放回来。DLL 需要它才能在焦点变化时动作。
+    #[serde(default)]
+    pub auto_disable_without_text_input: bool,
 }
 
 impl Default for InputSettings {
@@ -45,6 +50,7 @@ impl Default for InputSettings {
             shift_letter_compose: false,
             full_width_chars: false,
             raw_input: false,
+            auto_disable_without_text_input: false,
         }
     }
 }
@@ -106,6 +112,11 @@ pub enum ServerMessage {
 
         /// 要重绘的状态。
         frame: Frame,
+
+        /// 同样不由按键触发的上屏：鼠标点了 Server 自绘的候选窗上的候选。
+        /// 窗口在 Server 手里、按键在 DLL 手里，所以只能等 DLL 这一拍 `Poll` 时把文本带回去落进文档。
+        #[serde(default)]
+        commit: Option<String>,
     },
 
     /// 对一次 [`super::ClientMessage::SyncMode`] 的答复：当前的全局状态，

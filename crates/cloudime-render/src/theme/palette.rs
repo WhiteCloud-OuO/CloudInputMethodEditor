@@ -25,8 +25,17 @@ pub struct Palette {
     /// 页码等页脚小字，比序号更弱。
     pub footer: Color,
 
-    /// 候选右侧来源角标（用户短语「短」/ 用户自造词「造」）。
+    /// 候选右侧来源角标（用户短语「短」/ 用户自造词「造」）。页码也用这个颜色。
     pub badge: Color,
+
+    /// 翻译 Tip 里除释义以外的字（词性、分隔符、读音括号）：暂时统一 `#333333`，主题环节再一起设计。
+    pub translate_meta: Color,
+
+    /// 翻译 Tip 的释义：这个词条还没学会（缺省橙）。
+    pub translate_fresh: Color,
+
+    /// 翻译 Tip 的释义：这个词条学会了（缺省深灰）。
+    pub translate_learned: Color,
 
     /// 强调色：注解里需要更醒目的片段用它。
     pub accent: Color,
@@ -50,6 +59,9 @@ impl Palette {
             index: Color::rgb(0, 0, 0),
             footer: Color::gray(0, 66),
             badge: Color::rgb(0x88, 0x88, 0x88),
+            translate_meta: Color::rgb(0x33, 0x33, 0x33),
+            translate_fresh: Color::rgb(0xff, 0x7f, 0x27),
+            translate_learned: Color::rgb(0x33, 0x33, 0x33),
             accent: Color::rgb(0, 195, 208),
             background: Color::rgb(255, 255, 255),
             highlight: Color::rgba(200, 241, 255, 240),

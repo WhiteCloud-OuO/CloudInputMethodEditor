@@ -15,6 +15,9 @@ pub struct RenderSettings {
     /// 序号字体。
     pub item_number_font: (String, f32),
 
+    /// 翻译 Tip 的字体（候选窗底部那一行左侧）。
+    pub translate_font: (String, f32),
+
     /// 竖排时窗口的最小宽度（物理像素）。
     pub min_width_pixels: f32,
 

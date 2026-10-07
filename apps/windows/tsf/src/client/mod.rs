@@ -8,4 +8,4 @@ mod response;
 pub mod pipe;
 
 pub use engine::EngineClient;
-pub use response::{KeyResponse, ModeSyncReply};
+pub use response::{KeyResponse, ModeSyncReply, PollReply};

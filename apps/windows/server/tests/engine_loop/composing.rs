@@ -193,7 +193,7 @@ fn page_keys_are_fixed_to_minus_and_equals() {
     let (_, _, frame) = minus(&mut router);
     assert_eq!(frame.page, 0, "`-` 应翻回上一页");
 
-    // 逗号句号、方括号都不再翻页：先把高亮候选上屏，再按组句外语义处理这个标点（转全角）。
+    // 逗号句号不再翻页：先把高亮候选上屏，再按组句外语义处理这个标点（转全角）。
     let (outcome, commit, frame) = press(&mut router, punct(','));
     assert_eq!(
         (outcome, commit.as_deref()),
@@ -201,14 +201,12 @@ fn page_keys_are_fixed_to_minus_and_equals() {
     );
     assert_eq!(frame.page, 0);
     assert!(preedit(&frame).is_empty(), "标点把整段拼音一起上屏了");
+    // 方括号也不上屏标点了：它是挪拼音光标的键（收起 / 展开都一样），组句还在
     type_letters(&mut router, "ni");
     let (outcome, commit, frame) = press(&mut router, punct(']'));
-    assert_eq!(
-        (outcome, commit.as_deref()),
-        (KeyOutcome::Consumed, Some("你】"))
-    );
+    assert_eq!((outcome, commit), (KeyOutcome::Consumed, None));
     assert_eq!(frame.page, 0);
-    assert!(preedit(&frame).is_empty(), "标点把整段拼音一起上屏了");
+    assert_eq!(preedit(&frame), "ni", "方括号只挪光标、组句不动");
 }
 
 #[test]

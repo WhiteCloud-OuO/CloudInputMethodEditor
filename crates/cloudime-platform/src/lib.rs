@@ -16,10 +16,11 @@ pub use config::{
     CandidateConfig, Config, DEFAULT_CANDIDATE_BOX_MINIMUM_WIDTH, DEFAULT_FAMILY,
     DEFAULT_PUNCTUATION_MAPPING, DEFAULT_USER_WORD_BANK_FILE, DebuggingConfig, FontChoice,
     FullHalfPunctuation, GeneralConfig, InputConfig, ItemNumberStyle, LayoutMode, LogLevel,
-    MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MAX_PAGE_SIZE, MIN_ASSOCIATION_COUNTS,
-    MIN_CANDIDATE_COUNT, MO_HU_YIN_BITS, PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS,
-    PhraseConfig, PreeditMode, SimpTrad, SwitchKey, SwitchKeys, UpdateChannel, UpdateConfig,
-    WordBankConfig, fuzzy_bits, pair_bit, pair_open, pairwise_completion,
+    MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MAX_NEED_TIMES, MAX_PAGE_SIZE,
+    MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MIN_NEED_TIMES, MO_HU_YIN_BITS,
+    PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PhraseConfig, PreeditMode, SimpTrad,
+    SwitchKey, SwitchKeys, TranslateConfig, UpdateChannel, UpdateConfig, WordBankConfig,
+    fuzzy_bits, pair_bit, pair_open, pairwise_completion,
 };
 pub use error::ConfigError;
 pub use migrate::Migration;

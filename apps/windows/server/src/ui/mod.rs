@@ -10,6 +10,7 @@ mod layered;
 mod monitor;
 mod painter;
 mod status;
+mod status_tip;
 mod window_class;
 
 use std::cell::RefCell;
@@ -35,10 +36,16 @@ use self::candidates::CandidateWindow;
 use self::command::UiCommand;
 use self::painter::{Painter, SharedPainter};
 use self::status::StatusBar;
-use crate::dispatch::{CandidateSink, RenderSettings, StatusEvent, StatusSink, StatusView};
+use self::status_tip::StatusTip;
+use crate::dispatch::{
+    CandidateEvent, CandidateSink, RenderSettings, StatusEvent, StatusSink, StatusView,
+};
 
 /// 状态条上的操作（点格子 / 拖动结束）回给 Router 的回调，UI 线程上调。
 pub type StatusEvents = Box<dyn Fn(StatusEvent) + Send>;
+
+/// 候选窗上的鼠标操作（悬停 / 单击）回给 Router 的回调，UI 线程上调。
+pub type CandidateEvents = Box<dyn Fn(CandidateEvent) + Send>;
 
 /// 唤醒 UI 线程去排空命令队列的线程消息。
 const WM_WAKE: u32 = WM_APP;
@@ -58,13 +65,13 @@ pub struct UiHandle {
 
 impl UiHandle {
     /// 起 UI 线程并等它建好候选窗口。失败返回 `Err`，调用方退化为不画。
-    pub fn spawn(on_status: StatusEvents) -> Result<Self> {
+    pub fn spawn(on_status: StatusEvents, on_candidates: CandidateEvents) -> Result<Self> {
         // 用 Option<u32> 而非 Result 回报，免得 windows Error 跨线程。
         let (ready_tx, ready_rx) = mpsc::channel::<Option<u32>>();
         let (command_tx, command_rx) = mpsc::channel::<UiCommand>();
         thread::Builder::new()
             .name("cloudime-candidates".to_owned())
-            .spawn(move || run(command_rx, &ready_tx, on_status))
+            .spawn(move || run(command_rx, &ready_tx, on_status, on_candidates))
             .map_err(|_| Error::from(E_FAIL))?;
         match ready_rx.recv() {
             Ok(Some(thread_id)) => Ok(Self {
@@ -104,6 +111,10 @@ impl StatusSink for UiHandle {
 
     fn hide_status(&self) {
         self.post(UiCommand::StatusHide);
+    }
+
+    fn show_status_tip(&self, view: StatusView, caps: bool, anchor: ScreenRect) {
+        self.post(UiCommand::StatusTip(Box::new((view, caps, anchor))));
     }
 
     fn open_settings(&self) {
@@ -148,14 +159,19 @@ pub(super) fn module_handle() -> HINSTANCE {
 }
 
 /// UI 线程主体：建窗口、报回线程 id、跑消息循环。
-fn run(commands: Receiver<UiCommand>, ready: &Sender<Option<u32>>, on_status: StatusEvents) {
+fn run(
+    commands: Receiver<UiCommand>,
+    ready: &Sender<Option<u32>>,
+    on_status: StatusEvents,
+    on_candidates: CandidateEvents,
+) {
     // 按物理像素定位，与应用报来的组句屏幕矩形对齐；已设过会失败，忽略。
     let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
     let thread_id = unsafe { GetCurrentThreadId() };
     // 装上时随 Configure 命令建。
     let painter: SharedPainter = Rc::new(RefCell::new(None));
     // 先建窗口再报 id：建窗口顺带建起本线程的消息队列，之后 PostThreadMessageW 才有处可投。
-    let window = match CandidateWindow::new(painter.clone()) {
+    let window = match CandidateWindow::new(painter.clone(), on_candidates) {
         Ok(window) => Rc::new(window),
         Err(error) => {
             tracing::error!(%error, "建候选窗口失败，Server 将不显示候选框");
@@ -172,6 +188,13 @@ fn run(commands: Receiver<UiCommand>, ready: &Sender<Option<u32>>, on_status: St
             None
         }
     };
+    let tip = match StatusTip::new(painter.clone()) {
+        Ok(tip) => Some(tip),
+        Err(error) => {
+            tracing::error!(%error, "建状态切换提示窗失败，将不显示提示");
+            None
+        }
+    };
     if ready.send(Some(thread_id)).is_err() {
         return;
     }
@@ -184,7 +207,7 @@ fn run(commands: Receiver<UiCommand>, ready: &Sender<Option<u32>>, on_status: St
         if msg.message == WM_WAKE {
             // 一次唤醒排空整个队列，保住 Hide→Show 的先后。
             while let Ok(command) = commands.try_recv() {
-                apply(&window, status.as_ref(), &painter, command);
+                apply(&window, status.as_ref(), tip.as_ref(), &painter, command);
             }
             continue;
         }
@@ -204,6 +227,7 @@ fn run(commands: Receiver<UiCommand>, ready: &Sender<Option<u32>>, on_status: St
 fn apply(
     window: &CandidateWindow,
     status: Option<&StatusBar>,
+    tip: Option<&StatusTip>,
     painter: &SharedPainter,
     command: UiCommand,
 ) {
@@ -222,6 +246,12 @@ fn apply(
         UiCommand::StatusHide => {
             if let Some(status) = status {
                 status.hide();
+            }
+        }
+        UiCommand::StatusTip(payload) => {
+            let (view, caps, rect) = *payload;
+            if let Some(tip) = tip {
+                tip.show(&view, caps, to_win_rect(rect));
             }
         }
         UiCommand::Configure(settings) => {

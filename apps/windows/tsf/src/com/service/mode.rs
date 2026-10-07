@@ -14,6 +14,7 @@ use cloudime_platform::SwitchKeys;
 use cloudime_platform::protocol::{InputMode, InputSettings};
 
 use super::TextService_Impl;
+use crate::com::context;
 use crate::com::key::preserved;
 use crate::com::log::log;
 use crate::com::mode::{self, ModeButton, sink};
@@ -91,6 +92,39 @@ impl TextService_Impl {
             input.shift_letter_compose
         ));
         self.apply_mode_settings(input.english_mode, input.switch_mode);
+        // 「不处于输入状态时自动禁用输入法」：刚打开开关（且当前就不在输入状态）时立刻生效，
+        // 关掉开关时把自己之前关的放回去。
+        self.sync_auto_disable();
+    }
+
+    /// 「不处于输入状态时自动禁用输入法」（`[debugging] auto_disable_without_text_input`）：
+    /// 焦点不在可输入文本区域时按「禁用」走（按键原样放行、语言栏图标「禁」、Server 收起状态条），
+    /// 回到文本区域再回到原来的中 / 英（`ModeState::resume_mode` 记着）。
+    ///
+    /// **不写系统那条「输入法开 / 关」**（见 [`Self::refresh_mode_indicator`] 里的 `auto_disabled` 判断）：
+    /// 写关之后系统就不再把文档焦点给我们了，`ITfThreadMgr::GetFocus` 也拿不到东西，焦点回到文本区域时
+    /// 我们收不到任何恢复的依据——真机表现就是「禁用之后回不来」。只在本进程里按禁用走就没这个问题。
+    pub(crate) fn sync_auto_disable(&self) {
+        let enabled = self
+            .input_settings
+            .get()
+            .is_some_and(|input| input.auto_disable_without_text_input);
+        let disabled = enabled
+            && !self
+                .thread_mgr
+                .borrow()
+                .as_ref()
+                .is_some_and(context::in_text_input);
+        if disabled == self.auto_disabled.get() {
+            return;
+        }
+        self.auto_disabled.set(disabled);
+        log(&format!(
+            "不处于输入状态：自动{}",
+            if disabled { "禁用" } else { "恢复" }
+        ));
+        // 与系统 Ctrl + Space 走同一条路（落定拼音、改模式、报给 Server），只是不动系统开关。
+        self.follow_system_disabled(disabled);
     }
 
     /// Ctrl + Alt + Space 是组合键、走 TSF 保留键（与「翻译选中文字」同一套）；没勾就撤掉登记，免得白占着。
@@ -155,11 +189,12 @@ impl TextService_Impl {
 
     /// 向 Server 取一次全局模式跟上，顺路取回按键行为设置；没连着就什么都不做。
     pub(super) fn sync_mode_from_server(&self) {
+        let (in_text_input, caps) = super::text_focus_state();
         let reply = self
             .engine
             .borrow_mut()
             .as_mut()
-            .map(|client| client.sync_mode());
+            .map(|client| client.sync_mode(in_text_input, caps));
         match reply {
             Some(Ok(reply)) => {
                 self.apply_input_settings(reply.input);
@@ -239,7 +274,12 @@ impl TextService_Impl {
         let current = self.mode_state.mode();
         if let Some(thread_mgr) = self.thread_mgr.borrow().as_ref() {
             mode::set_indicator(thread_mgr, self.client_id.get(), current.english());
-            mode::set_keyboard_open(thread_mgr, self.client_id.get(), !current.disabled());
+            // 「不处于输入状态时自动禁用」期间**不写**这条：写关之后系统不再给我们文档焦点，
+            // 等焦点回到文本区域时也就没有恢复的依据了（见 `sync_auto_disable`）。
+            // 图标仍然跟着模式显示「禁」，Server 那边也会跟着收起状态条。
+            if !self.auto_disabled.get() {
+                mode::set_keyboard_open(thread_mgr, self.client_id.get(), !current.disabled());
+            }
         }
     }
 

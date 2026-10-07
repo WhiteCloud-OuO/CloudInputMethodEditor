@@ -1,11 +1,13 @@
 //! 按键怎么作用到 Engine / 高亮上。
 
 use cloudime_core::{CandidateKind, char_width, shortcut};
+use cloudime_platform::LayoutMode;
 use cloudime_platform::pairwise_completion;
 use cloudime_platform::protocol::KeyEvent;
 
 use super::{Effect, codes, with_prefix};
 use crate::dispatch::Router;
+use crate::dispatch::translate::TranslateAction;
 
 /// 成对补全里右半边对应键盘上的哪个键：`）` → `)`、`”` → `"`；本来就是半角（或没有对应）的原样返回。
 fn keyboard_close(close: char) -> char {
@@ -22,15 +24,30 @@ fn keyboard_close(close: char) -> char {
 ///
 /// `-` / `=` 是固定的翻页键（[`codes::page_key`] 在前面先处理掉），`_` / `+` 是它们上档的键、
 /// 也是标识符里常见的字符，沿用原来的英文直输段；`'` 是拼音的分隔符（`xi'an`），不能抢；
-/// `` ` `` 留给「轮换英文候选大小写」（见 [`Router::apply_printable`]），没英文候选时才进直输段。
+/// `` ` `` 留给「轮换英文候选大小写」（见 [`Router::apply_printable`]），没英文候选时才进直输段；
+/// `[` / `]` 是挪拼音光标的键（见 [`Router::apply_printable`]），也先被拦掉。
 fn is_commit_punctuation(c: char) -> bool {
-    c.is_ascii_punctuation() && !matches!(c, '\'' | '-' | '=' | '_' | '+' | '`')
+    c.is_ascii_punctuation() && !matches!(c, '\'' | '-' | '=' | '_' | '+' | '`' | '[' | ']')
+}
+
+/// `Shift + 反引号`（不带 Ctrl / Alt / Win）：发音那一键。
+fn is_speak_key(event: &KeyEvent) -> bool {
+    let modifiers = event.modifiers;
+    modifiers.shift
+        && !modifiers.ctrl
+        && !modifiers.alt
+        && !modifiers.win
+        && event.virtual_key == codes::BACKQUOTE
 }
 
 impl Router {
     /// 功能键靠键码，其余靠字符。带 Ctrl / Alt / Win 的键归应用。
     /// 表达式模式里 Shift + 数字打的是 `^ * ( )`，进算式。
     pub(crate) fn apply_key(&mut self, event: &KeyEvent) -> Effect {
+        // 多释义选择中（Ctrl + 反引号之后）：只有数字与 Esc 有效，别的键一律吃掉、拼音串不动
+        if self.translate.choices().is_some() {
+            return self.apply_choice_key(event);
+        }
         // 成对补全：上一键补上的右半边，紧接着又敲了一次就跳过去（不再插一个）。别的键也会把它作废。
         if let Some(close) = self.pending_close.take()
             && event.character == Some(close)
@@ -44,6 +61,12 @@ impl Router {
             return effect;
         }
         if let Some(effect) = self.ctrl_enter(event) {
+            return effect;
+        }
+        if let Some(effect) = self.ctrl_translate(event) {
+            return effect;
+        }
+        if let Some(effect) = self.shift_backquote(event) {
             return effect;
         }
         if event.modifiers.has_command_key() {
@@ -64,9 +87,13 @@ impl Router {
     /// 自造词从用户词库整个删掉（下次不再出），词库已有的词清掉对它的用户学习（选择次数、同输入串选择、
     /// 个人 n-gram 里与它相关的转移），权重回到词库原始词频；然后由调用方重排。
     /// 没这一格、或这一格既不是短语也不是中文 / 英文候选时返回 `None`，这一键照常交还应用。
+    /// 展开「更多候选项」时候选上没有序号、数字键改成跳页，这里不再杀词。
     fn ctrl_digit(&mut self, event: &KeyEvent) -> Option<Effect> {
         let modifiers = event.modifiers;
         if !modifiers.ctrl || modifiers.alt || modifiers.win || !self.composing() {
+            return None;
+        }
+        if self.show_more {
             return None;
         }
         let digit = codes::digit_virtual_key(event.virtual_key)?;
@@ -113,6 +140,88 @@ impl Router {
         Some(Effect::Changed(Some(self.engine.take_raw_english())))
     }
 
+    /// `Ctrl + 反引号`：上屏高亮候选的译文（本地词典的翻译 Tip）。有多条释义就先让用户挑一条
+    /// （自绘帧换成释义列表，数字键选、Esc 退出）；没有译文时也吃掉这一键，免得反引号漏进应用。
+    fn ctrl_translate(&mut self, event: &KeyEvent) -> Option<Effect> {
+        let modifiers = event.modifiers;
+        if !modifiers.ctrl
+            || modifiers.alt
+            || modifiers.win
+            || event.virtual_key != codes::BACKQUOTE
+            || !self.composing()
+        {
+            return None;
+        }
+        Some(match self.translate_action(self.highlight) {
+            TranslateAction::Commit(text) => Effect::Changed(text),
+            TranslateAction::Choosing | TranslateAction::Nothing => Effect::Navigated,
+        })
+    }
+
+    /// `Shift + 反引号`：念高亮候选的译文（系统语音，异步）。只有**一条**释义就念它；
+    /// 多条释义要先进选择界面（`Ctrl + 反引号`），进去之后这一键念高亮那条；没有译文就什么也不做。
+    ///
+    /// 开着翻译 Tip 且正在组句时这一键一律吃掉（不然 `~` 会漏进组句）；没在组句、或关掉翻译 Tip 时
+    /// 不认它，照旧打 `~`。
+    fn shift_backquote(&mut self, event: &KeyEvent) -> Option<Effect> {
+        if !self.config.translate_enabled || !self.composing() || !is_speak_key(event) {
+            return None;
+        }
+        self.speak();
+        Some(Effect::Navigated)
+    }
+
+    /// 多释义选择中的按键：方向键挪高亮、空格选高亮那条上屏、数字直接选第几条、Esc 退出，
+    /// `Shift + 反引号` 念高亮那条释义，别的键一律吃掉（拼音串不动）。
+    ///
+    /// 这一屏只是一列（竖排）或一行（横排），所以四个方向都当「上一条 / 下一条」：上下是列表
+    /// 本身的方向，左右在候选窗本来是挪拼音光标，这里没有光标可挪。
+    fn apply_choice_key(&mut self, event: &KeyEvent) -> Effect {
+        if event.virtual_key == codes::ESCAPE {
+            self.translate.end_choices();
+            return Effect::Navigated;
+        }
+        if event.modifiers.has_command_key() {
+            return Effect::Navigated;
+        }
+        if is_speak_key(event) {
+            self.speak();
+            return Effect::Navigated;
+        }
+        match event.virtual_key {
+            codes::UP | codes::LEFT => {
+                self.translate.move_choice_highlight(-1);
+                return Effect::Navigated;
+            }
+            codes::DOWN | codes::RIGHT => {
+                self.translate.move_choice_highlight(1);
+                return Effect::Navigated;
+            }
+            // 空格 = 选高亮那条，与鼠标单击同一条路。进选择界面时高亮落在第 1 条上，
+            // 所以不看一眼直接空格就是选第一条，与候选窗里「空格选高亮候选」的手感一致。
+            codes::SPACE => {
+                let highlight = self
+                    .translate
+                    .choices()
+                    .map_or(0, |choices| choices.highlight);
+                return self.commit_sense_at(highlight);
+            }
+            _ => {}
+        }
+        let Some(digit) = codes::digit(event) else {
+            return Effect::Navigated;
+        };
+        self.commit_sense_at(digit - 1)
+    }
+
+    /// 上屏选择界面里第 `index` 条释义；没这一条（或只并进组句）就重画一遍。
+    fn commit_sense_at(&mut self, index: usize) -> Effect {
+        match self.choose_sense(index) {
+            Some(text) => Effect::Changed(Some(text)),
+            None => Effect::Navigated,
+        }
+    }
+
     /// 退格 / Esc / 回车 / Tab / 方向键；没在组句时都交还应用。
     fn apply_function_key(&mut self, event: &KeyEvent) -> Effect {
         if !self.composing() {
@@ -134,20 +243,36 @@ impl Router {
             // Insert：已选的中文上屏，还没选的拼音丢掉（`云朵shurufa` → 上屏 `云朵`）
             codes::INSERT => Effect::Changed(self.engine.take_selected()),
             codes::RETURN => Effect::Changed(Some(self.engine.take_raw())),
-            codes::TAB if event.modifiers.shift => {
-                self.page(-1);
-                Effect::Navigated
-            }
+            // Tab：展开 / 收起「更多候选项」（原来是翻页，Shift + Tab 上一页）。设置里关掉时
+            // 这一键照样吃掉但什么也不做——组句还在，放行给应用会在拼音中间插一个制表符。
             codes::TAB => {
-                self.page(1);
+                if self.config.show_more_candidate_items {
+                    self.toggle_show_more();
+                }
                 Effect::Navigated
             }
+            // 方向键（收起态）：沿着**列表方向**的那个轴挪高亮、另一个轴翻页
+            // —— 竖排收起是「上下挪高亮、左右翻页」，横排收起是「左右挪高亮、上下翻页」。
+            // 拼音光标在收起态也不再由方向键移，改用 `[` `]`（见 [`Self::apply_printable`]）。
+            // 展开成网格后四个方向都挪高亮。
             codes::DOWN => {
-                self.move_highlight(1);
+                if self.show_more {
+                    self.move_highlight_in_grid(1, 0);
+                } else if self.horizontal() {
+                    self.page(1);
+                } else {
+                    self.move_highlight(1);
+                }
                 Effect::Navigated
             }
             codes::UP => {
-                self.move_highlight(-1);
+                if self.show_more {
+                    self.move_highlight_in_grid(-1, 0);
+                } else if self.horizontal() {
+                    self.page(-1);
+                } else {
+                    self.move_highlight(-1);
+                }
                 Effect::Navigated
             }
             codes::NEXT => {
@@ -159,12 +284,24 @@ impl Router {
                 Effect::Navigated
             }
             codes::LEFT => {
-                self.engine.move_cursor_left();
-                Effect::Changed(None)
+                if self.show_more {
+                    self.move_highlight_in_grid(0, -1);
+                } else if self.horizontal() {
+                    self.move_highlight(-1);
+                } else {
+                    self.page(-1);
+                }
+                Effect::Navigated
             }
             codes::RIGHT => {
-                self.engine.move_cursor_right();
-                Effect::Changed(None)
+                if self.show_more {
+                    self.move_highlight_in_grid(0, 1);
+                } else if self.horizontal() {
+                    self.move_highlight(1);
+                } else {
+                    self.page(1);
+                }
+                Effect::Navigated
             }
             codes::HOME => {
                 self.engine.move_cursor_home();
@@ -312,6 +449,24 @@ impl Router {
                 return Effect::Changed(None);
             }
         }
+        // 拼音光标：收起态与展开态都由 `[` `]` 两键移（方向键在候选窗里让给了高亮与翻页）。
+        // 没在组句时走不到这里（`apply_chinese` 那条路直接按标点处理），所以不组句时 `[` 仍是 `【`。
+        if matches!(c, '[' | ']') {
+            if c == '[' {
+                self.engine.move_cursor_left();
+            } else {
+                self.engine.move_cursor_right();
+            }
+            return Effect::Changed(None);
+        }
+        // 展开「更多候选项」：候选上没有序号了，数字键改成跳页（1–9 是第 1–9 页，0 是第 10 页）。
+        if self.show_more
+            && self.candidate_count() > 0
+            && let Some(digit) = codes::page_digit(event)
+        {
+            self.goto_page(if digit == 0 { 9 } else { digit - 1 });
+            return Effect::Navigated;
+        }
         if let Some(digit) = codes::digit(event)
             && let Some(index) = self.slot_index(digit)
         {
@@ -356,7 +511,7 @@ impl Router {
 
     /// 数字键在当前页对应的格子下标；这一页没有这一格（`gpt6` 只有三个候选）返回 `None`，数字当内容进缓冲区。
     fn slot_index(&self, digit: usize) -> Option<usize> {
-        let page_size = self.config.page_size;
+        let page_size = self.page_size();
         let index = self.highlight / page_size * page_size + digit - 1;
         (digit <= page_size && index < self.candidate_count()).then_some(index)
     }
@@ -383,6 +538,12 @@ impl Router {
 
     fn composing(&self) -> bool {
         !self.engine.composition().is_empty()
+    }
+
+    /// 候选窗是不是横排（`[candidate] layout_mode`）：横排收起时方向键的分工与竖排不同
+    /// （左右挪高亮、上下翻页，拼音光标改由 `[` `]` 移）。
+    fn horizontal(&self) -> bool {
+        self.config.layout == LayoutMode::Horizontal
     }
 }
 

@@ -53,6 +53,9 @@ const CAPS_INTERVAL_MS: u32 = 250;
 /// 状态条窗口上 Caps Lock 检查的定时器编号（[`fullscreen::TIMER_ID`] 是 1）。
 const CAPS_TIMER_ID: usize = 2;
 
+/// 状态切换提示只显示悬浮工具栏的前四个按钮：中 / 英、全 / 半角、中 / 西文标点、简 / 繁。
+pub(super) const TIP_BUTTONS: usize = 4;
+
 /// 图标名 → 点击动作（`icons-arrangement.cfg` 的 `button=`）。同一个按钮的几个状态名指向同一个动作，
 /// 状态条上按钮的顺序与显隐由 cfg 的 `pos` 决定，这里只回答「这个图标名意味着什么」。
 const ACTIONS: [(&str, StatusAction); 12] = [
@@ -169,8 +172,14 @@ impl StatusBar {
         self.dpi.set(dpi);
     }
 
-    /// 渲染器要的一排按钮：按 cfg 的 `pos` 从左到右，每个按钮按当前状态挑图标。
-    fn status_cells(view: &StatusView, arrangement: &Arrangement, caps: bool) -> Vec<StatusCell> {
+    /// 渲染器要的一排按钮：按 cfg 的 `pos` 从左到右，每个按钮按当前状态挑图标；`limit` 只取前几个
+    /// （状态切换提示只要前四个），画满状态条时传 [`TIP_BUTTONS`] 之外的大数（`usize::MAX`）。
+    fn status_cells(
+        view: &StatusView,
+        arrangement: &Arrangement,
+        caps: bool,
+        limit: usize,
+    ) -> Vec<StatusCell> {
         let state = ButtonState {
             english: view.english,
             caps,
@@ -181,6 +190,7 @@ impl StatusBar {
         arrangement
             .buttons
             .iter()
+            .take(limit)
             .map(|button| StatusCell::icon(button.svg(&state)))
             .collect()
     }
@@ -198,7 +208,7 @@ impl StatusBar {
         if arrangement.refresh() {
             tracing::info!(buttons = arrangement.buttons.len(), "状态条图标排布已重读");
         }
-        let cells = Self::status_cells(&view, &arrangement, self.placement.caps.get());
+        let cells = Self::status_cells(&view, &arrangement, self.placement.caps.get(), usize::MAX);
         let rendered = match (cells.is_empty(), self.painter.borrow_mut().as_mut()) {
             (false, Some(painter)) => painter.render_status(&cells, self.dpi.get()),
             _ => None,
@@ -240,6 +250,7 @@ impl StatusBar {
             self.hwnd,
             &bitmap.pixmap,
             (anchor.0 - margin, anchor.1 - margin),
+            255,
         );
         drop(arrangement);
         if updated.is_ok() {
@@ -272,6 +283,26 @@ impl Drop for StatusBar {
     fn drop(&mut self) {
         PLACEMENTS.with(|map| map.borrow_mut().remove(&(self.hwnd.0 as isize)));
         let _ = unsafe { DestroyWindow(self.hwnd) };
+    }
+}
+
+/// 状态切换提示用的那一小排图标（悬浮工具栏的前四个）。内部自己管图标排布，与状态条互不干扰
+/// —— `Arrangement` 只在本模块可见，提示窗通过它拿图标。
+pub(super) struct StatusIcons {
+    arrangement: Arrangement,
+}
+
+impl StatusIcons {
+    pub(super) fn load() -> Self {
+        Self {
+            arrangement: Arrangement::load(),
+        }
+    }
+
+    /// 按当前状态出一排图标；排布文件动过会重读（与状态条一样）。
+    pub(super) fn cells(&mut self, view: &StatusView, caps: bool) -> Vec<StatusCell> {
+        self.arrangement.refresh();
+        StatusBar::status_cells(view, &self.arrangement, caps, TIP_BUTTONS)
     }
 }
 

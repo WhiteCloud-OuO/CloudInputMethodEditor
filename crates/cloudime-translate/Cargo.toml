@@ -1,0 +1,18 @@
+[package]
+name = "cloudime-translate"
+description = "本地词典（LocalDictionary 下的 .qj / .db）的释义查询，以及词条的学习状态"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+cloudime-format.workspace = true
+rusqlite.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tracing.workspace = true
+zerocopy.workspace = true

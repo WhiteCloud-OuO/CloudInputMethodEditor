@@ -4,7 +4,7 @@
 
 use windows::Win32::UI::TextServices::{
     GUID_COMPARTMENT_EMPTYCONTEXT, GUID_COMPARTMENT_KEYBOARD_DISABLED, ITfCompartmentMgr,
-    ITfContext,
+    ITfContext, ITfThreadMgr,
 };
 use windows::core::{GUID, Interface};
 
@@ -15,6 +15,20 @@ pub(crate) fn keyboard_disabled(context: &ITfContext) -> bool {
     };
     flag(&manager, &GUID_COMPARTMENT_KEYBOARD_DISABLED)
         || flag(&manager, &GUID_COMPARTMENT_EMPTYCONTEXT)
+}
+
+/// 本线程当前的焦点在不在一个**可输入的文本区域**里（`[debugging] auto_disable_without_text_input` 用）。
+///
+/// 没有文本焦点（`ITfThreadMgr::GetFocus` 拿不到），或焦点所在的上下文被标成「空上下文 / 键盘禁用」
+/// （只读视图、密码框、没有可输入区域）都算「不在输入状态」。
+pub(crate) fn in_text_input(thread_mgr: &ITfThreadMgr) -> bool {
+    let Ok(document) = (unsafe { thread_mgr.GetFocus() }) else {
+        return false;
+    };
+    let Ok(context) = (unsafe { document.GetTop() }) else {
+        return false;
+    };
+    !keyboard_disabled(&context)
 }
 
 /// 上下文 compartment 里的 `DWORD` 非零。没设过 / 类型不对按 0。

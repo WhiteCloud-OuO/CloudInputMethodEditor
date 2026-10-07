@@ -28,6 +28,7 @@ Windows 输入法（只做 Windows，上游的 macOS / Linux 壳已删除）。C
 
 `docs/` 分四类（索引在 `docs/README.md`）：`design/` 设计与决定、`plan/` 路线与待办、`notes/` 工程记录（性能、复盘、踩坑、crate 实现要点）、
 `user/` 用户文档（官网构建时拉取渲染，约定见 `docs/user/README.md`，措辞面向用户、不出现实现词）。
+根目录 `tutorial.md` 是**随安装包发布的单文件使用手册**（打包时装到 `{app}\tutorial.md`），用户可见的行为改了要同步它，见 `docs/contributing.md`「文档同步」。
 
 ## 常用命令
 

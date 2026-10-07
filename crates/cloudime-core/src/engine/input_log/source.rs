@@ -21,6 +21,9 @@ pub enum InputSource {
     /// 用户配置的自定义短语。
     Custom,
 
+    /// 本地词典的翻译 Tip：上屏的是词典给的译文，不是候选本身（拼音照候选消耗）。
+    Translation,
+
     /// 回车原样上屏敲的字母。
     Raw,
 }

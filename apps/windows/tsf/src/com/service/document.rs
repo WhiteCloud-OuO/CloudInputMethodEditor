@@ -4,9 +4,10 @@ use windows::Win32::UI::TextServices::ITfContext;
 use windows::core::Ref;
 
 use super::TextService_Impl;
-use crate::com::composition::Update;
+use crate::com::composition::{Update, preedit_string};
 use crate::com::edit::request_update;
 use crate::com::log::log;
+use cloudime_platform::protocol::Frame;
 
 impl TextService_Impl {
     /// 失焦 / 停用 / 切模式：让 Server 交出缓冲区，原样落进最近收键的文档并收掉组句。
@@ -54,6 +55,40 @@ impl TextService_Impl {
         );
         if let Err(error) = requested {
             log(&format!("失焦上屏的编辑会话没被受理: {error}"));
+            self.shared.reset();
+        }
+    }
+
+    /// 轮询里搭回来的「不用按键的上屏」：鼠标点在 Server 自绘的候选窗上的一格。
+    ///
+    /// 候选窗在 Server 手里、收不到按键，所以那一格要上屏的文本只能挂在 `Poll` 的回包里回来。
+    /// 只选了一半（候选并进组句）时拼音行也变了，所以帧里那条新拼音行一并落进文档。
+    pub(crate) fn apply_poll_commit(&self, frame: &Frame, commit: Option<String>) {
+        let preedit = if frame.preedit_mode.inline() {
+            preedit_string(frame)
+        } else {
+            String::new()
+        };
+        self.shared.set_composing(!frame.is_empty());
+        let Some(context) = self.shared.last_context() else {
+            log(&format!("鼠标上屏没有上下文，丢弃: {commit:?}"));
+            self.shared.reset();
+            return;
+        };
+        log(&format!("鼠标点选上屏: {commit:?} 拼音行={preedit:?}"));
+        let requested = request_update(
+            &context,
+            self.client_id.get(),
+            self.engine.clone(),
+            self.shared.clone(),
+            Update {
+                commit,
+                preedit,
+                ..Update::default()
+            },
+        );
+        if let Err(error) = requested {
+            log(&format!("鼠标上屏的编辑会话没被受理: {error}"));
             self.shared.reset();
         }
     }

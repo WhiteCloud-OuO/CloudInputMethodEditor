@@ -185,7 +185,11 @@ fn mode_is_shared_by_every_app() {
 
 /// 会话取一次 `SyncMode`，返回它拿到的全局状态。
 fn synced_mode(router: &mut Router, session: SessionId) -> Option<InputMode> {
-    match router.handle(ClientMessage::SyncMode { session }) {
+    match router.handle(ClientMessage::SyncMode {
+        session,
+        in_text_input: false,
+        caps: false,
+    }) {
         Some(ServerMessage::ModeSync { mode, .. }) => mode,
         other => panic!("SyncMode 应回 ModeSync，实际 {other:?}"),
     }
@@ -196,8 +200,78 @@ fn synced_input(
     router: &mut Router,
     session: SessionId,
 ) -> cloudime_platform::protocol::InputSettings {
-    match router.handle(ClientMessage::SyncMode { session }) {
+    match router.handle(ClientMessage::SyncMode {
+        session,
+        in_text_input: false,
+        caps: false,
+    }) {
         Some(ServerMessage::ModeSync { input, .. }) => input,
         other => panic!("SyncMode 应回 ModeSync，实际 {other:?}"),
     }
+}
+
+/// 状态切换提示：状态一变就弹一次，位置用最近一次的光标矩形；状态没变不弹。
+#[test]
+fn status_change_tip_follows_state_and_caret() {
+    let mut router = router();
+    let recorder = RecordingStatus::default();
+    router.set_status_sink(Box::new(recorder.clone()));
+    let rect = ScreenRect {
+        left: 100,
+        top: 200,
+        right: 104,
+        bottom: 220,
+    };
+
+    // 组一次句：会话成为聚焦会话，随后的光标矩形才记得下。
+    press(&mut router, letter('n'));
+    router.handle(ClientMessage::PositionCandidates {
+        session: SESSION,
+        rect,
+    });
+    // DLL 报「焦点在可输入文本区域里」（顺带说明云朵是当前输入法）。
+    router.handle(ClientMessage::SyncMode {
+        session: SESSION,
+        in_text_input: true,
+        caps: false,
+    });
+
+    // 切全角 / 半角：弹一次，位置就是那个光标矩形。
+    router.handle_status_event(StatusEvent::ToggleCharWidthType);
+    let tips = recorder.tips();
+    assert_eq!(tips.len(), 1);
+    assert_eq!(tips[0].2, rect);
+    assert!(tips[0].0.full_width_chars);
+    assert!(!tips[0].1, "Caps 灭");
+
+    // 拖动状态条、点同一格两次抵消后状态回到原样：只有真的变了才弹。
+    router.handle_status_event(StatusEvent::Moved(10, 20));
+    assert_eq!(recorder.tips().len(), 1, "只挪位置不该弹");
+    router.handle_status_event(StatusEvent::ToggleCharWidthType);
+    assert_eq!(recorder.tips().len(), 2);
+}
+
+/// 焦点不在可输入文本区域里（DLL 报 `in_text_input = false`）时不弹提示。
+#[test]
+fn status_change_tip_skipped_outside_text_input() {
+    let mut router = router();
+    let recorder = RecordingStatus::default();
+    router.set_status_sink(Box::new(recorder.clone()));
+    press(&mut router, letter('n'));
+    router.handle(ClientMessage::PositionCandidates {
+        session: SESSION,
+        rect: ScreenRect {
+            left: 100,
+            top: 200,
+            right: 104,
+            bottom: 220,
+        },
+    });
+    router.handle(ClientMessage::SyncMode {
+        session: SESSION,
+        in_text_input: false,
+        caps: false,
+    });
+    router.handle_status_event(StatusEvent::ToggleCharWidthType);
+    assert!(recorder.tips().is_empty());
 }

@@ -82,8 +82,16 @@ impl Router {
                 self.handle_mode_changed(mode);
                 None
             }
-            ClientMessage::SyncMode { session } => {
+            ClientMessage::SyncMode {
+                session,
+                in_text_input,
+                caps,
+            } => {
                 self.handle_ime_active();
+                // 顺路记下焦点状态：状态切换提示据此决定弹不弹、以及「中 / 英」按钮画不画「A」。
+                self.in_text_input = in_text_input;
+                self.caps = caps;
+                self.check_status_tip();
                 Some(ServerMessage::ModeSync {
                     session,
                     mode: Some(self.mode),
@@ -141,15 +149,26 @@ impl Router {
     }
 
     /// 轮询：聚焦会话回最新一帧（本地整句重排到达后候选顺序可能变了），否则回空帧。
+    /// 顺带把攒着的鼠标点选上屏带回去（候选窗在 Server 手里，没有按键可以捎它）。
     fn handle_poll(&mut self, session: SessionId) -> ServerMessage {
         self.tick();
-        let frame = if self.focused == Some(session) {
+        let focused = self.focused == Some(session);
+        let frame = if focused {
             let shown = self.self_drawn_frame();
             self.reconcile_candidates(&shown);
             self.current_frame()
         } else {
             Frame::default()
         };
-        ServerMessage::Update { session, frame }
+        let commit = if focused {
+            self.pending_commit.take()
+        } else {
+            None
+        };
+        ServerMessage::Update {
+            session,
+            frame,
+            commit,
+        }
     }
 }

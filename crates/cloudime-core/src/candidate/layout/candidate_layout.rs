@@ -22,6 +22,11 @@ impl CandidateLayout {
         self.page_size
     }
 
+    /// 换一页几格（组句里展开 / 收起「更多候选项」时，一页从候选项个数变成一整屏）。
+    pub fn set_page_size(&mut self, page_size: usize) {
+        self.page_size = page_size.max(1);
+    }
+
     pub fn local(&self) -> &[Candidate] {
         &self.local
     }

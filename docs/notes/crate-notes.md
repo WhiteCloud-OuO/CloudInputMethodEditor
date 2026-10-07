@@ -113,6 +113,37 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 语言模型能 `write_qj` / 从 `.qj` 打开，启动 50 ms；`cargo run --release -p cloudime-dict-convert -- pack lm --name … --license …`
 生成 `data/generated/lm.qj`，Windows 打包（`apps/windows/installer/build.ps1`）在 TSV 更新时自动重打并只把 `.qj` 与 `WordBank\Dict.db` 打进包。词库改走 SQLite（`word-bank` 子命令写 `WordBank\Dict.db`）。设计见 `docs/design/architecture.md`「数据文件：`.qj` 容器」。
 
+## crates/cloudime-translate
+
+本地词典与翻译 Tip：查词条释义（`.qj` 青简容器按 `Kind::Glossary = 3` 映射读取，或 `.db` SQLite），
+以及「这个词条学没学会」的学习状态。词典在安装目录 `LocalDictionary\`（清单 `dictionaries.list` 一行
+`显示名=文件名`，[`Manifest`](../../crates/cloudime-translate/src/manifest.rs) 解析；坏行警告跳过，文件不在就是空清单），
+词典文件只读、学习状态在用户数据目录的 `translate.db`：
+
+```sql
+CREATE TABLE entries (dictionary TEXT, word TEXT, input_times INTEGER, learned INTEGER,
+                      PRIMARY KEY (dictionary, word));
+```
+
+`.db` 词典的表结构（见 `glossary/db.rs` 的文件头注释）：总表 `words(id, word, translation, pos, reading)`（一个中文词可有多条、
+每条一个译词，`pos` 可复合、`reading` 是译词的读音（日语假名），没有就空）+ 副表 `contents(id, initials, pinyin, word, reading)`
+（拼音首字母 / 拼音 / 中文词的索引，`reading` 与 `pinyin` 同值；查词先走它、再回总表；副表要列全，漏登记的词查不到）。
+读取端对**没有 `reading` 列的老结构**降级兼容（`Db::has_reading`，查不到读音、其余照常）。
+`Learning::record_commit` 把译文上屏的次数 +1、到 `need_times` 就把 `learned` 置上；「重置学习内容」= `reset`（删掉该词典的行）。
+
+两种词典的查词开销（`cargo test -p cloudime-translate --release -- --ignored --nocapture lookup_latency`，
+拿 `glossary-en.qj`（232213 词）与它转出来的 `.db` 各查 2 万次命中 + 2 万次未命中，三轮取稳）：
+
+| | 打开 | 命中 | 未命中 |
+|---|---|---|---|
+| `.qj`（mmap + 开放寻址哈希） | ~11 ms（逐条校验偏移，安全换来的） | **0.30 µs** | **0.07 µs** |
+| `.db`（SQLite，`prepare_cached` 复用语句） | ~0.6 ms | 42 µs | 20 µs |
+
+差两个数量级，但**开销在 SQLite 的每次查询机制上**（VM 执行、B 树定位、行解码、`TEXT` 拷成 `String`），
+不是读盘：开 `PRAGMA mmap_size` 只快约 12%（42→37 / 20→18 µs），所以读取端不开它、留住小页缓存。
+对翻译 Tip 没有影响——每帧只查**高亮那一个**候选（按键 / 轮询时才出帧），40 µs 在噪音里；
+真要为「一屏全查」这类批量用法铺路时，`.qj` 才是那份快的格式。
+
 ## crates/cloudime-neural
 
 `CharScorer`，Core `sentence::SentenceScorer` trait 的实现：candle 加载字级 Transformer（GPT-2 风格 decoder，训练仓库（本地 `../train`，私有，不在本仓库）导出的
@@ -138,13 +169,20 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 `set_value` 用 toml_edit 原地改键保留注释（分节可带点，`candidate.pinyin_font` 这种子表也走它））；
 `[candidate]` 收拢候选窗口那一套：`use_local_sentence_organization_model`（原 `[model] enabled`）、`candidate_arrangement_direction`、
 `candidate_count`（夹 5–9）、`candidate_association_counts`（联想候选项目上限，夹 0–4；候选列表里「比读法更长的词」最多留几条，
-见 `ranking::rank` 的 `association_limit`）、`pinyin_font` / `candidate_font` / `item_number_font`（各 `family` + `size` 的子表）、
-`item_number_style`（decimal / circled / roman / dingbat / parenthesized）、`candidate_box_minimum_width`（物理像素，竖排时生效）、
-`show_more_candidate_items`（只落配置，功能未做）、`program_list_of_hiding_candidate`（名单里的 exe 完全不接管，
+见 `ranking::rank` 的 `association_limit`；缺省 2）、`pinyin_font` / `candidate_font` / `item_number_font`（各 `family` + `size` 的子表；
+缺省微软雅黑 11 / 13 / 11 pt）、
+`item_number_style`（decimal / circled / roman / dingbat / parenthesized）、`candidate_box_minimum_width`（物理像素，竖排时生效；缺省 180）、
+`show_more_candidate_items`（缺省关；开着时组句里 Tab 把候选窗展开成一整屏，见候选窗那一节）、`program_list_of_hiding_candidate`（名单里的 exe 完全不接管，
 `InputSettings.raw_input` 通知 DLL）、`preedit`；`[status_bar]` 只剩位置（开关删了，状态条常开，只跟「当前输入法是不是云朵输入法」走）；
 `[status_bar]` 有 `show_status_bar`（缺省开；`StatusBarConfig` 手写 `Default`——`#[serde(default)]` 取的是结构体的 `Default`，不写就变成 `bool::default()` = 关，老配置会莫名其妙不显示工具条）：关掉后 Server 的 `reconcile_status` 始终收起，桌面上不再出现那条工具条（按钮位置 `x` / `y` 照旧）。
-`[debugging]` 只有 `auto_hide_float_tool_bar`（缺省开）：开着时前台全屏（`ui/status/fullscreen.rs` 每秒查一次）收起悬浮工具栏，
+`[debugging]` 只有 `auto_hide_float_tool_bar`（缺省关）：开着时前台全屏（`ui/status/fullscreen.rs` 每秒查一次）收起悬浮工具栏，
 关掉后全屏也不收；切到别的输入法 / 云朵被禁用时始终收起，与这一项无关（`RouterConfig.auto_hide_float_tool_bar` → `StatusView.auto_hide_fullscreen`）。
+`auto_disable_without_text_input`（缺省关）的判断与动作都在 DLL，见 TSF 那一节。
+
+**装机默认值**（`Config::default` 与 [`TEMPLATE`]，两者一致由 `template_parses_to_defaults` 盯着；这是产品定的起点，改要一起改）：
+联想上限 2、候选框最小宽度 180、符号映射**全关**（`DEFAULT_PUNCTUATION_MAPPING` = 0）、Tab 展开更多候选关、
+候选字体 13pt / 序号 11pt、全屏不自动收起悬浮工具栏、翻译词典缺省 `glossary-en.db`、`translate.reset_counter` 缺省 0
+（它是「重置学习内容」的计数器，不是开关：改小 / 改大都会让 Server 把那本词典的学习记录清掉）。
 配置按「输入 / 候选 / 词库 / 短语」四节重排完成：`[input]`（原来散在 `[general] traditional`、整个 `[fuzzy]`
 与写死在 Core 里的标点规则）：`use_jian_pin`、`mo_hu_yin_list`（位图，**一位一条规则**共十二位：zh/z 1、ch/c 2、sh/s 4、r/l 8、n/l 16、
 f/h 32、u/ü 64、uo/o 128、an/ang 256、en/eng 512、in/ing 1024、wang/huang 2048，`MO_HU_YIN_BITS`；0.0.3 起从「五组合并位」改成一位一条，
@@ -187,9 +225,32 @@ v15 之后给 `Candidate` 加了 `display`（候选里显示的内容，上屏�
 
 ## crates/cloudime-render
 
-横排矩阵：`Frame::columns` 不为 0 时 `Layout::Horizontal` 走 `renderer/matrix.rs`（列宽用帧里的 `column_ems`，Core `Grid::column_ems` 按整份候选估、
-单格封顶 `MAX_CELL_EMS` = 4 字宽，滚动时窗口不跳；网格下固定一行信息，放不下的截断）；视口与高亮移动在 Core `candidate::layout::Grid`（`GRID_ROWS` = 6），
-预览示例里有 `matrix-horizontal` 场景。Windows 上这套矩阵按键尚未接线（`Frame::columns` 只有横排固定一行信息）。
+矩阵：`Frame::columns` 不为 0 时走 `renderer/matrix.rs`（展开「更多候选项」就是这条；竖排 5 列 / 横排 5 行都是它），
+每格一样宽——取收起时那条高亮条的宽度（`Frame::min_cell_width`），比它长的候选截尾加「…」；没给这个宽度时
+（这次组句还没画过收起态）退回「一屏里最长的那条」、单格封顶 `MAX_CELL_EMS` = 4 字宽。候选不够一屏时不补空列。
+**展开态另有两条按候选字宽算的下限**（`Renderer::char_width` 量一个汉字，`horizontal_badge_gap` /
+`horizontal_min_cell_width` / `badge_char_width`）：
+
+- **横排**：每格最小宽度 = 6 个字宽 + 该屏最宽的角标；**收起**时候选词与来源角标之间的最小间隔是 2 个字宽
+  （竖排收起仍用 `BADGE_GAP` = 4pt——角标在自己的列里）。
+- **竖排**：每格最小宽度 = 这一屏最长的候选 + 2 个字宽 + **一个角标字宽**（`badge_char_width` 量「造」，
+  不管这一屏有没有角标都算），所以格子一定装得下最长那条、不会被截断。
+
+格子里的角标一律**贴格右边缘**（`matrix.rs` 用 `BADGE_GAP` 往里的位置），并把它占的这点位置算进 `chrome`
+（候选词的截断上限跟着让出来，文字与角标不会叠）。矩阵横竖共用，所以两条下限各按 `Layout` 走
+（`matrix_size` / `draw_matrix` / `matrix_cells` 因此都要传 `Layout`）。预览示例里有 `matrix-horizontal` /
+`matrix-vertical` 两个场景（矩阵那个带一个「造」角标，竖排那屏里还有一条 12 字的候选）用来看这两条规则。
+网格下固定留一行信息（被截断的高亮候选全文、译文、页码）。
+（早期那套「列宽由帧给 `column_ems`、滚动时不跳宽」的设计已随 `Frame::column_ems` 一起删掉——没有壳在用它。）
+
+底部那一行（`Frame::tip` + `Frame::footer`）：**左侧翻译 Tip、右侧页码**，由 `Renderer::bottom_line_height` /
+`draw_bottom_line` 统一画，竖排 / 横排 / 矩阵三条路都走它（矩阵原来那行「被截断候选的全文 + 译文」被它取代）。
+页码一直显示（只有一页也是 `1/1`，由壳决定内容），颜色用候选角标那一档（`colors.badge`，原来那档太浅）。
+Tip 是 `Vec<TipSegment>`（文本 + 深浅 + 是否斜体）：词性、释义之间的分隔符、读音括号统一走
+[`Tone::TranslateMeta`]（词性再叠斜体；**暂时**统一 `colors.translate_meta` = `#333333`，主题环节再设计），
+释义按词条 `learned` 取 `colors.translate_fresh`（缺省 `#ff7f27`）或 `colors.translate_learned`（缺省 `#333333`）。
+斜体要真的斜得有斜体字面：`fonts/windows.rs` 因此补了 `segoeuii.ttf` / `ariali.ttf`
+（微软雅黑没有斜体面，只请求 `Style::Italic` 会回落到正体）。Tip 放不下时截断加「…」（窗口宽度不为它撑大）。
 
 自绘渲染器：候选窗一帧 + 主题 → 预乘 RGBA 位图，tiny-skia 栅格 + cosmic-text 文字（fontdb 按清单只加载几个字体文件、不扫系统），
 自己解析 `trak` 字距表、按主题 gamma 加深笔画；配色只有一套（`Theme::new()` / `Palette::new()`，浅色单套，不再分深浅；拼音串与候选项序号是纯黑，页码仍是弱化的灰）；
@@ -206,6 +267,36 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 **高亮条移动动画**：`Frame::highlight_animation`（`HighlightAnimation`，起点矩形 + 进度 0..=1）让渲染器从起点矩形 lerp 到目标行矩形
 （`frame/highlight/rect.rs` 的 `HighlightRect`，内容区坐标，`HighlightRect::lerp`）；没有它就画在高亮行。三种布局都先把各行 / 各格的高亮矩形量好再把条子画在文字之前，
 并把这份矩形随 `Rendered::highlight_rects` 交给壳（壳连按方向键时按当前视觉位置续滑）。纯展示，不影响排序与按键。
+壳侧起不起滑动由 `ui/candidates/mod.rs::plan_slide` 判：高亮变了、且「内容没变」才从上一格续滑。**「内容没变」里不比
+翻译 Tip**——Tip 显示的就是高亮候选的译文（壳每帧跟着高亮重算），拿它判断会让「挪到有译文的候选」统统被当成内容变化、
+滑动被清掉，真机表现是「一部分候选之间有动画、一部分没有」。
+
+**展开（Tab）的过渡**由壳做（`ui/candidates/mod.rs`）：渲染器提供一个纯位图工具 `clip_pixmap`（按左上角裁 / 补透明）。
+壳在 300 ms 里把「内容尺寸」从切换前插值到切换后（`transition_frame`），每帧把渲染结果裁到这一块再贴出去，整张的额外不透明度走
+`UpdateLayeredWindow` 的 `SourceConstantAlpha`（`ui/layered::present` 因此多一个 `alpha` 参数，从 170 淡入到 255）。
+**位图不缩放**——内容是逐步露出来，字始终按最终字号栅格化，不会糊。触发条件是 `RenderData.columns` 由 0 变成非 0
+（Tab 展开；释义列表临时收起也走这条），起点取上一帧真正贴出去的尺寸（`last_content`）；定时器与高亮滑动共用
+（`SLIDE_TIMER_ID` / 16 ms），两个动画都走完才 `stop_animation`；起止各留一行 `info` 日志（含帧数），排查这类问题很有用。
+
+**收起方向没有过渡，是试过之后放弃的**（`transition_plan` 里只认 `columns` 0 → 非 0，注释里写了原因）。踩过的三条：
+
+1. **`SlidePlan::Clear` 只停滑动**，不能顺手停过渡：Tab 换内容时 `plan_slide` 判的正是 `Clear`，早期在这里清掉过渡 → 完全没有动画。
+2. **「旧的那一屏」在整段过渡里必须是切换前那一张**，不能每帧更新成这一帧的渲染结果——否则从第二帧起旧新是同一张，
+   合成的永远是最终样子（展开靠画布长大所以不暴露，收起一暴露就是「一帧跳过去」）。
+3. **分层窗口「缩小时不一定立刻重画」没法稳定绕开**：试过交叉淡化 + 把旧屏裁到这一帧的尺寸 + 固定画布（不缩窗口，
+   把缩小画在画布内部），真机上收起方向始终看不出变化。这条按决定放弃，只保留展开。
+   要再试：把 `transition_plan` 的 `expanding` 换回 `switched`，渲染器里那两个工具（`cross_fade` / `transition_pixmap`）
+   与壳里的「上一帧位图」缓存（`last_pixmap`）都在 git 历史里。
+
+底部那一行（Tip + 页码）的**基准三处布局统一**：竖排 / 横排 / 矩阵都画在「最后一行的底边 + 一个行内留白」处
+（矩阵原来多算了 `row_padding / 2`、横排多算了一个 `row_padding`），展开 / 收起切换时 Tip 不会上下跳那几像素。
+
+**缩放只有一个倍数**：渲染器只认「点 → 像素」一个 `scale`，主题里所有长度（字号、留白、间距、圆角、阴影）都乘它。
+所以壳的滚轮缩放不用改渲染器：候选窗把缩放的倍数折进传给 painter 的 DPI（`ui/candidates/mod.rs::effective_dpi` =
+显示器 DPI × `1.2^级数`），框、字、留白、阴影就一起变。级数存的是整数，上去再下来精确回 100%；`hide()` 里归零
+（窗口一关就回 100%，与「收起态宽度」一样属于这次弹窗的临时状态）。两处随之放宽：`ui/painter::scale` 不再拿 96 当下限
+（缩小时倍数小于 1），`preferred_size` 里竖排的最小宽度改成按点算（`m.px(theme.min_width_pixels)`，原来是
+`min_width_pixels / scale`，缩放时会朝反方向跑）。
 
 ## crates/cloudime-update
 
@@ -255,6 +346,18 @@ Server 装配直接退出，表现成「装完打不出候选、按键没反应�
 是被当修饰键用的（`held_as_modifier`），抬起不算单击；下一次切换键抬起时清掉这个标记；
 系统 Ctrl + Space（「输入法/非输入法切换」）翻的「输入法开 / 关」compartment（`com/mode/sink.rs`）关 = **禁用**、开 = 回到禁用前的中 / 英，
 我们切状态时把开关写成一致（`refresh_mode_indicator`：`open = !disabled`）；开关一变也作废被截走 Space 的那次「单击 Ctrl」。
+**「不处于输入状态时自动禁用输入法」**（`[debugging] auto_disable_without_text_input`，缺省关）：Server 把开关随
+`InputSettings` 下发给 DLL，判断与动作都在 DLL（只有它拿得到 TSF 的焦点）。`com/context.rs::in_text_input` 看本线程
+有没有文本焦点（`ITfThreadMgr::GetFocus`）以及那个上下文有没有被标成 `EMPTYCONTEXT` / `KEYBOARD_DISABLED`
+（只读视图、密码框），不在就按「禁用」走、回到文本区域再回到原来的中 / 英（`ModeState::resume_mode` 记着）——
+走的是与系统 Ctrl + Space **同一条路**（`follow_system_disabled`：落定拼音、改模式、报给 Server），
+所以按键放行、语言栏图标「禁」、Server 收起状态条都自动对上。
+
+**但它刻意不写系统那条「输入法开 / 关」compartment**（`refresh_mode_indicator` 里用 `auto_disabled` 拦掉）：
+2026-10-07 真机上先按「写 compartment」实现，结果**禁用之后回不来**——写关之后系统不再把文档焦点给文本服务，
+`ITfThreadMgr::GetFocus` 也拿不到东西，焦点回到文本区域时我们收不到任何恢复的依据。只在本进程里按禁用走就没这个问题，
+系统状态（别的输入法、Ctrl + Space）也不受影响。判定挂在轮询定时器那一拍（约 320 ms，见 `com/poll/mod.rs`），
+改设置同样在下一拍生效。
 禁用 = 完全不接管（`would_eat` 直接放行）、悬浮状态栏收起（Server `reconcile_status` 只在 `ime_active && !disabled` 时显示）、
 任务栏图标用 `mode/off-*.alpha`（`icon.rs` 的 `Glyph::Off`）。Caps Lock 亮着时单击 Shift 会先 `SendInput` 补一次 Caps Lock 清掉锁定、再切英文。
 内置热键（固定，不落配置）：`Shift + Space` 翻全角 / 半角（DLL 在 `OnTestKeyDown` / `OnKeyDown` 里拦，发 `IndicatorCommand::ToggleCharWidthType`）、
@@ -267,15 +370,19 @@ Server 装配直接退出，表现成「装完打不出候选、按键没反应�
 对应 `[candidate]`（本地整句模型开关、排布单选、个数滑轨（右侧跟一个当前值数字）、联想候选项目上限滑轨 0–4、三个「字体…」按钮弹系统字体对话框 `font_dialog.rs`、
 序号样式下拉、最小宽度、展示更多候选项、按程序隐藏的名单（下面每行一个 2 列 `Grid`——`Star` 列放程序名、「删除」按钮放第二列，外壳用 `controls::scroll_list` 卡 5 行，多了自己滚动））；「短语」页在 `pages/phrase.rs`（顶部「启用软件自带短语」开关；列表每行是一个 5 列 `Grid`——短语内容（`Star` 列，`Wrap` + `max_lines(3)` + 省略号）/ 候选内容 / 触发字母串 / 位置 / 编辑·删除两个按钮，列宽全部钉死（含操作列，否则表头那行没有按钮、`Star` 列会多占一截导致表头与数据行错位）；表单 + 列表读写安装目录 `Phrases\Phrase.db` 的 `user` 表）；
 「调试」页在 `pages/debugging.rs`：**原「统计」页整页搬来的输入统计面板**（末尾是「数据与组件」说明）与紧随其后的 `[debugging]` 自动隐藏开关、
-原来「高级」页的数据 / 日志入口（打开数据目录 / 打开日志目录 / 打包日志到桌面 / 清空输入日志四个按钮一行）与项目 GitHub 页面、详细日志、学习输入习惯、记录输入日志。
+原来「高级」页的数据 / 日志入口（打开数据目录 / 打开日志目录 / 打包日志到桌面 / 清空输入日志四个按钮一行）与项目 GitHub 页面 / 帮助手册两个按钮一行、详细日志、学习输入习惯、记录输入日志。
+「帮助手册」（`Message::OpenTutorial`）用系统默认程序打开随包的 `tutorial.md`（`component.rs::tutorial_path` = `bundled_root()/tutorial.md`，走 `controls::open_document`；
+文件不在只记一条日志）。`open_document` 先用 `AssocQueryStringW` 问这个扩展名有没有默认打开方式（只问长度：`pszout` 给 null 时它把需要的大小写回 `size`，
+没关联为 0），**没有就用 `notepad.exe` 打开**——`.md` 在很多机器上没关联，不这样会先弹「你要如何打开这个文件？」。
 「通用」页已删（`Shift` + 字母固定进组句，见 `dispatch/key/input.rs::apply_chinese`：字母进缓冲区、`Caps Lock` 亮着的仍直通），
 「统计」与「高级」两页并进「调试」；「关于」页已整体删除（版本在「数据与组件」里仍有一份，检查更新只剩 Server 侧（查并写 `update.json`，界面上不再提示），许可与数据署名看 `LICENSE` 与 `docs/design/landscape.md`）。
 设置窗口的标题栏图标走 `ViewContext::window_visuals(WindowVisuals::new().icon(path))`（`component.rs::window_icon`）——WinUI 3 不会自动取 exe 里的图标资源，必须显式 `AppWindow.SetIcon`，而那个接口只收 `&'static str`，所以算一次「exe 旁 `cloudime.ico`」的绝对路径再 `Box::leak`；装机包由 `cloudime.iss` 装这份 ico，开发时 `settings/build.rs` 往 exe 旁拷一份。
 设置窗口打开时的客户区写死 `WINDOW_CLIENT_SIZE`（`component.rs`：本机系统默认 1912×1028 的「宽取 2/3、高不变」= 1275×1028），再用 `clamp_to_work_area` 夹进主显示器工作区，小屏不顶出屏幕。**这个尺寸必须在第一次 publication 里就给具体值**：框架是「建窗 → 应用 `WindowVisuals` → `Activate`（显示）」三步，晚一步（让窗口先按系统默认显示、再靠 `on_window_size` 缩）用户就会看到「先宽后窄」闪一下；而那一刻窗口还没建出来（第一次 `view` 时枚举本进程窗口，一个都没有），量不到系统默认值，所以只能写死。`client_size` 收 DIP，框架自己按窗口 DPI 换算成像素。
 窗口**位置**居中走同文件另一个法子：框架的 `WindowVisuals` 没有位置，等它再到组件里跑一趟（下一次 `view`）窗口已经显示了，挪过去会看到「先左后中」闪一下（实测约 2 帧）。所以 `create` 里装一个**本线程的 CBT 钩子**（`SetWindowsHookExW(WH_CBT, …, GetCurrentThreadId())`，本进程自己的窗口、钩子过程不必进 DLL）：`HCBT_ACTIVATE` 在窗口真正显示**之前**同步回调，在那里 `SetWindowPos` 到所在显示器工作区正中就看不到闪动；`view` 里还留一条「按 pid 找窗口再挪」的兜底（`center_window_once`，`CENTERED` 一次性开关）。
 
-托盘「中 / 英」图标的右键菜单（`tsf/src/com/mode/menu.rs`，`TrackPopupMenuEx` 挂输入框所在窗口）固定四项、不再切中英：
-灰显的「云朵输入法」标题、分隔线、「设置」（`IndicatorCommand::OpenSettings`）、「重启输入法服务」（`IndicatorCommand::RestartServer`）。
+托盘「中 / 英」图标的右键菜单（`tsf/src/com/mode/menu.rs`，`TrackPopupMenuEx` 挂输入框所在窗口）固定几项、不再切中英：灰显的「云朵输入法」标题、分隔线、「设置」（`IndicatorCommand::OpenSettings`）、「查看帮助手册」（就地 `ShellExecuteW` 打开与 DLL 同目录的
+`tutorial.md`，不走 Server——那要给协议加枚举变体、还要升版本重装 DLL；`AssocQueryStringW` 问到这个扩展名没有默认打开方式时改用
+`notepad.exe`）、「重启输入法服务」（`IndicatorCommand::RestartServer`）。
 DLL 只把选中的命令发给 Server（`com/service/menu.rs::show_indicator_menu`），原菜单上的中 / 英、全角标点与「有新版本」入口一并去掉；
 协议里 `IndicatorState` / `ModeSync.indicator` / `IndicatorCommand::OpenDownload` 都保留，Server 仍算 `update_available`，只是界面上没有入口。
 「重启输入法服务」在 Server（`dispatch/status/mod.rs::handle_indicator`）：起一个新实例（`current_exe()` + `--wait-pid <本进程 pid>` +
@@ -335,11 +442,82 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 启动时工作目录设成 `tools\`：**控制台程序**（PE 子系统 3 的 exe、`.bat` / `.cmd`）用 `cmd /k` 起——程序跑完控制台留着，看得见输出、还能接着敲命令（`cwt.exe` 不给参数只打用法，直接起会一闪而过）；窗口程序直接起。
 「特殊字符」按钮起 exe 旁的 `SpecialSymbolsInserter.exe`（`ui/mod.rs::open_spec_chars`）：随安装包带的 VFB 成品、装在 `{app}` 根目录，自己画成置顶且不抢焦点的窗口（`WS_EX_NOACTIVATE`），点字符用 `SendInput` + `KEYEVENTF_UNICODE` 注入当前输入框，右键复制到剪贴板。
 
+**状态切换提示**（`server/src/ui/status_tip/`，`[input] show_status_change_tip` 缺省开）：中 / 英、Caps Lock、
+全 / 半角、简 / 繁、中文 / 西文标点任一变了，就在输入光标附近弹一个停留 1 秒的小条 —— 样式与悬浮状态条同一套图标，
+只取排布表的前四个（`ui/status/mod.rs::StatusIcons`，`TIP_BUTTONS = 4`，`Arrangement` 只在本模块可见，提示窗经它拿图标）；
+`WS_EX_TRANSPARENT` 点不着（鼠标穿透到下面的应用）、`WS_EX_NOACTIVATE` 不抢焦点，位置贴光标下方、放不下放上方（`place`，
+比候选窗那套简单：不用避让高亮行）。触发在 Router（`dispatch/status/mod.rs::check_status_tip`）：与 `reconcile_status` 分开，
+只在**用户切状态**的几条路（`handle_mode_changed`、`handle_status_event`（状态条三格与两个内置热键都汇到这里）、每拍 `SyncMode`）上调，
+配置热加载**不**走它（改设置不该弹提示）；比较 `TipState`（中英 + Caps + 全半角 + 简繁 + 当前模式的标点），第一次观察只记不弹。
+只在 `ime_active && !mode.disabled() && in_text_input` 且拿到过光标矩形时弹 —— 「在不在输入状态」与 Caps 都由 DLL 每拍
+`SyncMode` 带上来（`ClientMessage::SyncMode` 的 `in_text_input` / `caps`，v17 加；`in_text_input`：`ITfThreadMgr::GetFocus`
+拿不到文档、或上下文被标成 `EMPTYCONTEXT` / `KEYBOARD_DISABLED` 都算不在），因为 Caps 的按键根本不经过 Server。
+定位用最近一次的光标矩形（`Router::last_caret`，`position_candidates` 里记，组句结束后仍留着）。
+
 候选窗（`server/src/ui/candidates/`）只在高亮移动时做动画：方向键页内挪高亮、且行内容与拼音行都没变时，`set_content` 按
 `Rendered::highlight_rects` 从「上一段的当前视觉矩形」或「上一高亮行矩形」起滑（连按是连续续滑）；高亮没变的新帧（重排、
 异步编辑会话补报的组句矩形）不打断正在跑的动画；翻页 / 新查询 / 隐藏直接画或取消。窗口过程按 16 ms 的 `WM_TIMER` 算进度原地重贴，
 约 150 ms 的 cubic ease-out 后收尾。
 窗口过程按 HWND 从 UI 线程的表里找回窗口（`attach`）。纯展示，不改窗口位置大小、不涉及协议。
+
+「更多候选项」（`Router::show_more`，组句里 `Tab` 切、只活在一次组句里，`recompose` 收组句时清）：展开后一页从
+`candidate_count`（5–9）变成**一整屏** `5 × candidate_count`（`Router::page_size`），`CandidateLayout::set_page_size`
+就地换页大小；帧里给 `columns`（竖排 5 列、横排 `candidate_count` 列），渲染器见到 `columns > 0` 就走矩阵那条路
+（`draw_matrix`），不再看竖排 / 横排——「竖排展开成 5 列」与「横排展开成 5 行」只差 `columns` 取谁。**每格宽度就是
+「收起时那条高亮条的宽度」**：壳侧 `ui/candidates` 在收起态记住 `highlight_rects` 里高亮那条的宽，随渲染帧的
+`min_cell_width` 下发（窗口隐藏时作废）；比它还长的候选截尾加「…」，短的原样留白，候选不够一屏时不补空列。
+还没有这个宽度时（这次组句还没画过收起态）退回「一屏里最长的候选」并封顶 `MAX_CELL_EMS`。
+序号在 `RenderData::set` 里按 `columns > 0` 清空（数字键那时是跳页、不再选词），角标照旧。展开态的方向键在网格里走
+（`Router::move_highlight_in_grid`：上下换行、左右不越行），拼音光标改用 `[` `]`（`input.rs::apply_printable` 里
+先于「上屏候选 + 上屏标点」那条路处理），数字 `1`–`9` / `0` 跳到第 1–9 / 10 页（`goto_page`，越界夹到最后一页），
+`Ctrl + 数字` 不杀词、原样交还应用。
+
+候选窗的鼠标（`ui/candidates/` 的 `WM_MOUSEMOVE` / `WM_LBUTTONDOWN` / `WM_RBUTTONDOWN` / `WM_MBUTTONDOWN` / `WM_MOUSEWHEEL`）：`redraw` 记下阴影留白
+（内容区坐标 ↔ 客户区坐标），`cell_at` 拿 `last_rects` 命中有哪一格（两种排布都逐行 / 逐项给了矩形，所以**收起态也认单击**）；
+单击发 `CandidateEvent::Commit`，悬停发 `CandidateEvent::Hover`、鼠标移出候选窗发 `HoverLeft`（`TrackMouseEvent` 的
+`TME_LEAVE`），右键发 `Translate(Option<usize>)`，中键发 `Speak`，滚轮发 `Page(±1)`——两种状态都上报（收起态也跟手），
+都走 UI 线程 → 工人线程的 `Work::Candidate`，与状态条同一条路。滚轮翻页走 `Router::scroll`（不是键盘那条 `page`）：
+**只换这一页的内容，高亮留在窗口同一格**（原来第几格翻完还第几格，最后一页不满时格号夹到末尾），与「编辑拼音不把高亮
+拉回页首」同一个意思。
+`Router::handle_candidate_event` 里悬停直接挪高亮，并把鼠标指的那一格记进 `Router::hover_cell`；**它指的那一格又正好
+是高亮时**，`recompose` 不把高亮拉回页首（否则每敲一键高亮条都会从页首滑到鼠标那儿），鼠标移出候选窗、组句结束或
+窗口收起才清掉。**上屏要等 DLL**：候选窗在 Server 手里、收不到按键，所以文本先攒进 `Router::pending_commit`，DLL 下一拍
+`Poll`（组句中 80 ms 一拍）用 `ServerMessage::Update::commit` 带回去，DLL 侧 `apply_poll_commit` 再走一次编辑会话落进
+文档。老 DLL（协议 < `CANDIDATE_CLICK_SINCE`）认不出这段文本却又会跟着清组句，所以 Server 见到老协议直接不认
+这一下点击（`supports_candidate_click`）。协议因此从 v15 升到 v16。
+
+翻译 Tip（`dispatch/translate/`，配置 `[translate]`）：`Translate` 持有清单、打开着的词典（`.qj` / `.db`）与学习库
+（`%APPDATA%\CloudIME\translate.db`），`configure` 挂在配置热加载那条路上（`reload::apply_config`）——换词典、
+「重置学习内容」（`[translate] reset_counter` 变了就 `Learning::reset`）都在这里落地；学习库只有 Server 一个写入者，
+设置程序只改配置文件，所以不用抢锁、也不会被内存里的旧值盖回去。`self_drawn_frame` 给自绘帧补 `tip`
+（只查**高亮候选**这一条，`Router::highlighted_text`）或多释义选择时的 `tip_choices`（`current_frame` 发给 DLL 的那份不带）。
+按键在 `input.rs`：`Ctrl + 反引号`（`codes::BACKQUOTE = 0xC0`，DLL 侧要放行所以 `is_ctrl_command_key` 里加了它）查释义，
+一条就 `Engine::commit_translation` 上屏、多条进 `begin_choices`；选择态下只有数字与 Esc 有效（`apply_key` 最前面分流到
+`apply_choice_key`）。Core 的 `commit_translation` 只把**落进文档 / 日志 / 历史的文本**换成译文，拼音消耗、学习、
+个人 n-gram、自动造词仍按候选走（`InputSource::Translation` 在评测里不计分）。
+
+**发音**（`speech`，`Shift + 反引号` 与候选窗**鼠标中键**，`Router::speak`）：一条释义才念（`single_sense`），多条要么进
+选择界面后念高亮那条（`apply_choice_key` / 选择界面里的中键）、要么不念；没有译文没动作。开着 `[translate] enabled`
+且组句时这一键**一律吃掉**（`Effect::Navigated`，不再输入 `~`），没在组句 / 关掉开关时不认它、照旧打 `~`；中键在
+关掉开关时也不出声。
+语音走 Windows 的 SAPI（`ISpVoice`，「讲述人」念东西用的也是它）：`windows` crate 只生成接口，coclass GUID
+（`CLSID_SpVoice` / `CLSID_SpObjectTokenCategory`）、`SPCAT_VOICES`、`SPF_ASYNC | SPF_PURGEBEFORESPEAK` 都得自己写；
+声线按要念的文本认语言（汉字 / 假名 → `0x804`，字母 → `0x409`），COM 对象绑线程所以用 `thread_local` 留一份、
+`SetVoice` 按语言去重，`Speak` 异步 + 「新的顶掉旧的」不挡消息循环，念不出来只 `warn`（绝不影响打字）。
+测试里 `emit` 换成记下文本（`take_recorded`），不真出声、也不要求机器有音频设备。
+鼠标**右键**单击候选走的是同一个 `Router::translate_action`（结果 `TranslateAction::{Commit(Option<String>), Choosing, Nothing}`：
+按键那条路把 `Commit` 回成 `Effect::Changed`，鼠标那条路攒进 `pending_commit` 等下一拍 `Poll` 带走），
+只在 `[translate] enabled` 开着时响应。
+多释义选择（`Translate::choices`，`Choices { index, word, senses, highlight }`）：自绘帧临时变成「顶部一行词条 +
+下面每行一条释义」，**不画页码**（壳按 `tip_choices` 去掉底部那一行）、**展开态（Tab）下临时收回单列 / 单行**
+（`frame.columns = 0`，退出后 `grid_columns()` 自然恢复），并且**有高亮条**：`highlight` 是「第几条释义」，
+鼠标悬停挪它（`set_choice_highlight`）、单击选那一条上屏（与按它的数字键同一条路 `choose_sense`），
+方向键也挪它（`move_choice_highlight`；这一屏就一列 / 一行，四个方向都当上一条 / 下一条）、空格选高亮那条
+（`codes::SPACE`），数字键与 Esc 照旧；`Shift + 反引号` 在这一屏里念高亮那条（**不选、不退出**）；
+这一屏是纯状态改动，动画走候选窗那一套（`Effect::Navigated`
+之后照样 `reconcile_candidates(self_drawn_frame())`）；选择界面开着时**不重排**（`rescore` 那边跳过，
+否则 `Choices.index` 这个布局下标会对到别的候选上）。**右键（`Translate`，点在窗口任何位置都上报，
+没点中格子是 `None`）= `Esc` 取消**。不在选择界面时右键只认点中格子的那一下（`Translate(Some(index))`）。
 
 TSF 原有数字 / OEM 标点 / 空格键码按当前布局用 `ToUnicodeEx` 解析（bit 2 避免改变键盘状态），
 仅接受单个非代理项 UTF-16 单元。字母、小键盘和 AltGr 处理不变，不保证组合音符输入。
@@ -394,6 +572,9 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
 - `rehead dict|lm|model <输入…>`：把改名前的 `.qj`（魔数 `QINGJIAN`）就地改成当前魔数 `CLOUDIME`，只改头 8 字节。
   改之前按容器完整校验一遍（版本、分节表、`META`）、改完再开一遍，坏文件原样报错不碰，已是新魔数的跳过；
   `tools/release/data-bundle.sh` 发包前拿同一套魔数当门禁，用法见 `docs/notes/release.md`「产品数据从哪来」。
+
+`glossary-db`：把青简那套释义表 `.qj` 转成翻译 Tip 用的 `.db`（总表 `words` + 副表 `contents`）：中文词与译词照搬（一个词几条译词就写几条记录），拼音与首字母从 `--word-bank` 指的词库查（云朵 TSV / `.db` / `.qj` 都认，装机目录的 `WordBank\Dict.db` 直接就行），查不到的留空；`--out` 给目录就放进去、缺省与输入同目录。写完用读端重新打开核对词条数 / 译词数，对不上报错。
+用法：`cargo run --release -p cloudime-dict-convert -- glossary-db LocalDictionary/glossary-en.qj --word-bank WordBank/Dict.db --out LocalDictionary`。
 
 ## apps/windows/tools/cloudime-wordbank-transformer
 

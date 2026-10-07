@@ -36,8 +36,24 @@ const INDEX_GAP: f32 = 3.0;
 /// 横排时高亮底色在候选两侧多出的宽度（点）。
 const HIGHLIGHT_INSET: f32 = 5.0;
 
-/// 候选右侧来源角标与候选格右边缘之间的间距（点）。
+/// 候选右侧来源角标与候选格右边缘之间的间距（点）。竖排（角标在自己的列里）用它；
+/// 横排改用 [`HORIZONTAL_BADGE_GAP_EMS`] 个候选字宽。
 const BADGE_GAP: f32 = 4.0;
+
+/// 量「一个候选字有多宽」用的样字：一个汉字 ≈ 一个 em。
+const SINGLE_CHAR: &str = "国";
+
+/// 量「一个角标字有多宽」用的样字（角标都是「短 / 句 / 造」这类单个汉字）。
+const BADGE_CHAR: &str = "造";
+
+/// 横排里候选词与来源角标之间的最小间隔（字宽数）。
+const HORIZONTAL_BADGE_GAP_EMS: f32 = 2.0;
+
+/// 横排展开成网格时每格最小宽度里的候选字宽数（另加角标宽度）。
+const HORIZONTAL_CELL_MIN_EMS: f32 = 6.0;
+
+/// 竖排展开成网格时，最长候选之外还要多留的候选字宽数（另加一个角标字宽）。
+const VERTICAL_CELL_MIN_EMS: f32 = 2.0;
 
 /// 光学字号（点）：20 pt 以下系统给字体用的就是这一档（调研期在 macOS 上量的）。
 const OPTICAL_SIZE: f32 = 17.0;
@@ -104,10 +120,18 @@ impl Metrics<'_> {
             .with_family(self.theme.index_family.as_ref())
     }
 
-    /// 页码等页脚小字：与序号同一套字体，但保持弱化的颜色（序号改纯黑后别把页码也带亮）。
+    /// 页码等页脚小字：跟着候选角标同一个颜色（原来的灰太浅，看不清）。
     fn footer_style(&self) -> TextStyle {
-        self.style(self.theme.index_font, self.theme.colors.footer)
+        self.style(self.theme.index_font, self.theme.colors.badge)
             .with_family(self.theme.index_family.as_ref())
+    }
+
+    /// 翻译 Tip 的一段：字族 / 字号来自 `[candidate] translate_font`，`italic` 给词性用。
+    pub(super) fn translate_style(&self, color: Color, italic: bool) -> TextStyle {
+        let style = self
+            .style(self.theme.translate_font, color)
+            .with_family(self.theme.translate_family.as_ref());
+        if italic { style.italic() } else { style }
     }
 
     /// 候选右侧来源角标：与序号同一套字体，固定浅灰。
@@ -121,6 +145,9 @@ impl Metrics<'_> {
             Tone::Gloss => self.theme.colors.gloss,
             Tone::Fresh => self.theme.colors.fresh,
             Tone::Faint => self.theme.colors.pos,
+            Tone::TranslateMeta => self.theme.colors.translate_meta,
+            Tone::TranslateFresh => self.theme.colors.translate_fresh,
+            Tone::TranslateLearned => self.theme.colors.translate_learned,
         }
     }
 
@@ -175,15 +202,25 @@ impl Renderer {
         );
         let mut y = margin + metrics.padding();
         y += self.draw_top_line(&mut canvas, frame, &metrics, margin, y);
-        let highlight_rects = match layout {
-            Layout::Vertical => {
-                self.draw_vertical(&mut canvas, frame, &metrics, margin, y, content_width)
-            }
-            Layout::Horizontal if frame.columns > 0 => {
-                self.draw_matrix(&mut canvas, frame, &metrics, margin, y, content_width)
-            }
-            Layout::Horizontal => {
-                self.draw_horizontal(&mut canvas, frame, &metrics, margin, y, content_width)
+        let highlight_rects = if frame.columns > 0 {
+            // 展开「更多候选项」：竖排 / 横排都走矩阵，一行 `columns` 格、按行优先铺开。
+            self.draw_matrix(
+                &mut canvas,
+                frame,
+                &metrics,
+                layout,
+                margin,
+                y,
+                content_width,
+            )
+        } else {
+            match layout {
+                Layout::Vertical => {
+                    self.draw_vertical(&mut canvas, frame, &metrics, margin, y, content_width)
+                }
+                Layout::Horizontal => {
+                    self.draw_horizontal(&mut canvas, frame, &metrics, margin, y, content_width)
+                }
             }
         };
         Ok(Rendered {
@@ -212,16 +249,21 @@ impl Renderer {
     /// 内容需要的像素宽高（不含阴影边）。
     fn preferred_size(&mut self, frame: &Frame, layout: Layout, m: &Metrics) -> (f32, f32) {
         let (top_width, top_height) = self.top_line_size(frame, m);
-        let (body_width, body_height) = match layout {
-            Layout::Vertical => self.vertical_size(frame, m),
-            Layout::Horizontal if frame.columns > 0 => self.matrix_size(frame, m),
-            Layout::Horizontal => self.horizontal_size(frame, m),
+        let (body_width, body_height) = if frame.columns > 0 {
+            self.matrix_size(frame, m, layout)
+        } else {
+            match layout {
+                Layout::Vertical => self.vertical_size(frame, m),
+                Layout::Horizontal => self.horizontal_size(frame, m),
+            }
         };
         let width = top_width.max(body_width) + m.padding() * 2.0;
-        // 竖排时候选都很短窗口会窄得难看，给个下限
-        let width = match layout {
-            Layout::Vertical => width.max(m.theme.min_width_pixels / m.scale),
-            Layout::Horizontal => width,
+        // 竖排时候选都很短窗口会窄得难看，给个下限；展开成矩阵后宽度由格子决定，不要再撑。
+        // 下限按**点**算（`min_width_pixels` 就是 100% 缩放下的点数），跟着 DPI 与滚轮缩放一起变。
+        let width = if matches!(layout, Layout::Vertical) && frame.columns == 0 {
+            width.max(m.px(m.theme.min_width_pixels))
+        } else {
+            width
         };
         (width, top_height + body_height + m.padding() * 2.0)
     }
@@ -253,24 +295,50 @@ impl Renderer {
         badge.map_or(0.0, |text| self.measure(text, &m.badge_style()).width)
     }
 
-    /// 把来源角标右对齐画在候选格内（`right` 是格子右边缘），与序号一样垂直居中；返回没画时格右边缘。
+    /// 一个候选字的宽度（点）。用来按「字宽」定间距 / 最小宽度：取一个汉字量，
+    /// 楷体 / 雅黑下一个汉字就是一个 em，横排的候选里也以汉字为主。
+    pub(super) fn char_width(&mut self, m: &Metrics) -> f32 {
+        self.measure(SINGLE_CHAR, &m.text_style()).width
+    }
+
+    /// 横排里候选词与来源角标之间的**最小**间隔：两个候选字宽（比原来的 4pt 宽得多，角标不贴词）。
+    /// 竖排的角标在自己的列里，仍用 [`BADGE_GAP`]。
+    pub(super) fn horizontal_badge_gap(&mut self, m: &Metrics) -> f32 {
+        HORIZONTAL_BADGE_GAP_EMS * self.char_width(m)
+    }
+
+    /// 横排展开成网格时每格的**最小**宽度：6 个候选字 + 角标宽度（角标不能把候选词挤没）。
+    pub(super) fn horizontal_min_cell_width(&mut self, m: &Metrics, badge_width: f32) -> f32 {
+        HORIZONTAL_CELL_MIN_EMS * self.char_width(m) + badge_width
+    }
+
+    /// 一个角标字的宽度（点）。竖排展开的最小宽度按它算：**不管这一屏有没有角标都算进去**。
+    pub(super) fn badge_char_width(&mut self, m: &Metrics) -> f32 {
+        self.measure(BADGE_CHAR, &m.badge_style()).width
+    }
+
+    /// 把来源角标画在 `left` 处（调用方定它在哪：竖排是「格右边缘往里让 `BADGE_GAP`」，
+    /// 横排是「候选文字右边再加 2 个字宽」），与序号一样垂直居中。
     pub(super) fn draw_badge(
         &mut self,
         canvas: &mut Canvas,
         m: &Metrics,
         badge: Option<&str>,
-        right: f32,
+        left: f32,
         top: f32,
-        text_height: f32,
-    ) -> f32 {
+    ) {
         let Some(text) = badge else {
-            return right;
+            return;
         };
         let style = m.badge_style();
-        let width = self.measure(text, &style).width;
-        let x = right - m.px(BADGE_GAP) - width;
-        self.draw_text(canvas, text, &style, x, top + m.index_offset(text_height));
-        x
+        let text_height = m.px(m.theme.text_font.line_height);
+        self.draw_text(
+            canvas,
+            text,
+            &style,
+            left,
+            top + m.index_offset(text_height),
+        );
     }
 
     /// 画高亮条。`rect` 用内容区坐标；`origin` 是内容区左上角在画布里的像素坐标，画前搬过去。
@@ -290,6 +358,53 @@ impl Renderer {
             m.corner_radius() / 2.0,
             m.theme.colors.highlight,
         );
+    }
+
+    /// 底部那一行（左侧翻译 Tip、右侧页码）要多高；两样都没有就是 `0`。
+    pub(super) fn bottom_line_height(&mut self, frame: &Frame, m: &Metrics) -> f32 {
+        if frame.tip.is_none() && frame.footer.is_none() {
+            return 0.0;
+        }
+        let mut height = m.px(m.theme.translate_font.line_height);
+        if let Some(footer) = frame.footer.as_deref() {
+            height = height.max(self.measure(footer, &m.footer_style()).height);
+        }
+        height + m.row_padding()
+    }
+
+    /// 画底部那一行：`y` 是行框顶边（内容区坐标），`content_width` 是内容区宽度。
+    /// 页码靠右、翻译 Tip 靠左，放不下就把 Tip 截断。
+    pub(super) fn draw_bottom_line(
+        &mut self,
+        canvas: &mut Canvas,
+        frame: &Frame,
+        m: &Metrics,
+        left: f32,
+        y: f32,
+        content_width: f32,
+    ) {
+        let right = left + content_width - m.padding();
+        let mut budget = right - left - m.padding() * 2.0;
+        if let Some(footer) = frame.footer.as_deref() {
+            let style = m.footer_style();
+            let size = self.measure(footer, &style);
+            self.draw_text(canvas, footer, &style, right - size.width, y);
+            budget -= size.width + m.column_gap();
+        }
+        let Some(segments) = frame.tip.as_deref() else {
+            return;
+        };
+        let mut x = left + m.padding();
+        for segment in segments {
+            if budget <= 0.0 {
+                break;
+            }
+            let style = m.translate_style(m.tone_color(segment.tone), segment.italic);
+            let (shown, _) = self.truncate(&segment.text, &style, budget);
+            let used = self.draw_text(canvas, &shown, &style, x, y);
+            x += used;
+            budget -= used;
+        }
     }
 }
 

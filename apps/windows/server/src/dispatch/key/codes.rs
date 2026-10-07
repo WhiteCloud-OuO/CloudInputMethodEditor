@@ -7,6 +7,9 @@ pub(crate) const TAB: u32 = 0x09;
 pub(crate) const RETURN: u32 = 0x0D;
 pub(crate) const ESCAPE: u32 = 0x1B;
 
+/// 空格：组句里选中高亮候选；多释义选择里选高亮那条译文。
+pub(crate) const SPACE: u32 = 0x20;
+
 /// Insert：上屏组句里已选的部分、丢掉未选的拼音。
 pub(crate) const INSERT: u32 = 0x2D;
 pub(crate) const PRIOR: u32 = 0x21;
@@ -21,6 +24,9 @@ pub(crate) const DOWN: u32 = 0x28;
 /// 主键盘 `-`（VK_OEM_MINUS）与 `=`（VK_OEM_PLUS）：固定的上一页 / 下一页。
 pub(crate) const OEM_MINUS: u32 = 0xBD;
 pub(crate) const OEM_PLUS: u32 = 0xBB;
+
+/// 主键盘的反引号（VK_OEM_3）：`Ctrl + 反引号` 上屏翻译 Tip 的译文。
+pub(crate) const BACKQUOTE: u32 = 0xC0;
 
 /// 固定的翻页键：主键盘 `-` 上一页、`=` 下一页；返回 -1 / +1。
 /// 只认**没按 Shift 的裸键**：`Shift + =` 是 `+`、`Shift + -` 是 `_`，属上档符号，不翻页。
@@ -41,6 +47,16 @@ pub(crate) fn digit(event: &KeyEvent) -> Option<usize> {
     match event.character {
         Some(c) => ('1'..='9').contains(&c).then(|| c as usize - '0' as usize),
         None => digit_key(event.virtual_key),
+    }
+}
+
+/// 敲出来是数字 0–9 的键（展开「更多候选项」时跳页用，`0` 表示第 10 页）：0 不在选词的 [`digit`] 里。
+pub(crate) fn page_digit(event: &KeyEvent) -> Option<usize> {
+    match event.character {
+        Some(c) => c.is_ascii_digit().then(|| c as usize - '0' as usize),
+        None => (0x30..=0x39)
+            .contains(&event.virtual_key)
+            .then(|| (event.virtual_key - 0x30) as usize),
     }
 }
 

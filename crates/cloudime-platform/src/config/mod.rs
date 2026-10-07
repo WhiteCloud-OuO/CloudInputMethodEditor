@@ -8,6 +8,7 @@ mod phrase;
 mod preedit_mode;
 mod status_bar;
 mod switch_key;
+mod translate;
 mod update;
 mod word_bank;
 
@@ -36,6 +37,7 @@ pub use phrase::PhraseConfig;
 pub use preedit_mode::PreeditMode;
 pub use status_bar::StatusBarConfig;
 pub use switch_key::{SwitchKey, SwitchKeys};
+pub use translate::{MAX_NEED_TIMES, MIN_NEED_TIMES, TranslateConfig};
 pub use update::{UpdateChannel, UpdateConfig};
 pub use word_bank::{DEFAULT_USER_WORD_BANK_FILE, WordBankConfig};
 
@@ -68,6 +70,9 @@ pub struct Config {
 
     /// 检查更新。
     pub update: UpdateConfig,
+
+    /// 本地词典的翻译 Tip。
+    pub translate: TranslateConfig,
 }
 
 /// 首次运行写出的模板：默认值全部列出并注释，用户改一处即可。
@@ -86,13 +91,15 @@ mixture_input = true
 full_half_punctuation_marks_toggle = "follow"
 # 数字后标点使用半角：23:06、2.36、25+9 里的标点保持半角
 use_half_wide_punctuation_marks_after_digital = true
+# 状态切换提示：中 / 英、大写锁定、全 / 半角、简 / 繁、中文 / 西文标点变化时，在输入光标附近弹一个停留 1 秒的提示条
+show_status_change_tip = true
 # 符号成对补全：敲左符号补上右符号、光标停在中间。勾选项数值相加 —— () 1、[] 2、{} 4、"" 8、
 # （） 16、【】 32、｛｝ 64、《》 128、“” 256、‘‘ 512；0 为关闭
 punctuation_marks_pairwise_completion = 0
 
 # 中文模式下的符号映射：勾选项数值相加，只做单键替换（敲下来的是这个键，就换成右边那个上屏）。
-# / → 、 1；小键盘 / → ÷ 2；小键盘 * → × 4；~ → ～ 8；· → ` 16。0 为全关
-punctuation_marks_mapping = 31
+# / → 、 1；小键盘 / → ÷ 2；小键盘 * → × 4；~ → ～ 8；· → ` 16。0 为全关（缺省全关）
+punctuation_marks_mapping = 0
 
 [candidate]
 # 使用本地整句模型（输入法内置）：消耗一点处理器与内存换更准的整句输入；关掉只用词库与短语匹配
@@ -103,13 +110,13 @@ candidate_arrangement_direction = "vertical"
 candidate_count = 9
 # 联想候选项目上限（0–4）：候选里「比读法更长的词」（联想）最多留几条；0 表示不显示联想候选。
 # 打得短（尤其单个字母）时联想候选会很多，把这个调小能让要选的字 / 词留在候选窗口里
-candidate_association_counts = 4
+candidate_association_counts = 2
 # 候选项序号样式：decimal 1.~9. / circled ①~⑨ / roman Ⅰ~Ⅸ / dingbat ❶~❾ / parenthesized ⑴~⑼
 item_number_style = "decimal"
 # 候选框最小宽度（物理像素，只在竖排时有效）
-candidate_box_minimum_width = 320
-# 展示更多候选项（打字时按 Tab）：功能暂未实现，先保留设置项
-show_more_candidate_items = true
+candidate_box_minimum_width = 180
+# 展示更多候选项（打字时按 Tab）：组句里 Tab 把候选窗展开成一整屏（竖排 5 列 / 横排 5 行）
+show_more_candidate_items = false
 # 在下列程序中不显示候选框：这些程序里输入法完全不接管、按键原样交给应用（写 exe 文件名，不区分大小写）
 program_list_of_hiding_candidate = []
 # 组句中的拼音显示在哪：both 行内和候选窗口 / inline 只在行内 / window 只在候选窗口（应用里不放 marked text）
@@ -122,11 +129,16 @@ size = 11
 
 [candidate.candidate_font]
 family = "微软雅黑"
-size = 14
+size = 13
 
 [candidate.item_number_font]
 family = "微软雅黑"
-size = 9
+size = 11
+
+# 翻译 Tip 的字体：候选窗底部那一行的左侧显示高亮候选在本地词典里的释义
+[candidate.translate_font]
+family = "微软雅黑"
+size = 11
 
 [general]
 # 中文模式下按住 Shift 敲的字母固定收进组句缓冲区按小写参与匹配（Cpan 与 cpan 一样能出「C盘」），
@@ -166,13 +178,26 @@ show_status_bar = true
 [debugging]
 # 自动隐藏悬浮工具栏（实验性功能）：开启后，前台是全屏应用（游戏 / 看视频）时收起；
 # 切到别的输入法、云朵输入法被禁用时始终收起，不受这一项影响。关掉后全屏时也不收起
-auto_hide_float_tool_bar = true
+auto_hide_float_tool_bar = false
+# 不处于输入状态时自动禁用输入法（实验性功能）：焦点不在可输入文本区域（只读视图、密码框、
+# 没有文本焦点）时自动禁用，回到文本区域再启用。用户手动按 Ctrl + Space 禁用的不受影响
+auto_disable_without_text_input = false
 
 [update]
 # 检查更新：每天向官网（cloudime.app）读一次版本索引，有新版在菜单与设置的「关于」页提示；请求不带任何标识，不自动下载安装
 check = true
 # 渠道：stable 只看正式版；beta 还会提示测试版（alpha / beta / rc）
 channel = "stable"
+
+[translate]
+# 启用翻译 Tip：候选窗底部那一行的左侧显示高亮候选在本地词典里的释义
+enabled = true
+# 本地词典：安装目录 LocalDictionary\ 下 dictionaries.list 里登记的文件名；空 = 没选，不显示 Tip
+dictionary = "glossary-en.db"
+# 学会所需上屏次数（3–10）：一个词条的译文上屏这么多次就算学会，Tip 的颜色跟着变
+need_times = 3
+# 「重置学习内容」每点一次加 1；Server 看到它变了就把选中词典的学习记录清空
+reset_counter = 0
 "#;
 
 impl Config {
@@ -347,6 +372,25 @@ mod tests {
         assert_eq!(config, Config::default());
     }
 
+    /// 装机默认值：这份是产品定的起点，改它要一起改模板与各分节的 `Default`（上一支测试盯着两者一致）。
+    #[test]
+    fn shipped_defaults_are_the_agreed_starting_point() {
+        let config = Config::default();
+        // 联想候选收紧到 2、候选框最小宽度 180、符号映射全关、Tab 展开更多候选默认关
+        assert_eq!(config.candidate.candidate_association_counts, 2);
+        assert_eq!(config.candidate.candidate_box_minimum_width, 180);
+        assert!(!config.candidate.show_more_candidate_items);
+        assert_eq!(config.input.punctuation_marks_mapping, 0);
+        assert!(config.input.punctuation_mapping().is_empty());
+        // 字体：候选 13pt、序号 11pt
+        assert_eq!(config.candidate.candidate_font.size, 13.0);
+        assert_eq!(config.candidate.item_number_font.size, 11.0);
+        // 全屏时不自动收起悬浮工具栏；翻译 Tip 默认选英文词典，重置计数从 0 开始
+        assert!(!config.debugging.auto_hide_float_tool_bar);
+        assert_eq!(config.translate.dictionary, "glossary-en.db");
+        assert_eq!(config.translate.reset_counter, 0);
+    }
+
     #[test]
     fn partial_file_keeps_other_defaults() {
         let config: Config =
@@ -477,7 +521,7 @@ mod tests {
         assert_eq!(config.candidate.pinyin_font.size, 12.0);
         assert_eq!(config.candidate.pinyin_font.family, "LXGW WenKai");
         // 没写的字体项按缺省
-        assert_eq!(config.candidate.candidate_font.size, 14.0);
+        assert_eq!(config.candidate.candidate_font.size, 13.0);
         assert_eq!(config.general.log_level, LogLevel::Info);
     }
 

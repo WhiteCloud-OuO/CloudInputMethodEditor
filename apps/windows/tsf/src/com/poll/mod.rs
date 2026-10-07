@@ -116,6 +116,8 @@ fn poll_once(context: &PollContext) {
     if !context.shared.composing() {
         if tick.is_multiple_of(MODE_SYNC_EVERY) && in_foreground(context) {
             sync_mode(context);
+            // 「不处于输入状态时自动禁用输入法」：跟着这一拍顺手看一眼焦点（改设置时也是这一拍生效）。
+            super::service::with_active(|service| service.sync_auto_disable());
         }
         return;
     }
@@ -125,10 +127,23 @@ fn poll_once(context: &PollContext) {
     let Some(client) = guard.as_mut() else {
         return;
     };
-    if let Err(error) = client.poll() {
-        log(&format!("重排轮询失败，断开，下一键重连: {error}"));
-        *guard = None;
-        context.shared.end_composing();
+    let reply = match client.poll() {
+        Ok(reply) => reply,
+        Err(error) => {
+            log(&format!("重排轮询失败，断开，下一键重连: {error}"));
+            *guard = None;
+            context.shared.end_composing();
+            return;
+        }
+    };
+    // 借出引擎的借用要先放掉：下面那个编辑会话会再用一次。
+    drop(guard);
+    // 鼠标点了 Server 自绘的候选窗：要上屏的文本搭这一拍 `Poll` 回来。候选窗收不到按键，
+    // 没有别的路能把它送进文档。
+    if reply.commit.is_some() {
+        super::service::with_active(|service| {
+            service.apply_poll_commit(&reply.frame, reply.commit.clone());
+        });
     }
 }
 
@@ -164,7 +179,10 @@ fn sync_mode(context: &PollContext) {
         super::service::on_reconnect_tick();
         return;
     };
-    let reply = match client.sync_mode() {
+    // 焦点状态（在不在可输入文本区域、Caps 亮不亮）顺路带给 Server：Server 侧的状态切换提示要用，
+    // 而 Caps 的按键根本不经过 Server。
+    let (in_text_input, caps) = super::service::text_focus_state();
+    let reply = match client.sync_mode(in_text_input, caps) {
         Ok(reply) => reply,
         Err(error) => {
             log(&format!("同步中英模式失败，断开，下一键重连: {error}"));

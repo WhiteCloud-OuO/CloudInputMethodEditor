@@ -11,6 +11,7 @@ mod reload;
 mod rescore;
 mod session;
 mod status;
+mod translate;
 
 use std::collections::HashMap;
 use std::path::PathBuf;
@@ -23,7 +24,7 @@ use cloudime_platform::protocol::{
     SessionId,
 };
 
-pub use self::candidates::{CandidateSink, NoopSink, RenderSettings};
+pub use self::candidates::{CandidateEvent, CandidateSink, NoopSink, RenderSettings};
 use self::composed::Composed;
 pub use self::config::RouterConfig;
 use self::reload::ConfigReload;
@@ -32,6 +33,7 @@ pub use self::rescore::find_model;
 use self::rescore::{ModelLoader, RescoreState};
 use self::session::SessionInfo;
 pub use self::status::{NoopStatusSink, StatusEvent, StatusSink, StatusView};
+use self::translate::Translate;
 
 /// 学习数据落盘间隔；Server 没有定时器，借消息节拍看时间。
 const LEARNING_FLUSH_INTERVAL: Duration = Duration::from_secs(60);
@@ -59,6 +61,13 @@ pub struct Router {
     /// 当前高亮候选在布局里的下标（跨页）。
     highlight: usize,
 
+    /// 展开「更多候选项」没有（组句里的 Tab 切）。只活在一次组句里：组句一结束就回 `false`。
+    show_more: bool,
+
+    /// 鼠标正指着哪一格候选（帧里的页内下标）。它指着的那一格又正好是高亮时，
+    /// 再编辑拼音不把高亮拉回页首（理由见 [`Router::recompose`]）。鼠标移出候选窗就清掉。
+    hover_cell: Option<usize>,
+
     /// 这轮查询里动过高亮：动过就不再拿重排结果换掉候选。
     navigated: bool,
 
@@ -80,6 +89,19 @@ pub struct Router {
     /// 当前输入法是不是云朵输入法：有 DLL 来取模式就是，切成别的输入法时收起。状态条只在这时显示；
     /// 应用退出不影响它，状态条是桌面常驻的。
     ime_active: bool,
+
+    /// 前台会话最近报来的「焦点在可输入文本区域里」（DLL 每拍 `SyncMode` 带上）：状态切换提示据此决定弹不弹。
+    in_text_input: bool,
+
+    /// 前台会话最近报来的 Caps Lock 亮灭（Caps 的按键不经过 Server，只能由 DLL 带上来）。
+    caps: bool,
+
+    /// 上次观察到的状态切换提示状态：任一状态（中 / 英、Caps、全 / 半角、简 / 繁、中 / 西文标点）变了才弹。
+    /// `None` 表示还没观察过（Server 刚起来不该冒一个提示）。
+    last_tip: Option<self::status::TipState>,
+
+    /// 最近一次拿到的光标矩形；组句结束后仍留着，状态切换提示贴它附近。
+    last_caret: Option<ScreenRect>,
 
     /// 聚焦会话最近报来的光标矩形；云联想异步到达时按它原地重摆候选窗口。
     last_rect: Option<ScreenRect>,
@@ -110,6 +132,13 @@ pub struct Router {
 
     /// 任务栏菜单点了「重启输入法服务」：`serve_pipe` 回完这条消息就退出，让新起的实例接管。
     restart_pending: bool,
+
+    /// 鼠标点了候选窗、这个会话的 DLL 还没取走的要上屏文本；下一次 `Poll` 用
+    /// `ServerMessage::Update::commit` 带回去（见 [`candidates::CandidateEvent`]）。
+    pending_commit: Option<String>,
+
+    /// 本地词典与翻译 Tip（候选窗底部那一行左侧）。
+    translate: Translate,
 }
 
 impl Router {
@@ -117,7 +146,7 @@ impl Router {
         let mut engine = engine;
         // 中文模式的符号映射缺省表在配置里（Core 自己缺省是空表），在这里接上，测试与正式跑的是同一条路
         engine.set_punctuation_mapping(config.punctuation_mapping.clone());
-        Self {
+        let mut router = Self {
             engine,
             config: RouterConfig {
                 page_size: config.page_size.max(1),
@@ -128,6 +157,8 @@ impl Router {
             composed: None,
             notice: None,
             highlight: 0,
+            show_more: false,
+            hover_cell: None,
             navigated: false,
             last_flush: Instant::now(),
             reload: None,
@@ -135,6 +166,10 @@ impl Router {
             status: Box::new(NoopStatusSink),
             mode: InputMode::default(),
             ime_active: false,
+            in_text_input: false,
+            caps: false,
+            last_tip: None,
+            last_caret: None,
             last_rect: None,
             last_shown: None,
             model_path: None,
@@ -145,7 +180,23 @@ impl Router {
             delete_before: 0,
             pending_close: None,
             restart_pending: false,
-        }
+            pending_commit: None,
+            // 测试里不碰用户目录里的 `translate.db`：学习库不开，Tip 一律按「没学会」上色
+            translate: if cfg!(test) {
+                Translate::without_learning()
+            } else {
+                Translate::new()
+            },
+        };
+        // 把当前状态先记成基线：之后第一次真的变了才弹提示（否则第一次切换总被当成基线吞掉）。
+        router.last_tip = Some(router.tip_state());
+        // 启动时也要走一遍本地词典（`apply_config` 那条路只在配置**变了**时才走：
+        // 少了这一句，Server 起来后要等到用户动一次设置才会加载词典）
+        router.translate.configure(
+            &router.config.translate_dictionary,
+            router.config.translate_reset_counter,
+        );
+        router
     }
 
     /// 下发给 DLL 的按键行为设置：`OpenSession` 的回包带一次，之后每拍 `SyncMode` 也跟着走，
@@ -166,6 +217,7 @@ impl Router {
             shift_letter_compose: true,
             full_width_chars: self.config.full_width_chars,
             raw_input,
+            auto_disable_without_text_input: self.config.auto_disable_without_text_input,
         }
     }
 

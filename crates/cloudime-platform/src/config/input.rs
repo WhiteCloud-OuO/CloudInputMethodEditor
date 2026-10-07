@@ -85,8 +85,8 @@ pub const PUNCTUATION_MAPPING_BITS: [(u32, &str, &str); 5] = [
     (16, "·", "`"),
 ];
 
-/// 符号映射缺省开哪几项：上面 5 项全开，与老配置里单键那几条一致。
-pub const DEFAULT_PUNCTUATION_MAPPING: u32 = 31;
+/// 符号映射的缺省位图。**缺省全关**（新的装机默认值）：要哪几项在「设置 → 输入 → 中文模式下符号映射」里勾。
+pub const DEFAULT_PUNCTUATION_MAPPING: u32 = 0;
 
 /// 简体 / 繁体输出。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -194,6 +194,10 @@ pub struct InputConfig {
 
     /// 数字后标点符号使用半角：`23:06`、`2.36`、`25+9` 里的标点保持半角。
     pub use_half_wide_punctuation_marks_after_digital: bool,
+
+    /// 状态切换提示：中 / 英、大写锁定、全 / 半角、简 / 繁、中文 / 西文标点变化时，
+    /// 在输入光标附近弹一个停留 1 秒的提示条（只在处于输入状态时弹）。
+    pub show_status_change_tip: bool,
 }
 
 impl Default for InputConfig {
@@ -207,6 +211,7 @@ impl Default for InputConfig {
             punctuation_marks_mapping: DEFAULT_PUNCTUATION_MAPPING,
             punctuation_marks_pairwise_completion: 0,
             use_half_wide_punctuation_marks_after_digital: true,
+            show_status_change_tip: true,
         }
     }
 }

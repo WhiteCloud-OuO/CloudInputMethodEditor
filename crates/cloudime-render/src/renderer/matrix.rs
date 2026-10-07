@@ -2,20 +2,16 @@
 //! 超宽的候选截尾加「…」；网格下面固定留一行信息：高亮候选被截断时的完整文本、它的译文，页码在行尾。
 //! 整个窗口的宽度只由列宽决定，信息行放不下的也截断——高亮怎么移、视口怎么滚，窗口都不跳。
 
-use super::{HIGHLIGHT_INSET, INDEX_GAP, Metrics, Renderer, highlight_rect};
+use super::{
+    BADGE_GAP, HIGHLIGHT_INSET, INDEX_GAP, Layout, Metrics, Renderer, VERTICAL_CELL_MIN_EMS,
+    highlight_rect,
+};
 use crate::canvas::Canvas;
-use crate::color::Color;
 use crate::frame::{Frame, HighlightRect};
 use crate::text::TextStyle;
 
 /// 帧没给列宽时，一格里候选词最多多宽（按候选字号的倍数）。
 const MAX_CELL_EMS: f32 = 4.0;
-
-/// 列宽在估出来的字宽之外再留一点（点）：估宽按整字算，字形实际会多出零点几个像素。
-const CELL_SLACK: f32 = 1.5;
-
-/// 信息行里完整文本与译文之间的间距（点）。
-const INFO_GAP: f32 = 10.0;
 
 const ELLIPSIS: &str = "…";
 
@@ -25,8 +21,11 @@ struct Cells {
 
     index_width: f32,
 
-    /// 每列一格的宽度（序号 + 间距 + 候选词）。
+    /// 每列一格的宽度（序号 + 间距 + 候选词）；展开「更多候选项」时每列一样宽。
     column_widths: Vec<f32>,
+
+    /// 实际用了几列：候选不够一屏时不留空列，窗口不会白宽一截。
+    columns: usize,
 
     row_height: f32,
 }
@@ -45,24 +44,26 @@ impl Cells {
 }
 
 impl Renderer {
-    pub(super) fn matrix_size(&mut self, frame: &Frame, m: &Metrics) -> (f32, f32) {
+    pub(super) fn matrix_size(&mut self, frame: &Frame, m: &Metrics, layout: Layout) -> (f32, f32) {
         if frame.rows.is_empty() {
             return (0.0, 0.0);
         }
-        let cells = self.matrix_cells(frame, m);
-        let grid_rows = frame.rows.len().div_ceil(frame.columns.max(1));
-        let info_height = m.annotation_style(m.theme.colors.gloss).line_height + m.row_padding();
+        let cells = self.matrix_cells(frame, m, layout);
+        let grid_rows = frame.rows.len().div_ceil(cells.columns);
+        let info_height = self.bottom_line_height(frame, m);
         (
             cells.width(m.column_gap()) + m.px(HIGHLIGHT_INSET) * 2.0,
             cells.row_height * grid_rows as f32 + info_height,
         )
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_matrix(
         &mut self,
         canvas: &mut Canvas,
         frame: &Frame,
         m: &Metrics,
+        layout: Layout,
         left: f32,
         y: f32,
         content_width: f32,
@@ -70,8 +71,8 @@ impl Renderer {
         if frame.rows.is_empty() {
             return Vec::new();
         }
-        let cells = self.matrix_cells(frame, m);
-        let columns = frame.columns.max(1);
+        let cells = self.matrix_cells(frame, m, layout);
+        let columns = cells.columns;
         let text_height = m.px(m.theme.text_font.line_height);
         let inset = m.px(HIGHLIGHT_INSET);
         let origin = left + m.padding() + inset;
@@ -98,10 +99,10 @@ impl Renderer {
             if text.is_empty() && row.index.is_empty() {
                 continue;
             }
-            let cell_width = cells.column_widths[i % columns];
             let x = origin + cells.offset(i % columns, m.column_gap());
             let row_y = y + cells.row_height * (i / columns) as f32;
             let top = row_y + m.row_padding();
+            let cell_width = cells.column_widths[i % columns];
             if !row.index.is_empty() {
                 self.draw_text(
                     canvas,
@@ -113,141 +114,113 @@ impl Renderer {
             }
             let mut shown = row.clone();
             shown.text.clone_from(text);
-            self.draw_word(
-                canvas,
-                m,
-                &shown,
-                x + cells.index_width + m.px(INDEX_GAP),
-                top,
-            );
+            let text_x = x + cells.index_width + m.px(INDEX_GAP);
+            self.draw_word(canvas, m, &shown, text_x, top);
+            // 展开态：角标贴在**格右边缘**（往里让 `BADGE_GAP`）——与收起横排的
+            // 「文字后面跟 2 个字宽」不同，展开是格子对齐，角标各自靠右。
+            let badge_width = self.badge_width(row.badge.as_deref(), m);
             self.draw_badge(
                 canvas,
                 m,
                 row.badge.as_deref(),
-                x + cell_width,
+                x + cell_width - m.px(BADGE_GAP) - badge_width,
                 top,
-                text_height,
             );
         }
-        // 信息行：页码靠右；左边先放被截断的高亮候选的完整文本，再放译文，放不下的截断
+        // 底部那一行：左侧翻译 Tip、右侧页码
         let grid_rows = frame.rows.len().div_ceil(columns);
-        let info_top = y + cells.row_height * grid_rows as f32 + m.row_padding() / 2.0;
-        let right = left + content_width - m.padding();
-        let mut budget = right - origin;
-        if let Some(footer) = frame.footer.as_deref() {
-            let style = m.footer_style();
-            let size = self.measure(footer, &style);
-            self.draw_text(canvas, footer, &style, right - size.width, info_top);
-            budget -= size.width + m.column_gap();
-        }
-        let mut x = origin;
-        let Some(index) = frame.highlighted else {
-            return rects;
-        };
-        let Some(row) = frame.rows.get(index) else {
-            return rects;
-        };
-        if cells.texts[index].1 {
-            let used = self.draw_clipped(
-                canvas,
-                m,
-                &row.text,
-                m.theme.colors.text,
-                x,
-                info_top,
-                budget,
-            );
-            x += used + m.px(INFO_GAP);
-            budget -= used + m.px(INFO_GAP);
-        }
-        for (segment, tone) in &row.annotation {
-            if budget <= 0.0 {
-                break;
-            }
-            let used =
-                self.draw_clipped(canvas, m, segment, m.tone_color(*tone), x, info_top, budget);
-            x += used;
-            budget -= used;
-        }
+        // 底部那一行的基准与竖排 / 横排保持一致（都是「最后一行的底边 + 一个行内留白」）：
+        // 展开 / 收起切换时 Tip 不会上下跳。
+        let info_top = y + cells.row_height * grid_rows as f32 + m.row_padding();
+        self.draw_bottom_line(canvas, frame, m, left, info_top, content_width);
         rects
     }
 
-    /// 在信息行里画一段小字，宽度超过 `budget` 就截断；返回画了多宽。
-    #[allow(clippy::too_many_arguments)]
-    fn draw_clipped(
-        &mut self,
-        canvas: &mut Canvas,
-        m: &Metrics,
-        text: &str,
-        color: Color,
-        x: f32,
-        top: f32,
-        budget: f32,
-    ) -> f32 {
-        let style = m.annotation_style(color);
-        let (shown, _) = self.truncate(text, &style, budget);
-        self.draw_text(canvas, &shown, &style, x, top)
-    }
-
-    /// 每格的显示文字与各列宽度。序号列按最宽的一位数留，行与行才对得齐。
-    /// 列宽优先用帧给的（按整份候选估的，滚动时不变）；没给就按视口里实测、每格封顶 [`MAX_CELL_EMS`]。
-    fn matrix_cells(&mut self, frame: &Frame, m: &Metrics) -> Cells {
+    /// 每格的显示文字与各列宽度，以及这一格除候选词以外占多宽（展开「更多候选项」时**所有格子一样宽**）。
+    ///
+    /// 宽度基准：缺省取收起时那条高亮条的宽度（`min_cell_width`）——比它还长的候选截尾加「…」，
+    /// 短的原样留白；还没这个宽度时（这次组句还没画过收起态）退回「一屏里最长的那条」，
+    /// 单格封顶 [`MAX_CELL_EMS`]。
+    /// **横排另有两档**（都是按候选字宽算的，见 `Renderer::char_width`）：候选词与角标之间的最小间隔
+    /// 是 2 个字宽；每格最小宽度是 6 个字宽 + 角标宽度（角标不能把候选词挤没）。
+    fn matrix_cells(&mut self, frame: &Frame, m: &Metrics, layout: Layout) -> Cells {
         let text_style = m.text_style();
         let columns = frame.columns.max(1);
         let em = m.px(m.theme.text_font.size);
-        let index_width = self.measure("8", &m.index_style()).width;
-        let fixed: Option<Vec<f32>> = (frame.column_ems.len() == columns).then(|| {
+        let horizontal = layout == Layout::Horizontal;
+        // 展开「更多候选项」时不画序号，那一段宽度也就不用留
+        let index_width = if frame.rows.iter().any(|row| !row.index.is_empty()) {
+            self.measure("8", &m.index_style()).width
+        } else {
+            0.0
+        };
+        // 角标：各格一样宽，按最宽的那个角标留位置。展开态角标贴在**格右边缘**（往里让 `BADGE_GAP`），
+        // 所以这段位置要算进 `chrome`，候选词的截断上限跟着让出来，两者不会叠在一起。
+        let badge_width = frame
+            .rows
+            .iter()
+            .map(|row| self.badge_width(row.badge.as_deref(), m))
+            .fold(0.0_f32, f32::max);
+        let badge_space = if badge_width > 0.0 {
+            m.px(BADGE_GAP) + badge_width
+        } else {
+            0.0
+        };
+        // 格子里除候选词以外的宽度（展开态就只剩间距与角标）
+        let chrome = index_width + m.px(INDEX_GAP) + badge_space;
+        // 下限：收起时那条高亮条的宽度；展开态另有两档按候选字宽算的下限——
+        // 横排是「6 个字宽 + 角标宽度」，竖排是「这一屏最长的候选 + 2 个字宽 + 一个角标字宽」
+        // （竖排这个**不管有没有角标都把角标字宽算进去**）。
+        let min_width = if horizontal {
             frame
-                .column_ems
+                .min_cell_width
+                .max(self.horizontal_min_cell_width(m, badge_width))
+        } else {
+            let longest = frame
+                .rows
                 .iter()
-                .map(|ems| ems * em + m.px(CELL_SLACK))
-                .collect()
-        });
-        let mut text_widths = fixed.clone().unwrap_or_else(|| vec![0.0; columns]);
-        let row_height = self.measure("国", &text_style).height + m.row_padding() * 2.0;
+                .map(|row| self.measure(&row.text, &text_style).width)
+                .fold(0.0_f32, f32::max);
+            let vertical =
+                longest + VERTICAL_CELL_MIN_EMS * self.char_width(m) + self.badge_char_width(m);
+            frame.min_cell_width.max(vertical)
+        };
+        let limit = if min_width > chrome {
+            min_width - chrome
+        } else {
+            let widest = frame
+                .rows
+                .iter()
+                .map(|row| self.measure(&row.text, &text_style).width)
+                .fold(0.0_f32, f32::max);
+            widest.min(em * MAX_CELL_EMS)
+        };
         let texts = frame
             .rows
             .iter()
-            .enumerate()
-            .map(|(i, row)| {
-                let column = i % columns;
-                let limit = fixed
-                    .as_ref()
-                    .map_or(em * MAX_CELL_EMS, |widths| widths[column]);
-                // 列宽是按字数估出来的：同样按字数估着放得下的格子不用再实测截断（一屏五十多格，省掉大半次整形）
-                if fixed.is_some() && estimated_ems(&row.text) * em <= limit {
-                    return (row.text.clone(), false);
-                }
-                let (text, truncated) = self.truncate(&row.text, &text_style, limit);
-                if fixed.is_none() {
-                    let width = self.measure(&text, &text_style).width;
-                    text_widths[column] = text_widths[column].max(width);
-                }
-                (text, truncated)
-            })
+            .map(|row| self.truncate(&row.text, &text_style, limit))
             .collect();
+        let row_height = self.measure("国", &text_style).height + m.row_padding() * 2.0;
+        let cell_width = (chrome + limit).max(min_width);
+        let used = columns.min(frame.rows.len().max(1)).max(1);
         Cells {
             texts,
             index_width,
-            column_widths: text_widths
-                .iter()
-                .map(|width| index_width + m.px(INDEX_GAP) + width)
-                .collect(),
+            column_widths: vec![cell_width; used],
+            columns: used,
             row_height,
         }
     }
 }
 
-/// 按字数估一段文字几个字宽，与 Core `Grid::column_ems` 同一条规则：宽字符一个字宽，拉丁字母、数字不到一个。
-fn estimated_ems(text: &str) -> f32 {
-    text.chars()
-        .map(|c| if c.is_ascii() { 0.62 } else { 1.0 })
-        .sum()
-}
-
 impl Renderer {
     /// `text` 宽度超过 `max_width` 就从末尾去字、补上「…」直到放得下；返回显示文字与是否截断过。
-    fn truncate(&mut self, text: &str, style: &TextStyle, max_width: f32) -> (String, bool) {
+    pub(super) fn truncate(
+        &mut self,
+        text: &str,
+        style: &TextStyle,
+        max_width: f32,
+    ) -> (String, bool) {
         if text.is_empty() || self.measure(text, style).width <= max_width {
             return (text.to_owned(), false);
         }
