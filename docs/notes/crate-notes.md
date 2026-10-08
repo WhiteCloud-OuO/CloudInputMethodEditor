@@ -249,6 +249,8 @@ v15 给 `IndicatorCommand` 加了 `RestartServer`（托盘菜单的「重启输�
 v15 之后给 `Candidate` 加了 `display`（候选里显示的内容，上屏仍用 `text`）：带 `serde(default)` 的新字段两边仍能对话，
 老 DLL 只读候选条数、不读内容，行为不变，所以没有 +1。
 
+**主题文件**（`theme.rs`）：`Themes\*.json` 装候选窗口 / 悬浮工具栏 / 状态切换提示三个窗口的 21 个颜色，分 `candidate`（15 项）/ `bar`（背景 / 图标 / 阴影）/ `tip`（同三项）三组；`ThemeColor` 是一个 `#AARRGGBB`（也认 `#RRGGBB`，serde 走字符串、缺键回缺省，`Default` 对齐现有观感）。`ThemeFile::{load, save}`（`save` 建父目录 + 美化 JSON）；`theme_dirs(bundled_root)` 给出两个候选目录 —— 用户目录 `%APPDATA%\CloudIME\Themes`（可写）与随包目录 `<安装目录>\Themes`（只读），`list_themes` 两处都扫、**用户目录优先**（同名盖掉随包的）、按名字排序，`find_theme` 在它上面按名字找（可带 / 不带 `.json`、大小写不敏感）；`DEFAULT_THEME_FILE` = `Default.json`（随包另有一份 `Panic.json`，两份都是内置主题）、`THEMES_DIR` = `Themes`。`[theme]` 只有一个 `curr_theme`（文件名，不是路径；缺省 `Default.json`），设置页「主题」页写它、Server 靠它选主题。注解色（`gloss` / `pos` / `fresh`）暂不进主题文件。
+
 ## crates/cloudime-render
 
 矩阵：`Frame::columns` 不为 0 时走 `renderer/matrix.rs`（展开「更多候选项」就是这条；竖排 5 列 / 横排 5 行都是它），
@@ -271,25 +273,27 @@ v15 之后给 `Candidate` 加了 `display`（候选里显示的内容，上屏�
 
 底部那一行（`Frame::tip` + `Frame::footer`）：**左侧翻译 Tip、右侧页码**，由 `Renderer::bottom_line_height` /
 `draw_bottom_line` 统一画，竖排 / 横排 / 矩阵三条路都走它（矩阵原来那行「被截断候选的全文 + 译文」被它取代）。
-页码一直显示（只有一页也是 `1/1`，由壳决定内容），颜色用候选角标那一档（`colors.badge`，原来那档太浅）。
+页码一直显示（只有一页也是 `1/1`，由壳决定内容），颜色用 `colors.footer`（主题里的「候选窗口页码颜色」，缺省 `#888888`）。
 Tip 是 `Vec<TipSegment>`（文本 + 深浅 + 是否斜体）：词性、释义之间的分隔符、读音括号统一走
-[`Tone::TranslateMeta`]（词性再叠斜体；**暂时**统一 `colors.translate_meta` = `#333333`，主题环节再设计），
-释义按词条 `learned` 取 `colors.translate_fresh`（缺省 `#ff7f27`）或 `colors.translate_learned`（缺省 `#333333`）。
+[`Tone::TranslateMeta`]（词性再叠斜体；统一 `colors.translate_meta` —— 主题里的「翻译 Tip 词性和分号颜色」，缺省 `#333333`），
+释义按词条 `learned` 取 `colors.translate_fresh`（主题「未学习释义颜色」，缺省 `#ff7f27`）或 `colors.translate_learned`（主题「已学习释义颜色」，缺省 `#333333`）。
 斜体要真的斜得有斜体字面：`fonts/windows.rs` 因此补了 `segoeuii.ttf` / `ariali.ttf`
 （微软雅黑没有斜体面，只请求 `Style::Italic` 会回落到正体）。Tip 放不下时截断加「…」（窗口宽度不为它撑大）。
 
 底部信息区还在本地 Tip 那一行**下面**多画一行**在线翻译**（内容由脚本给，见 `docs/design/online-translate.md`）：
-`Frame::online` 与 `Frame::tip` 用同一套 `TipSegment`，`Tone::Online` 走 `colors.online`（缺省 `#0f6cbd`）；
+`Frame::online` 与 `Frame::tip` 用同一套 `TipSegment`，`Tone::Online` 走 `colors.extra`（主题里的「候选项额外内容颜色」，缺省 `#0f6cbd`）；
 两行合起来的高度由 `Renderer::info_height` / `draw_info` 算并画（竖排 / 横排 / 矩阵三条路共用），
 等待「翻译中…」、成功译文、失败原因三态的颜色由壳在 `ui/candidates/render_data.rs::online_segments` 里定。
 `examples/preview.rs` 的两个 `online-*` 场景就是拿来看这一行的。
 
 自绘渲染器：候选窗一帧 + 主题 → 预乘 RGBA 位图，tiny-skia 栅格 + cosmic-text 文字（fontdb 按清单只加载几个字体文件、不扫系统），
 自己解析 `trak` 字距表、按主题 gamma 加深笔画；配色只有一套（`Theme::new()` / `Palette::new()`，浅色单套，不再分深浅；拼音串与候选项序号是纯黑，页码仍是弱化的灰）；
+`Palette` 里三个窗口那 21 项可被主题文件覆盖（`candidate` / `bar` / `tip`，壳侧 `apply_theme_colors` 从 `ThemeFile` 套进去），`gloss` / `pos` / `fresh` 这些注解色还没进主题文件；
 cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 `qingjian-opsz`，workspace `[patch.crates-io]` 钉 rev）。
 状态条是一排 `StatusCell::Icon`（整份 `<svg>` 源码）：`svg.rs` 用 resvg 0.48（workspace 钉版、`default-features = false`，
 不扫系统字体、不要 svgz 与光栅图解码）解析光栅化，按 SVG 宽高比缩进 `BUTTON_SIZE` = 20 pt 的方按钮居中叠上去，解析失败返回 `RenderError::InvalidSvg`；
-`render_status` 只画图标、不留文字格与分隔线，按钮之间与四周各留 `BUTTON_GAP` = 6 pt，返回各按钮右边界供点击命中。
+`draw_svg` 收一个 `Option<Color>`，给了就按每个像素的 alpha 把整张图标染成这个颜色（工具栏 / 提示窗的图标色靠它，SVG 里写的是什么色都只取轮廓）；
+`render_status` 只画图标、不留文字格与分隔线，按钮之间与四周各留 `BUTTON_GAP` = 6 pt，返回各按钮右边界供点击命中；背景与阴影由壳按窗口传入（工具栏 / 状态切换提示各一套主题色）。
 `examples/preview.rs` 出 PNG 与真机截图并排比、`--measure` 量宽度。Windows 壳候选窗口与悬浮状态条都走这条渲染路径（`ui/painter/`，`ui/layered/` 贴位图），
 字体库加载失败时都不绘制、不显示并记日志；`[general] font` 是候选窗字族名（空为系统字体，`fonts/directwrite.rs` 按字族名找字体文件只加载那几个，没装就回系统字体；
 设置页 `candidates.rs` 的字体框是边输入边提示的自动补全）。设计与验收见 `docs/design/rendering.md`。
@@ -534,6 +538,14 @@ Server 用 `apply_size_request` 落到 `RouterConfig` 的 `script_min_width` / `
 「不在组句了」那一处与 `reset_composition` 都调 `clear_script_size()` 回配置值；配置热加载时也特意保留
 （与三个全角 / 半角字段同样处理）。
 
+**主题**（三个窗口换配色）：`RouterConfig.curr_theme`（`[theme] curr_theme` 的文件名）折进 `RenderSettings.theme`（一个 `cloudime_platform::ThemeFile`），
+`RouterConfig::render_settings()` 里由 `load_theme(name)` 读出来 —— 先 `find_theme` 定文件（用户目录优先），再按「路径 + mtime」缓存内容，命中就跳过读盘 + JSON 解析
+（目录扫描每次照做，它决定优先级）；读不到 / 读不动就用缺省主题。`Painter::configure` 比 `RenderSettings` 不等就整体重建：`apply_theme_colors` 把 21 项套到 `Theme.colors`，
+候选窗 / 工具栏 / 提示三份 `Shadow` 也按主题里的阴影色重新构建。画的时候候选窗走 `candidate_shadow`，状态条与状态切换提示经
+`Painter::render_status(.., StatusKind::Bar / StatusKind::Tip)` 各取自己那套背景 / 图标 / 阴影色。
+`apply_config` **不再**用 `settings != previous` 当门：那种 `previous` 是拿**磁盘上刚改过的**主题文件读出来的，两边会相等，
+「重新应用同一个主题」就被吞掉（只有换主题名才生效）——现在每次热加载都推给 `Painter::configure`，由它跟**当前真正生效的**设置比对。
+
 **输入法自己的组合键优先**：`Ctrl+数字`（主键盘 / 小键盘）、`Ctrl+Enter`、`Ctrl+反引号`、`Shift+反引号`
 这四类**不派发给脚本**（`handle_key` 开头用 `input::reserved_combo` 判一下，命中的那几拍脚本完全看不到），
 Server 只按自己的语义处理 —— 谁先定义谁优先，脚本抢不走输入法的核心操作。别的 `Ctrl` 组合与不带修饰键的键
@@ -591,6 +603,13 @@ Server 只按自己的语义处理 —— 谁先定义谁优先，脚本抢不�
 对应 `[input]` 那八项（模糊音、符号映射、符号成对补全三组勾选都用 `ListView`，每项是一份 `ListViewItem`、内容就是一个自带文本的 `CheckBox`（`CheckBox` 是 `ContentControl`，文本直接 `.content(label)`，不用再套 `TextBlock`）；列表共用 `controls::scroll_list`——`selection_mode(None)` 不要选中高亮，`max_height` 卡在 5 行（`LIST_ROW_HEIGHT × LIST_VISIBLE_ROWS`），超出的组（符号成对补全 10 项）由列表自己出滚动条；简繁单选与候选页的排布单选走 `controls::radio_row`——**独立 `RadioButton`** 横排（同一个 `group_name` 互斥），**不用框架的 `RadioButtons` 容器**：容器一行内容的「期望高度」比实际渲染矮（渲染 32、期望 25），渲染出来的选项比自己盒子低 3.5px，左边的标签按盒子居中后看着总差一点，从外面（`min_height` / 套一层面板）也调不动；独立控件和开关 / 下拉一样是单控件，居中对得上；标点全半角下拉等）；标签与控件默认**垂直居中**（`controls::labeled`，标签不设对齐会被拉伸到整行高、文字却画在自己顶部，40 高的开关行里就偏上约 10px）；一行很高的控件（`ListView`、单选）改用 `controls::labeled_top` / `field_top`，标签顶对齐、与第一行内容对齐；「候选」页在 `pages/candidates.rs`，
 对应 `[candidate]`（本地整句模型开关、排布单选、个数滑轨（右侧跟一个当前值数字）、联想候选项目上限滑轨 0–4、三个「字体…」按钮弹系统字体对话框 `font_dialog.rs`、
 序号样式下拉、最小宽度、展示更多候选项、按程序隐藏的名单（下面每行一个 2 列 `Grid`——`Star` 列放程序名、「删除」按钮放第二列，外壳用 `controls::scroll_list` 卡 5 行，多了自己滚动））；「短语」页在 `pages/phrase.rs`（顶部「启用软件自带短语」开关；列表每行是一个 5 列 `Grid`——短语内容（`Star` 列，`Wrap` + `max_lines(3)` + 省略号）/ 候选内容 / 触发字母串 / 位置 / 编辑·删除两个按钮，列宽全部钉死（含操作列，否则表头那行没有按钮、`Star` 列会多占一截导致表头与数据行错位）；表单 + 列表读写安装目录 `Phrases\Phrase.db` 的 `user` 表）；
+「主题」页在 `pages/theme/`：`mod.rs` 是页面（`Slot` 是那 21 个颜色槽，`ALL` / `label()` / `get()` / `set()`，顺序与页面一致；高亮 / 普通候选序号各一项；「新建主题」按钮 + 名字 `TextBox` + 「确认保存」按钮、「选择主题」`ComboBox` + 「刷新主题」/「应用主题」两个按钮、21 行「名称 + 可点的 `#aarrggbb`」，末尾挂 `color_dialog::ColorDialog`）；
+`preview.rs` 是页顶那块预览，**走真渲染器**：按草稿 + 配置里的四项字体拼一份 `cloudime_render::Theme`（`min_width_pixels` 固定 200），拼一帧样例（拼音行、两条候选、角标「句」/「造」、页码、译文 Tip、在线那一行），用 `Renderer::render` 画候选窗、`render_status` 画悬浮工具栏（7 个图标）与状态切换提示（前 4 个），三份各自带主题阴影色的 `Shadow`；
+图标用 `include_str!` 把 `server/src/ui/status/icons/*.svg` 编进来（那几个文件是 cargo 的编译依赖，改了会重编）；位图 `encode_png()` 后交给 `Image::source_data(EncodedImage)`、`Stretch::None` 1:1 贴出来——所以预览与真实窗口像素一致（真阴影 / 真尺寸 / 真图标并按主题色染色）。
+`theme/preview.rs` 里的 `apply_colors` 与 Server 的 `apply_theme_colors` 是同一份映射（两边依赖的东西不同，谁也不能反过来依赖谁，所以各留一份，**改键名 / 加颜色时两处一起改**）。
+「导入主题」挑 `.json` → 先 `ThemeFile::load` 验一遍 → `save` 进用户目录 → `refresh_theme_names()` + `select_theme()`（自动刷新列表，但不自动应用）；「导出当前主题」把草稿 `save` 到用户挑的位置。
+两行控件的首列固定 120（`PICKER_LABEL_WIDTH`，WinUI 的 `Button` 最小宽度本来就是 120），让「选择主题」的下拉与上面一行的名字框左边对齐。
+状态在 `panel/mod.rs`（`theme_names` / `theme_selected` / `theme_draft` / `theme_new_name` / `theme_status` / `color_dialog` / `color_slot`），消息 `Theme*` 在 `message.rs`，处理在 `component.rs`：**改色只动草稿** —— 点颜色（`ThemeColorOpen(slot)`）开对话框，`ColorDialog`「确定」后 `slot.set(&mut theme_draft, ..)`，预览与那一行跟着变。「确认保存」只 `ThemeFile::save` 到 `%APPDATA%\CloudIME\Themes\<名字>.json`（**存下来但不换**）；「应用主题」才把选中的名字写进 `[theme] curr_theme`（同值也写）→ mtime 变 → Server 热加载重读主题（没选中就提示先选一份，也不走保留名校验）。「新建主题」从内置的 `Themes\Default.json` 复制（`find_theme` 找不到就 `ThemeFile::default()`）；名字由纯函数 `theme_stem` 定（名字框空则沿用当前选中的那份；与随包两份内置主题 `Default` / `Panic` 同名的一律拒 —— 大小写不敏感，带 `.json` 后缀也认）。「刷新主题」重扫 `list_themes`。
 「脚本」页在 `pages/scripts.rs`：顶部一行加粗红字的声明、三列 `Grid` 列表（文件名 / 介绍 / 启用开关 + 「删除此脚本」「编辑此脚本」）、「新建脚本」按钮；列宽与单元格抽成通用的 `controls::grid_row` / `controls::text_cell`（上面短语页那个 5 列 `Grid` 也改用它俩）；操作列宽 300 DIP，开关与两个按钮都放开最小宽度（`min_width(0)`，WinUI 的 `Button` 默认最小宽度是 120）、开关用 `ToggleSwitchSlot::OnContent` / `OffContent` 置空自带的「开 / 关」文字 —— 否则三个控件按默认宽度加起来顶出列外，最后那个按钮会被右边缘切掉一截。脚本目录 = 安装目录 `Scripts\`（与 `cloudime-script` 的 `DIRECTORY`、Server 读的同一处），列表跳过 `template.lua`；第二列的介绍是从文件里**文本扫**出来的（`describe_in` 认 `description = "…"` / `'…'`、跳过 `--` 注释）——设置程序里不执行脚本，Lua 运行时只在 Server；开关写 `[script] disabled`（`Config::set_array`，缺分节会补出来），删除先用 `rfd` 确认、再顺手把它从名单里摘掉；「新建脚本」在 `Scripts\` 取不重名的文件名（`script.lua` → `script-2.lua`…）、写入 `include_str!` 编进 exe 的 `Scripts\template.lua`，随后 `panel/notepad.rs` 用记事本打开并把模板 `WM_SETTEXT` 塞进它的 `Edit` 子控件（`EnumWindows` 先按我们刚起的进程号认主窗口、机器上本来开着别的记事本时才按类名 `Notepad` 兜底；等窗口与填字都在后台线程轮询，上限 4 秒，不卡界面）。这一页的改动（含开关）都要重启 Server 才生效 —— 「新建脚本」右边那个「重启输入法服务」按钮走 `crate::server::restart()`：连 `\\.\pipe\cloudime` 发一条 `ClientMessage::Indicator { RestartServer }`（设置程序不常驻连接，开一次用完即走），与托盘那条路完全一样（这条消息 Server 不回包，所以发完不等；连不上就把原因写在页面状态里）。
 「调试」页在 `pages/debugging.rs`：**原「统计」页整页搬来的输入统计面板**（末尾是「数据与组件」说明）与紧随其后的 `[debugging]` 自动隐藏开关、
 原来「高级」页的数据 / 日志入口（打开数据目录 / 打开日志目录 / 打包日志到桌面 / 清空输入日志四个按钮一行）与项目 GitHub 页面 / 帮助手册两个按钮一行、详细日志、学习输入习惯、记录输入日志。

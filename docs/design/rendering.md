@@ -48,7 +48,7 @@
 
 - 2D 栅格 `tiny-skia`：纯 Rust，CPU。候选窗 2 倍屏几百乘几百像素，亚毫秒；不上 GPU（vello / wgpu 对这个尺寸是负担）。
 - 文字 `cosmic-text`：fontdb 找字体 + rustybuzz 整形 + swash 栅格，带回退链与彩色 emoji。**这是唯一的技术风险点。**
-- 主题文件 TOML，随包给内置主题，用户目录可加。
+- 主题文件 JSON（三个窗口的 21 个颜色；见 [theme.md](theme.md)），随包给内置主题，用户目录可加。
 
 ## spike：先验证再投入
 

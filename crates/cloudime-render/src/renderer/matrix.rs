@@ -107,7 +107,7 @@ impl Renderer {
                 self.draw_text(
                     canvas,
                     &row.index,
-                    &m.index_style(),
+                    &m.index_style(frame.highlighted == Some(i)),
                     x,
                     top + m.index_offset(text_height),
                 );
@@ -115,7 +115,7 @@ impl Renderer {
             let mut shown = row.clone();
             shown.text.clone_from(text);
             let text_x = x + cells.index_width + m.px(INDEX_GAP);
-            self.draw_word(canvas, m, &shown, text_x, top);
+            self.draw_word(canvas, m, &shown, text_x, top, frame.highlighted == Some(i));
             // 展开态：角标贴在**格右边缘**（往里让 `BADGE_GAP`）——与收起横排的
             // 「文字后面跟 2 个字宽」不同，展开是格子对齐，角标各自靠右。
             let badge_width = self.badge_width(row.badge.as_deref(), m);
@@ -150,7 +150,7 @@ impl Renderer {
         let horizontal = layout == Layout::Horizontal;
         // 展开「更多候选项」时不画序号，那一段宽度也就不用留
         let index_width = if frame.rows.iter().any(|row| !row.index.is_empty()) {
-            self.measure("8", &m.index_style()).width
+            self.measure("8", &m.index_style(false)).width
         } else {
             0.0
         };

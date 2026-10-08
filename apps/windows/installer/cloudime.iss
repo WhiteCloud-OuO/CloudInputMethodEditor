@@ -118,6 +118,10 @@ Source: "{#Repo}\WordBank\*.db";   DestDir: "{app}\WordBank"; Flags: ignoreversi
 ; 它们在子目录里，加载器只认 Scripts\ 根部的 *.lua，所以不会被当成脚本执行。
 Source: "{#Repo}\Scripts\template.lua"; DestDir: "{app}\Scripts"; Flags: ignoreversion
 Source: "{#Repo}\Scripts\lib\*"; DestDir: "{app}\Scripts\lib"; Flags: ignoreversion
+
+; —— 主题：安装目录 Themes\ 只放**随包默认**主题（只读）；用户自己编辑 / 新建的主题在
+; `%APPDATA%\CloudIME\Themes\`（可写，设置页「主题」页写那里）——
+Source: "{#Repo}\Themes\*"; DestDir: "{app}\Themes"; Flags: ignoreversion
 ; onlyifdoesntexist：升级别覆盖用户自己的短语；文件随仓库带（内置短语写在 cloudime_default 表里）。
 Source: "{#Repo}\Phrases\Phrase.db"; DestDir: "{app}\Phrases"; Flags: onlyifdoesntexist
 ; 内置短语的同步源：同一份文件换个名字装进 data\，每次升级都覆盖；Server 启动时把它的 cloudime_default

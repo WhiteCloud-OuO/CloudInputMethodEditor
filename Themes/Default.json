@@ -1,0 +1,29 @@
+{
+  "candidate": {
+    "background": "#FFFFFFFF",
+    "highlight": "#F0C8F1FF",
+    "shadow": "#5A000000",
+    "pinyin": "#FF000000",
+    "pinyin_caret": "#D8000000",
+    "highlight_text": "#D8000000",
+    "text": "#D8000000",
+    "index": "#FF000000",
+    "highlight_index": "#FF000000",
+    "page_number": "#FF888888",
+    "badge": "#FF888888",
+    "translate_meta": "#FF333333",
+    "translate_learned": "#FF333333",
+    "translate_fresh": "#FFFF7F27",
+    "extra": "#FF0F6CBD"
+  },
+  "bar": {
+    "background": "#FFFFFFFF",
+    "icon": "#FF231F20",
+    "shadow": "#5A000000"
+  },
+  "tip": {
+    "background": "#FFFFFFFF",
+    "icon": "#FF231F20",
+    "shadow": "#5A000000"
+  }
+}

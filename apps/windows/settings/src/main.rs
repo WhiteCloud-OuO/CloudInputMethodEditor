@@ -3,6 +3,8 @@
 #![cfg_attr(windows, windows_subsystem = "windows")]
 
 #[cfg(windows)]
+mod color_dialog;
+#[cfg(windows)]
 mod log;
 #[cfg(windows)]
 mod panel;

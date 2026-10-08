@@ -32,7 +32,7 @@ impl Renderer {
             row_height: 0.0,
         };
         let text_style = m.text_style();
-        let index_style = m.index_style();
+        let index_style = m.index_style(false);
         let annotation_style = m.annotation_style(m.theme.colors.gloss);
         for row in rows {
             let index = self.measure(&row.index, &index_style);
@@ -89,11 +89,11 @@ impl Renderer {
             self.draw_text(
                 canvas,
                 &row.index,
-                &m.index_style(),
+                &m.index_style(frame.highlighted == Some(i)),
                 left + m.padding(),
                 top + m.index_offset(text_height),
             );
-            self.draw_word(canvas, m, row, text_x, top);
+            self.draw_word(canvas, m, row, text_x, top, frame.highlighted == Some(i));
             let mut x = annotation_x;
             for (segment, tone) in &row.annotation {
                 let style = m.annotation_style(m.tone_color(*tone));

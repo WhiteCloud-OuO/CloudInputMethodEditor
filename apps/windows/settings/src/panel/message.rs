@@ -100,6 +100,30 @@ pub(crate) enum Message {
     /// 新建一个脚本：建文件、写模板、用记事本打开。
     ScriptNew,
 
+    // 主题页
+    /// 选中的主题（下拉下标；`None` 是取消选中，忽略）。
+    ThemeSelect(Option<usize>),
+    /// 重新扫描 `Themes\` 两个目录。
+    ThemeRefresh,
+    /// 从默认主题复制一份到草稿。
+    ThemeNew,
+    /// 「新建主题」名字框的输入。
+    ThemeNewName(String),
+    /// 把草稿写到用户目录（只存主题，不换到它）。
+    ThemeSave,
+    /// 把选中的主题写进 `[theme] curr_theme`（触发热加载，换到它）。
+    ThemeApply,
+    /// 挑一个 `.json` 主题文件导入到用户主题目录，成功后刷新列表。
+    ThemeImport,
+    /// 把当前主题导出到用户挑的位置。
+    ThemeExport,
+    /// 点了某个颜色的 `#aarrggbb`：弹颜色对话框改它。
+    ThemeColorOpen(super::pages::theme::Slot),
+    /// 颜色对话框里改了色。
+    ThemeColorChanged(windows_reactor::Color),
+    /// 颜色对话框关了（`Primary` 是「确定」）。
+    ThemeColorClosed(windows_reactor::ContentDialogResult),
+
     // 调试页：文件 / 日志 / 学习（原「高级」页）
     VerboseLog(bool),
     InputLog(bool),

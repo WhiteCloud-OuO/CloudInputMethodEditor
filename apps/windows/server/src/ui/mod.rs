@@ -120,7 +120,7 @@ impl CandidateSink for UiHandle {
     }
 
     fn configure(&self, settings: RenderSettings) {
-        self.post(UiCommand::Configure(settings));
+        self.post(UiCommand::Configure(Box::new(settings)));
     }
 
     fn viewport(&self) -> Option<(f32, f32)> {

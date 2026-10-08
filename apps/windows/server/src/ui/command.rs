@@ -22,6 +22,6 @@ pub(super) enum UiCommand {
     /// 载荷：要显示的状态、Caps Lock 亮灭、光标矩形。
     StatusTip(Box<(StatusView, bool, ScreenRect)>),
 
-    /// 换渲染器（字体变了才重建）。
-    Configure(RenderSettings),
+    /// 换渲染器（字体 / 主题变了才重建）。
+    Configure(Box<RenderSettings>),
 }

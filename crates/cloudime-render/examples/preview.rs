@@ -118,7 +118,14 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     for name in &names {
         cells.push(StatusCell::icon(icon(name)?));
     }
-    let status = renderer.render_status(&cells, &theme, args.scale, shadow.as_ref())?;
+    let status = renderer.render_status(
+        &cells,
+        &theme,
+        args.scale,
+        shadow.as_ref(),
+        theme.colors.bar_background,
+        theme.colors.bar_icon,
+    )?;
     let path = args.out.join("status.png");
     status.rendered.pixmap.save_png(&path)?;
     let (w, h) = status.rendered.content_size_points();

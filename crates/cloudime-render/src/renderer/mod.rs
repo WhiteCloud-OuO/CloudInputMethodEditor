@@ -115,14 +115,20 @@ impl Metrics<'_> {
         self.style(self.theme.annotation_font, color)
     }
 
-    fn index_style(&self) -> TextStyle {
-        self.style(self.theme.index_font, self.theme.colors.index)
+    /// 序号的样式；`highlighted` 是高亮的那一条，序号颜色与普通候选分开取。
+    fn index_style(&self, highlighted: bool) -> TextStyle {
+        let color = if highlighted {
+            self.theme.colors.highlight_index
+        } else {
+            self.theme.colors.index
+        };
+        self.style(self.theme.index_font, color)
             .with_family(self.theme.index_family.as_ref())
     }
 
-    /// 页码等页脚小字：跟着候选角标同一个颜色（原来的灰太浅，看不清）。
+    /// 页码等页脚小字。
     fn footer_style(&self) -> TextStyle {
-        self.style(self.theme.index_font, self.theme.colors.badge)
+        self.style(self.theme.index_font, self.theme.colors.footer)
             .with_family(self.theme.index_family.as_ref())
     }
 
@@ -148,7 +154,7 @@ impl Metrics<'_> {
             Tone::TranslateMeta => self.theme.colors.translate_meta,
             Tone::TranslateFresh => self.theme.colors.translate_fresh,
             Tone::TranslateLearned => self.theme.colors.translate_learned,
-            Tone::Online => self.theme.colors.online,
+            Tone::Online => self.theme.colors.extra,
         }
     }
 
@@ -300,9 +306,24 @@ impl Renderer {
         self.text.draw(canvas, text, style, x, y)
     }
 
-    /// 候选词本体。
-    fn draw_word(&mut self, canvas: &mut Canvas, m: &Metrics, row: &Row, x: f32, top: f32) {
-        let style = m.text_style();
+    /// 候选词本体。`highlighted` 是高亮的那一条，用另一个颜色。
+    fn draw_word(
+        &mut self,
+        canvas: &mut Canvas,
+        m: &Metrics,
+        row: &Row,
+        x: f32,
+        top: f32,
+        highlighted: bool,
+    ) {
+        let color = if highlighted {
+            m.theme.colors.highlight_text
+        } else {
+            m.theme.colors.text
+        };
+        let style = m
+            .style(m.theme.text_font, color)
+            .with_family(m.theme.text_family.as_ref());
         self.draw_text(canvas, &row.text, &style, x, top);
     }
 

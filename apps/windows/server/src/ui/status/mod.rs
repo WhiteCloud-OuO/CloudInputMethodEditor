@@ -210,7 +210,9 @@ impl StatusBar {
         }
         let cells = Self::status_cells(&view, &arrangement, self.placement.caps.get(), usize::MAX);
         let rendered = match (cells.is_empty(), self.painter.borrow_mut().as_mut()) {
-            (false, Some(painter)) => painter.render_status(&cells, self.dpi.get()),
+            (false, Some(painter)) => {
+                painter.render_status(&cells, self.dpi.get(), crate::ui::painter::StatusKind::Bar)
+            }
             _ => None,
         };
         let Some(rendered) = rendered else {

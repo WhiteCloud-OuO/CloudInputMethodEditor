@@ -61,7 +61,7 @@ impl Renderer {
     fn items(&mut self, rows: &[Row], m: &Metrics) -> (Vec<Item>, f32) {
         let mut row_height: f32 = 0.0;
         let text_style = m.text_style();
-        let index_style = m.index_style();
+        let index_style = m.index_style(false);
         let items = rows
             .iter()
             .map(|row| {
@@ -118,16 +118,23 @@ impl Renderer {
             self.fill_highlight(canvas, m, rect, left);
         }
         let mut x = left + m.padding() + inset;
-        for (row, item) in frame.rows.iter().zip(&items) {
+        for (i, (row, item)) in frame.rows.iter().zip(&items).enumerate() {
             let width = item_width(item, m, badge_gap);
             self.draw_text(
                 canvas,
                 &row.index,
-                &m.index_style(),
+                &m.index_style(frame.highlighted == Some(i)),
                 x,
                 top + m.index_offset(text_height),
             );
-            self.draw_word(canvas, m, row, x + item.index_width + m.px(INDEX_GAP), top);
+            self.draw_word(
+                canvas,
+                m,
+                row,
+                x + item.index_width + m.px(INDEX_GAP),
+                top,
+                frame.highlighted == Some(i),
+            );
             // 角标紧跟在候选文字后面，中间留 `badge_gap`（两个候选字宽）。
             // 它离格右边缘的距离 = 上面 `item_width` 里那一段减去角标宽度，画在这里正好对上。
             self.draw_badge(

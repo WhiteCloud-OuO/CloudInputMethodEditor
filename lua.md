@@ -12,7 +12,6 @@
 | [`docs/notes/crate-notes.md`](docs/notes/crate-notes.md) | 实现要点（`crates/cloudime-script`、Server 的「用户脚本」两节） |
 | [`Scripts/template.lua`](Scripts/template.lua) | 「新建脚本」用的模板（只有清单骨架） |
 | [`Scripts/lib/example-niutrans.lua`](Scripts/lib/example-niutrans.lua) | 完整示例：小牛翻译（签名、表单编码、折行、多行显示） |
-| [`Scripts/lib/example-copy-all.lua`](Scripts/lib/example-copy-all.lua) | 示例：`Ctrl+A` 把输入框整篇文本复制到剪贴板（`cloudime.text.all` 的测试样例） |
 
 ## 目录
 
@@ -613,10 +612,9 @@ cloudime.script{
 local helpers = dofile("Scripts/lib/helpers.lua")   -- 相对路径按安装目录算
 ```
 
-### 12.12 复制全文到剪贴板（`cloudime.text.all` 的测试样例）
+### 12.12 复制全文到剪贴板（`cloudime.text.all`）
 
-随包 `Scripts\lib\example-copy-all.lua`：组句里按 `Ctrl+A`，把输入框**整篇文本**写进剪贴板，
-候选窗提示复制了多少字。拷到 `Scripts\` 根部、重启输入法服务即可用。
+组句里按 `Ctrl+A`，把输入框**整篇文本**写进剪贴板，候选窗提示复制了多少字：
 
 ```lua
 cloudime.on("key", function(event)

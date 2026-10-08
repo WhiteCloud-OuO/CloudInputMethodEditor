@@ -132,7 +132,6 @@ impl Router {
         );
         self.engine.set_learning(config.general.learning);
         self.engine.set_rare_enabled(config.word_bank.rare_items);
-        let previous = self.config.render_settings();
         // 全角 / 半角是会话内状态（不进配置文件）：重建配置时沿用当前值，用户刚切的不被热加载冲掉
         let full_width_punctuation = self.config.full_width_punctuation;
         let english_full_width_punctuation = self.config.english_full_width_punctuation;
@@ -155,9 +154,10 @@ impl Router {
         self.config.english_full_width_punctuation = english_full_width_punctuation;
         self.config.full_width_chars = full_width_chars;
         let settings = self.config.render_settings();
-        if settings != previous {
-            self.candidates.configure(settings.clone());
-        }
+        // 别拿 `settings != previous` 当门：那种 `previous` 是拿**此刻磁盘上的主题文件**读出来的，主题文件
+        // 先被「确认保存」改过时它已经是新主题，两边相等就把「重新应用同一个主题」吞掉（只有换主题才生效）。
+        // 真正「当前生效的设置」只有 painter 知道，交给 `Painter::configure` 比对（没变它自己会跳过）。
+        self.candidates.configure(settings.clone());
         // 脚本的量尺也跟上：字体设置变了它自己会重建渲染器
         self.measure.borrow_mut().0 = settings;
         self.reconcile_status();

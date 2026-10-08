@@ -79,7 +79,7 @@ impl Renderer {
             top,
             m.px(CARET_WIDTH),
             line_height,
-            m.theme.colors.text,
+            m.theme.colors.pinyin_caret,
         );
         cursor_x - x + m.px(CARET_WIDTH)
     }

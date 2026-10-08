@@ -31,6 +31,9 @@ pub struct RenderSettings {
     /// 展开（「展示更多候选项」）成网格时每格的最大宽度（点；`0` 表示不限）：
     /// 超过就截尾加「…」，格子不再跟着候选词变长。
     pub max_cell_width: f32,
+
+    /// 当前主题（`Themes\` 里那份的三个窗口配色）；读不到就是缺省主题。
+    pub theme: cloudime_platform::ThemeFile,
 }
 
 /// Router 只产出帧，画交给它；Windows 上由 UI 线程实现。

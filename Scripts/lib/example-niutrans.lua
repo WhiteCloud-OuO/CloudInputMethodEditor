@@ -1,32 +1,36 @@
--- 例子：Ctrl + T 调小牛翻译的「通用文本-Flash」接口翻**高亮候选**，译文写在候选窗底部那一行。
+-- 小牛翻译：Ctrl + T 翻**高亮候选**，译文写在候选窗底部那一行。
 --
--- 这份文件放在 Scripts\lib\ 里，**不会被加载**（加载器只认 Scripts\ 根部的 *.lua）。
--- 想用它：拷到 Scripts\ 下（名字随意，比如 my-translate.lua），填上自己的 appId / apikey，
--- 再重启输入法服务（任务栏「中 / 英」图标右键 → 重启输入法服务）就生效了。
+-- 这份是**活跃**的那个脚本（放在 Scripts\ 根部就会被加载）。`Scripts\lib\example-niutrans.lua`
+-- 是随包发出去的同一份参考（放 lib\ 里所以不会被加载）。
 --
--- 要改的东西都在这份文件里：接口地址、语向、组合键、结果怎么写。输入法不掺和这些 ——
--- 它只做两件事：把 `{ online = … }` 画在候选窗底部那一行；把脚本给的请求发出去（`http_post`）。
+-- 两个坑先说：
+--   1. 凭据写在下面这两行。**真 key 填在安装目录那一份**（比如 C:\Program Files\CloudIME\Scripts\niutrans.lua），
+--      别填进仓库里这一份 —— 这份是跟着 git 走的。仓库里放的是占位。
+--   2. 改完要**重启输入法服务**（任务栏「中 / 英」图标右键 → 重启输入法服务）才生效。
+--
+-- 占位 key 按 Ctrl+T 会看到「在线翻译失败：…（鉴权失败 / 参数错误之类）」—— 那是服务端回的，
+-- 说明请求这条路是通的，填上真凭据就能出译文。
 
 cloudime.script{
-    name        = "小牛翻译（示例）",
-    description = "Ctrl+T 翻高亮候选，译文写在候选窗底部那一行",
+    name        = "小牛翻译",
+    description = "Ctrl+T 翻高亮候选，译文写在候选窗底部那一行（初次使用点击编辑，然后填写user_id和user_key）",
     api         = 1,
     timeout     = 8000,      -- 单次调用墙钟上限（毫秒）：要 ≥ 下面 http_post 的时限
     sync        = false,     -- 只用异步回调
     handover    = "callback",
     on_error    = function(event, message)
-        cloudime.log("小牛翻译示例出错：" .. event .. " → " .. message)
+        cloudime.log("小牛翻译脚本出错：" .. event .. " → " .. message)
     end,
 }
 
--- 纯 Lua 的 MD5：跟着安装包一起装在 Scripts\lib\ 下（Server 的工作目录就是安装目录）
+-- 纯 Lua 的 MD5（随包放在 Scripts\lib\ 下；Server 的工作目录就是安装目录，所以这个相对路径能找到）
 local md5 = dofile("Scripts/lib/md5.lua").hex
 
-local APP_ID = "填你自己的 appId"   -- 小牛翻译云平台 → 控制台 → API应用
-local API_KEY = "填你自己的 apikey"
+local APP_ID = "user_id"      -- TODO: 换成自己的 appId（小牛翻译云平台 → 控制台 → API应用）
+local API_KEY = "user_key"    -- TODO: 换成自己的 apikey
 local ENDPOINT = "https://api.niutrans.com/v2/text/translate"
-local FROM, TO = "auto", "en"       -- 源语自动识别、翻成英文（见它的「支持语言列表」）
-local TIMEOUT_MS = 6000             -- 等候上限；不能超过清单里的 timeout
+local FROM, TO = "auto", "en"  -- 源语自动识别、翻成英文（见它的「支持语言列表」）
+local TIMEOUT_MS = 6000        -- 等候上限；不能超过清单里的 timeout
 local MAX_LINES = 5            -- 最多显示几行；再长的最后一行补「…」
 local FALLBACK_WIDTH = 460     -- 拿不到候选窗宽度时（还没画过窗口）按这个行宽折
 -- 签名：apikey 与所有参数按参数名 ASCII 升序拼成 k=v&k=v…（空值字段不参与），再取 MD5 的小写十六进制

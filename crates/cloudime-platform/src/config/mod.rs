@@ -9,6 +9,7 @@ mod preedit_mode;
 mod script;
 mod status_bar;
 mod switch_key;
+mod theme;
 mod translate;
 mod update;
 mod word_bank;
@@ -39,6 +40,7 @@ pub use preedit_mode::PreeditMode;
 pub use script::ScriptConfig;
 pub use status_bar::StatusBarConfig;
 pub use switch_key::{SwitchKey, SwitchKeys};
+pub use theme::{DEFAULT_CURR_THEME, ThemeConfig};
 pub use translate::{MAX_NEED_TIMES, MIN_NEED_TIMES, TranslateConfig};
 pub use update::{UpdateChannel, UpdateConfig};
 pub use word_bank::{DEFAULT_USER_WORD_BANK_FILE, WordBankConfig};
@@ -78,6 +80,9 @@ pub struct Config {
 
     /// 用户脚本（安装目录 `Scripts\` 下的 `.lua`）：禁用名单。
     pub script: ScriptConfig,
+
+    /// 主题：当前用哪份 JSON 主题文件（`Themes\`）。
+    pub theme: ThemeConfig,
 }
 
 /// 首次运行写出的模板：默认值全部列出并注释，用户改一处即可。
@@ -212,6 +217,11 @@ reset_counter = 0
 # 禁用的用户脚本（安装目录 Scripts\ 下的文件名，大小写不敏感）：设置页的「启用 / 禁用」开关写这里。
 # Server 启动时按它跳过（改完要重启 Server）。每个脚本必须在文件最前面声明清单，见安装目录的 Scripts\template.lua
 disabled = []
+
+[theme]
+# 当前主题：Themes\ 下的主题文件名（一份主题就是候选窗口 / 悬浮工具栏 / 状态切换提示三个窗口的 21 个颜色）
+# 随包装两份内置主题：Default.json（对齐现有观感）、Panic.json；自己新建 / 编辑的在下面这个用户目录里，同名以用户目录为准
+curr_theme = "Default.json"
 "#;
 
 impl Config {

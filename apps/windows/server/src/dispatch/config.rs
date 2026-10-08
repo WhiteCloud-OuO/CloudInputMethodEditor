@@ -47,6 +47,9 @@ pub struct RouterConfig {
     /// `off` 一律不能（缺省）/ `more_candidates` 只有「展示更多候选项」展开成网格时能 / `always` 都能。
     pub mouse_word_selection: MouseWordSelection,
 
+    /// 当前主题的文件名（`[theme] curr_theme`，`Themes\` 下）。
+    pub curr_theme: String,
+
     /// 启用翻译 Tip（`[translate] enabled`）。
     pub translate_enabled: bool,
 
@@ -137,6 +140,7 @@ impl RouterConfig {
             item_number_style: self.item_number_style,
             scale: self.script_scale,
             max_cell_width: self.max_cell_width,
+            theme: load_theme(&self.curr_theme),
         }
     }
 
@@ -148,6 +152,47 @@ impl RouterConfig {
                 .hiding_candidates
                 .iter()
                 .any(|name| name.trim().eq_ignore_ascii_case(program))
+    }
+}
+
+/// 主题文件的内容缓存：同一个文件、mtime 没变就直接用上次读的，省掉一次读盘 + JSON 解析。
+/// （目录扫描还是每次都做 —— 它决定「用户目录盖过随包」的优先级。）
+static THEME_CACHE: std::sync::Mutex<
+    Option<(
+        std::path::PathBuf,
+        std::time::SystemTime,
+        cloudime_platform::ThemeFile,
+    )>,
+> = std::sync::Mutex::new(None);
+
+/// 读当前主题文件（用户目录优先）；找不到 / 读不动就用缺省主题。
+fn load_theme(name: &str) -> cloudime_platform::ThemeFile {
+    let root = cloudime_platform::resources::bundled_root();
+    let Some(entry) = cloudime_platform::find_theme(root.as_deref(), name) else {
+        return cloudime_platform::ThemeFile::default();
+    };
+    let modified = std::fs::metadata(&entry.path)
+        .and_then(|meta| meta.modified())
+        .ok();
+    // 命中缓存：路径与 mtime 都没变
+    if let Ok(cache) = THEME_CACHE.lock()
+        && let Some((path, cached, theme)) = cache.as_ref()
+        && *path == entry.path
+        && Some(*cached) == modified
+    {
+        return *theme;
+    }
+    match cloudime_platform::ThemeFile::load(&entry.path) {
+        Ok(theme) => {
+            if let (Some(modified), Ok(mut cache)) = (modified, THEME_CACHE.lock()) {
+                *cache = Some((entry.path, modified, theme));
+            }
+            theme
+        }
+        Err(error) => {
+            tracing::warn!(%error, path = %entry.path.display(), "主题文件读不动，用缺省主题");
+            cloudime_platform::ThemeFile::default()
+        }
     }
 }
 
@@ -181,6 +226,7 @@ impl From<&Config> for RouterConfig {
             preedit: candidate.preedit,
             show_more_candidate_items: candidate.show_more_candidate_items,
             mouse_word_selection: candidate.mouse_word_selection,
+            curr_theme: config.theme.curr_theme.clone(),
             translate_enabled: config.translate.enabled,
             translate_dictionary: config.translate.dictionary.clone(),
             translate_need_times: config.translate.need_times(),

@@ -9,6 +9,7 @@ pub use rendered::RenderedStatus;
 
 use super::{Metrics, Rendered, Renderer};
 use crate::canvas::Canvas;
+use crate::color::Color;
 use crate::error::RenderError;
 use crate::shadow::Shadow;
 use crate::svg::draw_svg;
@@ -22,12 +23,16 @@ const BUTTON_GAP: f32 = 6.0;
 
 impl Renderer {
     /// 画状态条：一排图标按钮。返回位图与各按钮右边界（内容坐标，供点击命中）。
+    /// `background` / `icon` 由调用方按窗口给（悬浮工具栏、状态切换提示各一套），
+    /// 图标按 alpha 染成 `icon`。
     pub fn render_status(
         &self,
         cells: &[StatusCell],
         theme: &Theme,
         scale: f32,
         shadow: Option<&Shadow>,
+        background: Color,
+        icon: Color,
     ) -> Result<RenderedStatus, RenderError> {
         let metrics = Metrics { theme, scale };
         let size = metrics.px(BUTTON_SIZE);
@@ -54,13 +59,13 @@ impl Renderer {
             content_width,
             content_height,
             radius,
-            theme.colors.background,
+            background,
         );
         let top = margin + gap;
         let mut left = margin + gap;
         let mut edges = Vec::with_capacity(cells.len());
         for cell in cells {
-            draw_svg(&mut canvas, cell.svg(), left, top, size)?;
+            draw_svg(&mut canvas, cell.svg(), left, top, size, Some(icon))?;
             left += size;
             edges.push(left - margin);
             left += gap;
@@ -102,8 +107,16 @@ mod tests {
             return;
         };
         let cells = [StatusCell::icon(RED), StatusCell::icon(RED)];
+        let theme = Theme::new();
         let out = renderer
-            .render_status(&cells, &Theme::new(), 1.0, None)
+            .render_status(
+                &cells,
+                &theme,
+                1.0,
+                None,
+                theme.colors.bar_background,
+                theme.colors.bar_icon,
+            )
             .unwrap();
         // 两个 20 pt 的方按钮 + 中间一个 6 pt 间距 + 两侧各 6 pt
         assert_eq!(
@@ -124,20 +137,24 @@ mod tests {
         let Some(renderer) = renderer() else {
             return;
         };
+        let theme = Theme::new();
         let out = renderer
             .render_status(
                 &[StatusCell::icon(RED)],
-                &Theme::new(),
+                &theme,
                 2.0,
                 Some(&Shadow::panel()),
+                theme.colors.bar_background,
+                theme.colors.bar_icon,
             )
             .unwrap();
+        // 图标按 alpha 染成主题色（深色），落在白底上就是非白像素；阴影也一起证明留了边
         let painted = out
             .rendered
             .pixmap
             .pixels()
             .iter()
-            .any(|p| p.alpha() > 0 && p.red() > 200 && p.green() < 60 && p.blue() < 60);
+            .any(|p| p.alpha() > 0 && p.red() < 200);
         assert!(painted, "SVG 图标没画上去");
         assert!(out.rendered.pixmap.width() > out.rendered.content_width);
         assert!(out.rendered.content_x > 0);

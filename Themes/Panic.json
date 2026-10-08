@@ -1,0 +1,29 @@
+{
+  "candidate": {
+    "background": "#FF212121",
+    "highlight": "#BD522500",
+    "shadow": "#26000000",
+    "pinyin": "#FFD66000",
+    "pinyin_caret": "#FFD66000",
+    "highlight_text": "#FFD66000",
+    "text": "#FFD66000",
+    "highlight_index": "#FFD66000",
+    "index": "#FFD66000",
+    "page_number": "#A8D66000",
+    "badge": "#C9B85200",
+    "translate_meta": "#D9BABABA",
+    "translate_learned": "#DED66000",
+    "translate_fresh": "#D9BABABA",
+    "extra": "#DED66000"
+  },
+  "bar": {
+    "background": "#FF212121",
+    "icon": "#DED66000",
+    "shadow": "#45000000"
+  },
+  "tip": {
+    "background": "#FF212121",
+    "icon": "#DED66000",
+    "shadow": "#45000000"
+  }
+}

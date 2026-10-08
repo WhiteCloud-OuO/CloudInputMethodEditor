@@ -19,15 +19,17 @@ use cloudime_platform::{
     Config, FullHalfPunctuation, ItemNumberStyle, LayoutMode, LogLevel, MAX_ASSOCIATION_COUNTS,
     MAX_CANDIDATE_COUNT, MAX_NEED_TIMES, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT,
     MIN_NEED_TIMES, MO_HU_YIN_BITS, MouseWordSelection, PAIRWISE_COMPLETION_BITS,
-    PUNCTUATION_MAPPING_BITS, PreeditMode, SimpTrad,
+    PUNCTUATION_MAPPING_BITS, PreeditMode, SimpTrad, ThemeColor, ThemeFile,
 };
 use windows_reactor::*;
+
+use crate::color_dialog::ColorDialog;
 
 use super::controls::{export_logs, log_dir, open_document, open_with_explorer};
 use super::font_dialog;
 use super::notice::Notice;
 use super::pages::phrase::PhraseForm;
-use super::pages::{dictionaries, phrase, scripts, translate};
+use super::pages::{dictionaries, phrase, scripts, theme, translate};
 use super::{Message, REPOSITORY_URL, Settings};
 
 /// 标题栏图标：exe 旁的 `cloudime.ico`（装机包装到 `{app}`，`build.rs` 也给开发时的 exe 旁拷一份）。
@@ -216,7 +218,7 @@ impl Component for Settings {
         let (phrases, phrase_status) = phrase::load(&cloudime_platform::PhraseStore::locate(&root));
         // 窗口一出现就居中的钩子：得赶在框架建窗之前装好（`create` 就够早，那时窗口还没建）。
         install_center_hook();
-        Self {
+        let mut settings = Self {
             config,
             path,
             page: "input".to_string(),
@@ -228,7 +230,21 @@ impl Component for Settings {
             phrase_edit: None,
             phrase_status,
             script_status: String::new(),
-        }
+            theme_names: Vec::new(),
+            theme_selected: None,
+            theme_draft: ThemeFile::default(),
+            theme_new_name: String::new(),
+            theme_status: String::new(),
+            color_dialog: ColorDialog::new(Color::rgb(0, 0, 0)),
+            color_slot: None,
+        };
+        // 主题：列一遍两个目录，再把配置里指定的那份读进草稿。
+        settings.refresh_theme_names();
+        let current = settings.config.theme.curr_theme.clone();
+        let stem = current.trim().trim_end_matches(".json").to_owned();
+        settings.select_theme(&stem);
+        settings.theme_status.clear();
+        settings
     }
 
     fn update(&mut self, message: Message, _context: &ComponentContext<Self>) {
@@ -503,6 +519,57 @@ impl Component for Settings {
                 crate::log::info("「组件」页还没有做，点了只记一条日志");
             }
 
+            // 主题页
+            Message::ThemeSelect(Some(index)) => {
+                if let Some(name) = self.theme_names.get(index).cloned() {
+                    self.select_theme(&name);
+                }
+            }
+            Message::ThemeRefresh => {
+                self.refresh_theme_names();
+                self.theme_status = "已重新扫描主题目录。".to_owned();
+            }
+            Message::ThemeNew => {
+                self.theme_draft = Self::default_theme_draft();
+                self.theme_selected = None;
+                self.theme_new_name.clear();
+                self.theme_status =
+                    "已载入默认主题：改个名字、调颜色，点「确认保存」存下来，再点「应用主题」换上。".to_owned();
+            }
+            Message::ThemeNewName(text) => self.theme_new_name = text,
+            Message::ThemeSave => self.save_theme(),
+            Message::ThemeApply => self.apply_theme(),
+            Message::ThemeImport => theme::import(self),
+            Message::ThemeExport => theme::export(self),
+            Message::ThemeColorOpen(slot) => {
+                let color = slot.get(&self.theme_draft);
+                self.color_dialog.open(Color {
+                    a: color.a,
+                    r: color.r,
+                    g: color.g,
+                    b: color.b,
+                });
+                self.color_slot = Some(slot);
+            }
+            Message::ThemeColorChanged(color) => self.color_dialog.set_color(color),
+            Message::ThemeColorClosed(result) => {
+                self.color_dialog.close();
+                if result == ContentDialogResult::Primary
+                    && let Some(slot) = self.color_slot.take()
+                {
+                    let color = self.color_dialog.color();
+                    slot.set(
+                        &mut self.theme_draft,
+                        ThemeColor {
+                            a: color.a,
+                            r: color.r,
+                            g: color.g,
+                            b: color.b,
+                        },
+                    );
+                }
+            }
+
             // 下拉被清空 / 越界：不改
             _ => {}
         }
@@ -542,6 +609,7 @@ impl Component for Settings {
             item("dictionaries", "词库", Symbol::Library),
             item("phrase", "短语", Symbol::Comment),
             item("translate", "翻译", Symbol::Character),
+            item("theme", "主题", Symbol::ViewAll),
             item("scripts", "脚本", Symbol::Document),
             item("debugging", "调试", Symbol::Repair),
         ];

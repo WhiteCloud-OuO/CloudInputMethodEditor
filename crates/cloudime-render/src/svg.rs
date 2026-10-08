@@ -5,20 +5,33 @@ use resvg::usvg::{self, Transform};
 use tiny_skia::Pixmap;
 
 use crate::canvas::Canvas;
+use crate::color::Color;
 use crate::error::RenderError;
 
 /// 把 `svg` 画进 `(x, y)` 为左上角、边长 `size` 像素的方块：按 SVG 自己的宽高比等比缩放，在方框里居中、不裁剪。
+/// `color` 给 `Some` 时**按 alpha 把整张图标染成这个颜色**（SVG 里写的是什么色都不管，只取轮廓）。
 pub(crate) fn draw_svg(
     canvas: &mut Canvas,
     svg: &str,
     x: f32,
     y: f32,
     size: f32,
+    color: Option<Color>,
 ) -> Result<(), RenderError> {
     let side = size.ceil().max(1.0) as u32;
-    let icon = rasterize(svg, side)?;
+    let mut icon = rasterize(svg, side)?;
+    if let Some(color) = color {
+        tint(&mut icon, color);
+    }
     canvas.blend_pixmap(x.round() as i32, y.round() as i32, &icon);
     Ok(())
+}
+
+/// 按每个像素的 alpha 把整张图标染成 `color`。
+fn tint(icon: &mut Pixmap, color: Color) {
+    for pixel in icon.pixels_mut() {
+        *pixel = color.premultiplied(pixel.alpha());
+    }
 }
 
 /// 解析 + 栅格化成 `side × side` 的位图，两边装不下就留白（`usvg::Size` 保证宽高为正，零尺寸在解析时就被拒）。

@@ -104,7 +104,9 @@ impl StatusTip {
         self.dpi.set(dpi);
         let cells = self.icons.borrow_mut().cells(view, caps);
         let rendered = match (cells.is_empty(), self.painter.borrow_mut().as_mut()) {
-            (false, Some(painter)) => painter.render_status(&cells, dpi),
+            (false, Some(painter)) => {
+                painter.render_status(&cells, dpi, crate::ui::painter::StatusKind::Tip)
+            }
             _ => None,
         };
         let Some(rendered) = rendered else {
