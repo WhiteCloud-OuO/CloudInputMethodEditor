@@ -19,6 +19,8 @@ Windows 输入法（只做 Windows，上游的 macOS / Linux 壳已删除）。C
 - `crates/cloudime-neural`：字级 Transformer 本地推理 `CharScorer`（candle），给整句前几条路径重打分。
 - `crates/cloudime-format`：`.qj` 数据容器（mmap 读、零拷贝视图、写入器、哈希索引）。
 - `crates/cloudime-platform`：平台层共用：`Config`（TOML 配置）、`extra_dictionaries`、Windows Server ↔ DLL 的 `protocol` 类型。
+- `crates/cloudime-translate`：本地词典（安装目录 `LocalDictionary\` 下的 `.qj` / `.db`）的释义查询与「学没学会」，翻译 Tip 用它。
+- `crates/cloudime-script`：用户脚本的运行时（mlua + LuaJIT，LuaJIT 源码随包编）。改哪些输入法行为、脚本在哪几处跑，见 `docs/design/script.md`。
 - `crates/cloudime-render`：自绘渲染器（spike 中，分支 renderer-spike）：候选窗一帧 + 主题 → 位图，壳只贴图。见 `docs/design/rendering.md`。
 - `crates/cloudime-update`：检查更新：读官网的 `releases.json`、验 ed25519 签名、按平台与渠道挑新版本，只提示不安装；发版侧的签名工具是 `tools/release-sign`。见 `docs/design/update.md`。
 - `apps/cli`：Core 的验证工具：查询、逐键计时、输入日志回放、整句评测、常数扫描。排序 / 整句 / 纠错的改动先跑它再合。
@@ -29,6 +31,8 @@ Windows 输入法（只做 Windows，上游的 macOS / Linux 壳已删除）。C
 `docs/` 分四类（索引在 `docs/README.md`）：`design/` 设计与决定、`plan/` 路线与待办、`notes/` 工程记录（性能、复盘、踩坑、crate 实现要点）、
 `user/` 用户文档（官网构建时拉取渲染，约定见 `docs/user/README.md`，措辞面向用户、不出现实现词）。
 根目录 `tutorial.md` 是**随安装包发布的单文件使用手册**（打包时装到 `{app}\tutorial.md`），用户可见的行为改了要同步它，见 `docs/contributing.md`「文档同步」。
+根目录 `lua.md` 是**脚本作者的技术文档**（清单、事件与载荷、动作表、`cloudime` 表、闸门、示例）——
+单文件、只留仓库（不进安装包）；脚本接口改了要与它、`docs/design/script.md`、`Scripts\template.lua` 一起改。
 
 ## 常用命令
 

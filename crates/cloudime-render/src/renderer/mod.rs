@@ -15,7 +15,7 @@ use crate::canvas::Canvas;
 use crate::color::Color;
 use crate::error::RenderError;
 use crate::fonts::FontLibrary;
-use crate::frame::{Frame, HighlightRect, Row, Tone};
+use crate::frame::{Frame, HighlightRect, Row, TipSegment, Tone};
 use crate::layout::Layout;
 use crate::shadow::Shadow;
 use crate::text::{TextPainter, TextSize, TextStyle};
@@ -148,6 +148,7 @@ impl Metrics<'_> {
             Tone::TranslateMeta => self.theme.colors.translate_meta,
             Tone::TranslateFresh => self.theme.colors.translate_fresh,
             Tone::TranslateLearned => self.theme.colors.translate_learned,
+            Tone::Online => self.theme.colors.online,
         }
     }
 
@@ -240,6 +241,21 @@ impl Renderer {
         self.text.measure(text, &style).width
     }
 
+    /// 量一段文字在某个字体（字族 + 字号）下的宽高，单位**点**；与真正画出来走同一套整形 / 回退链，
+    /// 重量按正常（不加粗）。`family` 是 `None` 就用界面字体（与 [`Theme`] 里那几项一致）。
+    ///
+    /// 给上层用：脚本的 `cloudime.ui.measure` 拿它算「窗口要多宽才装得下这段译文」。
+    pub fn measure_font(
+        &mut self,
+        text: &str,
+        font: &FontSpec,
+        family: Option<&String>,
+    ) -> (f32, f32) {
+        let style = TextStyle::new(*font, font.size, Color::rgb(0, 0, 0), 1.0).with_family(family);
+        let size = self.text.measure(text, &style);
+        (size.width, size.height)
+    }
+
     /// 每个字形用到的字族名，验证回退链用。
     pub fn trace_families(&mut self, text: &str, theme: &Theme) -> Vec<String> {
         let metrics = Metrics { theme, scale: 1.0 };
@@ -258,9 +274,9 @@ impl Renderer {
             }
         };
         let width = top_width.max(body_width) + m.padding() * 2.0;
-        // 竖排时候选都很短窗口会窄得难看，给个下限；展开成矩阵后宽度由格子决定，不要再撑。
+        // 候选都很短时窗口会窄得难看，给个下限（竖排、横排都算）；展开成矩阵后宽度由格子决定，不要再撑。
         // 下限按**点**算（`min_width_pixels` 就是 100% 缩放下的点数），跟着 DPI 与滚轮缩放一起变。
-        let width = if matches!(layout, Layout::Vertical) && frame.columns == 0 {
+        let width = if frame.columns == 0 {
             width.max(m.px(m.theme.min_width_pixels))
         } else {
             width
@@ -372,6 +388,47 @@ impl Renderer {
         height + m.row_padding()
     }
 
+    /// 底部「信息区」要多高：本地 Tip / 页码那一行，加上它下面那几行在线翻译（有才加）。
+    /// 脚本体里写了换行（`\n`）就按几行算 —— 一屏最高多少行由脚本自己限。
+    pub(super) fn info_height(&mut self, frame: &Frame, m: &Metrics) -> f32 {
+        let bottom = self.bottom_line_height(frame, m);
+        let Some(segments) = frame.online.as_deref() else {
+            return bottom;
+        };
+        let lines = online_lines(segments).len() as f32;
+        bottom + m.px(m.theme.translate_font.line_height) * lines + m.row_padding()
+    }
+
+    /// 画底部信息区：`y` 是本地 Tip / 页码那一行的顶边，在线翻译那一块紧贴在它下面（可能有几行）。
+    pub(super) fn draw_info(
+        &mut self,
+        canvas: &mut Canvas,
+        frame: &Frame,
+        m: &Metrics,
+        left: f32,
+        y: f32,
+        content_width: f32,
+    ) {
+        let bottom = self.bottom_line_height(frame, m);
+        self.draw_bottom_line(canvas, frame, m, left, y, content_width);
+        let Some(segments) = frame.online.as_deref() else {
+            return;
+        };
+        // 在线翻译独占底部信息区下面那几行（本地 Tip 与页码在上面那一行里），逐行左对齐、每行放不下各自截断
+        let budget = content_width - m.padding() * 2.0;
+        let line_height = m.px(m.theme.translate_font.line_height);
+        for (i, line) in online_lines(segments).into_iter().enumerate() {
+            self.draw_segments(
+                canvas,
+                &line,
+                m,
+                left + m.padding(),
+                y + bottom + line_height * i as f32,
+                budget,
+            );
+        }
+    }
+
     /// 画底部那一行：`y` 是行框顶边（内容区坐标），`content_width` 是内容区宽度。
     /// 页码靠右、翻译 Tip 靠左，放不下就把 Tip 截断。
     pub(super) fn draw_bottom_line(
@@ -394,7 +451,22 @@ impl Renderer {
         let Some(segments) = frame.tip.as_deref() else {
             return;
         };
-        let mut x = left + m.padding();
+        self.draw_segments(canvas, segments, m, left + m.padding(), y, budget);
+    }
+
+    /// 从左往右一段一段画字（翻译 Tip / 在线翻译共用）：`x` 是左端、`y` 是行框顶边，
+    /// `budget` 是还剩多少宽度（点），放不下就把这一段截断。
+    fn draw_segments(
+        &mut self,
+        canvas: &mut Canvas,
+        segments: &[TipSegment],
+        m: &Metrics,
+        x: f32,
+        y: f32,
+        budget: f32,
+    ) {
+        let mut x = x;
+        let mut budget = budget;
         for segment in segments {
             if budget <= 0.0 {
                 break;
@@ -406,6 +478,27 @@ impl Renderer {
             budget -= used;
         }
     }
+}
+
+/// 在线翻译那一段段文字按 `\n` 拆成几行（脚本体里写了换行就显示成多行，换行后面的字从新一行左端开始）。
+/// 没写换行时就是一行 —— 与以前一样。
+fn online_lines(segments: &[TipSegment]) -> Vec<Vec<TipSegment>> {
+    let mut lines: Vec<Vec<TipSegment>> = vec![Vec::new()];
+    for segment in segments {
+        for (i, part) in segment.text.split('\n').enumerate() {
+            if i > 0 {
+                lines.push(Vec::new());
+            }
+            if !part.is_empty() {
+                lines.last_mut().expect("至少有一行").push(TipSegment::new(
+                    part,
+                    segment.tone,
+                    segment.italic,
+                ));
+            }
+        }
+    }
+    lines
 }
 
 /// 目标高亮条的矩形（内容区坐标）：有动画信息时从它的起点矩形 lerp 到目标行矩形，否则就是目标行矩形。
@@ -426,7 +519,11 @@ fn highlight_rect(frame: &Frame, rects: &[HighlightRect]) -> Option<HighlightRec
 #[cfg(test)]
 mod tests {
     use super::highlight_rect;
-    use crate::frame::{Frame, HighlightAnimation, HighlightRect};
+    use crate::fonts::FontLibrary;
+    use crate::frame::{Frame, HighlightAnimation, HighlightRect, Row, TipSegment, Tone};
+    use crate::layout::Layout;
+    use crate::renderer::Renderer;
+    use crate::theme::Theme;
 
     fn rects() -> [HighlightRect; 3] {
         [
@@ -468,5 +565,131 @@ mod tests {
     fn no_highlight_row_draws_nothing() {
         let frame = Frame::default();
         assert_eq!(highlight_rect(&frame, &rects()), None);
+    }
+
+    /// 在线翻译那一行里写了换行就按多行算高度：每多一行窗口就多一条行高。
+    #[test]
+    fn online_newlines_make_the_window_taller() {
+        // 没有系统字体的环境（CI 容器）跳过
+        let Some(mut renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let theme = Theme::new();
+        let mut height = |online: &str| {
+            let frame = Frame {
+                online: Some(vec![TipSegment::new(online, Tone::Online, false)]),
+                ..Frame::default()
+            };
+            renderer
+                .render(&frame, Layout::Vertical, &theme, 1.0, None)
+                .unwrap()
+                .content_height
+        };
+        let one = height("a");
+        let two = height("a\nb");
+        let three = height("a\nb\nc");
+        assert!(
+            two > one && three > two,
+            "多一行该更高：{one} {two} {three}"
+        );
+        let (first, second) = (two - one, three - two);
+        assert!(
+            first.abs_diff(second) <= 1,
+            "每多一行的增量该一致：{first} vs {second}"
+        );
+    }
+
+    /// 换行是真画出来的：两行「M」的字形分别落在墨迹范围的上下两半。
+    #[test]
+    fn online_newlines_actually_paint_two_lines() {
+        let Some(mut renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let frame = Frame {
+            online: Some(vec![TipSegment::new("M\nM", Tone::Online, false)]),
+            ..Frame::default()
+        };
+        let pixmap = renderer
+            .render(&frame, Layout::Vertical, &Theme::new(), 1.0, None)
+            .unwrap()
+            .pixmap;
+        let (w, h) = (pixmap.width(), pixmap.height());
+        // 在线译文用的蓝色（`Palette::online`，抗锯齿边缘偏浅，只认深一点的核心像素）
+        let inked = |x: u32, y: u32| {
+            let p = pixmap.pixel(x, y).unwrap();
+            p.red() < 120 && p.blue() > 150
+        };
+        let rows: Vec<u32> = (0..h).filter(|&y| (0..w).any(|x| inked(x, y))).collect();
+        let (first, last) = (*rows.first().expect("一个字都没画上"), rows[rows.len() - 1]);
+        let middle = (first + last) / 2;
+        let upper = rows.iter().filter(|&&y| y < middle).count();
+        let lower = rows.iter().filter(|&&y| y > middle).count();
+        assert!(
+            upper > 0 && lower > 0,
+            "两行该各有字形（墨迹 y 范围 {first}..{last}）"
+        );
+    }
+
+    /// 「展开后每个候选项的最大宽度」：太长的候选展开时截到上限，格子不再跟着变长。
+    #[test]
+    fn expanded_cells_respect_the_maximum_width() {
+        // 没有系统字体的环境（CI 容器）跳过
+        let Some(mut renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        // 48 个汉字：展开（竖排）时基准宽度远大于上限
+        let frame = Frame {
+            columns: 5,
+            rows: vec![Row::plain(0, "国".repeat(48))],
+            ..Frame::default()
+        };
+        let cell = |renderer: &mut Renderer, cap: f32| {
+            let mut theme = Theme::new();
+            theme.max_cell_width = cap;
+            let out = renderer
+                .render(&frame, Layout::Vertical, &theme, 1.0, None)
+                .unwrap();
+            out.highlight_rects
+                .first()
+                .map(|rect| rect.width())
+                .unwrap_or(0.0)
+        };
+        let uncapped = cell(&mut renderer, 0.0);
+        assert!(uncapped > 460.0, "不限宽时该撑得很长：{uncapped}");
+
+        // 格宽被截到 420，高亮条两侧各多出 5 点的留边
+        let capped = cell(&mut renderer, 420.0);
+        assert!(
+            (capped - 430.0).abs() <= 1.0,
+            "上限该把格子压到 420：{capped}"
+        );
+    }
+
+    /// 候选框最小宽度横排也生效（以前只在竖排时撑窗口）。
+    #[test]
+    fn the_minimum_width_applies_to_horizontal_too() {
+        // 没有系统字体的环境（CI 容器）跳过
+        let Some(mut renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let mut theme = Theme::new();
+        theme.min_width_pixels = 300.0;
+        // 单个候选：不设下限时横排窗口只有几十点宽
+        let frame = Frame {
+            rows: vec![Row::plain(0, "你")],
+            ..Frame::default()
+        };
+        let wide = |renderer: &mut Renderer, minimum: f32| {
+            let mut theme = theme.clone();
+            theme.min_width_pixels = minimum;
+            renderer
+                .render(&frame, Layout::Horizontal, &theme, 1.0, None)
+                .unwrap()
+                .content_width
+        };
+        let narrow = wide(&mut renderer, 0.0);
+        let widened = wide(&mut renderer, 300.0);
+        assert!(narrow < 300, "不设下限时该是窄的：{narrow}");
+        assert!(widened >= 300, "横排也该撑到最小宽度：{widened}");
     }
 }

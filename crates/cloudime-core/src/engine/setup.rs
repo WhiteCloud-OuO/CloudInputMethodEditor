@@ -295,6 +295,43 @@ impl Engine {
         self.rare_enabled
     }
 
+    /// 表达式计算面板开着没有（V 模式里按 Tab 进来）：开着时候选只有结果那一条。
+    pub fn calculator(&self) -> bool {
+        self.calculator
+    }
+
+    /// 进 / 出表达式计算面板（壳在按 Tab / Esc 时调）。组句结束壳要清掉。
+    pub fn set_calculator(&mut self, on: bool) {
+        self.calculator = on;
+    }
+
+    /// 脚本给的加权 / 降权（`词文本 → 系数`：大于 1 加权、小于 1 降权、给 0 就沉底）。**整份替换**，
+    /// 空的就是全清；壳（Server 的脚本接口）每次脚本给就调一次，内容没变时什么都不做。
+    ///
+    /// 系数乘在**词频那一层**：排序规则本身仍在 Core（结构键、读法层级、联想折扣都照旧），脚本只调参 ——
+    /// 覆盖字母少的词再重也不会因此跑到覆盖满的词前面（见 `ranking` 的模块文档）。
+    /// 空词、非有限 / 负数的系数直接丢掉。
+    pub fn set_word_adjustments(&mut self, adjustments: impl IntoIterator<Item = (String, f64)>) {
+        let mut next = HashMap::new();
+        for (word, factor) in adjustments {
+            if word.is_empty() || !factor.is_finite() || factor < 0.0 {
+                continue;
+            }
+            next.insert(word, factor);
+        }
+        if next == self.word_adjustments {
+            return;
+        }
+        self.word_adjustments = next;
+        // 排序变了：整句那边的格子缓存留着只会给出旧顺序
+        self.forget_span_cache();
+    }
+
+    /// 脚本给过几条加权 / 降权（日志用）。
+    pub fn word_adjustment_count(&self) -> usize {
+        self.word_adjustments.len()
+    }
+
     /// 换掉全部附加词库（导入、移除、开关之后），**按第三方词库的添加顺序**排列：查词时靠前的优先，
     /// 同一个词靠前命中后后面的不再重复产出。格子缓存随之作废。
     pub fn set_extra_dictionaries(&mut self, dictionaries: Vec<Dictionary>) {

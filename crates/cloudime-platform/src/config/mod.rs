@@ -6,6 +6,7 @@ mod layout_mode;
 mod log_level;
 mod phrase;
 mod preedit_mode;
+mod script;
 mod status_bar;
 mod switch_key;
 mod translate;
@@ -22,7 +23,7 @@ use crate::error::ConfigError;
 pub use candidate::{
     CandidateConfig, DEFAULT_CANDIDATE_BOX_MINIMUM_WIDTH, DEFAULT_FAMILY, FontChoice,
     ItemNumberStyle, MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MIN_ASSOCIATION_COUNTS,
-    MIN_CANDIDATE_COUNT,
+    MIN_CANDIDATE_COUNT, MouseWordSelection,
 };
 pub use debugging::DebuggingConfig;
 pub use general::{GeneralConfig, MAX_PAGE_SIZE};
@@ -35,6 +36,7 @@ pub use layout_mode::LayoutMode;
 pub use log_level::LogLevel;
 pub use phrase::PhraseConfig;
 pub use preedit_mode::PreeditMode;
+pub use script::ScriptConfig;
 pub use status_bar::StatusBarConfig;
 pub use switch_key::{SwitchKey, SwitchKeys};
 pub use translate::{MAX_NEED_TIMES, MIN_NEED_TIMES, TranslateConfig};
@@ -73,6 +75,9 @@ pub struct Config {
 
     /// 本地词典的翻译 Tip。
     pub translate: TranslateConfig,
+
+    /// 用户脚本（安装目录 `Scripts\` 下的 `.lua`）：禁用名单。
+    pub script: ScriptConfig,
 }
 
 /// 首次运行写出的模板：默认值全部列出并注释，用户改一处即可。
@@ -113,10 +118,14 @@ candidate_count = 9
 candidate_association_counts = 2
 # 候选项序号样式：decimal 1.~9. / circled ①~⑨ / roman Ⅰ~Ⅸ / dingbat ❶~❾ / parenthesized ⑴~⑼
 item_number_style = "decimal"
-# 候选框最小宽度（物理像素，只在竖排时有效）
+# 候选框最小宽度（物理像素，竖排与横排都生效）
 candidate_box_minimum_width = 180
 # 展示更多候选项（打字时按 Tab）：组句里 Tab 把候选窗展开成一整屏（竖排 5 列 / 横排 5 行）
 show_more_candidate_items = false
+# 使用鼠标选词：off 关闭（新用户缺省）/ more_candidates 仅「展示更多候选项」展开时 / always 全部开启
+mouse_word_selection = "off"
+# 展开后每个候选项的最大宽度（物理像素，0 表示不限）：展开成网格时每格不超过它，太长的截断并显示 …
+candidate_item_maximum_width = 420
 # 在下列程序中不显示候选框：这些程序里输入法完全不接管、按键原样交给应用（写 exe 文件名，不区分大小写）
 program_list_of_hiding_candidate = []
 # 组句中的拼音显示在哪：both 行内和候选窗口 / inline 只在行内 / window 只在候选窗口（应用里不放 marked text）
@@ -198,6 +207,11 @@ dictionary = "glossary-en.db"
 need_times = 3
 # 「重置学习内容」每点一次加 1；Server 看到它变了就把选中词典的学习记录清空
 reset_counter = 0
+
+[script]
+# 禁用的用户脚本（安装目录 Scripts\ 下的文件名，大小写不敏感）：设置页的「启用 / 禁用」开关写这里。
+# Server 启动时按它跳过（改完要重启 Server）。每个脚本必须在文件最前面声明清单，见安装目录的 Scripts\template.lua
+disabled = []
 "#;
 
 impl Config {
@@ -380,6 +394,7 @@ mod tests {
         assert_eq!(config.candidate.candidate_association_counts, 2);
         assert_eq!(config.candidate.candidate_box_minimum_width, 180);
         assert!(!config.candidate.show_more_candidate_items);
+        assert_eq!(config.candidate.candidate_item_maximum_width, 420);
         assert_eq!(config.input.punctuation_marks_mapping, 0);
         assert!(config.input.punctuation_mapping().is_empty());
         // 字体：候选 13pt、序号 11pt
@@ -389,6 +404,16 @@ mod tests {
         assert!(!config.debugging.auto_hide_float_tool_bar);
         assert_eq!(config.translate.dictionary, "glossary-en.db");
         assert_eq!(config.translate.reset_counter, 0);
+    }
+
+    #[test]
+    fn script_disabled_reads_from_toml_and_defaults_empty() {
+        assert!(Config::default().script.disabled.is_empty());
+        let config: Config =
+            toml::from_str("[script]\ndisabled = [\"a.lua\", \"B.LUA\"]\n").unwrap();
+        assert_eq!(config.script.disabled, ["a.lua", "B.LUA"]);
+        // 模板里带着这一节（新装的用户不用手加）
+        assert!(TEMPLATE.contains("[script]\n"));
     }
 
     #[test]

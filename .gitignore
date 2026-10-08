@@ -11,6 +11,11 @@
 /LocalDictionary
 /Phrases/*
 !/Phrases/Phrase.db
+# 用户脚本目录：只跟踪「新建脚本」的模板与 lib\ 下的工具 / 示例（随包发），
+# 用户自己写在 Scripts\ 根部的脚本（可能带着自己的 API key）一律不进仓库
+/Scripts/*
+!/Scripts/template.lua
+!/Scripts/lib/
 tree.md
 version.txt
 cargo-build.ps1

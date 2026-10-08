@@ -110,17 +110,25 @@ fn expression_mode_spells_chinese_numerals() {
 
 #[test]
 fn expression_mode_other_punctuation_commits_then_applies() {
-    let mut router = router();
-    type_letters(&mut router, "v");
-    press(&mut router, digit(1));
-    press(&mut router, punct('+'));
-    press(&mut router, digit(2));
-    // 逗号不是算式的一部分：先把首选上屏，逗号按没在组句处理。
-    // 上屏的是数字 3，而「数字后标点使用半角」缺省开着，所以逗号保持半角（配置可关，见输入页）
-    let (outcome, commit, frame) = press(&mut router, punct(','));
+    // `,` 是函数的参数分隔符（算式的一部分）：进缓冲区，不上屏
+    let mut comma = router();
+    type_letters(&mut comma, "v");
+    press(&mut comma, digit(1));
+    let (outcome, commit, frame) = press(&mut comma, punct(','));
+    assert_eq!((outcome, commit), (KeyOutcome::Consumed, None));
+    assert_eq!(preedit(&frame), "v1,");
+
+    // 别的标点（`;`）不是算式的一部分：先把首选上屏，再按没在组句处理。
+    // 上屏的是数字 3，而「数字后标点使用半角」缺省开着，所以分号保持半角（配置可关，见输入页）
+    let mut other = router();
+    type_letters(&mut other, "v");
+    press(&mut other, digit(1));
+    press(&mut other, punct('+'));
+    press(&mut other, digit(2));
+    let (outcome, commit, frame) = press(&mut other, punct(';'));
     assert_eq!(
         (outcome, commit),
-        (KeyOutcome::Consumed, Some("3,".to_owned()))
+        (KeyOutcome::Consumed, Some("3;".to_owned()))
     );
     assert!(preedit(&frame).is_empty());
 }

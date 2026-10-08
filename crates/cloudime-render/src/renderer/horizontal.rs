@@ -32,7 +32,7 @@ impl Renderer {
         if let Some(footer) = frame.footer.as_deref() {
             width = width.max(m.column_gap() + self.measure(footer, &m.footer_style()).width);
         }
-        let mut height = row_height + self.bottom_line_height(frame, m);
+        let mut height = row_height + self.info_height(frame, m);
         if let Some((annotation_width, annotation_height)) =
             self.highlighted_annotation_size(frame, m)
         {
@@ -139,10 +139,13 @@ impl Renderer {
             );
             x += width + m.column_gap();
         }
-        // 底部那一行：左侧翻译 Tip、右侧页码。`top` 已经含了一个行内留白，这里只再加最后一行的底边，
-        // 与竖排 / 矩阵同一个基准（切换展开 / 收起时 Tip 不会上下跳）。
-        self.draw_bottom_line(canvas, frame, m, left, top + row_height, content_width);
-        // 高亮候选的译文
+        // 高亮候选的译文（横排时它在候选下面单独一行）、以及它下面的底部信息区。
+        // 两者的纵向次序必须与 `horizontal_size` 里预留的「候选行 + 译文 + 信息区」一致：
+        // 以前信息区画在 `top + row_height`、译文画在 `y + row_height + row_padding()/2`，
+        // 两段落在同一处，译文长一点就和 Tip / 页码叠在一起。
+        let annotation_height = self
+            .highlighted_annotation_size(frame, m)
+            .map_or(0.0, |(_, height)| height);
         if let Some(row) = frame.highlighted.and_then(|i| frame.rows.get(i)) {
             let mut x = left + m.padding() + inset;
             let annotation_top = y + row_height + m.row_padding() / 2.0;
@@ -151,6 +154,14 @@ impl Renderer {
                 x += self.draw_text(canvas, segment, &style, x, annotation_top);
             }
         }
+        // 没有译文时保持原来的基准（`top` 已经含一个行内留白，与竖排 / 矩阵一致，
+        // 展开 / 收起切换时 Tip 不会上下跳）；有译文就排在它下面。
+        let info_top = if annotation_height > 0.0 {
+            y + row_height + annotation_height
+        } else {
+            top + row_height
+        };
+        self.draw_info(canvas, frame, m, left, info_top, content_width);
         rects
     }
 }

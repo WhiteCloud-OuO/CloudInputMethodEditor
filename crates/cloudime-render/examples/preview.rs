@@ -8,7 +8,7 @@ use std::time::Instant;
 use clap::Parser;
 use cloudime_render::{
     FontLibrary, Frame, Layout, Preedit, PreeditSegment, PreeditStyle, Renderer, Row, Shadow,
-    StatusCell, Theme, Tone,
+    StatusCell, Theme, TipSegment, Tone,
 };
 
 #[derive(Parser)]
@@ -78,11 +78,13 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let shadow = (!args.no_shadow).then_some(Shadow::panel());
 
-    let scenes: [(&str, Frame, Layout); 7] = [
+    let scenes: [(&str, Frame, Layout); 9] = [
         ("matrix-horizontal", matrix(), Layout::Horizontal),
         ("matrix-vertical", matrix(), Layout::Vertical),
         ("nihao-vertical", nihao(), Layout::Vertical),
         ("nihao-horizontal", nihao(), Layout::Horizontal),
+        ("online-vertical", online_translate(), Layout::Vertical),
+        ("online-horizontal", online_translate(), Layout::Horizontal),
         ("corrected-vertical", corrected_japanese(), Layout::Vertical),
         (
             "corrected-horizontal",
@@ -270,9 +272,25 @@ fn matrix() -> Frame {
         columns: 9,
         min_cell_width: 0.0,
         tip: None,
+        online: None,
         footer: Some("2/12".into()),
         status: None,
     }
+}
+
+/// 示例帧：本地 Tip（bottom 那一行）+ 在线翻译（它下面单独一行）都在，
+/// 用来核对新增那一行的高度、配色与截断。
+fn online_translate() -> Frame {
+    let mut frame = nihao();
+    frame.tip = Some(vec![
+        TipSegment::new("n. ", Tone::TranslateMeta, true),
+        TipSegment::new("hello", Tone::TranslateFresh, false),
+    ]);
+    frame.online = Some(vec![
+        TipSegment::new("在线 ", Tone::TranslateMeta, false),
+        TipSegment::new("Hello, how are you today", Tone::Online, false),
+    ]);
+    frame
 }
 
 fn nihao() -> Frame {
@@ -326,6 +344,7 @@ fn nihao() -> Frame {
         columns: 0,
         min_cell_width: 0.0,
         tip: None,
+        online: None,
         footer: Some("1/6".to_owned()),
         status: None,
     };
@@ -384,6 +403,7 @@ fn corrected_japanese() -> Frame {
         columns: 0,
         min_cell_width: 0.0,
         tip: None,
+        online: None,
         footer: None,
         status: Some("已删除「开放」".to_owned()),
     }
@@ -399,6 +419,7 @@ fn probe() -> Frame {
         columns: 0,
         min_cell_width: 0.0,
         tip: None,
+        online: None,
         footer: None,
         status: None,
     }

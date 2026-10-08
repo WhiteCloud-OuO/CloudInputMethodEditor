@@ -39,6 +39,23 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 
 表达式：`shortcut::candidates` 以固定前缀 `v`（`EXPRESSION_PREFIX`）认表达式模式，算四则运算与中文数字；`rq` / `sj` / `xq` 出日期 / 时间 / 星期，候选是 `CandidateKind::Shortcut`，上屏吃掉整段作用域。`Engine::expression_mode` 决定组句中数字与运算符进缓冲区还是选词。
 
+`shortcut::evaluator` 是**复数内核**（实部 + 虚部，`Complex`）：`+ - * / % ^ ! @`、括号、一元正负号，
+**不做隐式乘法**（`6i`、`2(3+4)`、`2x3` 都是语法错，`x` 也不当乘号）；函数见 `call`（三角函数收角度、
+带 `r` 的收弧度、反三角返回角度、`lg/ln/log/sqrt/sinh/cosh/tanh/arrange/combine/avg/vari/sum`）。
+`pow` 两边都是实数时走 `powf`（`2^10` 精确），否则走极坐标（`sqrt(-4)` = `2i`）—— 极坐标带出来的
+`cos(π/2)` 那种 1e-17 噪声由 `denoise` 按**相对**量级收掉；`Complex::new` 顺手把 `-0.0` 收成 `0.0`
+（不然 `atan2(-0.0, -4)` 给出 `-π`，`sqrt(-4)` 会算成 `-2i`）。算不了（语法错、除零、定义域外、
+溢出 / 非有限）一律 `None` = 空候选。
+
+**表达式计算器面板**：`Engine.calculator`（壳在 `v` 模式里按 `Tab` 设、`Tab` / `Esc` 清，组句结束也清）——
+开着时 `query_expression` 走 `shortcut::result_candidates`：**只给结果那一条候选**
+（算式空着给 `0`，算错给空），拼音行用 `typed_display` 显示算式本身（去掉 `v`）。壳那一侧：
+`apply_function_key` 的 `TAB` / `ESCAPE` 先看 `calculator`（进 / 出面板，不展开候选窗）、
+`apply_printable` 在面板里把**所有可打印 ASCII**都 `push` 进算式（标点按西文，忽略全角 / 符号映射），
+`composed::expression_hint` 按状态给底部那一行的提示（`v` 模式：「输入数字或表达式」；
+面板：「按Tab/Esc退出表达式计算」）。面板里回车走 `calculator_expression`：算得出来就上屏「算式=结果」
+（`5*6=30`），否则原样上屏（`take_raw` 顺手清组句，`calculator` 由 `handle_key` 的空组句那一拍清掉）。
+
 `Engine` 是对外唯一门面，`Learner` trait 在 `engine` 模块；词库是「用户词 + 主词库 + 稀有词库（`with_rare` / `set_rare_enabled`，缺省关闭）+ 附加词库（`set_extra_dictionaries`，按添加顺序）」的列表，**按优先级从高到低**；同一个词在靠前词库里命中后，后面的词库不再重复产出（跨词库去重、靠前优先：词级在 `Engine::lookup_across_dictionaries`，整句词图在 `sentence::span_candidates`，都按 `text` 挡重），**同一本词库内部的重复不去重**，留给 `ranking::rank` / `dedup_by` 按名次保留最高的一条。繁体输出（`traditional` 开关与 `traditional_map` 映射）依赖 `ferrous-opencc`（`s2tw`）在出候选与上屏边界转换，内部保持简体。
 - 候选排序分两级：先按**结构键**，同一结构下再按**权重**降序、`hit.text` 升序。结构键（`ranking::Scored`）依序：
   ① 覆盖的输入字母数降序（`kaif` 的 开发 先于只覆盖 `kai` 的 开）；② 非末尾的简拼音节数升序（`kai f a` 是 1、`kai fa` 是 0）；
@@ -51,6 +68,9 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
   （`词频 × 用户权重因子 × 纠错折扣 × 联想折扣`）砍到 `limit×2`，不查上下文与同输入串选择次数。
   用户权重因子 `Learner::rank_weight` 替代了原来的 `1 + 全局选择次数`：自造词的权重就是它在用户词库里的词频（初始 = 各字词库词频最大值，
   每次重选 ×1.2），其余词按全局重复次数每次 ×1.15（封顶见 `cloudime-learning`）。
+  脚本给的加权 / 降权（`Engine::set_word_adjustments`，词文本 → 系数）也乘在这一层：结构键、读法层级、纠错与联想折扣
+  都不动，所以系数只改「同一档里谁更靠前」，覆盖少的词再重也不会跑到覆盖满的词前面。Core 还把这层的分数按文本
+  记进 `Query::weights`（`rank_pool` 交回「候选 + 权重」，平台层用它给脚本看排序依据）。
 - 中英混输的英文词、整句与中文词一起进同一个池子按上面的键排。英文词没有音节读法，结构键借用整段读法的简拼数与末音节完整性
   （敲的是同一串字母），否则英文词会凭「没有简拼、末音节必然完整」天然压过同覆盖的中文简拼读法（`mp` 的 MP 压 门票）；
   英文权重 = 英文词频 × (1+选过次数)，没有词频按 1.0。句末英文词并入整句（`EnglishTail`）不受影响。
@@ -81,6 +101,8 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 `EngineSession` 保存可挂起的组句、标点、历史与学习链，`Engine::swap_session` 在同一个引擎里交换输入状态，共用词库与落盘服务。切换上下文时清除查询及异步重排缓存，并由平台恢复各自私密状态。
 
 `Engine::raw_preedit()`（`engine/raw/`）只读返回 `RawPreedit { text, cursor_bytes }`：完整未上屏组合（已选文本 + 未选拼音）及 UTF-8 字节光标，与随后 `take_raw()` 共用文本生成，保留大小写、显式分隔符及光标后的剩余内容；不运行候选查询、不学习、不记日志、统计、历史或展示回报。首位固定 0，末位固定完整文本长度；`take_raw()` 的提交和清理顺序不变（回车 = 已选文本 + 剩余拼音原样，去掉手敲的 `'`；已选段在选中时已各自记过输入日志，这里只补未选拼音那一段）。
+
+拼音串**显示**走另一条路：`Query::marked_segments()` 把最优切分按音节用 `'` 拼起来（`join_marked`），光标后的剩余拼音另起一段、前面带一颗 `'`，所以显示串可能与敲的原文不同（`ni'hao` 是拼出来的）。光标前**末尾**那颗手敲的 `'` 没有「下一个音节」可接，`join_marked` 会丢，所以在 `marked_segments` 里补回来（光标后还有拼音时不补 —— 那一段自己就带一颗）；`segments_cursor` 早就按「显示串里有它」算光标，补上正好对齐。
 
 `Engine::discard_input` / `EngineSession::discard_input` 用于隐私能力变化时无痕清理输入，包括透传缓冲、学习链和暂存词汇曝光；`set_private` 只切换写入开关，保留已输入的组句。
 
@@ -171,8 +193,12 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 `candidate_count`（夹 5–9）、`candidate_association_counts`（联想候选项目上限，夹 0–4；候选列表里「比读法更长的词」最多留几条，
 见 `ranking::rank` 的 `association_limit`；缺省 2）、`pinyin_font` / `candidate_font` / `item_number_font`（各 `family` + `size` 的子表；
 缺省微软雅黑 11 / 13 / 11 pt）、
-`item_number_style`（decimal / circled / roman / dingbat / parenthesized）、`candidate_box_minimum_width`（物理像素，竖排时生效；缺省 180）、
-`show_more_candidate_items`（缺省关；开着时组句里 Tab 把候选窗展开成一整屏，见候选窗那一节）、`program_list_of_hiding_candidate`（名单里的 exe 完全不接管，
+`item_number_style`（decimal / circled / roman / dingbat / parenthesized）、`candidate_box_minimum_width`（物理像素，竖排与横排都生效；缺省 180）、
+`show_more_candidate_items`（缺省关；开着时组句里 Tab 把候选窗展开成一整屏，见候选窗那一节）、`mouse_word_selection`
+（off 关闭（缺省）/ more_candidates 仅展开成网格时 / always 全部开启；控制候选窗的鼠标悬停 / 点选，见候选窗那一节）、
+`candidate_item_maximum_width`
+（展开后每格的最大宽度，物理像素 / 点；缺省 420，0 不限 —— 在 `matrix_cells` 里给格宽封顶，超出的候选截尾加「…」；
+`Theme.max_cell_width` ← `RenderSettings.max_cell_width`）、`program_list_of_hiding_candidate`（名单里的 exe 完全不接管，
 `InputSettings.raw_input` 通知 DLL）、`preedit`；`[status_bar]` 只剩位置（开关删了，状态条常开，只跟「当前输入法是不是云朵输入法」走）；
 `[status_bar]` 有 `show_status_bar`（缺省开；`StatusBarConfig` 手写 `Default`——`#[serde(default)]` 取的是结构体的 `Default`，不写就变成 `bool::default()` = 关，老配置会莫名其妙不显示工具条）：关掉后 Server 的 `reconcile_status` 始终收起，桌面上不再出现那条工具条（按钮位置 `x` / `y` 照旧）。
 `[debugging]` 只有 `auto_hide_float_tool_bar`（缺省关）：开着时前台全屏（`ui/status/fullscreen.rs` 每秒查一次）收起悬浮工具栏，
@@ -252,6 +278,12 @@ Tip 是 `Vec<TipSegment>`（文本 + 深浅 + 是否斜体）：词性、释义�
 斜体要真的斜得有斜体字面：`fonts/windows.rs` 因此补了 `segoeuii.ttf` / `ariali.ttf`
 （微软雅黑没有斜体面，只请求 `Style::Italic` 会回落到正体）。Tip 放不下时截断加「…」（窗口宽度不为它撑大）。
 
+底部信息区还在本地 Tip 那一行**下面**多画一行**在线翻译**（内容由脚本给，见 `docs/design/online-translate.md`）：
+`Frame::online` 与 `Frame::tip` 用同一套 `TipSegment`，`Tone::Online` 走 `colors.online`（缺省 `#0f6cbd`）；
+两行合起来的高度由 `Renderer::info_height` / `draw_info` 算并画（竖排 / 横排 / 矩阵三条路共用），
+等待「翻译中…」、成功译文、失败原因三态的颜色由壳在 `ui/candidates/render_data.rs::online_segments` 里定。
+`examples/preview.rs` 的两个 `online-*` 场景就是拿来看这一行的。
+
 自绘渲染器：候选窗一帧 + 主题 → 预乘 RGBA 位图，tiny-skia 栅格 + cosmic-text 文字（fontdb 按清单只加载几个字体文件、不扫系统），
 自己解析 `trak` 字距表、按主题 gamma 加深笔画；配色只有一套（`Theme::new()` / `Palette::new()`，浅色单套，不再分深浅；拼音串与候选项序号是纯黑，页码仍是弱化的灰）；
 cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 `qingjian-opsz`，workspace `[patch.crates-io]` 钉 rev）。
@@ -291,11 +323,17 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 底部那一行（Tip + 页码）的**基准三处布局统一**：竖排 / 横排 / 矩阵都画在「最后一行的底边 + 一个行内留白」处
 （矩阵原来多算了 `row_padding / 2`、横排多算了一个 `row_padding`），展开 / 收起切换时 Tip 不会上下跳那几像素。
 
+**横排里信息区排在「高亮候选的译文」那一行下面**（`draw_horizontal`）：横排的译文是候选下面单独一行
+（竖排它在候选右侧那一列），`horizontal_size` 预留的高度本来就是「候选行 + 译文 + 信息区」，
+但画的时候信息区落在 `top + row_height`、译文落在 `y + row_height + row_padding() / 2`，
+两段同一处 —— 译文长一点就和 Tip / 页码叠在一起（预览 `nihao-horizontal` / `online-horizontal` 能看出来）。
+现在有译文时信息区改画在 `y + row_height + annotation_height`（与预留一致），没有译文时保持原基准不动。
+
 **缩放只有一个倍数**：渲染器只认「点 → 像素」一个 `scale`，主题里所有长度（字号、留白、间距、圆角、阴影）都乘它。
 所以壳的滚轮缩放不用改渲染器：候选窗把缩放的倍数折进传给 painter 的 DPI（`ui/candidates/mod.rs::effective_dpi` =
 显示器 DPI × `1.2^级数`），框、字、留白、阴影就一起变。级数存的是整数，上去再下来精确回 100%；`hide()` 里归零
 （窗口一关就回 100%，与「收起态宽度」一样属于这次弹窗的临时状态）。两处随之放宽：`ui/painter::scale` 不再拿 96 当下限
-（缩小时倍数小于 1），`preferred_size` 里竖排的最小宽度改成按点算（`m.px(theme.min_width_pixels)`，原来是
+（缩小时倍数小于 1），`preferred_size` 里的最小宽度改成按点算（`m.px(theme.min_width_pixels)`，原来是
 `min_width_pixels / scale`，缩放时会朝反方向跑）。
 
 ## crates/cloudime-update
@@ -304,6 +342,53 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 （`signature.rs`，`PUBLIC_KEYS` 列表，`verify_strict`）；`checker/` 是调度（`Checker::poll` 由壳的每秒定时器调，到点起一次性线程）、落盘状态 `UpdateState`（`update.json`，先写临时文件再改名）
 与查到的结果 `Available`。`Version` 自己实现语义化版本比较，不引 semver。`[update]` 配置与 `UpdateChannel` 在 `cloudime-platform`。
 `examples/check.rs` 手动走一遍；`tools/release-sign` 是发版侧的 keygen / sign / verify。
+
+## crates/cloudime-script
+
+用户脚本的运行时：`mlua` + LuaJIT（版本在根 `[workspace.dependencies]` 里定，特性 `luajit` + `vendored`）——
+LuaJIT 源码随 crate 编译进二进制，装机包不依赖机器上装的 Lua，与 `rusqlite` 的 `bundled` 一个路子；
+`mlua` 只在这个 crate 声明一次，别处用 `cloudime_script::mlua` 这个再导出。LuaJIT 在 x64 与 i686 都编得出来
+（TSF DLL 有 32 位那份），2026-10-07 起。
+
+`runtime.rs` 是全部：`Runtime::load(dir)` 读 `dir` 下的 `*.lua`（按文件名排序）依次 `exec`，`Runtime::none()`
+是不读盘的空运行时（`RouterConfig::scripts_dir` 为 `None` 时用它）；脚本用全局表 `cloudime` 的
+`on(事件名, 处理函数)` 登记、`log(文本)` 写日志，另读 `cloudime.context`（光标前文，派发前由 `set_context` 刷新）。
+规则（没脚本走老路 / 有脚本在固定四处跑、风险自担）见 `docs/design/script.md`，这里只记实现。
+**清单**：每个脚本必须最先声明 `cloudime.script{…}`（字段见上面那份文档），`runtime.rs::parse_manifest`
+校验；缺 / 不合法 → 那个脚本不加载，注册过一半的处理函数也撤掉（`retract_handlers`）。`apps` 进 `dispatch`
+过滤（`None` = 不过滤，`startup` / HTTP 回调就是）、`priority` 决定派发顺序（大的在后，合并时盖住前面的）、
+`budget` / `timeout` 由 `Runtime::arm` 在**每次调用前**按该脚本的清单上紧、出错时先调清单里的 `on_error`；
+`cloudime` 表锁成**只读代理**（`__index` 指向本体、`__newindex` 报错），本体留在 `Runtime::host` 里
+给运行时自己写 `context`；`rawset` 能绕过这道锁，但只改到脚本自己看到的那份（运行时的函数本体不受影响）。
+`cloudime.on` 只在加载期允许（`loading` 标记）；`http_get` 的响应时间限制不能超过清单里的 `timeout`。
+`Runtime::load(dir, disabled)` 读**安装目录**的 `Scripts\`（Server 里 `RouterConfig::from(&config).with_bundled_scripts()`
+指过去）：按文件名排序执行，**跳过 `template.lua`**（新建脚本的模板）与 `[script] disabled` 里列到的文件（大小写不敏感）。
+清单的 `description` 只是记下来进日志（设置页自己扫文件取它，见 `docs/design/script.md`）。
+`dispatch` 把处理函数**返回的表**按登记顺序递回调用方
+（返回 `nil` / 别的类型的跳过）—— 返回值是什么意思本 crate 不管，由派发方（Server）定；`has_handlers(事件名)`
+让派发方在没人关心时连载荷都不拼。
+
+**HTTP**（`http.rs`）：`cloudime.http_get(url, timeout_ms, callback)` 与
+`cloudime.http_post(url, body, { timeout_ms, headers }, callback)` 共用同一条管线
+（`Pending { url, deadline, callback, manifest }` + 一个 `mpsc` 回信通道）。请求在**一次性线程**里跑
+（与 `cloudime-update` 同一套 reqwest + 单线程 tokio），派发线程只做「收结果 → 调回调」——不阻塞输入；
+`http_post` 的表头在 Lua 那层先验一遍（名字 / 值不合法当场报 Lua 错），免得后台线程 panic。
+**`timeout_ms` 都是必给参数**（给 0 / 不给直接报错、请求不发，且不能超过清单里的 `timeout`），
+`Runtime::poll_requests(候选表)` 交付结果时还会再比一次时限：**超过时限才回来的收信直接丢掉**（记一条日志）。
+结果表成功是 `{url, status, body}`、失败是 `{url, error}`；`poll_requests` 返回回调**返回的表**
+（同事件那套语义），另给 `has_pending_requests()` 让调用方在没挂着请求时跳过整段。
+
+**脚本拿到的是 mlua 的「安全子集」标准库**（`io` / `os` / `package` 都在，`debug` 没有）加上几处刻意改动
+（`os.exit` / `os.execute` / `io.popen` / `io.stdin` / `coroutine`，见 `docs/design/script.md`）—— 定调是
+「脚本就是用户自己写的本机程序，风险自担」，但**先把能卡住工人线程的入口堵掉**。
+加载期与派发期的 Lua 错误都只记日志、跳过那一个
+脚本 / 处理函数，绝不让脚本错误影响输入法；派发时先把处理函数 clone 出来再放开 `handlers` 借用，处理函数里
+再 `cloudime.on` 不会重入 panic。
+
+**引擎挂在 Server，不挂 DLL**（2026-10-07 定）：DLL 被加载进每个应用、脚本的 JIT 在开了 ACG 的宿主里会失败、
+脚本一崩还会连累宿主应用；而 Server 正对着协议两头（DLL 送来的按键 / 前景 / 光标矩形，DLL 要照做的上屏 /
+帧 / 状态条），「脚本操作输入法」在 Server 侧就够。DLL 侧真要 TSF 直通再单独评估。见 `apps/windows` 那节的
+「用户脚本」。
 
 ## apps/cli
 
@@ -330,6 +415,143 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 启动装配（`server/src/assembly/`）里语言模型读不出来就**就地降级**——退化成一元词频整句——而不是让 Server 起不来；
 只有主词库坏了才回落 `assets/sample/dict.tsv`，连样例都装不起来才 `exit(1)`。数据坏了只该掉效果：曾因为随包 `.qj` 还是改名前的魔数，
 Server 装配直接退出，表现成「装完打不出候选、按键没反应、状态条也不显示」。
+
+**用户脚本**（0.1.0 起，运行时见 `crates/cloudime-script`）：脚本放数据目录 `%APPDATA%\CloudIME\scripts\*.lua`，
+`RouterConfig::scripts_dir` 由 `main.rs` 的 `RouterConfig::from(&config).with_user_scripts()` 指过去
+（`RouterConfig::default()` 不带它 —— 测试不该去读开发机上真实的脚本目录）。`Router::new` 里 `Runtime::load`
+加载，之后每次按键在 `handle_key` **最前面**派 `key`（脚本看到的是这一键**处理之前**的状态），
+`recompose()` 把引擎排好的候选交出去派 `candidates`，全部加载完再派一次 `startup`。
+事件名与载荷在 `server/src/dispatch/script.rs`：
+
+- `startup`：空表。
+- `key`：`app`（宿主 exe 名）/ `vk` / `char` / `ctrl` / `alt` / `shift` / `caps` / `english_mode` / `composing` / `mode`
+  （`chinese` / `english` / `disabled`）。
+- `candidates`：1 起的数组（另有 `app` 字段说明这是哪个应用），每项 `{ text, display, pinyin, weight, kind }` —— `pinyin` 是词库读音、
+  `weight` 是 **Core 的排名权重**（`Query::weights`，词频 × 用户权重 × 选择次数 × 上下文 × 纠错 × 联想；
+  快捷候选不在表里，没有这一项），`kind` 是 `chinese` / `english` / `shortcut` / `custom` / `sentence`。
+  脚本据此自己定序（见 `order` 与 `adjust`）。
+
+脚本还能读 `cloudime.context`：光标前文 —— 应用里已经输入、不在候选窗口里的那段文本。它本来就是 DLL 送来的
+`ClientMessage::Surrounding`（DLL 在组句起始时读 TSF 的光标前文，见日志里的「送光标前文 N 字」），Router 在
+`set_surrounding` 里留一份、`stop_rescoring` 里清掉，**不需要 Core 侧接口，也不需要 `WM_GETTEXT`**。
+
+处理函数**返回一张表**就是「这一拍要改什么」：多个脚本按登记顺序合并，后面的盖前面的（表里缺的项不动），
+读的时候按类型严格匹配（**不让 Lua 把数字悄悄转成字符串**，`commit = 42` 当写错了记一条日志），认得的键：
+
+| 键 | 类型 | 意思 |
+|---|---|---|
+| `passthrough` | `true` | 这一键不吃、原样交给应用（游戏里抢键就靠它） |
+| `commit` | 字符串 | 吃掉这一键、直接上屏这段文本（`reset_composition` 清掉当前组句） |
+| `notice` | 字符串 | 候选窗里显示一行提示（`Frame::notice`，随这一帧下发、下一次按键清） |
+| `order` | `{2, 1}` | 候选排序：1 起下标按这个顺序排到前面，没列到的按原顺序接在后面 |
+| `display` | `{[1] = "译①"}` | 候选显示：原下标（1 起）→ 显示的文本（上屏的仍是 `text`） |
+| `adjust` | `{["云朵"] = 2.0}` | 加权 / 降权：词文本 → 系数（>1 加权、<1 降权、0 沉底）；整份替换，空表全清 |
+
+`order` / `display` **不绕开引擎**（2026-10-07 定）：`apply_candidate_actions` 把重排 / 改显示落到
+`Composed::Candidates` 的 `CandidateLayout` 上（`CandidateLayout::new` 重建），之后的方向键、数字键、鼠标
+点选都按新顺序走，选中第几个仍由 `Engine::commit` 去上屏 / 并进组句；高亮按「原下标 → 新下标」跟着原来那个
+候选走。越界 / 重复的项记日志跳过，脚本写错不会把候选搞没。
+
+`adjust` **排序环节仍在 Core**（2026-10-07 定）：`handle_key` 里把它递给 `Engine::set_word_adjustments`
+（内容没变时 Core 自己跳过），Core 在 `engine/query` 里把它乘进每条命中的**用户权重因子**那一层 ——
+结构键（覆盖字母数、末音节、`exact`）、读法层级、纠错与联想折扣都不动，所以系数只改「同一档里谁更靠前」，
+覆盖少的词再重也不会跑到覆盖满的词前面。脚本调参前想知道 Core 怎么排的，看 `candidates` 载荷里的 `weight`。
+
+`notice` 与 `adjust` 在**没有按键的那两拍**（`candidates` 事件、HTTP 回调）也认（`apply_common_actions`）；
+`passthrough` / `commit` 要有按键才谈得上，那两拍给了就记一条日志忽略。
+
+**`cloudime.candidate.redraw()`**：脚本请 Server 把当前这一屏重算一遍再重画。Runtime 里就是一个
+`Cell<bool>` 脏标记（`take_redraw_request`），Server 在两处兑现：按键那一拍（`handle_key` 末尾）与
+收异步回调那一拍（`poll_scripts_requests`，**即使回调没返回动作表**也照样重画 —— 这正是它存在的理由）；
+`candidates` 那一拍里调会被忽略（那一拍本来就在重算，免得自己套自己）。
+
+**量文字**（`cloudime.ui.measure` / `measure_tip`）：`ui/measure.rs` 里的 `SharedMeasurer` 自己建一个
+`Renderer`（**懒加载**，读系统字体一次几百毫秒）+ 一份与候选窗同源的 `Theme`（字族 / 字号从同一份
+`RenderSettings` 算），用 `Renderer::measure_font`（`cloudime-render` 新加的公开接口，走同一套整形 /
+回退链）量出**点**宽高。**不借候选窗那个渲染器**：`SharedPainter` 是 `Rc<RefCell<…>>` 只有 UI 线程能用，
+从工人线程去借要么卡输入要么抢锁。Server 在 `Router::new` 里把这个量尺装进脚本运行时
+（`Runtime::set_measure`），字体设置变了由 `apply_config` 刷新（量尺自己比对后重建）。
+
+**截断 / 折行**（`cloudime.ui.truncate`）：就用上面那个量尺，`"ellipsis"` 从尾部去字补「…」；
+`"wrap"` 贪心按行宽折（优先在空白处断、空白甩掉不带进下一行，没有空白的中文从任意处断），
+最多 `max_lines` 行、剩下的在末行补「…」（与渲染器同一个省略号），返回
+`{ text, lines, truncated, width }`。
+
+**问窗口多大**（`cloudime.candidate.width()`）：UI 线程每画一帧把内容区尺寸（点）写进 `ui/viewport.rs` 的
+`Viewport`（两个 `AtomicU32` 存 f32 位模式：`0` = 还没画过 / 收起时 `clear`），`UiHandle`（也就是
+`CandidateSink` 的实现）把它报给 Router（`CandidateSink::viewport`）；Router 在每次派发脚本事件 /
+收回调之前 `scripts.set_viewport(...)`（与 `set_context` 同一时机），Lua 那边读一个 `RefCell`。
+工人线程读、UI 线程写，所以用原子量而不是 `Rc<Cell>`。
+
+**在线那一行支持多行**：`Frame.online` 还是 `Vec<TipSegment>`，渲染器在 `info_height` / `draw_info`
+里用 `online_lines` 按 `\n` 拆成几行（每行各自左对齐、各自按宽度截断），窗口高度 = 底部那行 +
+行数 × 翻译行高 + 行间距 —— 所以脚本把折好的多行文本写进 `online`，窗口自己变高，不用 `set_page_size`。
+一行都不写换行时与以前完全一样。
+
+**读输入框文本**（`cloudime.text.all` / `before` / `after`）：只有 TSF DLL 读得到 ——
+`com/edit/surrounding.rs::document_text` 在起组句的那次编辑会话里读：光标前后各读一半（各 10 万 UTF-16 单元
+上限）拼成「以光标为中心」的 `DocumentText { text, caret }`，私密框不读。两半各用 COM 的
+`ITfRange::Clone`（`surrounding.rs::clone_range`）拿一份**独立** range 再挪 —— COM 接口的 Rust `.clone()`
+只是 `AddRef`、仍指向同一个对象，挪前一半会把后一半也带偏（真机表现为整篇翻倍，如「测试文本」变两遍）；
+同一坑在 `composition/mod.rs` 各处（`move_selection` / `shift_caret` / `delete_before_caret`）早就是用
+`unsafe { range.Clone()? }` 避开的。Server 侧 `dispatch/document.rs`
+把它当快照、按显示宽度切片（`weight`：中文 / 全角 2、西文 1）：`before` 从头部丢、`after` 从尾部丢、
+`all` 走 `keep_around`（前一半 + 后一半）。**快照组句结束不清** —— 清了的话每段组句的第一键都是 `nil`
+（DLL 那份要到组句起始的编辑会话才读得到，晚于第一键）；只在**换焦点 / 会话**（`ensure_focus` /
+`OpenSession` 重连 / `CloseSession`）或**转私密**时清。读取时机由 `ServerMessage::ModeSync.want_document`
+请：**有脚本就一直请**（每段组句起始读一份新的，快照跟着文档走；没脚本 `false`、零读取），DLL 下一次
+`ClientMessage::Surrounding.document` 带来 —— 两个方向都是**加字段**（serde default），老 DLL / 老 Server
+各自忽略，**不升协议版本**。`Document::store` **只认 `Some`**：没请 DLL 读的那段组句送的是 `None`，照单
+覆盖会让快照在「读到」与「抹掉」之间来回抖、脚本时灵时不灵，`None` 一律当「这次没有」忽略。
+`document_text` 光标前后两半各自 `unwrap_or_default`：光标在文档最开头时前一半为空，不算失败（两侧都空
+才是没有文本）。
+
+**已知坑：有的宿主只给「局部上下文」**（2026-10-08 真机排查）。Windows 11 记事本实测：起组句那一拍
+`GetSelection` / `GetStart` / `GetEnd` 都是 `0..0`（空），上屏之后又只剩刚上屏那一段（真机文档 6 个字、
+`GetText` 只回最后 2 个）——宿主把 TSF 上下文按选区 / 组句圈成了局部。这类宿主里 `cloudime.text.*`
+**读不到整篇**（给 `nil`）；Firefox / Word / 多数 Electron 应用给的是整篇，正常。曾试过「绕开 TSF
+从窗口层读」（`WM_GETTEXT` + UI Automation）：`WM_GETTEXT` 对记事本的 RichEdit 只回 1 个字；UIA 从
+**焦点元素**取到的是那段行内拼音（marked text）、从**前台窗口元素**再 `FindFirst(IsTextPatternAvailable)`
+在记事本里也没找到 Provider。**这条路暂时打住**，要通吃最省事的是注入 `Ctrl+A` + `Ctrl+C` 读剪贴板
+（注入前必须先收掉组句，否则 `Ctrl+A` 会被自家 DLL 吃掉、又派发回脚本成环）。另记一条硬教训：读窗口是
+**跨进程**调用，**绝不能**放在服务所有应用的那条工人线程上——工人线程一卡，所有应用等它回包就一起没响应
+（真机踩过）；要单独线程 + 超时。
+
+**剪贴板**（`cloudime.clipboard.settext` / `gettext`）：Lua 标准库没有剪贴板，实现在 Server 侧
+`dispatch/clipboard.rs`：写走 `EmptyClipboard` + `GlobalAlloc(GMEM_MOVEABLE)` + `SetClipboardData(CF_UNICODETEXT)`
+（UTF-16 + 结尾 0），读走 `GetClipboardData` + `GlobalLock` + 逐 UTF-16 单元转字符串；`OpenClipboard`
+短等重试 5 × 10ms，`Drop` 里 `CloseClipboard`。Server 就在用户会话里，所以不必经 DLL；接口由
+`Runtime::set_clipboard` 装进去。剪贴板是全局资源：打不开报错、里面没有文本给 `nil`。
+（`apps/windows/server/Cargo.toml` 因此加了 `Win32_System_DataExchange` / `Win32_System_Memory` /
+`Win32_System_Ole` 三个 windows feature。）
+
+**候选窗尺寸**（`cloudime.candidate.set_min_width` / `set_page_size` / `set_scale`）：Runtime 里收成一个
+`SizeRequest`（三项都是 `Option<Option<T>>`：没提 / 恢复默认 / 设成某值，`take_size_request` 取一次就清），
+Server 用 `apply_size_request` 落到 `RouterConfig` 的 `script_min_width` / `script_page_size` / `script_scale`
+上 —— 最小宽度与缩放折进 `RenderSettings`（`min_width_pixels` 与新增的 `scale`，变了才重新下发给候选窗；
+窗口 `effective_dpi` 用它覆盖 `Ctrl + 滚轮` 的级数，用户一滚就清掉自己那份让滚轮接管），一页候选数进
+`Router::page_size()` 所以要 `recompose` 才看得见。三项**只在本次组句内有效**：`handle_key` 末尾的
+「不在组句了」那一处与 `reset_composition` 都调 `clear_script_size()` 回配置值；配置热加载时也特意保留
+（与三个全角 / 半角字段同样处理）。
+
+**输入法自己的组合键优先**：`Ctrl+数字`（主键盘 / 小键盘）、`Ctrl+Enter`、`Ctrl+反引号`、`Shift+反引号`
+这四类**不派发给脚本**（`handle_key` 开头用 `input::reserved_combo` 判一下，命中的那几拍脚本完全看不到），
+Server 只按自己的语义处理 —— 谁先定义谁优先，脚本抢不走输入法的核心操作。别的 `Ctrl` 组合与不带修饰键的键
+照旧派发（脚本能 `passthrough` / `commit`）。
+
+**异步请求**：`cloudime.http_get(url, timeout_ms, callback)` 与
+`cloudime.http_post(url, body, options, callback)`（见 `crates/cloudime-script`）的结果在**以后某一拍**由
+`tick()` 里的 `poll_scripts_requests` 收：调
+`Runtime::poll_requests`（第二个参数是**那一刻**的候选，回调不必依赖请求发出时的旧下标），回调返回的表按同一套
+动作语义合并后落到当前这一屏，再 `reconcile_candidates` 重画。这一拍**没有按键**，所以 `passthrough` / `commit`
+从语义上无从谈起：给了就记一条日志忽略；`order` / `display` / `notice` / `adjust` / `online` 照常生效。
+
+**还没接的**（目标清单）：改「组句里已经选中的那一段」（Engine 没有「改组句内容」的入口，要 Core 侧新接口）、
+把 Core 的排序数据（词频 / 出处）交给脚本（`candidates` 载荷现在只有文本与来源，脚本改权重时不看 Core 的数字）、
+主题（主题功能本身还没做，先在动作表里留位）。
+**启动可执行文件**不用接：完整标准库的 `os.execute('start notepad.exe')` 已经能做。
+
+改脚本要重启 Server 才生效（托盘右键「重启输入法服务」），没有热重载。
 本地整句模型：`dispatch/rescore/` 按 `[candidate] use_local_sentence_organization_model` 在后台线程加载预热、停键后重排，见 `docs/design/architecture.md`「本地整句模型」。
 热加载的 `WordBank\` 目录与启动同款（按 `WordBank\Dict.db` 与附加词库的 mtime / 长度快照重装）；
 短语库（安装目录 `Phrases\Phrase.db`）也按文件 mtime 单独热重读；`[phrase] use_default_phrases` 变了也重读一遍。不合成一个 crate，因为 DLL 不能带 Engine 的依赖树，见 `apps/windows/README.md`；
@@ -369,6 +591,7 @@ Server 装配直接退出，表现成「装完打不出候选、按键没反应�
 对应 `[input]` 那八项（模糊音、符号映射、符号成对补全三组勾选都用 `ListView`，每项是一份 `ListViewItem`、内容就是一个自带文本的 `CheckBox`（`CheckBox` 是 `ContentControl`，文本直接 `.content(label)`，不用再套 `TextBlock`）；列表共用 `controls::scroll_list`——`selection_mode(None)` 不要选中高亮，`max_height` 卡在 5 行（`LIST_ROW_HEIGHT × LIST_VISIBLE_ROWS`），超出的组（符号成对补全 10 项）由列表自己出滚动条；简繁单选与候选页的排布单选走 `controls::radio_row`——**独立 `RadioButton`** 横排（同一个 `group_name` 互斥），**不用框架的 `RadioButtons` 容器**：容器一行内容的「期望高度」比实际渲染矮（渲染 32、期望 25），渲染出来的选项比自己盒子低 3.5px，左边的标签按盒子居中后看着总差一点，从外面（`min_height` / 套一层面板）也调不动；独立控件和开关 / 下拉一样是单控件，居中对得上；标点全半角下拉等）；标签与控件默认**垂直居中**（`controls::labeled`，标签不设对齐会被拉伸到整行高、文字却画在自己顶部，40 高的开关行里就偏上约 10px）；一行很高的控件（`ListView`、单选）改用 `controls::labeled_top` / `field_top`，标签顶对齐、与第一行内容对齐；「候选」页在 `pages/candidates.rs`，
 对应 `[candidate]`（本地整句模型开关、排布单选、个数滑轨（右侧跟一个当前值数字）、联想候选项目上限滑轨 0–4、三个「字体…」按钮弹系统字体对话框 `font_dialog.rs`、
 序号样式下拉、最小宽度、展示更多候选项、按程序隐藏的名单（下面每行一个 2 列 `Grid`——`Star` 列放程序名、「删除」按钮放第二列，外壳用 `controls::scroll_list` 卡 5 行，多了自己滚动））；「短语」页在 `pages/phrase.rs`（顶部「启用软件自带短语」开关；列表每行是一个 5 列 `Grid`——短语内容（`Star` 列，`Wrap` + `max_lines(3)` + 省略号）/ 候选内容 / 触发字母串 / 位置 / 编辑·删除两个按钮，列宽全部钉死（含操作列，否则表头那行没有按钮、`Star` 列会多占一截导致表头与数据行错位）；表单 + 列表读写安装目录 `Phrases\Phrase.db` 的 `user` 表）；
+「脚本」页在 `pages/scripts.rs`：顶部一行加粗红字的声明、三列 `Grid` 列表（文件名 / 介绍 / 启用开关 + 「删除此脚本」「编辑此脚本」）、「新建脚本」按钮；列宽与单元格抽成通用的 `controls::grid_row` / `controls::text_cell`（上面短语页那个 5 列 `Grid` 也改用它俩）；操作列宽 300 DIP，开关与两个按钮都放开最小宽度（`min_width(0)`，WinUI 的 `Button` 默认最小宽度是 120）、开关用 `ToggleSwitchSlot::OnContent` / `OffContent` 置空自带的「开 / 关」文字 —— 否则三个控件按默认宽度加起来顶出列外，最后那个按钮会被右边缘切掉一截。脚本目录 = 安装目录 `Scripts\`（与 `cloudime-script` 的 `DIRECTORY`、Server 读的同一处），列表跳过 `template.lua`；第二列的介绍是从文件里**文本扫**出来的（`describe_in` 认 `description = "…"` / `'…'`、跳过 `--` 注释）——设置程序里不执行脚本，Lua 运行时只在 Server；开关写 `[script] disabled`（`Config::set_array`，缺分节会补出来），删除先用 `rfd` 确认、再顺手把它从名单里摘掉；「新建脚本」在 `Scripts\` 取不重名的文件名（`script.lua` → `script-2.lua`…）、写入 `include_str!` 编进 exe 的 `Scripts\template.lua`，随后 `panel/notepad.rs` 用记事本打开并把模板 `WM_SETTEXT` 塞进它的 `Edit` 子控件（`EnumWindows` 先按我们刚起的进程号认主窗口、机器上本来开着别的记事本时才按类名 `Notepad` 兜底；等窗口与填字都在后台线程轮询，上限 4 秒，不卡界面）。这一页的改动（含开关）都要重启 Server 才生效 —— 「新建脚本」右边那个「重启输入法服务」按钮走 `crate::server::restart()`：连 `\\.\pipe\cloudime` 发一条 `ClientMessage::Indicator { RestartServer }`（设置程序不常驻连接，开一次用完即走），与托盘那条路完全一样（这条消息 Server 不回包，所以发完不等；连不上就把原因写在页面状态里）。
 「调试」页在 `pages/debugging.rs`：**原「统计」页整页搬来的输入统计面板**（末尾是「数据与组件」说明）与紧随其后的 `[debugging]` 自动隐藏开关、
 原来「高级」页的数据 / 日志入口（打开数据目录 / 打开日志目录 / 打包日志到桌面 / 清空输入日志四个按钮一行）与项目 GitHub 页面 / 帮助手册两个按钮一行、详细日志、学习输入习惯、记录输入日志。
 「帮助手册」（`Message::OpenTutorial`）用系统默认程序打开随包的 `tutorial.md`（`component.rs::tutorial_path` = `bundled_root()/tutorial.md`，走 `controls::open_document`；
@@ -379,6 +602,7 @@ Server 装配直接退出，表现成「装完打不出候选、按键没反应�
 设置窗口的标题栏图标走 `ViewContext::window_visuals(WindowVisuals::new().icon(path))`（`component.rs::window_icon`）——WinUI 3 不会自动取 exe 里的图标资源，必须显式 `AppWindow.SetIcon`，而那个接口只收 `&'static str`，所以算一次「exe 旁 `cloudime.ico`」的绝对路径再 `Box::leak`；装机包由 `cloudime.iss` 装这份 ico，开发时 `settings/build.rs` 往 exe 旁拷一份。
 设置窗口打开时的客户区写死 `WINDOW_CLIENT_SIZE`（`component.rs`：本机系统默认 1912×1028 的「宽取 2/3、高不变」= 1275×1028），再用 `clamp_to_work_area` 夹进主显示器工作区，小屏不顶出屏幕。**这个尺寸必须在第一次 publication 里就给具体值**：框架是「建窗 → 应用 `WindowVisuals` → `Activate`（显示）」三步，晚一步（让窗口先按系统默认显示、再靠 `on_window_size` 缩）用户就会看到「先宽后窄」闪一下；而那一刻窗口还没建出来（第一次 `view` 时枚举本进程窗口，一个都没有），量不到系统默认值，所以只能写死。`client_size` 收 DIP，框架自己按窗口 DPI 换算成像素。
 窗口**位置**居中走同文件另一个法子：框架的 `WindowVisuals` 没有位置，等它再到组件里跑一趟（下一次 `view`）窗口已经显示了，挪过去会看到「先左后中」闪一下（实测约 2 帧）。所以 `create` 里装一个**本线程的 CBT 钩子**（`SetWindowsHookExW(WH_CBT, …, GetCurrentThreadId())`，本进程自己的窗口、钩子过程不必进 DLL）：`HCBT_ACTIVATE` 在窗口真正显示**之前**同步回调，在那里 `SetWindowPos` 到所在显示器工作区正中就看不到闪动；`view` 里还留一条「按 pid 找窗口再挪」的兜底（`center_window_once`，`CENTERED` 一次性开关）。
+设置程序的 exe 清单由 `windows_reactor_setup::as_self_contained()` 生成（里面插着自包含标记 `<description>windows-reactor-self-contained</description>`，`build.rs` 在这一步之后**直接改 `OUT_DIR\app.manifest` 那一份**，往 `</assembly>` 前补一条 `Microsoft.Windows.Common-Controls 6.0.0.0` 依赖）：`rfd` 的确认框（`MessageBox`）、启动失败提示与系统字体对话框 `ChooseFontW` 这类**系统对话框**只有清单里有这个依赖才用主题控件，否则退回 comctl32 v5、按钮是老式 3D 外观 —— 框架自己的控件是自绘的，不受影响。**别另加一个 `/MANIFESTINPUT`**：两份清单交给链接器合并有丢掉自包含标记的风险（那标记是自包含部署的判据）。
 
 托盘「中 / 英」图标的右键菜单（`tsf/src/com/mode/menu.rs`，`TrackPopupMenuEx` 挂输入框所在窗口）固定几项、不再切中英：灰显的「云朵输入法」标题、分隔线、「设置」（`IndicatorCommand::OpenSettings`）、「查看帮助手册」（就地 `ShellExecuteW` 打开与 DLL 同目录的
 `tutorial.md`，不走 Server——那要给协议加枚举变体、还要升版本重装 DLL；`AssocQueryStringW` 问到这个扩展名没有默认打开方式时改用
@@ -481,7 +705,9 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 拉回页首」同一个意思。
 `Router::handle_candidate_event` 里悬停直接挪高亮，并把鼠标指的那一格记进 `Router::hover_cell`；**它指的那一格又正好
 是高亮时**，`recompose` 不把高亮拉回页首（否则每敲一键高亮条都会从页首滑到鼠标那儿），鼠标移出候选窗、组句结束或
-窗口收起才清掉。**上屏要等 DLL**：候选窗在 Server 手里、收不到按键，所以文本先攒进 `Router::pending_commit`，DLL 下一拍
+窗口收起才清掉。开头还按 `[candidate] mouse_word_selection`（`Router::mouse_selection_allowed`）过一道：
+`off` 时**悬停 / 点选**一律不理会（右键翻译、中键朗读、滚轮翻页照旧，那不是「选词」），`more_candidates` 时
+只有 `Router::show_more` 展开成网格那会儿才理会；缺省 `off`（新用户不用鼠标选词）。**上屏要等 DLL**：候选窗在 Server 手里、收不到按键，所以文本先攒进 `Router::pending_commit`，DLL 下一拍
 `Poll`（组句中 80 ms 一拍）用 `ServerMessage::Update::commit` 带回去，DLL 侧 `apply_poll_commit` 再走一次编辑会话落进
 文档。老 DLL（协议 < `CANDIDATE_CLICK_SINCE`）认不出这段文本却又会跟着清组句，所以 Server 见到老协议直接不认
 这一下点击（`supports_candidate_click`）。协议因此从 v15 升到 v16。
@@ -491,7 +717,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 「重置学习内容」（`[translate] reset_counter` 变了就 `Learning::reset`）都在这里落地；学习库只有 Server 一个写入者，
 设置程序只改配置文件，所以不用抢锁、也不会被内存里的旧值盖回去。`self_drawn_frame` 给自绘帧补 `tip`
 （只查**高亮候选**这一条，`Router::highlighted_text`）或多释义选择时的 `tip_choices`（`current_frame` 发给 DLL 的那份不带）。
-按键在 `input.rs`：`Ctrl + 反引号`（`codes::BACKQUOTE = 0xC0`，DLL 侧要放行所以 `is_ctrl_command_key` 里加了它）查释义，
+按键在 `input.rs`：`Ctrl + 反引号`（`codes::BACKQUOTE = 0xC0`；DLL 那边所有带 Ctrl 的组合都会先问一趟 Server）查释义，
 一条就 `Engine::commit_translation` 上屏、多条进 `begin_choices`；选择态下只有数字与 Esc 有效（`apply_key` 最前面分流到
 `apply_choice_key`）。Core 的 `commit_translation` 只把**落进文档 / 日志 / 历史的文本**换成译文，拼音消耗、学习、
 个人 n-gram、自动造词仍按候选走（`InputSource::Translation` 在评测里不计分）。
@@ -518,6 +744,23 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 之后照样 `reconcile_candidates(self_drawn_frame())`）；选择界面开着时**不重排**（`rescore` 那边跳过，
 否则 `Choices.index` 这个布局下标会对到别的候选上）。**右键（`Translate`，点在窗口任何位置都上报，
 没点中格子是 `None`）= `Esc` 取消**。不在选择界面时右键只认点中格子的那一下（`Translate(Some(index))`）。
+
+在线翻译那一行（`dispatch/translate/online.rs`，见 `docs/design/online-translate.md`）：**只是一个显示位**，
+内容由脚本给 —— 动作 `online = "文本"` / `{ text, state }` / `false`（清掉）。Server **不碰网络、不认识任何厂商**：
+「翻」是脚本自己用 `cloudime.http_post` 做的。这一行归脚本（换候选、改拼音都不动它），
+只有组句结束（`reset_composition` / 这一拍之后不在组句）才收；`self_drawn_frame` 把它塞进 `Frame::online`
+（只给自绘窗用，不升协议版本）。
+它**也参与 `Ctrl + 反引号` 上屏**：`Online` 记着「写这一行时高亮候选是谁」，
+`Router::translate_action` 把 `Online::translation_for(word)` 当成一条释义**插在最前面**
+（`pos = ONLINE_POS`「在线」，列表里显示成 `(在线)`）—— 只有它一条就直接上屏，和本地释义一起就进释义选择；
+上屏它**不**记本地词典的「学会」（`commit_sense` 的 `record` 参数按来源给），陈旧的那一行（挪过候选）不认。
+TSF 那边 `key_sink::eats_key` 在**组句里**（候选窗显示着）把带 Ctrl（不带 Alt / Win）的组合先送进 Server 问一趟（没在组句时一律归应用：`Ctrl+A` / `Ctrl+C` 这类快捷键不能被输入法吃掉）
+（以前是个白名单：数字 / 回车 / 反引号 / T）—— 脚本才绑得上任意 `Ctrl` 组合；没人绑时 Server 回
+`Passthrough`，按键照旧交给应用。`Alt` / `Win` 不碰（AltGr = Ctrl+Alt、Win 是系统键，都在外壳那一层）。
+随包在安装目录 `Scripts\lib\` 下给两样东西做这件事：`md5.lua`（纯 Lua MD5，只依赖 LuaJIT 的 `bit`，
+拿 RFC 1321 向量回归）与 `example-niutrans.lua`（完整示例）；`lib\` 是子目录，加载器不认，所以不会被执行。
+示例拿到译文后会按 `cloudime.candidate.width()`（候选窗内容区宽度，点）折行（最多 5 行、超出的补「…」），
+不再改窗口宽度 —— 窗口宽度只由候选决定。
 
 TSF 原有数字 / OEM 标点 / 空格键码按当前布局用 `ToUnicodeEx` 解析（bit 2 避免改变键盘状态），
 仅接受单个非代理项 UTF-16 单元。字母、小键盘和 AltGr 处理不变，不保证组合音符输入。

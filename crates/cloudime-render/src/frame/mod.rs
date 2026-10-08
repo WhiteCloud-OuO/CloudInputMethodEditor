@@ -39,6 +39,10 @@ pub struct Frame {
     /// 底部那一行左侧的翻译 Tip（一段一段画）；`None` 表示这个词条没有译文。
     pub tip: Option<Vec<TipSegment>>,
 
+    /// 候选窗底部**再下面一行**的在线翻译（`Ctrl+T`）：整行留给它，一段一段画。
+    /// `None` = 没按过 `Ctrl+T`（或已经收起）。
+    pub online: Option<Vec<TipSegment>>,
+
     /// 拼音行右侧的一句临时状态（删了什么词）。
     pub status: Option<String>,
 }

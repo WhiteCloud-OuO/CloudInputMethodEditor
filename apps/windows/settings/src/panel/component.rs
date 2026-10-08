@@ -18,8 +18,8 @@ use windows::core::BOOL;
 use cloudime_platform::{
     Config, FullHalfPunctuation, ItemNumberStyle, LayoutMode, LogLevel, MAX_ASSOCIATION_COUNTS,
     MAX_CANDIDATE_COUNT, MAX_NEED_TIMES, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT,
-    MIN_NEED_TIMES, MO_HU_YIN_BITS, PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS,
-    PreeditMode, SimpTrad,
+    MIN_NEED_TIMES, MO_HU_YIN_BITS, MouseWordSelection, PAIRWISE_COMPLETION_BITS,
+    PUNCTUATION_MAPPING_BITS, PreeditMode, SimpTrad,
 };
 use windows_reactor::*;
 
@@ -27,7 +27,7 @@ use super::controls::{export_logs, log_dir, open_document, open_with_explorer};
 use super::font_dialog;
 use super::notice::Notice;
 use super::pages::phrase::PhraseForm;
-use super::pages::{dictionaries, phrase, translate};
+use super::pages::{dictionaries, phrase, scripts, translate};
 use super::{Message, REPOSITORY_URL, Settings};
 
 /// 标题栏图标：exe 旁的 `cloudime.ico`（装机包装到 `{app}`，`build.rs` 也给开发时的 exe 旁拷一份）。
@@ -227,6 +227,7 @@ impl Component for Settings {
             phrase_form: PhraseForm::default(),
             phrase_edit: None,
             phrase_status,
+            script_status: String::new(),
         }
     }
 
@@ -339,6 +340,17 @@ impl Component for Settings {
             Message::ShowMoreCandidates(on) => {
                 self.save("candidate", "show_more_candidate_items", on);
             }
+            Message::MouseWordSelection(Some(i)) if i < MouseWordSelection::ALL.len() => {
+                self.save(
+                    "candidate",
+                    "mouse_word_selection",
+                    MouseWordSelection::ALL[i].key(),
+                );
+            }
+            Message::CandidateItemMaximumWidth(Some(value)) => {
+                let width = (value.round() as i64).clamp(0, 2000);
+                self.save("candidate", "candidate_item_maximum_width", width);
+            }
             Message::ProgramQuery(text) => self.program_query = Some(text),
             Message::ProgramAdd => {
                 let name = self
@@ -419,6 +431,29 @@ impl Component for Settings {
                 // 设置程序只写配置文件：把这个计数加 1，Server 见到值变了就把学习记录清空
                 let next = self.config.translate.reset_counter.wrapping_add(1);
                 self.save("translate", "reset_counter", next as i64);
+            }
+
+            // 脚本页
+            Message::ScriptToggle(file, on) => {
+                // 名单里一律按文件名（大小写不敏感）：先摘掉再按需加回去，
+                // 免得同一只脚本攒出两条不同大小写的记录。
+                let mut disabled = self.config.script.disabled.clone();
+                disabled.retain(|name| !name.eq_ignore_ascii_case(&file));
+                if !on {
+                    disabled.push(file);
+                }
+                self.save_array("script", "disabled", &disabled);
+                self.script_status = "已在配置里记下，重启输入法服务后生效。".to_owned();
+            }
+            Message::ScriptRemove(file) => scripts::remove(self, &file),
+            Message::ScriptEdit(file) => scripts::edit(self, &file),
+            Message::ScriptNew => scripts::create(self),
+            Message::RestartServer => {
+                self.script_status = match crate::server::restart() {
+                    Ok(()) => "已请输入法服务重启：几秒后新实例接管，正在打字的应用会重新连上。"
+                        .to_owned(),
+                    Err(message) => message,
+                };
             }
 
             // 调试页（文件 / 日志 / 学习那几项，原「高级」页）
@@ -507,6 +542,7 @@ impl Component for Settings {
             item("dictionaries", "词库", Symbol::Library),
             item("phrase", "短语", Symbol::Comment),
             item("translate", "翻译", Symbol::Character),
+            item("scripts", "脚本", Symbol::Document),
             item("debugging", "调试", Symbol::Repair),
         ];
         NavigationView::new()

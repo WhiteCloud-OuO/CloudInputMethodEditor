@@ -340,7 +340,12 @@ fn eats_without_server(event: &KeyEvent) -> bool {
 
 /// 这个键吃不吃（[`TextService_Impl::would_eat`] 的纯逻辑，便于单测）。
 ///
-/// - 带 Ctrl / Alt / Win：一律归应用；**只有组句中的 Ctrl + 数字**例外，交给 Server 判是不是杀词；
+/// - **组句里带 Ctrl（但不带 Alt / Win）的组合：先问一趟 Server** —— 脚本可以绑任意 Ctrl 组合
+///   （`Ctrl+字母` / `Ctrl+标点` / `Ctrl+Shift+…` 都算），「问」只是问：Server 没接管就回
+///   `Passthrough`，按键照旧交给应用。**没在组句时（候选窗没显示）一律不问**：`Ctrl+A` / `Ctrl+C`
+///   这类快捷键必须原样归应用，`OnTestKeyDown` 一旦答「吃」，应用就再拿不到这个键。
+///   **Alt / Win 不碰**：AltGr 就是 Ctrl+Alt（打字用）、Win 是系统键，
+///   而且这两类本来就在系统 / 外壳那一层被处理掉了，输入法也不该拦。
 /// - 字母：组句中一定吃（拼音要接着写下去）；没在组句时只有「中文模式、Caps 灭、
 ///   没按 Shift）」才吃。英文模式是纯直通、
 ///   Caps 只管大小写，这两种字母都归应用。`⇧C` 接 `pan` 出「C盘」靠的是后面这条；
@@ -356,12 +361,10 @@ fn eats_key(
     full_width_chars: bool,
 ) -> bool {
     let modifiers = event.modifiers;
-    if composing
-        && modifiers.ctrl
-        && !modifiers.alt
-        && !modifiers.win
-        && is_ctrl_command_key(event.virtual_key)
-    {
+    // 带 Ctrl（不带 Alt / Win）的组合：**只在组句里**（候选窗口显示着）才问一趟 Server ——
+    // 脚本能在打字过程中接管组合键；不在组句时一律归应用，否则记事本里的 `Ctrl+A` / `Ctrl+C`
+    // 这类快捷键会被输入法吃掉（`OnTestKeyDown` 那边一旦答「吃」，应用就再也拿不到这个键）。
+    if composing && modifiers.ctrl && !modifiers.alt && !modifiers.win {
         return true;
     }
     if modifiers.has_command_key() {
@@ -383,12 +386,7 @@ fn eats_key(
         .is_some_and(|c| c.is_ascii_punctuation() || c.is_ascii_digit())
 }
 
-/// 组句里 Ctrl 组合能吃进 Server 的键：数字（杀词 / 上屏短语与整句）、回车（原样上屏并记一次）、
-/// 反引号（本地词典的翻译 Tip：上屏译文）。
-fn is_ctrl_command_key(vk: u32) -> bool {
-    matches!(vk, 0x31..=0x39 | 0x61..=0x69 | 0x0D | 0xC0)
-}
-
+/// 组句里 Ctrl 组合能不能被吃进 Server：见 [`eats_key`] 里那条规则（带 Ctrl、不带 Alt / Win 就吃）。
 #[cfg(test)]
 mod tests {
     use cloudime_platform::protocol::{KeyEvent, KeyModifiers};
@@ -417,36 +415,58 @@ mod tests {
         event
     }
 
+    /// 任意 Ctrl 组合（不带 Alt / Win）都先问一趟 Server：脚本想绑什么绑什么；
+    /// 组句与不组句都一样（`Ctrl+C` 这类也会走一趟，没有人接管就 Passthrough 交回应用）。
     #[test]
-    fn ctrl_command_keys_are_eaten_only_while_composing() {
+    fn any_ctrl_combo_goes_to_the_server_first() {
         let ctrl = KeyModifiers {
             ctrl: true,
             ..KeyModifiers::default()
         };
-        // 组句中的 Ctrl+1：先测吃，交给 Server 判是不是杀词 / 上屏短语
+        // 组句中：Ctrl+数字 / 小键盘 / 回车 / 反引号 —— 内置那几个照旧先测吃
+        for vk in [0x31, 0x61, 0x0D, 0xC0] {
+            assert!(eats_key(
+                &with_modifiers(vk, '\u{1}', ctrl),
+                true,
+                false,
+                false
+            ));
+        }
+        // 以前白名单外的（Ctrl+A / Ctrl+Z / Ctrl+F…）现在也吃：脚本能绑任意 Ctrl 组合
         assert!(eats_key(
-            &with_modifiers(0x31, '\u{1}', ctrl),
+            &with_modifiers(0x41, 'a', ctrl),
             true,
             false,
             false
         ));
-        // 小键盘也一样
         assert!(eats_key(
-            &with_modifiers(0x61, '\u{1}', ctrl),
+            &with_modifiers(0x5A, '\u{1a}', ctrl),
             true,
             false,
             false
         ));
-        // Ctrl+回车 同样先测吃，交给 Server
+        // 不带 Ctrl 时的老规矩不变
         assert!(eats_key(
-            &with_modifiers(0x0D, '\r', ctrl),
+            &with_modifiers(0x31, '1', ctrl),
             true,
             false,
             false
         ));
-        // 没在组句：归应用
+        // 带 Shift 的 Ctrl 组合同样问（脚本里看 event.shift 区分；这里在组句里）
+        let ctrl_shift = KeyModifiers {
+            shift: true,
+            ..ctrl
+        };
+        assert!(eats_key(
+            &with_modifiers(0x54, '\u{14}', ctrl_shift),
+            true,
+            false,
+            false
+        ));
+        // **没在组句时不问**（`Ctrl+A` / `Ctrl+C` 这类快捷键必须原样归应用）：
+        // 一旦在 `OnTestKeyDown` 答「吃」，应用就再拿不到这个键了。
         assert!(!eats_key(
-            &with_modifiers(0x31, '\u{1}', ctrl),
+            &with_modifiers(0x41, 'a', ctrl),
             false,
             false,
             false
@@ -457,7 +477,8 @@ mod tests {
             false,
             false
         ));
-        // Alt / Win 组合仍归应用
+
+        // Alt / Win / Ctrl+Alt（AltGr）一律不碰：它们在系统 / 外壳那一层，输入法不该拦
         let alt = KeyModifiers { alt: true, ..ctrl };
         assert!(!eats_key(
             &with_modifiers(0x31, '\u{1}', alt),
@@ -465,9 +486,26 @@ mod tests {
             false,
             false
         ));
-        // 非数字 / 回车的 Ctrl 组合仍归应用
         assert!(!eats_key(
-            &with_modifiers(0x41, 'a', ctrl),
+            &with_modifiers(0x54, '\u{14}', alt),
+            false,
+            false,
+            false
+        ));
+        let win = KeyModifiers { win: true, ..ctrl };
+        assert!(!eats_key(
+            &with_modifiers(0x41, 'a', win),
+            true,
+            false,
+            false
+        ));
+        // 只有 Win（Win+Space 切输入法那类）：也不碰 —— 这是脚本把自己玩坏时的逃生门
+        let win_only = KeyModifiers {
+            win: true,
+            ..KeyModifiers::default()
+        };
+        assert!(!eats_key(
+            &with_modifiers(0x20, ' ', win_only),
             true,
             false,
             false
@@ -536,7 +574,7 @@ mod tests {
             false,
             false
         ));
-        // 带 Ctrl 的组合键归应用
+        // 带 Ctrl 的组合：没在组句时归应用（记事本的 `Ctrl+C` 不该被吃掉）
         let ctrl_c = KeyModifiers {
             ctrl: true,
             ..KeyModifiers::default()
@@ -582,7 +620,7 @@ mod tests {
             false,
             true
         ));
-        // 带 Ctrl 的组合键仍归应用（转全角不该截走快捷键）
+        // 没在组句：带 Ctrl 的也归应用（「问」只在组句里有意义）
         let ctrl_c = KeyModifiers {
             ctrl: true,
             ..KeyModifiers::default()

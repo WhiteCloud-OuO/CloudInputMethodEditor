@@ -8,6 +8,7 @@ members = [
     "crates/cloudime-lm",
     "crates/cloudime-format",
     "crates/cloudime-translate",
+    "crates/cloudime-script",
     "crates/cloudime-neural",
     "crates/cloudime-render",
     "crates/cloudime-update",
@@ -32,6 +33,7 @@ cloudime-platform = { path = "crates/cloudime-platform" }
 cloudime-lm = { path = "crates/cloudime-lm" }
 cloudime-format = { path = "crates/cloudime-format" }
 cloudime-translate = { path = "crates/cloudime-translate" }
+cloudime-script = { path = "crates/cloudime-script" }
 cloudime-neural = { path = "crates/cloudime-neural" }
 cloudime-render = { path = "crates/cloudime-render" }
 cloudime-update = { path = "crates/cloudime-update" }
@@ -57,6 +59,8 @@ memmap2 = "0.9"
 zerocopy = { version = "0.8", features = ["derive"] }
 # 词库存档（WordBank 下的 .db）；bundled 自带 SQLite 源码，装机包不依赖外部 sqlite3
 rusqlite = { version = "0.40.2", features = ["bundled"] }
+# 用户脚本的运行时：mlua 的 LuaJIT 后端；vendored 让 LuaJIT 源码随包编译，装机包不依赖外部 Lua
+mlua = { version = "0.12.2", features = ["luajit", "vendored"] }
 
 # 本地神经语言模型推理（字级 Transformer，权重 safetensors）
 candle-core = "0.11.0"

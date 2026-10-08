@@ -13,7 +13,7 @@ use cloudime_render::{
 use crate::dispatch::RenderSettings;
 
 /// 按字族名加载字体时的 locale（中日同形字选哪家的字形）。
-const LOCALE: &str = "zh-CN";
+pub(super) const LOCALE: &str = "zh-CN";
 
 /// UI 线程上共享的渲染器；`None` = 字体库加载失败，渲染不出来。
 pub(super) type SharedPainter = Rc<RefCell<Option<Painter>>>;
@@ -88,6 +88,7 @@ impl Painter {
             ),
         );
         theme.min_width_pixels = settings.min_width_pixels;
+        theme.max_cell_width = settings.max_cell_width;
         Some(Self {
             renderer: Renderer::new(library),
             theme,

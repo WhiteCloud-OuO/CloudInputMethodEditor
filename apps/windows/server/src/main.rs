@@ -211,7 +211,7 @@ fn main() {
         Err(error) => tracing::warn!(%error, "短语库读不出来，本次不启用短语"),
     }
     engine.log_session(env!("CARGO_PKG_VERSION"), "windows");
-    let router_config = RouterConfig::from(&config);
+    let router_config = RouterConfig::from(&config).with_bundled_scripts();
     let mut router = Router::new(engine, router_config.clone());
     let model_path = dispatch::find_model(user_dir().as_deref(), &root);
     router.configure_local_model(

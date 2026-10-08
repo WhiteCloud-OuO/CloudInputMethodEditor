@@ -1,0 +1,16 @@
+[package]
+name = "cloudime-script"
+description = "脚本运行时：内嵌 LuaJIT（mlua）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+mlua.workspace = true
+reqwest = { workspace = true, features = ["native-tls", "system-proxy"] }
+tokio.workspace = true
+tracing.workspace = true

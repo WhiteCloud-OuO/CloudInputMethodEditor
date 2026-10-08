@@ -105,6 +105,14 @@ pub struct Engine {
     /// 「比读法更长的词」（联想）最多留几条，避免单字输入时被大量联想候选淹没。
     association_counts: usize,
 
+    /// 表达式计算面板（V 模式里按 Tab 进来）：只给结果那一条候选、拼音行显示算式本身。
+    /// 由壳在进 / 出面板时设（见 `apps/windows` 的按键处理），组句结束要清掉。
+    calculator: bool,
+
+    /// 脚本给的加权 / 降权（词文本 → 系数）：乘进词频那一层，排序规则本身仍由 Core 定。
+    /// 由壳用 [`Self::set_word_adjustments`] 设，缺省空。
+    word_adjustments: HashMap<String, f64>,
+
     /// 用户定义的固定位置文本。
     custom_phrases: Vec<crate::CustomPhrase>,
 
@@ -294,6 +302,8 @@ impl Engine {
             mixture_input: true,
             english_case: EnglishCase::Lower,
             association_counts: MAX_ASSOCIATION_COUNTS,
+            calculator: false,
+            word_adjustments: HashMap::new(),
             custom_phrases: Vec::new(),
             language_model: Box::new(NoLanguageModel),
             sentence_scorer: None,

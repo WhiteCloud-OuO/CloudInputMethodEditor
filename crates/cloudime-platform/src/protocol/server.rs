@@ -135,5 +135,11 @@ pub enum ServerMessage {
         /// 右键菜单打勾用的开关状态（v7 起）。
         #[serde(default)]
         indicator: IndicatorState,
+
+        /// 请 DLL 在下一次 `Surrounding` 里带一份整篇文档快照（脚本的 `cloudime.text.*` 要用）。
+        /// 只在**有脚本登记**且（还没拿到过、或脚本又要过）时为 `true`；老 DLL 不认识这个字段，
+        /// 读到就忽略（serde 默认忽略多余字段），所以不用升协议版本。
+        #[serde(default)]
+        want_document: bool,
     },
 }

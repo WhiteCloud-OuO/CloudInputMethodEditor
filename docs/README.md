@@ -16,6 +16,8 @@ README.md 只介绍项目，所有技术内容放在这里，分四类：前三�
 | [design/candidate-ui.md](design/candidate-ui.md) | 候选窗口与按键约定的设计 |
 | [design/landscape.md](design/landscape.md) | 同类项目（水杉、Rime）、可用数据源及其许可 |
 | [design/rendering.md](design/rendering.md) | UI 与自绘渲染器（2026-09-13）：显示面与控件面的区分、Flutter / Avalonia / WebView 的调研结论、主题的两条路、tiny-skia + cosmic-text 的 spike 结果与 Windows 接入 |
+| [design/script.md](design/script.md) | 用户脚本（2026-10-07）：脚本清单（manifest）与硬规则、没脚本就走老路、有脚本在固定四处跑、调用链路（一次按键走一遍）、能给脚本看到什么 / 改什么，以及出错、稳定性闸门与风险怎么兜 |
+| [design/online-translate.md](design/online-translate.md) | 在线翻译（2026-10-07）：输入法里**没有**这个功能 —— 它只给 `http_get` / `http_post` 与候选窗底部那一行（`online` 动作），翻什么、按哪个键、怎么签名全由脚本自己实现；随包一份小牛翻译的完整示例 |
 | [plan/roadmap.md](plan/roadmap.md) | 分阶段路线图、各阶段的依赖关系与已完成项 |
 | [plan/todo.md](plan/todo.md) | 待办清单，按「从自用到能给别人用」排 |
 | [notes/crate-notes.md](notes/crate-notes.md) | 各 crate / app / tool 的实现要点：入口类型、数据文件、常数、生成命令 |

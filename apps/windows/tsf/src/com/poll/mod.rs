@@ -193,6 +193,8 @@ fn sync_mode(context: &PollContext) {
     drop(guard);
     // 按键行为设置每一拍都带（DLL 不读配置文件），切换键与内置英文模式开关改完靠它生效。
     super::service::on_input_settings(reply.input);
+    // 脚本要整篇文本（`cloudime.text.*`）：下一次起组句时读一份带上
+    super::service::on_document_request(reply.want_document);
     if let Some(mode) = reply.mode {
         super::service::on_mode_sync(mode);
     }

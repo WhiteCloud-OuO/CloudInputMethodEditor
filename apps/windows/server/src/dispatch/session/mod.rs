@@ -27,6 +27,8 @@ impl Router {
             self.engine.set_application(app);
             let private = self.focused_private();
             self.engine.set_private(private);
+            // 换了个会话（焦点 / 输入框变了）：上一份文本快照作废，等 DLL 重读
+            self.document.clear();
         }
     }
 
@@ -48,6 +50,10 @@ impl Router {
         }
         if self.focused == Some(session) {
             self.engine.set_private(private);
+            if private {
+                // 私密输入框：文本快照立刻作废（DLL 那边本来也不读）
+                self.document.clear();
+            }
         }
     }
 
@@ -73,6 +79,12 @@ impl Router {
         self.hover_cell = None;
         self.pending_commit = None;
         self.translate.end_choices();
+        // 在线翻译那一行只活在一次组句里（收起时连在跑的请求一起丢）
+        self.online.clear();
+        // 脚本设的候选窗尺寸也一样（回配置值并重新下发设置）
+        self.clear_script_size();
+        // 表达式计算面板只活在一次组句里
+        self.engine.set_calculator(false);
         self.hide_candidate_window();
     }
 }

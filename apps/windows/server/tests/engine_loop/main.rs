@@ -4,5 +4,6 @@ mod composing;
 mod english;
 mod modes;
 mod rescoring;
+mod scripts;
 mod status;
 mod support;

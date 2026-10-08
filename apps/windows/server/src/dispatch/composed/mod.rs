@@ -13,13 +13,18 @@ use super::Router;
 const EXPAND_COLUMNS: usize = 5;
 
 impl Router {
-    /// 一页几个候选：没展开就是设置里的候选项个数；展开「更多候选项」时是一整屏
+    /// 一页几个候选：没展开就是设置里的候选项个数（脚本可以用
+    /// `cloudime.candidate.set_page_size` 在本组句内改它）；展开「更多候选项」时是一整屏
     /// （竖排 5 列、横排 5 行，都是 5 × 候选项个数）。
     pub(super) fn page_size(&self) -> usize {
+        let base = self
+            .config
+            .script_page_size
+            .unwrap_or(self.config.page_size);
         if self.show_more {
-            self.config.page_size * EXPAND_COLUMNS
+            base * EXPAND_COLUMNS
         } else {
-            self.config.page_size
+            base
         }
     }
 
@@ -49,6 +54,7 @@ impl Router {
         self.navigated = false;
         if self.engine.composition().is_empty() {
             self.composed = None;
+            self.candidate_weights.clear();
             self.stop_rescoring();
             // 这次组句完了：下一段拼音的候选窗从收起来的样子出现（展开只活在一次组句里）
             self.show_more = false;
@@ -56,12 +62,22 @@ impl Router {
             return;
         }
         self.attach_loaded_model();
+        // 只有脚本可能要看 Core 的排序数字时才把权重留一份（没脚本就完全不多花这一步）
+        let wants_weights =
+            self.scripts.has_handlers("candidates") || self.scripts.has_pending_requests();
         let built = self.engine.query().ok().map(|query| {
             let (preedit, cursor) = marked_parts(&query);
-            (query.candidates.items.clone(), preedit, cursor)
+            (
+                query.candidates.items.clone(),
+                wants_weights.then(|| query.weights.clone()),
+                preedit,
+                cursor,
+            )
         });
         self.composed = Some(match built {
-            Some((items, preedit, cursor)) => {
+            Some((items, weights, preedit, cursor)) => {
+                // Core 的排名权重跟着候选一起留着：脚本的 `candidates` 载荷要用（按文本查）
+                self.candidate_weights = weights.unwrap_or_default();
                 let layout = CandidateLayout::new(items, page_size);
                 Composed::Candidates {
                     preedit,
@@ -70,6 +86,7 @@ impl Router {
                 }
             }
             None => {
+                self.candidate_weights.clear();
                 // 查询失败也带上已选文本（`云朵shurufa` 里拼音段切不动时仍在组句）。
                 let raw = self.engine.raw_preedit();
                 let cursor = raw.text[..raw.cursor_bytes].chars().count();
@@ -85,6 +102,10 @@ impl Router {
             self.highlight = self.highlight.min(count.saturating_sub(1));
         }
         self.schedule_rescoring();
+        // 引擎排完了：交给脚本看一眼能不能改候选顺序 / 显示（没人登记就什么都不做）
+        if self.scripts.has_handlers("candidates") {
+            self.let_scripts_reorder_candidates();
+        }
     }
 
     /// 高亮移动 `delta`，夹在 `[0, 末尾]`，到页边自然换页。收起态的方向键用它。
@@ -244,7 +265,29 @@ impl Router {
         if self.config.translate_enabled {
             frame.tip = self.translate.tip(&self.highlighted_text());
         }
+        // 表达式模式（`v` 开头）或在表达式计算面板里：底部那一行换成提示 —— 本地词典的译文在这里
+        // 没有意义（候选是算出来的），提示同时告诉用户这一模式能敲什么。
+        if let Some(hint) = self.expression_hint() {
+            frame.tip = Some(hint);
+        }
+        // 表达式计算面板：只有一条「结果」候选，不画序号
+        frame.hide_index = self.engine.calculator();
+        // 在线翻译那一行（`Ctrl+T`）与本地 Tip 无关：单独看它自己的状态
+        frame.online = self.online.line();
         frame
+    }
+
+    /// 表达式模式（`v` 开头）底部那一行的提示；不在表达式模式时 `None`（照常用本地词典的译文）。
+    ///
+    /// 走 `Tip` 这个通道（渲染端只认它），`learned = true` 借的是「深灰」那个颜色 —— 提示不是
+    /// 「刚学会的译文」，只是同一条路。
+    fn expression_hint(&self) -> Option<cloudime_translate::Tip> {
+        if self.engine.calculator() {
+            return Some(hint_tip("按Tab/Esc退出表达式计算"));
+        }
+        self.engine
+            .expression_mode()
+            .then(|| hint_tip("输入数字或表达式"))
     }
 
     /// 当前高亮候选的文本：本地词典按它查词条。
@@ -271,6 +314,8 @@ impl Router {
                 layout: self.config.layout,
                 columns: 0,
                 tip: None,
+                online: None,
+                hide_index: false,
                 tip_choices: None,
                 notice: self.notice.clone(),
             },
@@ -296,11 +341,26 @@ impl Router {
                     layout: self.config.layout,
                     columns: self.grid_columns(),
                     tip: None,
+                    online: None,
+                    hide_index: false,
                     tip_choices: None,
                     notice: self.notice.clone(),
                 }
             }
         }
+    }
+}
+
+/// 底部那一行的一句提示（表达式模式的用法提示）：借 `Tip` 的 `learned` 拿深灰那个颜色。
+fn hint_tip(text: &str) -> cloudime_translate::Tip {
+    cloudime_translate::Tip {
+        word: String::new(),
+        learned: true,
+        senses: vec![cloudime_translate::Sense {
+            pos: None,
+            text: text.to_owned(),
+            reading: None,
+        }],
     }
 }
 

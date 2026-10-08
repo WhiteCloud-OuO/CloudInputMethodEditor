@@ -38,6 +38,12 @@ pub(crate) enum Message {
     CandidateBoxMinimumWidth(Option<f64>),
     /// 展示更多候选项（功能暂未实现，只落配置）。
     ShowMoreCandidates(bool),
+    /// 使用鼠标选词（`MouseWordSelection::ALL` 的下标）。
+    MouseWordSelection(Option<usize>),
+    /// 展开后每个候选项的最大宽度（物理像素，0 表示不限）。
+    CandidateItemMaximumWidth(Option<f64>),
+    /// 请正在跑的输入法服务重启（脚本改动生效用，与任务栏右键「重启输入法服务」同一条路）。
+    RestartServer,
     /// 「不显示候选框」程序名单的输入框。
     ProgramQuery(String),
     /// 把输入框里的程序名加进名单。
@@ -83,6 +89,16 @@ pub(crate) enum Message {
     TranslateNeedTimes(f64),
     /// 重置这份词典的学习内容（`[translate] reset_counter` 加 1，Server 见到就清）。
     ResetTranslateLearning,
+
+    // 脚本页
+    /// 启用 / 禁用某个脚本（文件名，写 `[script] disabled`）。
+    ScriptToggle(String, bool),
+    /// 删除某个脚本文件。
+    ScriptRemove(String),
+    /// 用记事本打开某个脚本。
+    ScriptEdit(String),
+    /// 新建一个脚本：建文件、写模板、用记事本打开。
+    ScriptNew,
 
     // 调试页：文件 / 日志 / 学习（原「高级」页）
     VerboseLog(bool),

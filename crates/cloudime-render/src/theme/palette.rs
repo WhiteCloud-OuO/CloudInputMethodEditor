@@ -37,6 +37,9 @@ pub struct Palette {
     /// 翻译 Tip 的释义：这个词条学会了（缺省深灰）。
     pub translate_learned: Color,
 
+    /// 在线翻译那一行（`Ctrl+T`）：缺省用偏蓝的强调色，跟本地 Tip 的橙 / 灰区分开。
+    pub online: Color,
+
     /// 强调色：注解里需要更醒目的片段用它。
     pub accent: Color,
 
@@ -62,6 +65,7 @@ impl Palette {
             translate_meta: Color::rgb(0x33, 0x33, 0x33),
             translate_fresh: Color::rgb(0xff, 0x7f, 0x27),
             translate_learned: Color::rgb(0x33, 0x33, 0x33),
+            online: Color::rgb(0x0f, 0x6c, 0xbd),
             accent: Color::rgb(0, 195, 208),
             background: Color::rgb(255, 255, 255),
             highlight: Color::rgba(200, 241, 255, 240),

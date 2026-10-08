@@ -22,6 +22,7 @@ cloudime-lm.workspace = true
 cloudime-neural.workspace = true
 cloudime-platform.workspace = true
 cloudime-render.workspace = true
+cloudime-script.workspace = true
 cloudime-translate.workspace = true
 cloudime-update.workspace = true
 thiserror.workspace = true
@@ -42,8 +43,11 @@ windows = { version = "0.62.2", features = [
     "Win32_Security_Authorization",
     "Win32_Storage_FileSystem",
     "Win32_System_Com",
+    "Win32_System_DataExchange",
     "Win32_System_IO",
     "Win32_System_LibraryLoader",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
     "Win32_System_Pipes",
     "Win32_System_Threading",
     "Win32_UI_Controls",

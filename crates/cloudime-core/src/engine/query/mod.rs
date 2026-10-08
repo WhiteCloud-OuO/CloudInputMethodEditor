@@ -13,7 +13,7 @@ pub(super) use result::join_marked;
 pub(super) use result::join_marked_typed;
 pub(super) use snapshot::QuerySnapshot;
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 
 impl Engine {
     /// 解析当前缓冲区并生成排好序的候选。**不带译文**，译文由 [`Self::annotate`] 补。
@@ -126,7 +126,10 @@ impl Engine {
                 let mut pool: Vec<(Candidate, PoolRank)> = Vec::new();
                 let full = keys.chars().filter(|c| *c != '\'').count();
                 self.push_english(&mut pool, true, full, 0, false);
-                let mut items = rank_pool(pool);
+                let ranked = rank_pool(pool);
+                let weights = pool_weights(&ranked);
+                let mut items: Vec<Candidate> =
+                    ranked.into_iter().map(|(candidate, _)| candidate).collect();
                 self.insert_shortcuts(&mut items, keys);
                 if items.is_empty() {
                     return Err(error);
@@ -134,6 +137,7 @@ impl Engine {
                 return Ok(Query {
                     segmentations: Vec::new(),
                     candidates: CandidateList { items },
+                    weights,
                     tail: keys.to_owned(),
                     text: self.composition.typed_text(),
                     cursor: self.composition.cursor(),
@@ -255,6 +259,16 @@ impl Engine {
         }
         let lookup = start.elapsed();
 
+        // 脚本给的加权 / 降权（`Engine::set_word_adjustments`）：乘进用户权重因子那一层，
+        // 结构键、读法层级、纠错与联想折扣都不动 —— 排序规则仍在 Core，脚本只调参数。
+        if !self.word_adjustments.is_empty() {
+            for item in &mut scored {
+                if let Some(factor) = self.word_adjustments.get(item.hit.text) {
+                    item.weight *= factor;
+                }
+            }
+        }
+
         let start = Instant::now();
         // 再往后翻也翻不到的候选不必再造：单字母简拼能命中两万个词，排完序只留前面这些。
         // 同输入串（候选覆盖的那段字母）下选过的优先；上下文是上一个上屏的词（句首为 None）
@@ -317,7 +331,10 @@ impl Engine {
             reading_structure.0,
             reading_structure.1,
         );
-        let mut items = rank_pool(pool);
+        let ranked = rank_pool(pool);
+        let weights = pool_weights(&ranked);
+        let mut items: Vec<Candidate> =
+            ranked.into_iter().map(|(candidate, _)| candidate).collect();
         let rank = start.elapsed();
         // 快捷候选按敲的键认（`rq` 日期），插在本地首选之后
         self.insert_shortcuts(&mut items, keys);
@@ -334,6 +351,7 @@ impl Engine {
         Ok(Query {
             segmentations,
             candidates: CandidateList { items },
+            weights,
             tail: tail.to_owned(),
             text: self.composition.typed_text(),
             cursor: self.composition.cursor(),
@@ -352,6 +370,34 @@ impl Engine {
     /// 表达式模式（`v` 开头）：不解析拼音，候选是算式结果 / 中文数字，再加上整段是英文词的情况（`very`）。
     /// preedit 原样显示输入。
     pub(super) fn query_expression(&self, scope: &str, rest: String, start: Instant) -> Query {
+        // 表达式计算面板（Tab 进来的）：只给结果那一条候选，拼音行显示算式本身（去掉 `v` 前缀）。
+        // 算式空着显示 `0`，算错 / 溢出就是没有候选。
+        if self.calculator {
+            let body = scope
+                .strip_prefix(shortcut::EXPRESSION_PREFIX)
+                .unwrap_or(scope);
+            return Query {
+                segmentations: Vec::new(),
+                candidates: CandidateList {
+                    items: shortcut::result_candidates(body),
+                },
+                weights: HashMap::new(),
+                tail: String::new(),
+                // 拼音行显示算式本身：`typed_display` 是它，`text` / `cursor` 也跟着去掉 `v` 那一个字节，
+                // 光标位置才对得上（`segments_cursor` 是数 `text` 里的字符）。
+                text: body.to_owned(),
+                cursor: self.composition.cursor().saturating_sub(1),
+                rest,
+                typed_display: Some(body.to_owned()),
+                selected: String::new(),
+                correction: None,
+                timings: Timings {
+                    parse: Duration::ZERO,
+                    lookup: Duration::ZERO,
+                    rank: start.elapsed(),
+                },
+            };
+        }
         let mut items = shortcut::candidates(scope, &jiff::Zoned::now());
         if let Some(word) = self.english.as_ref().and_then(|english| english.get(scope)) {
             items.push(Candidate {
@@ -365,6 +411,7 @@ impl Engine {
         Query {
             segmentations: Vec::new(),
             candidates: CandidateList { items },
+            weights: HashMap::new(),
             tail: scope.to_owned(),
             text: self.composition.text().to_owned(),
             cursor: self.composition.cursor(),
@@ -392,6 +439,7 @@ impl Engine {
         Query {
             segmentations: Vec::new(),
             candidates: CandidateList { items },
+            weights: HashMap::new(),
             tail: scope.to_owned(),
             text: self.composition.text().to_owned(),
             cursor: self.composition.cursor(),
@@ -428,6 +476,7 @@ impl Engine {
         Query {
             segmentations: Vec::new(),
             candidates: CandidateList { items },
+            weights: HashMap::new(),
             tail: scope.to_owned(),
             text: self.composition.text().to_owned(),
             cursor: self.composition.cursor(),
@@ -737,8 +786,9 @@ impl Engine {
 /// 否则最后一步的权重排序又会让高频单字霸屏。
 type PoolRank = (usize, usize, bool, bool, u8, f64);
 
-/// 候选池按结构键与权重排，同文本只留名次最高的那条，最后 map 成候选列表。
-fn rank_pool(mut pool: Vec<(Candidate, PoolRank)>) -> Vec<Candidate> {
+/// 候选池按结构键与权重排，同文本只留名次最高的那条；返回「候选 + 它的排名权重」
+/// （权重给平台层看 Core 的排序依据，见 [`Query::weights`]）。
+fn rank_pool(mut pool: Vec<(Candidate, PoolRank)>) -> Vec<(Candidate, f64)> {
     pool.sort_by(|a, b| {
         b.1.0
             .cmp(&a.1.0)
@@ -756,7 +806,15 @@ fn rank_pool(mut pool: Vec<(Candidate, PoolRank)>) -> Vec<Candidate> {
     let mut seen: HashSet<String> = HashSet::with_capacity(pool.len());
     pool.into_iter()
         .filter(|(candidate, _)| seen.insert(candidate.text.clone()))
-        .map(|(candidate, _)| candidate)
+        .map(|(candidate, rank)| (candidate, rank.5))
+        .collect()
+}
+
+/// 候选池里的排名权重按文本记一份（给平台层看 Core 的排序依据）。
+fn pool_weights(ranked: &[(Candidate, f64)]) -> HashMap<String, f64> {
+    ranked
+        .iter()
+        .map(|(candidate, weight)| (candidate.text.clone(), *weight))
         .collect()
 }
 

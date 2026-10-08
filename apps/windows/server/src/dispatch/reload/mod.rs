@@ -137,19 +137,29 @@ impl Router {
         let full_width_punctuation = self.config.full_width_punctuation;
         let english_full_width_punctuation = self.config.english_full_width_punctuation;
         let full_width_chars = self.config.full_width_chars;
+        // 脚本设的候选窗尺寸（本组句内有效）也一样，别被热加载冲掉
+        let script_min_width = self.config.script_min_width;
+        let script_page_size = self.config.script_page_size;
+        let script_scale = self.config.script_scale;
         self.config = RouterConfig::from(config);
         // 本地词典 / 学习状态跟着配置走：换词典、重置学习内容都在这里落地
         self.translate.configure(
             &self.config.translate_dictionary,
             self.config.translate_reset_counter,
         );
+        // 脚本设的候选窗尺寸也是会话内状态（组句结束才清）：热加载时别把它抹掉
+        self.config.script_min_width = script_min_width;
+        self.config.script_page_size = script_page_size;
+        self.config.script_scale = script_scale;
         self.config.full_width_punctuation = full_width_punctuation;
         self.config.english_full_width_punctuation = english_full_width_punctuation;
         self.config.full_width_chars = full_width_chars;
         let settings = self.config.render_settings();
         if settings != previous {
-            self.candidates.configure(settings);
+            self.candidates.configure(settings.clone());
         }
+        // 脚本的量尺也跟上：字体设置变了它自己会重建渲染器
+        self.measure.borrow_mut().0 = settings;
         self.reconcile_status();
         self.apply_model_config(config.candidate.use_local_sentence_organization_model);
 

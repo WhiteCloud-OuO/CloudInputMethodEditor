@@ -7,6 +7,8 @@ mod log;
 #[cfg(windows)]
 mod panel;
 #[cfg(windows)]
+mod server;
+#[cfg(windows)]
 mod single_instance;
 
 #[cfg(windows)]

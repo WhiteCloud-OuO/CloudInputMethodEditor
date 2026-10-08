@@ -4,6 +4,7 @@ mod event;
 mod sink;
 
 use cloudime_core::{CandidateKind, Learner};
+use cloudime_platform::MouseWordSelection;
 use cloudime_platform::protocol::{CANDIDATE_CLICK_SINCE, Frame, ScreenRect, SessionId};
 
 pub use self::event::CandidateEvent;
@@ -17,6 +18,13 @@ impl Router {
     ///
     /// 收起态与展开态一样：悬停跟手、单击上屏。
     pub fn handle_candidate_event(&mut self, event: CandidateEvent) {
+        // 鼠标选词关着（或只在展开成网格时开）时，鼠标的**悬停 / 点选**一律不理会：
+        // 右键翻译、中键朗读、滚轮翻页照旧（那不是「选词」）。
+        if matches!(event, CandidateEvent::Hover(_) | CandidateEvent::Commit(_))
+            && !self.mouse_selection_allowed()
+        {
+            return;
+        }
         // 多释义选择中：那一屏画的是释义不是候选，鼠标悬停挪高亮、单击选那一条上屏；
         // 右键（`Translate`）与移出不管。选择本身仍以数字键 / Esc 为主。
         if self.translate.choices().is_some() {
@@ -111,6 +119,16 @@ impl Router {
                 let frame = self.self_drawn_frame();
                 self.reconcile_candidates(&frame);
             }
+        }
+    }
+
+    /// 这一拍鼠标能不能在候选窗里选词（`[candidate] mouse_word_selection`）：
+    /// `off` 一律不能（缺省）；`more_candidates` 只有「展示更多候选项」展开成网格时能；`always` 都能。
+    fn mouse_selection_allowed(&self) -> bool {
+        match self.config.mouse_word_selection {
+            MouseWordSelection::Off => false,
+            MouseWordSelection::MoreCandidates => self.show_more,
+            MouseWordSelection::Always => true,
         }
     }
 

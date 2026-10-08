@@ -74,9 +74,9 @@ pub const CANDIDATE_CLICK_SINCE: u32 = 16;
 pub mod frame;
 pub mod key;
 
-pub use client::ClientMessage;
+pub use client::{ClientMessage, DocumentText};
 pub use codec::{CodecError, DEFAULT_PIPE_NAME, read_message, write_message};
-pub use frame::{Frame, PreeditKind, PreeditSegment, TipChoices};
+pub use frame::{Frame, OnlineLine, OnlineState, PreeditKind, PreeditSegment, TipChoices};
 pub use indicator::{IndicatorCommand, IndicatorState};
 pub use key::{KeyEvent, KeyModifiers, KeyOutcome};
 pub use mode::InputMode;

@@ -66,6 +66,18 @@ pub(crate) fn apply(
     ec: u32,
     update: &Update,
 ) -> Result<()> {
+    // 先读输入框状态、再上屏。上屏会把组句收掉（`has_composition()` 变 false），而有的宿主（Windows 11
+    // 记事本实测）给 IME 的是**按选区 / 组句圈起来的局部上下文**——整篇读不到、上屏那一刻只剩刚上屏
+    // 那一段、起组句那一拍甚至是空的 `0..0`（详见 `docs/notes/crate-notes.md`「读输入框文本」的坑）。
+    // 读放在上屏之前，至少和「起组句时读」的语义一致。
+    // 一段组句里只问一次。行内模式看组句刚起；`preedit = window` 模式应用里根本没有组句，
+    // 得另用一个标记，否则每敲一键都要重读一遍光标前文、重报一次私密状态。
+    let report_input = !shared.has_composition() && !shared.context_reported();
+    if report_input {
+        shared.set_context_reported(true);
+    }
+    let input = report_input.then(|| input_context(context, ec, super::service::want_document()));
+
     match update.commit.as_deref() {
         Some(text) => commit_text(
             shared,
@@ -80,22 +92,20 @@ pub(crate) fn apply(
         None => {}
     }
     let preedit = &update.preedit;
-    // 一段组句里只问一次输入框状态。行内模式看组句刚起；`preedit = window` 模式应用里根本没有组句，
-    // 得另用一个标记，否则每敲一键都要重读一遍光标前文、重报一次私密状态。
-    let report_input = !shared.has_composition() && !shared.context_reported();
-    if report_input {
-        shared.set_context_reported(true);
-    }
-    let input = report_input.then(|| input_context(context, ec));
     if preedit.is_empty() {
         end_composition(shared, ec)?;
     } else {
         update_preedit(shared, context, ec, preedit)?;
     }
-    if let Some(InputContext { private, before }) = input {
+    if let Some(InputContext {
+        private,
+        before,
+        document,
+    }) = input
+    {
         report_privacy(engine, private);
-        if let Some(before) = before {
-            report_surrounding(engine, before);
+        if before.is_some() || document.is_some() {
+            report_surrounding(engine, before.unwrap_or_default(), document);
         }
     }
     report_caret(shared, engine, context, ec);
@@ -112,14 +122,20 @@ fn report_privacy(engine: &SharedClient, private: bool) {
     }
 }
 
-/// 把光标前文送给 Server；引擎正被别处借着（罕见）就算了，Server 退回会话历史。
-fn report_surrounding(engine: &SharedClient, before: String) {
+/// 把光标前文（和 Server 请过的整篇快照）送给 Server；引擎正被别处借着（罕见）就算了，
+/// Server 退回会话历史 / 下一段组句再读。
+fn report_surrounding(
+    engine: &SharedClient,
+    before: String,
+    document: Option<cloudime_platform::protocol::DocumentText>,
+) {
     let chars = before.chars().count();
+    let document_chars = document.as_ref().map_or(0, |doc| doc.text.chars().count());
     if let Ok(mut guard) = engine.try_borrow_mut()
         && let Some(client) = guard.as_mut()
     {
-        match client.surrounding(before) {
-            Ok(()) => super::log::log(&format!("送光标前文 {chars} 字")),
+        match client.surrounding(before, document) {
+            Ok(()) => super::log::log(&format!("送光标前文 {chars} 字、整篇 {document_chars} 字")),
             Err(error) => super::log::log(&format!("送光标前文失败: {error}")),
         }
     }
@@ -191,7 +207,7 @@ fn settle_caret(
     text_chars: usize,
     caret_shift: i16,
 ) {
-    if caret_shift != 0 && nudge_caret_by_key(caret_shift) {
+    if caret_shift != 0 && nudge_caret_by_key(i32::from(caret_shift)) {
         return;
     }
     place_caret(context, ec, range, text_chars, caret_shift);
@@ -210,19 +226,19 @@ fn place_caret(
     }
 }
 
-/// 注入 `caret_shift` 个方向键（负左、正右），让**应用自己**挪光标。返回是否注入成功。
+/// 注入 `steps` 个方向键（负左、正右），让**应用自己**挪光标。返回是否注入成功。
 ///
 /// 在编辑会话里调：注入的输入先排进应用的消息队列，会话返回后应用才处理，那时文本已经落好了。
 /// AppContainer（商店应用）里 `SendInput` 会被拒，返回不够数，调用方退回 TSF 位移并记日志。
-fn nudge_caret_by_key(caret_shift: i16) -> bool {
+fn nudge_caret_by_key(steps: i32) -> bool {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
         VK_LEFT, VK_RIGHT,
     };
-    if caret_shift == 0 {
+    if steps == 0 {
         return true;
     }
-    let key = if caret_shift < 0 { VK_LEFT } else { VK_RIGHT };
+    let key = if steps < 0 { VK_LEFT } else { VK_RIGHT };
     let input = |flags: KEYBD_EVENT_FLAGS| INPUT {
         r#type: INPUT_KEYBOARD,
         Anonymous: INPUT_0 {
@@ -234,7 +250,7 @@ fn nudge_caret_by_key(caret_shift: i16) -> bool {
         },
     };
     let mut inputs = Vec::new();
-    for _ in 0..caret_shift.unsigned_abs() {
+    for _ in 0..steps.unsigned_abs() {
         inputs.push(input(KEYBD_EVENT_FLAGS(0)));
         inputs.push(input(KEYEVENTF_KEYUP));
     }
@@ -383,7 +399,7 @@ fn move_selection(
 ///
 /// 先试注入方向键（应用自己的光标逻辑永远可用），注入不了再走 TSF：收成**末尾**再 `ShiftEnd`。
 fn shift_caret(context: &ITfContext, ec: u32, caret_shift: i16) -> Result<()> {
-    if nudge_caret_by_key(caret_shift) {
+    if nudge_caret_by_key(i32::from(caret_shift)) {
         return Ok(());
     }
     // GetSelection 给的 range 归调用方释放：借它当光标，挪好这一轮就放掉

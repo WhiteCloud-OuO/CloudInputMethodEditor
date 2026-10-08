@@ -3,6 +3,11 @@
 //! 词典在安装目录的 `LocalDictionary\`（清单 `dictionaries.list` 决定设置页里能选哪些），
 //! 学习状态在用户数据目录的 `translate.db`——词典文件只读，学没学会得另存一处。
 //! 换词典与「重置学习内容」都由 [`Translate::configure`] 跟着配置热加载走。
+//!
+//! 另外还有一份**在线**翻译（[`online`]，候选窗按 `Ctrl+T`）：那一条与本地词典无关，
+//! 结果画在候选窗底部本地 Tip 的下面单独一行。
+
+pub(crate) mod online;
 
 use std::path::PathBuf;
 
@@ -59,21 +64,47 @@ pub(crate) enum TranslateAction {
     Nothing,
 }
 
+/// 在线翻译那一行当成「一条释义」时的词性标记：释义列表里能一眼看出它来自网上（渲染成 `(在线)`），
+/// 也用来判断「这一次上屏的是在线译文」—— 那种**不**记本地词典的「学会」次数（那是本地释义的次数）。
+pub(super) const ONLINE_POS: &str = "在线";
+
+/// 把「在线翻译那一行」并进释义列表的**最前面**（`None` 就原样返回）。
+///
+/// 与本地词典的释义并列、排第一：用户按 `Ctrl + 反引号` 时，最想要的通常就是刚翻出来的那条。
+fn senses_with_online(senses: Vec<Sense>, online: Option<String>) -> Vec<Sense> {
+    let Some(text) = online else {
+        return senses;
+    };
+    let mut merged = Vec::with_capacity(senses.len() + 1);
+    merged.push(Sense {
+        pos: Some(ONLINE_POS.to_owned()),
+        text,
+        reading: None,
+    });
+    merged.extend(senses);
+    merged
+}
+
+/// 「本地释义 + 在线那一行」的合并顺序（纯函数，不需要真实词典）。
 impl Router {
-    /// 对第 `index` 个候选做「翻译 Tip 动作」：一条释义就直接上屏译文，多条进选择界面，
-    /// 没有译文什么都不做。上屏文本由调用方处理——按键直接回给 DLL，鼠标得攒进 `pending_commit`
+    /// 对第 `index` 个候选做「翻译 Tip 动作」：**本地词典的释义 + 在线翻译那一行**（脚本给这一格翻的、
+    /// 且已经翻好的那条）一起列出来，在线那条排最前面 —— 一条就直接上屏译文，多条进选择界面，
+    /// 都没有就什么都不做。上屏文本由调用方处理——按键直接回给 DLL，鼠标得攒进 `pending_commit`
     /// 等下一拍 `Poll` 带走（候选窗在 Server 手里，收不到按键）。
     pub(crate) fn translate_action(&mut self, index: usize) -> TranslateAction {
         let Some(word) = self.layout_candidate(index).map(|candidate| candidate.text) else {
             return TranslateAction::Nothing;
         };
-        let Some(senses) = self.translate.senses(&word) else {
+        let online = self.online.translation_for(&word);
+        let senses = senses_with_online(self.translate.senses(&word).unwrap_or_default(), online);
+        if senses.is_empty() {
             return TranslateAction::Nothing;
-        };
+        }
         if let [sense] = senses.as_slice() {
             let text = sense.text.clone();
+            let from_online = sense.pos.as_deref() == Some(ONLINE_POS);
             // `None` 是「只并进组句」：整段还没选完，等后面选完 / 回车再一起交给应用
-            return TranslateAction::Commit(self.commit_sense(index, &word, &text));
+            return TranslateAction::Commit(self.commit_sense(index, &word, &text, !from_online));
         }
         self.translate.begin_choices(index, word, senses);
         TranslateAction::Choosing
@@ -85,17 +116,26 @@ impl Router {
         let choices = self.translate.choices()?;
         let sense = choices.senses.get(index)?;
         let (candidate, word, text) = (choices.index, choices.word.clone(), sense.text.clone());
+        let from_online = sense.pos.as_deref() == Some(ONLINE_POS);
         self.translate.end_choices();
-        self.commit_sense(candidate, &word, &text)
+        self.commit_sense(candidate, &word, &text, !from_online)
     }
 
-    /// 上屏第 `index` 个候选的第 `text` 条译文：拼音消耗与学习都按这个候选走
-    /// （`Engine::commit_translation`），落进文档的是译文；顺带给这个词条记一次「译文上屏」。
-    pub(crate) fn commit_sense(&mut self, index: usize, word: &str, text: &str) -> Option<String> {
+    /// 上屏第 `index` 个候选的第 `text` 条译文：拼音消耗按这个候选走（`Engine::commit_translation`），
+    /// 落进文档的是译文；`record` 为真（译文来自**本地词典**）时顺带给这个词条记一次「译文上屏」。
+    pub(crate) fn commit_sense(
+        &mut self,
+        index: usize,
+        word: &str,
+        text: &str,
+        record: bool,
+    ) -> Option<String> {
         let candidate = self.layout_candidate(index)?;
         let commit = self.engine.commit_translation(&candidate, text);
-        self.translate
-            .record(word, self.config.translate_need_times);
+        if record {
+            self.translate
+                .record(word, self.config.translate_need_times);
+        }
         commit
     }
 
@@ -294,5 +334,36 @@ fn open_learning() -> Option<Learning> {
             tracing::warn!(path = %path.display(), %error, "翻译学习状态库打不开，翻译 Tip 一律按没学会上色");
             None
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use cloudime_translate::Sense;
+
+    use super::{ONLINE_POS, senses_with_online};
+
+    fn sense(text: &str) -> Sense {
+        Sense {
+            pos: None,
+            text: text.to_owned(),
+            reading: None,
+        }
+    }
+
+    /// 在线那条排最前面，并且带一个 `(在线)` 的词性标记（列表里能看出它从哪来）。
+    #[test]
+    fn the_online_translation_goes_first() {
+        let merged =
+            senses_with_online(vec![sense("sad"), sense("sorrow")], Some("悲伤".to_owned()));
+        assert_eq!(merged.len(), 3);
+        assert_eq!(merged[0].text, "悲伤");
+        assert_eq!(merged[0].pos.as_deref(), Some(ONLINE_POS));
+        assert_eq!(merged[1].text, "sad");
+        assert_eq!(merged[2].text, "sorrow");
+
+        // 没有在线译文就原样返回
+        let local = vec![sense("sad")];
+        assert_eq!(senses_with_online(local.clone(), None), local);
     }
 }

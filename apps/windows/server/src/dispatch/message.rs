@@ -7,6 +7,8 @@ use cloudime_platform::protocol::{
 
 use super::Router;
 use super::key::Effect;
+use super::key::input::reserved_combo;
+use super::script::ScriptActions;
 use super::session::SessionInfo;
 
 impl Router {
@@ -31,6 +33,8 @@ impl Router {
                 if self.focused == Some(session) {
                     self.reset_composition();
                     self.focused = None;
+                    // 重连：DLL 的文本快照重新读一份
+                    self.document.clear();
                 }
                 self.sessions.insert(
                     session,
@@ -56,9 +60,17 @@ impl Router {
                 tracing::debug!(?session, ?text, "焦点离开，结束组句");
                 Some(ServerMessage::Committed { session, text })
             }
-            ClientMessage::Surrounding { session, text } => {
+            ClientMessage::Surrounding {
+                session,
+                text,
+                document,
+            } => {
                 tracing::trace!(?session, chars = text.chars().count(), "收到光标前文");
                 self.set_surrounding(session, text);
+                // 整篇快照只认聚焦会话那份（DLL 在起组句时读，天然就是当前文档）
+                if self.focused == Some(session) {
+                    self.document.store(document);
+                }
                 None
             }
             ClientMessage::Privacy { session, private } => {
@@ -97,6 +109,10 @@ impl Router {
                     mode: Some(self.mode),
                     input: self.input_settings(session),
                     indicator: self.indicator_state(),
+                    // 只要还有脚本登记，就每段组句请 DLL 带一份整篇：快照得跟着文档走，读一次就冻结会
+                    // 拿到旧的（`copy all` 这类会少掉后来敲进去的字）。代价是每段组句起始读一次文档，
+                    // 与文档大小成正比、硬上限 20 万 UTF-16 单元；没脚本时永远是 `false`，零读取。
+                    want_document: self.scripts.has_any_handlers(),
                 })
             }
             ClientMessage::ImeSwitched { session } => {
@@ -115,6 +131,8 @@ impl Router {
                     self.reset_composition();
                     self.focused = None;
                 }
+                // 会话没了：文本快照也作废
+                self.document.clear();
                 self.flush_learning();
                 tracing::debug!(?session, "会话关闭");
                 None
@@ -124,9 +142,48 @@ impl Router {
 
     fn handle_key(&mut self, session: SessionId, event: KeyEvent) -> ServerMessage {
         self.ensure_focus(session);
+        // 脚本先看一眼这一键：返回的表能改这一拍的结果（见 `script`）。
+        // **输入法自己占用的组合键（`Ctrl+数字` / `Ctrl+Enter` / `Ctrl+反引号` / `Shift+反引号`）
+        // 不派发给脚本** —— 谁先定义谁优先，脚本抢不走（见 `docs/design/script.md`）。
+        let actions = if reserved_combo(&event) {
+            ScriptActions::default()
+        } else {
+            self.script_actions(&event)
+        };
+        // 脚本给的加权 / 降权：排序仍在 Core，这里只把参数递过去（没给就不动 Core 那份）
+        if let Some(adjustments) = &actions.adjust {
+            self.engine
+                .set_word_adjustments(adjustments.iter().cloned());
+        }
         self.notice = None;
         self.caret_shift = 0;
         self.delete_before = 0;
+        // 脚本把这一键接管了：不吃，原样交给应用（游戏里抢键）。
+        if actions.passthrough {
+            let shown = self.self_drawn_frame();
+            self.reconcile_candidates(&shown);
+            return ServerMessage::KeyResult {
+                session,
+                outcome: KeyOutcome::Passthrough,
+                commit: None,
+                caret_shift: 0,
+                delete_before: 0,
+                frame: self.current_frame(),
+            };
+        }
+        // 脚本把这一键接管了：上屏它的文本，当前组句作废。
+        if let Some(text) = actions.commit {
+            self.reset_composition();
+            return ServerMessage::KeyResult {
+                session,
+                outcome: KeyOutcome::Consumed,
+                commit: Some(text),
+                caret_shift: 0,
+                delete_before: 0,
+                frame: self.current_frame(),
+            };
+        }
+        self.notice = actions.notice.clone();
         let (commit, outcome) = match self.apply_key(&event) {
             Effect::Changed(commit) => {
                 self.recompose();
@@ -135,6 +192,23 @@ impl Router {
             Effect::Navigated => (None, KeyOutcome::Consumed),
             Effect::Passthrough => (None, KeyOutcome::Passthrough),
         };
+        // 脚本要的在线翻译那一行（`online`）：放在按键派发**之后**，脚本看到的是这一拍之后的状态
+        self.apply_online_actions(&actions);
+        // 这一拍之后不在组句了（Esc / 上屏完 / 断线）：候选窗都没了，那一行与脚本设的尺寸都收掉 ——
+        // 它们只活在一次组句里（脚本自己写的那一份也归这条规则）
+        if !self.composing() {
+            self.online.clear();
+            self.clear_script_size();
+            self.engine.set_calculator(false);
+        }
+        // 脚本要了「重画」（`cloudime.candidate.redraw()`）：按它最新的状态把这一屏重算一遍，
+        // 这样异步回调里改的状态能立刻反映到候选窗上（重算会重新派发 `candidates` 事件）。
+        if self.scripts.take_redraw_request() {
+            self.recompose();
+        }
+        // 脚本设的候选窗尺寸（`cloudime.candidate.set_*`）：本组句内有效
+        let size = self.scripts.take_size_request();
+        self.apply_size_request(size);
         // 自绘窗吃未降级的帧；发给 DLL 的那份按老协议降级（见 composed 的 current_frame）
         let shown = self.self_drawn_frame();
         self.reconcile_candidates(&shown);

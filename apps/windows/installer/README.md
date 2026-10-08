@@ -14,6 +14,7 @@ C:\Program Files\CloudIME\
     Microsoft.UI.Xaml.dll …   设置程序自带的 Windows App Runtime（自包含部署，见下节；约 53 MB / 35 个文件）
     cloudime.ico              开始菜单 / 启动项快捷方式的图标（exe 里也嵌了一份）
     tutorial.md               使用手册（键盘、鼠标、候选窗的全部用法；随仓库根目录的 tutorial.md，发版前同步）
+    lua.md                    脚本作者的技术文档（清单、事件与载荷、动作、cloudime 表、示例；随仓库根目录的 lua.md）
     SpecialSymbolsInserter.exe 特殊字符输入器（随包带的独立小工具，悬浮状态条「特殊字符」按钮起它）
     LocalDictionary\          本地词典（翻译 Tip 用）：dictionaries.list（一行「显示名=文件名」）+ glossary-*.qj / *.db；
                               「设置 → 翻译 → 本地词典」的选项就是清单里的显示名，Server 与设置程序都从这儿读（约 50 MB，按需要留哪几份）
@@ -24,6 +25,8 @@ C:\Program Files\CloudIME\
                               随仓库带一份成品，升级不覆盖用户短语）
     data\phrase-default.db    内置短语的同步源（与上面同一份文件换个名字，每次升级都覆盖；Server 启动时把它的
                               cloudime_default 同步进 Phrases\Phrase.db，用户短语不受影响）
+    Scripts\                  用户 Lua 脚本（一个 .lua 一个脚本；本目录对普通用户可写，「设置 → 脚本」页走它）+
+                              template.lua（「新建脚本」的模板，加载器按文件名跳过、不执行；升级会覆盖它，用户脚本不动）
     data\icons-arrangement.cfg 悬浮状态条的按钮排布（哪个按钮、位置、图标）
     data\icons\*.svg          那些按钮的图标（20×20）
     assets\                   sample\
@@ -75,7 +78,7 @@ Server 与设置程序按 **exe 相对**定位随包资源（`cloudime_platform:
 卸载反向：杀 Server / 设置程序 → 反注册当前版本 DLL（DLL 自己删掉 `%ProgramData%\CloudIME\cloudime.ico`）→ 删文件。
 输入法 DLL 被加载在**每个用过输入法的进程**里（连 explorer.exe 都在内），文件锁着删不掉：卸载器对删不掉的
 `cloudime_tsf*.dll` 调用 `RestartReplace`（`MoveFileEx` 的 `DELAY_UNTIL_REBOOT`）登记到重启后由系统删除，并在结束前提示重启；
-`[UninstallDelete]` 清掉整个安装目录（含用户导入的词库与 `Phrases\Phrase.db` 里的用户短语）与用户数据（`%APPDATA%\CloudIME`、`%LOCALAPPDATA%\CloudIME`、`%ProgramData%\CloudIME`）。
+`[UninstallDelete]` 清掉整个安装目录（含用户导入的词库、`Phrases\Phrase.db` 里的用户短语与 `Scripts\` 下的用户脚本）与用户数据（`%APPDATA%\CloudIME`、`%LOCALAPPDATA%\CloudIME`、`%ProgramData%\CloudIME`）。
 
 ## 升级：DLL 被占用怎么办
 

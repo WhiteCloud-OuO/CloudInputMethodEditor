@@ -45,6 +45,7 @@ fn surrounding_text_arriving_after_the_first_key_still_rescoring() {
         router.handle(ClientMessage::Surrounding {
             session: SESSION,
             text: "今天".to_owned(),
+            document: None,
         }),
         None
     );
@@ -56,6 +57,7 @@ fn surrounding_text_arriving_after_the_first_key_still_rescoring() {
         router.handle(ClientMessage::Surrounding {
             session: SessionId(9),
             text: "无关".to_owned(),
+            document: None,
         }),
         None
     );

@@ -19,7 +19,7 @@ impl Renderer {
         if let Some(footer) = frame.footer.as_deref() {
             width = width.max(self.measure(footer, &m.footer_style()).width);
         }
-        height += self.bottom_line_height(frame, m);
+        height += self.info_height(frame, m);
         (width, height)
     }
 
@@ -109,8 +109,8 @@ impl Renderer {
                 top,
             );
         }
-        // 底部那一行：左侧翻译 Tip、右侧页码
-        self.draw_bottom_line(
+        // 底部信息区：本地 Tip / 页码那一行，下面可能还有在线翻译那一行
+        self.draw_info(
             canvas,
             frame,
             m,

@@ -13,6 +13,7 @@ fn main() {
     embed_icon();
     stage_icon();
     stage_windows_runtime();
+    add_common_controls_dependency();
 }
 
 /// 图标资源要 `rc.exe`（MSVC）编，只在 Windows 宿主上做；失败只警告，别让编译挂掉。
@@ -74,6 +75,47 @@ fn stage_windows_runtime() {
 
 #[cfg(not(windows))]
 fn stage_windows_runtime() {}
+
+/// 往自包含清单里补一条 comctl32 v6 依赖：`MessageBox` / 任务对话框（`rfd` 的确认框、启动失败提示）
+/// 与系统字体对话框（`ChooseFontW`）这些**系统对话框**，只有进程清单里声明了
+/// `Microsoft.Windows.Common-Controls 6.0.0.0` 才会用主题控件；否则退回 comctl32 v5，按钮是老式 3D 外观。
+/// 框架自己的控件是自绘的、不依赖它，所以缺了不报错，只是这几个对话框难看。
+///
+/// 清单是 [`stage_windows_runtime`] 里 `as_self_contained()` 刚写进 `OUT_DIR\app.manifest` 的那份
+/// （开头插着自包含标记 `<description>`）：**直接改那一份**，不另外加一个 `/MANIFESTINPUT` ——
+/// 两份清单交给链接器合并有丢标记的风险。
+#[cfg(windows)]
+fn add_common_controls_dependency() {
+    const DEPENDENCY: &str = concat!(
+        r#"<dependency><dependentAssembly><assemblyIdentity type="win32""#,
+        r#" name="Microsoft.Windows.Common-Controls" version="6.0.0.0""#,
+        r#" processorArchitecture="*" publicKeyToken="6595b64144ccf1df" language="*"/>"#,
+        r#"</dependentAssembly></dependency>"#
+    );
+    let Ok(out_dir) = std::env::var("OUT_DIR") else {
+        return;
+    };
+    let path = std::path::Path::new(&out_dir).join("app.manifest");
+    // 没走自包含部署（交叉编 gnu、或清单生成方式改了）就没有这份文件：不补，别让编译挂掉。
+    let Ok(manifest) = std::fs::read_to_string(&path) else {
+        return;
+    };
+    if manifest.contains("Microsoft.Windows.Common-Controls") {
+        return;
+    }
+    let Some(end) = manifest.rfind("</assembly>") else {
+        println!("cargo:warning=自包含清单里没有 </assembly>，comctl32 v6 依赖没补上");
+        return;
+    };
+    let mut patched = manifest;
+    patched.insert_str(end, DEPENDENCY);
+    if let Err(error) = std::fs::write(&path, patched) {
+        println!("cargo:warning=写带 comctl32 v6 依赖的清单失败: {error}");
+    }
+}
+
+#[cfg(not(windows))]
+fn add_common_controls_dependency() {}
 
 /// `CARGO_PKG_VERSION`，`-dev` 结尾时接 `-<短哈希>`（脏加 +）。
 fn dev_version() -> String {

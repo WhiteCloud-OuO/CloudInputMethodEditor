@@ -180,6 +180,46 @@ pub(super) fn entry_title(name: &str, entries: usize, license: &str, broken: boo
     text
 }
 
+/// 表格的一行：`Grid` + 列宽 + 列间距；列宽与表头用同一份（各页自己的常量），免得两行错位。
+///
+/// 单元格靠 `grid_column(i)` 定位（见 [`text_cell`]）。**最后一列别用 `Auto`**：表头那行往往
+/// 没有按钮，`Auto` 会塌成 0，表头与数据行就对不上了，钉死一个宽度。
+pub(super) fn grid_row(
+    columns: impl IntoIterator<Item = GridLength>,
+    cells: impl IntoIterator<Item = KeyedView>,
+) -> View {
+    Grid::new()
+        .columns(columns)
+        .column_spacing(12.0)
+        .keyed_children(cells)
+}
+
+/// 表格单元格的文本：`column` 是第几列，`bold` 加粗、`wrap` 换行（最多 3 行，超出打省略号）。
+pub(super) fn text_cell(
+    key: &str,
+    text: impl Into<String>,
+    column: i32,
+    bold: bool,
+    wrap: bool,
+) -> KeyedView {
+    let mut block = TextBlock::new()
+        .text(text)
+        .vertical_alignment(VerticalAlignment::Center)
+        .grid_column(column);
+    block = if wrap {
+        block
+            .text_wrapping(TextWrapping::Wrap)
+            .max_lines(3)
+            .text_trimming(TextTrimming::CharacterEllipsis)
+    } else {
+        block.text_wrapping(TextWrapping::NoWrap)
+    };
+    if bold {
+        block = block.font_weight(FontWeight::SEMI_BOLD);
+    }
+    KeyedView::new(key, block)
+}
+
 /// 一行「词库名 + 移除按钮」：词库页用，内置词库不列出、都带移除。
 pub(super) fn bank_row(
     stem: &str,

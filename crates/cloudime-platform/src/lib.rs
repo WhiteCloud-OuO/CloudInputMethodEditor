@@ -18,9 +18,9 @@ pub use config::{
     FullHalfPunctuation, GeneralConfig, InputConfig, ItemNumberStyle, LayoutMode, LogLevel,
     MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MAX_NEED_TIMES, MAX_PAGE_SIZE,
     MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MIN_NEED_TIMES, MO_HU_YIN_BITS,
-    PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PhraseConfig, PreeditMode, SimpTrad,
-    SwitchKey, SwitchKeys, TranslateConfig, UpdateChannel, UpdateConfig, WordBankConfig,
-    fuzzy_bits, pair_bit, pair_open, pairwise_completion,
+    MouseWordSelection, PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PhraseConfig,
+    PreeditMode, SimpTrad, SwitchKey, SwitchKeys, TranslateConfig, UpdateChannel, UpdateConfig,
+    WordBankConfig, fuzzy_bits, pair_bit, pair_open, pairwise_completion,
 };
 pub use error::ConfigError;
 pub use migrate::Migration;

@@ -113,6 +113,11 @@ Source: "{#Repo}\data\generated\lm.qj";          DestDir: "{app}\data\generated"
 ; Excludes 挡掉开发机自己的 UserWordBank.db（用户自造词库，运行时生成，绝不能进包）。
 Source: "{#Repo}\WordBank\*.db";   DestDir: "{app}\WordBank"; Flags: ignoreversion; Excludes: "UserWordBank.db"
 ; —— 短语库：安装目录 Phrases\Phrase.db（user 与 cloudime_default 两张表）——
+; 用户脚本目录：只装「新建脚本」用的模板（用户在设置页里建的脚本不随包走；升级会覆盖模板）。
+; lib\ 里放脚本用的工具（纯 Lua 的 md5.lua）与一份完整示例（example-niutrans.lua）——
+; 它们在子目录里，加载器只认 Scripts\ 根部的 *.lua，所以不会被当成脚本执行。
+Source: "{#Repo}\Scripts\template.lua"; DestDir: "{app}\Scripts"; Flags: ignoreversion
+Source: "{#Repo}\Scripts\lib\*"; DestDir: "{app}\Scripts\lib"; Flags: ignoreversion
 ; onlyifdoesntexist：升级别覆盖用户自己的短语；文件随仓库带（内置短语写在 cloudime_default 表里）。
 Source: "{#Repo}\Phrases\Phrase.db"; DestDir: "{app}\Phrases"; Flags: onlyifdoesntexist
 ; 内置短语的同步源：同一份文件换个名字装进 data\，每次升级都覆盖；Server 启动时把它的 cloudime_default
@@ -123,6 +128,7 @@ Source: "{#Repo}\Phrases\Phrase.db"; DestDir: "{app}\data"; DestName: "phrase-de
 Source: "{#Repo}\data\local_models\*.qjm"; DestDir: "{app}\data\local_models"; Flags: ignoreversion skipifsourcedoesntexist
 ; —— 随 git 的资源 ——
 Source: "{#Repo}\tutorial.md"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Repo}\lua.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Repo}\assets\sample\dict.tsv";        DestDir: "{app}\assets\sample"; Flags: ignoreversion
 ; 悬浮状态条的图标按钮：排布表与 icons\ 装在 data\ 下，Server 按 exe 位置读 {app}\data\icons-arrangement.cfg
 Source: "{#Repo}\apps\windows\server\src\ui\status\icons-arrangement.cfg"; DestDir: "{app}\data"; Flags: ignoreversion
@@ -150,6 +156,9 @@ Filename: "{sys}\icacls.exe"; Parameters: """{app}\WordBank"" /grant *S-1-5-32-5
 ; ①.6 短语目录对普通用户可写：「设置 → 短语」页的增删改要写 Phrases\Phrase.db（同样在 Program Files 下）。
 Filename: "{sys}\icacls.exe"; Parameters: """{app}\Phrases"" /grant *S-1-5-32-545:(OI)(CI)M /T /C /Q"; \
   Flags: runhidden waituntilterminated; StatusMsg: "配置短语目录权限…"
+; ①.7 脚本目录对普通用户可写：「设置 → 脚本」页的新建 / 编辑 / 删除都要写 Scripts\（同样在 Program Files 下）。
+Filename: "{sys}\icacls.exe"; Parameters: """{app}\Scripts"" /grant *S-1-5-32-545:(OI)(CI)M /T /C /Q"; \
+  Flags: runhidden waituntilterminated; StatusMsg: "配置脚本目录权限…"
 ; ② 注册文本服务（写 HKCR + 图标到 %ProgramData%\CloudIME\cloudime.ico）。注册的是本版本的 DLL，
 ;    InprocServer32 指向新文件；旧版本的 DLL **不能** regsvr32 /u（那会把整个 CLSID 注销掉）。
 Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\{#TsfDll}"""; \

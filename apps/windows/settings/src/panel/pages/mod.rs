@@ -5,4 +5,5 @@ pub(super) mod debugging;
 pub(super) mod dictionaries;
 pub(super) mod input;
 pub(super) mod phrase;
+pub(super) mod scripts;
 pub(super) mod translate;

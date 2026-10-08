@@ -13,24 +13,30 @@ use windows::Win32::UI::TextServices::{
 };
 use windows::core::Interface;
 
+use cloudime_platform::protocol::DocumentText;
+
 /// 往前读多少字。
 const LOOKBACK: i32 = 64;
 
-/// 起组句时对输入框的判断：私密不私密，以及不私密时光标前的文字。
+/// 起组句时对输入框的判断：私密不私密、光标前的文字，以及（Server 请过的话）一份整篇快照。
 pub(crate) struct InputContext {
     /// 输入范围声明了私密 / 密码 / PIN（[`SECRET_SCOPES`]）：不读前文，Server 侧不学不记不发云端。
     pub(crate) private: bool,
 
     /// 当前选区起点之前最多 [`LOOKBACK`] 个 UTF-16 单元的文本。私密、没有选区、读不到时为 `None`。
     pub(crate) before: Option<String>,
+
+    /// 整篇快照（`cloudime.text.*` 用）：只在 Server 请过时读（[`document_text`]）。
+    pub(crate) document: Option<DocumentText>,
 }
 
-/// 起组句时读一次：先判私密，不私密再读前文。
-pub(crate) fn input_context(context: &ITfContext, ec: u32) -> InputContext {
+/// 起组句时读一次：先判私密，不私密再读前文（Server 要的话连整篇一起读）。
+pub(crate) fn input_context(context: &ITfContext, ec: u32, document: bool) -> InputContext {
     let Some(range) = selection_start(context, ec) else {
         return InputContext {
             private: false,
             before: None,
+            document: None,
         };
     };
     if private_input(context, ec, &range) {
@@ -38,17 +44,65 @@ pub(crate) fn input_context(context: &ITfContext, ec: u32) -> InputContext {
         return InputContext {
             private: true,
             before: None,
+            document: None,
         };
     }
     InputContext {
         private: false,
-        before: text_before_caret(context, ec, range),
+        before: text_before_caret(ec, &range),
+        document: document.then(|| document_text(ec, &range)).flatten(),
     }
 }
 
-/// `range`（已折成插入点）之前最多 [`LOOKBACK`] 个 UTF-16 单元的文本；读不到 / 为空是 `None`。
-fn text_before_caret(context: &ITfContext, ec: u32, range: ITfRange) -> Option<String> {
-    let _ = context;
+/// 复制一份**独立**的 range。COM 接口的 `.clone()` 只是 `AddRef`、仍指向同一个对象，
+/// 挪动副本会连带原件 —— 读光标前后两半时，第二次读会带上第一次挪过的范围（整篇翻倍）。
+/// 用 COM 自己的 `Clone`（`ITfRange::Clone`，返回一个真正的新 range）才对。
+fn clone_range(range: &ITfRange) -> Option<ITfRange> {
+    unsafe { range.Clone() }.ok()
+}
+
+/// 整篇快照的硬上限（UTF-16 单元）：读一篇要先分配缓冲，总得有个天花板。
+/// 200 000 个单元 ≈ 10 万汉字 / 400 KB —— 再多也够脚本用了，再高只会拖慢每一次读取。
+const DOCUMENT_LIMIT: i32 = 200_000;
+
+/// 读一份「光标附近」的文档快照：光标前后各一半、最多 `2 × [`DOCUMENT_LIMIT`]` 个 UTF-16 单元。
+/// `DocumentText.caret` 是光标在返回文本里的字符下标（`cloudime.text.before` 按它切）。
+/// 私密框、读不到、空文档返回 `None`。
+fn document_text(ec: u32, caret: &ITfRange) -> Option<DocumentText> {
+    // 分两半读（光标前 / 光标后）：拼起来就是「以光标为中心」，光标下标天然是前一半的字符数。
+    // 某一侧为空（光标就在文档两头）不算失败，两侧都为空才是没有文本。
+    let before = side_text(ec, caret, true).unwrap_or_default();
+    let after = side_text(ec, caret, false).unwrap_or_default();
+    let caret_index = before.chars().count();
+    let mut text = before;
+    text.push_str(&after);
+    (!text.is_empty()).then_some(DocumentText {
+        text,
+        caret: caret_index,
+    })
+}
+
+/// 从光标往一侧读最多 [`DOCUMENT_LIMIT`] / 2 个 UTF-16 单元：`before = true` 读光标之前，否则读之后。
+fn side_text(ec: u32, caret: &ITfRange, before: bool) -> Option<String> {
+    let range = clone_range(caret)?;
+    let half = DOCUMENT_LIMIT / 2;
+    let mut shifted = 0i32;
+    let result = if before {
+        unsafe { range.ShiftStart(ec, -half, &mut shifted, std::ptr::null()) }
+    } else {
+        unsafe { range.ShiftEnd(ec, half, &mut shifted, std::ptr::null()) }
+    };
+    result.ok()?;
+    let mut buf = vec![0u16; half as usize];
+    let mut fetched = 0u32;
+    unsafe { range.GetText(ec, 0, &mut buf, &mut fetched) }.ok()?;
+    let text = String::from_utf16_lossy(&buf[..fetched as usize]);
+    (!text.is_empty()).then_some(text)
+}
+
+/// 光标之前最多 [`LOOKBACK`] 个 UTF-16 单元的文本；读不到 / 为空是 `None`。
+fn text_before_caret(ec: u32, caret: &ITfRange) -> Option<String> {
+    let range = clone_range(caret)?;
     let mut shifted = 0i32;
     unsafe { range.ShiftStart(ec, -LOOKBACK, &mut shifted, std::ptr::null()) }.ok()?;
     if shifted == 0 {

@@ -43,6 +43,7 @@ pub(crate) fn join_marked_typed(typed: &str, segmentations: &[Segmentation], tai
 
 use crate::engine::timings::Timings;
 use crate::engine::{MarkedKind, MarkedSegment};
+use std::collections::HashMap;
 
 /// 不带译文的候选查询结果。
 #[derive(Debug, Clone, Default)]
@@ -52,6 +53,11 @@ pub struct Query {
 
     /// 排好序的候选，`translation` 均为 `None`。
     pub candidates: CandidateList,
+
+    /// 候选文本 → **Core 的排名权重**（`rank_pool` 那一层算出来的分：词频 × 用户权重 × 选择次数 ×
+    /// 上下文 × 纠错 × 联想，结构键不在里面）。给平台层看 Core 的排序依据（脚本据此决定加权 / 降权）；
+    /// 快捷候选（日期 / 算式）不参与排名，不在表里。
+    pub weights: HashMap<String, f64>,
 
     /// 输入末尾无法切分的字母（如 `kaifv` 的 `v`），不参与本次候选，留给后续输入。
     pub tail: String,
@@ -114,11 +120,21 @@ impl Query {
         match &self.correction {
             Some(correction) => segments.extend(correction.marked_segments()),
             None => {
-                let typed = if let Some(display) = &self.typed_display {
+                let mut typed = if let Some(display) = &self.typed_display {
                     display.clone()
                 } else {
                     join_marked(&self.segmentations, &self.tail)
                 };
+                // 光标前刚敲的那颗隔音符（`xi'`）：显示串是按音节拼的（只在音节之间插 `'`），
+                // 末尾这颗后面还没有音节可接，`join_marked` 会把它丢掉 —— 补回来，不然按下去
+                // 拼音串看不出任何变化（光标映射那边本来就按「显示串里有它」算，补上正好对齐）。
+                // 光标后面还有拼音时不补：那一段（`rest`）自己前面就带一颗 `'`，已经显示出来了。
+                if self.rest.is_empty()
+                    && self.text[..self.cursor.min(self.text.len())].ends_with('\'')
+                    && !typed.ends_with('\'')
+                {
+                    typed.push('\'');
+                }
                 if !typed.is_empty() {
                     segments.push(MarkedSegment::new(typed, MarkedKind::Typed));
                 }

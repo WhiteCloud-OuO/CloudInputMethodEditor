@@ -2,7 +2,7 @@
 
 use cloudime_platform::ItemNumberStyle;
 use cloudime_platform::LayoutMode;
-use cloudime_platform::protocol::{Frame, PreeditKind};
+use cloudime_platform::protocol::{Frame, OnlineState, PreeditKind};
 use cloudime_render::{
     HighlightAnimation, Preedit, PreeditSegment, PreeditStyle, Row, TipSegment, Tone,
 };
@@ -42,6 +42,9 @@ pub(crate) struct RenderData {
 
     /// 底部那一行左侧的翻译 Tip（词性斜体、释义常规），没有译文时为空。
     pub(super) tip: Vec<TipSegment>,
+
+    /// 底部 Tip 下面**单独一行**的在线翻译（`Ctrl+T`），没按过 / 已收起时为空。
+    pub(super) online: Vec<TipSegment>,
 }
 
 impl RenderData {
@@ -57,6 +60,7 @@ impl RenderData {
             columns: 0,
             index_style: ItemNumberStyle::default(),
             tip: Vec::new(),
+            online: Vec::new(),
         }
     }
 
@@ -70,6 +74,7 @@ impl RenderData {
         self.columns = frame.columns;
         self.index_style = index_style;
         self.tip = tip_segments(frame);
+        self.online = online_segments(frame);
         // 多释义选择（Ctrl + 反引号之后）：顶部那一行换成被翻译的词条、候选行换成各条释义
         match &frame.tip_choices {
             Some(choices) => {
@@ -105,8 +110,8 @@ impl RenderData {
             }
         }
         // 展开「更多候选项」时不画序号：候选密排成格子，序号既挤又用不上
-        // （数字键那时是跳页，不再选词）。
-        if self.columns > 0 {
+        // （数字键那时是跳页，不再选词）。表达式计算面板同理（只有一条「结果」）。
+        if self.columns > 0 || frame.hide_index {
             for row in &mut self.rows {
                 row.index.clear();
             }
@@ -153,6 +158,7 @@ impl RenderData {
             min_cell_width,
             footer: self.footer.clone(),
             tip: (!self.tip.is_empty()).then(|| self.tip.clone()),
+            online: (!self.online.is_empty()).then(|| self.online.clone()),
             status: self.notice.clone(),
         }
     }
@@ -204,6 +210,22 @@ fn tip_segments(frame: &Frame) -> Vec<TipSegment> {
         }
     }
     segments
+}
+
+/// 底部 Tip 下面那一行的在线翻译（`Ctrl+T`）：先一个小字前缀，再按这一行的状态给正文上色。
+fn online_segments(frame: &Frame) -> Vec<TipSegment> {
+    let Some(line) = frame.online.as_ref() else {
+        return Vec::new();
+    };
+    let (prefix, tone) = match line.state {
+        OnlineState::Waiting => ("在线 ", Tone::TranslateMeta),
+        OnlineState::Done => ("在线 ", Tone::Online),
+        OnlineState::Failed => ("在线翻译失败：", Tone::TranslateMeta),
+    };
+    vec![
+        TipSegment::new(prefix, Tone::TranslateMeta, false),
+        TipSegment::new(line.text.clone(), tone, false),
+    ]
 }
 
 /// 窗口顶部要画的拼音行：`[general] preedit` 配成「只在行内」时为空（拼音已经在应用里）；

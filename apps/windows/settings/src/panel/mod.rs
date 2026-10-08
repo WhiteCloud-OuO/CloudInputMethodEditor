@@ -6,6 +6,7 @@ mod component;
 mod controls;
 mod font_dialog;
 mod message;
+mod notepad;
 mod notice;
 mod pages;
 
@@ -18,7 +19,7 @@ pub(crate) use self::message::Message;
 use self::notice::Notice;
 use self::pages::candidates::FontRole;
 use self::pages::phrase::PhraseForm;
-use self::pages::{candidates, debugging, dictionaries, input, phrase, translate};
+use self::pages::{candidates, debugging, dictionaries, input, phrase, scripts, translate};
 
 /// CLOUDIME_VERSION 由 build.rs 给：-dev 版接 git 短哈希。
 pub(crate) const VERSION: &str = env!("CLOUDIME_VERSION");
@@ -61,6 +62,9 @@ pub(crate) struct Settings {
 
     /// 最近一次短语操作的结果，显示在短语页。
     phrase_status: String,
+
+    /// 最近一次脚本操作的结果，显示在脚本页（新建 / 删除 / 改名）。
+    script_status: String,
 }
 
 impl Settings {
@@ -131,6 +135,7 @@ impl Settings {
             "candidates" => candidates::view(self, context),
             "dictionaries" => dictionaries::view(self, context),
             "phrase" => phrase::view(self, context),
+            "scripts" => scripts::view(self, context),
             "translate" => translate::view(self, context),
             "debugging" => debugging::view(self, context),
             _ => input::view(self, context),

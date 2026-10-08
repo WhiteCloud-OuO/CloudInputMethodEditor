@@ -3,18 +3,23 @@
 //! 候选窗口输出在 [`candidates`]，状态条在 [`status`]，配置热加载在 [`reload`]，本地整句模型在 [`rescore`]。
 
 mod candidates;
+mod clipboard;
 mod composed;
 mod config;
+mod document;
 mod key;
 mod message;
 mod reload;
 mod rescore;
+mod script;
 mod session;
 mod status;
 mod translate;
 
+use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
+use std::rc::Rc;
 use std::time::{Duration, Instant};
 
 use cloudime_core::Engine;
@@ -23,6 +28,9 @@ use cloudime_platform::protocol::{
     ClientMessage, Frame, IndicatorState, InputMode, InputSettings, ScreenRect, ServerMessage,
     SessionId,
 };
+
+use crate::ui::SharedMeasurer;
+use document::Document;
 
 pub use self::candidates::{CandidateEvent, CandidateSink, NoopSink, RenderSettings};
 use self::composed::Composed;
@@ -55,8 +63,16 @@ pub struct Router {
     /// 当前组句的展示状态；没在组句时为 `None`。
     composed: Option<Composed>,
 
-    /// 屏幕提示（当前没有来源写入），随下一帧下发、下一次按键清。
+    /// 屏幕提示（当前只有脚本会写，见 `script`），随下一帧下发、下一次按键清。
     notice: Option<String>,
+
+    /// 聚焦会话最近送来的光标前文（应用里已经输入、不在候选窗口里的那段文本）；组句结束就清。
+    /// 给脚本看：`cloudime.context`。
+    surrounding: String,
+
+    /// 候选文本 → Core 的排名权重（`Query::weights`）：给脚本看 Core 的排序依据（`candidates` 载荷里的
+    /// `weight`）。按文本存，所以脚本重排 / 改显示都不影响它。
+    candidate_weights: HashMap<String, f64>,
 
     /// 当前高亮候选在布局里的下标（跨页）。
     highlight: usize,
@@ -139,11 +155,53 @@ pub struct Router {
 
     /// 本地词典与翻译 Tip（候选窗底部那一行左侧）。
     translate: Translate,
+
+    /// 用户脚本运行时：脚本目录（[`RouterConfig::scripts_dir`]）里的脚本在 [`Router::new`] 时加载，
+    /// 之后每次按键派发一次事件（见 [`script`]）。
+    scripts: cloudime_script::Runtime,
+
+    /// 在线翻译（`Ctrl+T`）：候选窗底部单独一行的译文 / 等待 / 失败。
+    online: translate::online::Online,
+
+    /// 脚本的量尺（`cloudime.ui.measure`）：`(当前字体设置, 懒加载的量尺)`。
+    /// 字体设置由 `apply_config` 刷新，量尺自己看到变了就重建。
+    measure: Rc<RefCell<(RenderSettings, SharedMeasurer)>>,
+
+    /// 输入框文本快照（脚本的 `cloudime.text.*`）：DLL 每段组句起始送一份，见 [`document`](self)。
+    document: Document,
 }
 
 impl Router {
     pub fn new(engine: Engine, config: RouterConfig) -> Self {
         let mut engine = engine;
+        // 先把脚本运行时建起来（`config` 下面要被整体挪进 RouterConfig）。
+        let scripts = match config.scripts_dir.as_deref() {
+            Some(dir) => cloudime_script::Runtime::load(dir, &config.script_disabled),
+            None => cloudime_script::Runtime::none(),
+        };
+        // 脚本的量尺（`cloudime.ui.measure`）：懒加载的渲染器 + 当前字体设置（`apply_config` 会刷新），
+        // 装进脚本运行时 —— 量出来的点宽与候选窗画出来的一致。
+        let measure = Rc::new(RefCell::new((
+            config.render_settings(),
+            SharedMeasurer::default(),
+        )));
+        scripts.set_measure({
+            let measure = measure.clone();
+            Rc::new(move |text: &str, font: cloudime_script::MeasureFont| {
+                let mut slot = measure.borrow_mut();
+                let (settings, measurer) = &mut *slot;
+                measurer.measure(settings, text, font)
+            })
+        });
+        // 输入框文本（`cloudime.text.*`）：快照由 DLL 送（`Surrounding.document`）、按显示宽度切片
+        // 都在 `Document` 里；脚本这边通过一个闭包问 —— 拿不到就是 `nil`，同时会请 DLL 下一次带上。
+        let document = Document::default();
+        scripts.set_text_hook({
+            let document = document.clone();
+            Rc::new(move |range, limit| document.slice(range, limit))
+        });
+        // 剪贴板（`cloudime.clipboard.*`）：Server 就在用户会话里，直接用 Windows 剪贴板 API
+        scripts.set_clipboard(Rc::new(clipboard::set_text), Rc::new(clipboard::get_text));
         // 中文模式的符号映射缺省表在配置里（Core 自己缺省是空表），在这里接上，测试与正式跑的是同一条路
         engine.set_punctuation_mapping(config.punctuation_mapping.clone());
         let mut router = Self {
@@ -156,6 +214,8 @@ impl Router {
             focused: None,
             composed: None,
             notice: None,
+            surrounding: String::new(),
+            candidate_weights: HashMap::new(),
             highlight: 0,
             show_more: false,
             hover_cell: None,
@@ -187,6 +247,10 @@ impl Router {
             } else {
                 Translate::new()
             },
+            online: translate::online::Online::default(),
+            measure,
+            document,
+            scripts,
         };
         // 把当前状态先记成基线：之后第一次真的变了才弹提示（否则第一次切换总被当成基线吞掉）。
         router.last_tip = Some(router.tip_state());
@@ -196,6 +260,8 @@ impl Router {
             &router.config.translate_dictionary,
             router.config.translate_reset_counter,
         );
+        // 脚本都加载完了，通知一声：脚本里可以做准备了。
+        router.dispatch_startup_to_scripts();
         router
     }
 

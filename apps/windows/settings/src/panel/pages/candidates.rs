@@ -2,7 +2,8 @@
 
 use cloudime_platform::{
     CandidateConfig, FontChoice, ItemNumberStyle, LayoutMode, MAX_ASSOCIATION_COUNTS,
-    MAX_CANDIDATE_COUNT, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, PreeditMode,
+    MAX_CANDIDATE_COUNT, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MouseWordSelection,
+    PreeditMode,
 };
 use windows_reactor::*;
 
@@ -239,7 +240,7 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
         ),
         field(
             "候选框最小宽度",
-            "仅在候选项排布方向为垂直时有效。单位为像素。",
+            "竖排、横排都生效（展开成网格时窗口宽度由格子决定）。单位为像素。",
             NumberBox::new()
                 .minimum(0.0)
                 .maximum(2000.0)
@@ -248,10 +249,29 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
         ),
         field(
             "展示更多候选项",
-            "在打字时按下 Tab 键启用。常规：显示更多的候选项；U 模式：显示符号输入面板；I 模式：显示高级编辑面板；V 模式：显示表达式计算器面板。（功能暂未实现）",
+            "在打字时按下 Tab 键启用。常规：显示更多的候选项；U 模式：显示符号输入面板；I 模式：显示高级编辑面板；V 模式：显示表达式计算器面板（拼音里敲 v 再按 Tab 进入，再按 Tab / Esc 退出）。（U / I 模式暂未实现）",
             ToggleSwitch::new()
                 .is_on(c.show_more_candidate_items)
                 .on_toggled(context.callback(Message::ShowMoreCandidates)),
+        ),
+        field(
+            "使用鼠标选词",
+            "鼠标点候选窗里的候选来选词 / 上屏。关闭即不用鼠标选词（缺省）；「仅更多候选项时」只在按 Tab 展开的网格里能点；「全部开启」常规候选窗与展开后的网格都能点。",
+            mode_combo(
+                &MouseWordSelection::ALL,
+                c.mouse_word_selection,
+                MouseWordSelection::label,
+                context.callback(Message::MouseWordSelection),
+            ),
+        ),
+        field(
+            "展开后每个候选项的最大宽度",
+            "「展示更多候选项」展开成网格时，每个候选项最多这么宽；太长的会截断并显示…。0 表示不限。单位为像素。",
+            NumberBox::new()
+                .minimum(0.0)
+                .maximum(2000.0)
+                .value(c.candidate_item_maximum_width as f64)
+                .on_value_changed(context.callback(Message::CandidateItemMaximumWidth)),
         ),
         field_top(
             "在下列程序中不显示候选框（使用原始输入）",

@@ -6,6 +6,16 @@ use super::mode::InputMode;
 use super::screen_rect::ScreenRect;
 use super::session::SessionId;
 
+/// 输入框里的文本快照：以光标为中心的一段（DLL 侧有硬上限），以及光标在 `text` 里的**字符**下标。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct DocumentText {
+    /// 文本本身（上限内、以光标为中心的一段；截过的话只有中间那一段）。
+    pub text: String,
+
+    /// 光标在 `text` 里的字符下标（不是字节、也不是 UTF-16 单元）—— `cloudime.text.before` 按它切。
+    pub caret: usize,
+}
+
 /// DLL（客户端，每个应用进程里一个）发给 Server 的消息。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -55,6 +65,11 @@ pub enum ClientMessage {
 
         /// 光标前最多 64 字。
         text: String,
+
+        /// 整篇文档快照（脚本的 `cloudime.text.*` 用）：Server 在 [`super::ServerMessage::ModeSync`]
+        /// 里请过一次才带（`want_document`）。`None` = 这次没请求 / 读不到 / 私密输入框。
+        #[serde(default)]
+        document: Option<DocumentText>,
     },
 
     /// 输入框私密与否变了（DLL 起组句时按输入范围判：`IS_PRIVATE` / 密码 / PIN 类算私密，浏览器无痕窗口就是它）。

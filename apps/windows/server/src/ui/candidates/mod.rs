@@ -10,6 +10,7 @@ pub(crate) mod row;
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
+use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -32,11 +33,11 @@ use cloudime_platform::protocol::Frame;
 use cloudime_render::{HighlightAnimation, HighlightRect, Pixmap, clip_pixmap};
 
 pub(crate) use self::render_data::RenderData;
-use super::CandidateEvents;
 use super::layered;
 use super::monitor;
 use super::painter::SharedPainter;
 use super::window_class::WindowClass;
+use super::{CandidateEvents, Viewport};
 use crate::dispatch::{CandidateEvent, RenderSettings};
 
 const CLASS_NAME: PCWSTR = w!("CloudIMECandidateWindow");
@@ -211,11 +212,22 @@ pub(crate) struct CandidateWindow {
 
     /// 滚轮缩放的第几级（Ctrl + 滚轮）：倍数 = `1.2^zoom_step`，只活在内存里（重启回 100%）。
     zoom_step: Cell<i32>,
+
+    /// 脚本要的缩放倍数（`cloudime.candidate.set_scale`，本组句内有效）：`None` = 按 `zoom_step`。
+    /// 用户滚一下滚轮就清掉它（由滚轮接管）；Server 那边配置再变时会重新送过来。
+    script_scale: Cell<Option<f32>>,
+
+    /// 最近画出来的内容区尺寸（点）对外公布的地方：脚本的 `cloudime.candidate.width()` 读它。
+    viewport: Arc<Viewport>,
 }
 
 impl CandidateWindow {
     /// 建一个隐藏的候选窗口。
-    pub(crate) fn new(painter: SharedPainter, events: CandidateEvents) -> Result<Self> {
+    pub(crate) fn new(
+        painter: SharedPainter,
+        events: CandidateEvents,
+        viewport: Arc<Viewport>,
+    ) -> Result<Self> {
         CLASS.ensure(|| WNDCLASSEXW {
             lpfnWndProc: Some(wndproc),
             hInstance: super::module_handle(),
@@ -260,6 +272,8 @@ impl CandidateWindow {
             transition_frames: Cell::new(0),
             events,
             zoom_step: Cell::new(0),
+            script_scale: Cell::new(None),
+            viewport,
         })
     }
 
@@ -338,9 +352,11 @@ impl CandidateWindow {
         }
     }
 
-    /// 配置变了：换序号写法（三项字体与最小宽度在 painter 那边）。
+    /// 配置变了：换序号写法与脚本要的缩放（三项字体与最小宽度在 painter 那边）。
     pub(crate) fn configure(&self, settings: &RenderSettings) {
         self.index_style.set(settings.item_number_style);
+        // 脚本要的缩放（`cloudime.candidate.set_scale`）：配置一变就跟着刷新
+        self.script_scale.set(settings.scale);
     }
 
     /// 按光标矩形定位并显示：贴光标下方（放不下放上方），四周留出阴影。
@@ -360,6 +376,8 @@ impl CandidateWindow {
         // 滚轮缩放是临时的：窗口一关就回到 100%，下次弹出是正常大小。
         self.zoom_step.set(0);
         self.hover.set(None);
+        // 窗口不在了：脚本问宽度就该得到「没有」。
+        self.viewport.clear();
         self.stop_animation();
         let _ = unsafe { ShowWindow(self.hwnd, SW_HIDE) };
     }
@@ -379,6 +397,7 @@ impl CandidateWindow {
         let Some(anchor) = self.anchor.get() else {
             return;
         };
+        let dpi = self.effective_dpi();
         let rendered = {
             let animation = self.current_animation();
             let data = self.data.borrow();
@@ -386,7 +405,7 @@ impl CandidateWindow {
             self.painter
                 .borrow_mut()
                 .as_mut()
-                .and_then(|painter| painter.render_frame(&frame, data.layout, self.effective_dpi()))
+                .and_then(|painter| painter.render_frame(&frame, data.layout, dpi))
         };
         let Some(rendered) = rendered else {
             // 字体库加载失败或渲染出错（已记日志）：不贴图、不显示。
@@ -413,6 +432,11 @@ impl CandidateWindow {
             self.hide();
             return;
         }
+        // 把窗口现在的内容区尺寸（点）公布出去：脚本的 `cloudime.candidate.width()` 按它折行。
+        // 渲染器只认「点 → 像素」一个倍数（`dpi / 96`），这里换算回来。
+        let to_points = 96.0 / dpi.max(1) as f32;
+        self.viewport
+            .set(content.0 as f32 * to_points, content.1 as f32 * to_points);
         // 展开 / 收起过渡：位图**内容**在缩 / 长（不缩放），并前后互淡；画布尺寸另有讲究，见下。
         // 位置按**最终**尺寸算，免得过渡中边长边缩时上下位置翻来覆去。
         let transition = self.frame_with_transition(content);
@@ -583,13 +607,20 @@ impl CandidateWindow {
         let ratio = zoom_factor(step) / zoom_factor(current);
         self.collapsed_width.set(self.collapsed_width.get() * ratio);
         self.zoom_step.set(step);
+        // 用户一滚就由滚轮接管：脚本设的缩放让位（脚本那边下次再设又会盖回来）
+        self.script_scale.set(None);
         self.redraw();
     }
 
-    /// 实际用来画的 DPI：显示器 DPI × 滚轮缩放倍数（渲染器只认「点 → 像素」一个倍数）。
+    /// 实际用来画的 DPI：显示器 DPI × 缩放倍数（渲染器只认「点 → 像素」一个倍数）。
+    /// 脚本设过缩放（`cloudime.candidate.set_scale`）就按脚本的，否则按用户 `Ctrl + 滚轮` 的级数。
     fn effective_dpi(&self) -> u32 {
         let dpi = self.dpi.get().max(96) as f32;
-        (dpi * zoom_factor(self.zoom_step.get())).round().max(1.0) as u32
+        let factor = self
+            .script_scale
+            .get()
+            .unwrap_or_else(|| zoom_factor(self.zoom_step.get()));
+        (dpi * factor).round().max(1.0) as u32
     }
 
     /// 让窗口在鼠标移出时收到一条 `WM_MOUSELEAVE`（系统只报一次，每次 `WM_MOUSEMOVE` 都要重新登记）。

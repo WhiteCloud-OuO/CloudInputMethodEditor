@@ -106,6 +106,11 @@ impl Router {
     pub(super) fn stop_rescoring(&mut self) {
         self.rescore.stop();
         self.engine.set_rescoring_context(None);
+        // 组句结束了：脚本也不该再从 `cloudime.context` 里读到上一段的前文
+        self.surrounding.clear();
+        // 文本快照**不**在这里清：清了的话每段组句的第一次 `cloudime.text.*` 都是 `nil`
+        //（DLL 那份快照要到组句起始的编辑会话才读得到，晚于第一键）。留着上一段组句的快照当底，
+        // 焦点 / 会话真变了才清（见 `ensure_focus` / `OpenSession` / `CloseSession`）。
     }
 
     /// DLL 送来聚焦会话的光标前文：给 Engine 当前文，缓存里按旧前文记的「要打分的」作废，重新攒一次并重新计时。
@@ -114,6 +119,8 @@ impl Router {
         if self.focused != Some(session) || self.engine.composition().is_empty() {
             return;
         }
+        // 脚本也要看这段前文（`cloudime.context`）
+        self.surrounding = text.clone();
         self.engine
             .set_rescoring_context((!text.is_empty()).then_some(text));
         if matches!(self.composed, Some(Composed::Candidates { .. })) {
@@ -146,6 +153,8 @@ impl Router {
         self.attach_loaded_model();
         self.advance_rescoring();
         self.poll_config_reload();
+        // 脚本的 HTTP 结果也借这一拍收：到了就调回调、按回调要的改候选显示再重画
+        self.poll_scripts_requests();
     }
 
     /// 防抖到点就发请求；在等结果就收一次，收到了重查并重画当前页。

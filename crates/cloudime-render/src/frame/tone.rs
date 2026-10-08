@@ -19,4 +19,7 @@ pub enum Tone {
 
     /// 翻译 Tip 的释义：这个词条学会了。
     TranslateLearned,
+
+    /// 在线翻译那一行（`Ctrl+T`）：与本地 Tip 分开着色，一眼能看出是网上来的。
+    Online,
 }

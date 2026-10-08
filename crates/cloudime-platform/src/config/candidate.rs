@@ -16,8 +16,12 @@ pub const MIN_ASSOCIATION_COUNTS: usize = 0;
 /// 联想候选项目上限的上限。
 pub const MAX_ASSOCIATION_COUNTS: usize = 4;
 
-/// 候选框最小宽度的缺省值（物理像素，只在竖排时起作用）。
+/// 候选框最小宽度的缺省值（物理像素，竖排与横排都生效）。
 pub const DEFAULT_CANDIDATE_BOX_MINIMUM_WIDTH: u32 = 180;
+
+/// 「展开后每个候选项的最大宽度」的缺省值（物理像素）：展开成网格时每格不超过它，
+/// 太长的候选项截断并显示 `…`。`0` 表示不限。
+pub const DEFAULT_CANDIDATE_ITEM_MAXIMUM_WIDTH: u32 = 420;
 
 /// 一种字体的用法：字族名 + 字号（点）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
@@ -124,6 +128,44 @@ impl ItemNumberStyle {
     }
 }
 
+/// 「使用鼠标选词」：鼠标能不能点候选窗里的候选来选词 / 上屏。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MouseWordSelection {
+    /// 关闭（缺省）：鼠标不选词。
+    #[default]
+    Off,
+
+    /// 仅「展示更多候选项」展开成网格时可用。
+    MoreCandidates,
+
+    /// 全部开启：常规候选窗与展开后的网格都能用鼠标选。
+    Always,
+}
+
+impl MouseWordSelection {
+    /// 全部取值，设置界面按这个顺序列出。
+    pub const ALL: [Self; 3] = [Self::Off, Self::MoreCandidates, Self::Always];
+
+    /// 配置文件里的写法。
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::MoreCandidates => "more_candidates",
+            Self::Always => "always",
+        }
+    }
+
+    /// 界面上的名字。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "关闭",
+            Self::MoreCandidates => "仅更多候选项时",
+            Self::Always => "全部开启",
+        }
+    }
+}
+
 /// `[candidate]` 分节。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -159,12 +201,20 @@ pub struct CandidateConfig {
     /// 组句中的拼音显示在行内、候选窗口还是两处都显示。
     pub preedit: crate::config::PreeditMode,
 
-    /// 候选框最小宽度（物理像素，只在竖排时有效）。
+    /// 候选框最小宽度（物理像素，竖排与横排都生效）。
     pub candidate_box_minimum_width: u32,
 
     /// 展示更多候选项（按 Tab）：组句里 Tab 把候选窗展开成一整屏（竖排 5 列 / 横排 5 行，
     /// 另一个方向就是 [`candidate_count`](Self::candidate_count)）；关掉时 Tab 吃掉但不展开。
     pub show_more_candidate_items: bool,
+
+    /// 使用鼠标选词：鼠标能不能点候选窗里的候选来选词 / 上屏。
+    /// `off` 关闭（缺省）/ `more_candidates` 仅「展示更多候选项」展开时 / `always` 全部开启。
+    pub mouse_word_selection: MouseWordSelection,
+
+    /// 展开（「展示更多候选项」）后每个候选项的最大宽度（物理像素，`0` 表示不限）：
+    /// 展开成网格时每格不超过它，太长的候选项截断并显示 `…`。
+    pub candidate_item_maximum_width: u32,
 
     /// 在下列程序中不显示候选框（完全不接管输入，按键原样交给应用）。
     pub program_list_of_hiding_candidate: Vec<String>,
@@ -185,6 +235,8 @@ impl Default for CandidateConfig {
             preedit: crate::config::PreeditMode::default(),
             candidate_box_minimum_width: DEFAULT_CANDIDATE_BOX_MINIMUM_WIDTH,
             show_more_candidate_items: false,
+            mouse_word_selection: MouseWordSelection::default(),
+            candidate_item_maximum_width: DEFAULT_CANDIDATE_ITEM_MAXIMUM_WIDTH,
             program_list_of_hiding_candidate: Vec::new(),
         }
     }
@@ -254,6 +306,17 @@ mod tests {
             ..CandidateConfig::default()
         };
         assert_eq!(config.association_counts(), MIN_ASSOCIATION_COUNTS);
+    }
+
+    #[test]
+    fn mouse_word_selection_defaults_to_off() {
+        assert_eq!(
+            CandidateConfig::default().mouse_word_selection,
+            MouseWordSelection::Off
+        );
+        assert_eq!(MouseWordSelection::ALL.len(), 3);
+        assert_eq!(MouseWordSelection::MoreCandidates.key(), "more_candidates");
+        assert_eq!(MouseWordSelection::Always.label(), "全部开启");
     }
 
     #[test]

@@ -191,6 +191,8 @@ mod tests {
                 assert!(event.modifiers.ctrl);
                 assert_eq!(event.virtual_key, 0x31);
                 assert_eq!(to_key_event(0x41, false).character, Some('A'));
+                // 没在组句时带 Ctrl 的键归应用（记事本的 `Ctrl+A` / `Ctrl+C` 要能用）：
+                // `OnTestKeyDown` 返回 false，按键原样交给应用、也不问 Server。
                 assert!(
                     !unsafe { sink.OnTestKeyDown(None, WPARAM(0x31), LPARAM(0)) }
                         .unwrap()

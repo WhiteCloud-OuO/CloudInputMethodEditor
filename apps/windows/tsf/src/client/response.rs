@@ -11,6 +11,9 @@ pub struct ModeSyncReply {
 
     /// 右键菜单打勾用的开关状态，同样每一拍都带。
     pub indicator: IndicatorState,
+
+    /// Server 请 DLL 在下一次起组句时带一份整篇文本快照（脚本的 `cloudime.text.*` 要用）。
+    pub want_document: bool,
 }
 
 /// Server 对一次组句轮询的答复。

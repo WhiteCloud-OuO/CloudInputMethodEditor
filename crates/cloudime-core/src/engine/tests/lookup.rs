@@ -108,6 +108,23 @@ fn marked_text_joins_best_segmentation_with_apostrophes() {
     assert_eq!(engine.query().unwrap().marked_text(), "kai'fa");
     engine.set_input("kf");
     assert_eq!(engine.query().unwrap().marked_text(), "k'f");
+
+    // 末尾刚敲的隔音符也要看得见（不然按下去像没反应）；后面接上音节后仍是只有一颗
+    engine.set_input("kai'");
+    assert_eq!(engine.query().unwrap().marked_text(), "kai'");
+    assert_eq!(
+        engine.query().unwrap().marked_cursor(),
+        "kai'".chars().count()
+    );
+    engine.set_input("kai'f");
+    assert_eq!(engine.query().unwrap().marked_text(), "kai'f");
+    // 连敲两颗：第二颗没有音节可接，只显示一颗
+    engine.set_input("kai''");
+    assert_eq!(engine.query().unwrap().marked_text(), "kai'");
+    // 光标回到那颗隔音符后面（后面还有拼音）：那颗由 `rest` 那段带出来，不能再补一颗
+    engine.set_input("kai'f");
+    assert!(engine.move_cursor_syllable_left());
+    assert_eq!(engine.query().unwrap().marked_text(), "kai'f");
 }
 
 #[test]
@@ -310,6 +327,36 @@ fn shift_letters_join_the_buffer() {
 }
 
 #[test]
+fn calculator_panel_shows_only_the_result() {
+    let mut engine = self::engine();
+    engine.set_input("v2*(3+4)");
+    engine.set_calculator(true);
+    let query = engine.query().unwrap();
+    // 候选只有结果那一条；拼音行显示算式本身（去掉 `v` 前缀）
+    assert_eq!(query.candidates.items.len(), 1);
+    assert_eq!(query.candidates.items[0].text, "14");
+    assert_eq!(query.marked_text(), "2*(3+4)");
+    assert_eq!(query.marked_cursor(), 7);
+
+    // 算式空着（刚切进来）：结果是 0
+    engine.set_input("v");
+    assert_eq!(texts_of(&engine), ["0"]);
+
+    // 算错 / 溢出：空候选
+    engine.set_input("v1/0");
+    assert!(texts_of(&engine).is_empty());
+    engine.set_input("v9^9^9");
+    assert!(texts_of(&engine).is_empty());
+
+    // 退出面板后又回到 V 模式那一套（结果 + 「算式=结果」）
+    engine.set_input("v1+2");
+    engine.set_calculator(false);
+    let query = engine.query().unwrap();
+    assert_eq!(query.marked_text(), "v1+2");
+    assert_eq!(query.candidates.items[1].text, "1+2=3");
+}
+
+#[test]
 fn expression_mode_skips_pinyin_and_evaluates() {
     let mut engine = self::engine();
     assert!(!engine.expression_mode());
@@ -451,4 +498,38 @@ fn cursor_moves_by_syllable() {
     engine.move_cursor_home();
     assert!(engine.move_cursor_syllable_right());
     assert_eq!(engine.composition().cursor(), "hello".len());
+}
+
+/// 脚本给的加权 / 降权：同一个结构档里按系数重排，跨档的仍听 Core（覆盖少的 开 不会因此跑到最前）。
+#[test]
+fn word_adjustments_boost_and_demote_within_the_tier() {
+    let mut engine = engine();
+    engine.set_input("kaifa");
+    let plain = texts_of(&engine);
+    assert!(
+        plain.iter().position(|text| text == "开饭") > plain.iter().position(|text| text == "开放"),
+        "{plain:?}"
+    );
+
+    // 加权：开饭（词频 800）乘 1000 压过 开放（20000）
+    engine.set_word_adjustments([("开饭".to_owned(), 1000.0)]);
+    let boosted = texts_of(&engine);
+    assert!(
+        boosted.iter().position(|text| text == "开饭")
+            < boosted.iter().position(|text| text == "开放"),
+        "{boosted:?}"
+    );
+    // 覆盖不够的 开 还在最后：系数只改词频那一层
+    assert_eq!(boosted.last().unwrap(), "开");
+
+    // 降权：开放 沉到 开饭 后面；清空后回到原样
+    engine.set_word_adjustments([("开放".to_owned(), 0.001)]);
+    let demoted = texts_of(&engine);
+    assert!(
+        demoted.iter().position(|text| text == "开放")
+            > demoted.iter().position(|text| text == "开饭"),
+        "{demoted:?}"
+    );
+    engine.set_word_adjustments([]);
+    assert_eq!(texts_of(&engine), plain);
 }

@@ -5,9 +5,10 @@ use crate::dispatch::{CandidateEvent, CandidateSink, RenderSettings, Router, Rou
 use cloudime_core::{CandidateKind, CustomPhrase, Engine};
 use cloudime_dictionary::{Dictionary, WordList};
 use cloudime_platform::LayoutMode;
+use cloudime_platform::MouseWordSelection;
 use cloudime_platform::protocol::{
-    ClientMessage, Frame, KeyEvent, KeyModifiers, KeyOutcome, PROTOCOL_VERSION, ScreenRect,
-    ServerMessage, SessionId,
+    ClientMessage, Frame, KeyEvent, KeyModifiers, KeyOutcome, OnlineLine, OnlineState,
+    PROTOCOL_VERSION, ScreenRect, ServerMessage, SessionId,
 };
 use cloudime_translate::Sense;
 
@@ -51,6 +52,8 @@ fn router(size: usize) -> Router {
         engine,
         RouterConfig {
             page_size: size,
+            // 鼠标相关用例要能点 / 悬停；测这条设置本身的用例再单独覆盖。
+            mouse_word_selection: MouseWordSelection::Always,
             ..Default::default()
         },
     );
@@ -88,6 +91,191 @@ fn compose(router: &mut Router, text: &str, modifiers: KeyModifiers) {
         key(router, c as u32, Some(c), modifiers);
     }
 }
+
+/// 表达式计算面板里按回车：算得出来上屏「算式=结果」；算不出来照旧原样上屏。
+#[test]
+fn the_calculator_panel_commits_the_expression_with_its_value() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    compose(&mut r, "v2*(3+4)", normal);
+    key(&mut r, 0x09, Some('\t'), normal); // 进面板
+    let (outcome, commit, _) = key(&mut r, 0x0D, Some('\r'), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit.as_deref(), Some("2*(3+4)=14"));
+    assert!(r.engine.composition().is_empty(), "上屏后组句该结束");
+    assert!(!r.engine.calculator());
+
+    // 算不出来（`v2*`）：照旧原样上屏
+    let mut r = router(9);
+    compose(&mut r, "v2*", normal);
+    key(&mut r, 0x09, Some('\t'), normal);
+    let (_, commit, _) = key(&mut r, 0x0D, Some('\r'), normal);
+    assert_eq!(commit.as_deref(), Some("v2*"));
+
+    // 不在面板里（`v` 模式）：回车仍是原样上屏
+    let mut r = router(9);
+    compose(&mut r, "v2*(3+4)", normal);
+    let (_, commit, _) = key(&mut r, 0x0D, Some('\r'), normal);
+    assert_eq!(commit.as_deref(), Some("v2*(3+4)"));
+}
+
+/// 表达式模式（`v` 开头）底部那一行换成用法提示；普通拼音没有这段提示。
+#[test]
+fn expression_mode_shows_a_hint_in_the_tip() {
+    let normal = KeyModifiers::default();
+    let mut expression = router(9);
+    compose(&mut expression, "v1+2", normal);
+    let tip = expression
+        .self_drawn_frame()
+        .tip
+        .expect("表达式模式该有用法提示");
+    assert_eq!(tip.joined(), "输入数字或表达式");
+
+    let mut plain = router(9);
+    compose(&mut plain, "nihao", normal);
+    assert!(plain.self_drawn_frame().tip.is_none(), "普通拼音不该有提示");
+}
+
+/// V 模式里 Tab 进表达式计算面板：候选固定成结果那一条、拼音行显示算式（没有 `v`）、
+/// 标点按西文进算式；Tab / Esc 退出回 V 模式。
+#[test]
+fn tab_enters_and_leaves_the_calculator_panel() {
+    let mut r = router(9);
+    let normal = KeyModifiers::default();
+    compose(&mut r, "v2*(3+4)", normal);
+
+    let (outcome, _, frame) = key(&mut r, 0x09, Some('\t'), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert!(r.engine.calculator());
+    assert_eq!(frame.candidates.items.len(), 1, "面板里只有一条候选");
+    assert_eq!(frame.candidates.items[0].text, "14");
+    assert_eq!(preedit(&frame), "2*(3+4)", "拼音行显示算式本身");
+
+    // 面板里敲 `;` 这类标点也照收（西文标点，不转全角、不结束组句）
+    let (_, commit, _) = key(&mut r, 0xBA, Some(';'), normal);
+    assert_eq!(commit, None);
+    assert_eq!(r.engine.raw_preedit().text, "v2*(3+4);");
+
+    // Tab 退出：回 V 模式（拼音行又带上 `v`）
+    let (_, _, frame) = key(&mut r, 0x09, Some('\t'), normal);
+    assert!(!r.engine.calculator());
+    assert_eq!(preedit(&frame), "v2*(3+4);");
+
+    // Esc 在面板里也是「退出表达式计算」，不清空组句
+    key(&mut r, 0x09, Some('\t'), normal);
+    assert!(r.engine.calculator());
+    let (outcome, _, _) = key(&mut r, 0x1B, None, normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert!(!r.engine.calculator());
+    assert_eq!(r.engine.composition().text(), "v2*(3+4);");
+
+    // `[` `]` 在面板里仍然移拼音光标（不进算式）
+    key(&mut r, 0x09, Some('\t'), normal);
+    assert!(r.engine.calculator());
+    let before = r.engine.composition().cursor();
+    let (_, commit, _) = key(&mut r, 0xDB, Some('['), normal);
+    assert_eq!(commit, None);
+    assert!(
+        r.engine.composition().cursor() < before,
+        "`[` 该把光标往左移"
+    );
+    assert!(
+        r.engine.raw_preedit().text.ends_with(';'),
+        "`[` 不该进算式：{}",
+        r.engine.raw_preedit().text
+    );
+
+    // Delete：清空算式与结果（面板留着，结果是 0）
+    let (_, _, frame) = key(&mut r, 0x2E, None, normal);
+    assert!(r.engine.calculator());
+    assert_eq!(r.engine.raw_preedit().text, "v");
+    assert_eq!(frame.candidates.items.len(), 1);
+    assert_eq!(frame.candidates.items[0].text, "0");
+
+    // 组句结束（空组句那一拍）面板状态要清掉
+    key(&mut r, 0x1B, None, normal); // 退出面板
+    key(&mut r, 0x1B, None, normal); // 清空组句
+    assert!(!r.engine.calculator());
+    assert_eq!(r.engine.composition().text(), "");
+}
+
+/// 拼音串里的分词符：组句里敲单引号只进缓冲区当隔音符（`xi'an` 得分段），
+/// 不上屏、也不会被当成标点走符号映射 / 全角那条路。
+#[test]
+fn apostrophe_stays_in_the_composition_as_a_separator() {
+    let mut router = router(9);
+    let normal = KeyModifiers::default();
+    compose(&mut router, "xi", normal);
+
+    let (outcome, commit, frame) = key(&mut router, 0xDE, Some('\''), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit, None, "单引号不该上屏");
+    assert_eq!(
+        router.engine.raw_preedit().text,
+        "xi'",
+        "单引号该进缓冲区（键入的原文）"
+    );
+    assert_eq!(preedit(&frame), "xi'", "拼音串末尾也要看得见这颗隔音符");
+
+    // 隔音符后面还有音节：拼音串必须按它分段（`xi'an` 不能显示成 `xian`）
+    key(&mut router, 0x41, Some('a'), normal);
+    let frame = key(&mut router, 0x4E, Some('n'), normal).2;
+    assert_eq!(router.engine.raw_preedit().text, "xi'an");
+    assert_eq!(preedit(&frame), "xi'an", "拼音串该按显式隔音符分段");
+}
+
+/// 隔音符真在起作用：同一串字母，敲不敲 `'` 决定分段（`xian` 出「先」，`xi'an` 出「西安」）。
+#[test]
+fn apostrophe_forces_the_boundary_in_candidates() {
+    let normal = KeyModifiers::default();
+    let texts = |frame: &Frame| -> Vec<String> {
+        frame
+            .candidates
+            .items
+            .iter()
+            .map(|candidate| candidate.text.clone())
+            .collect()
+    };
+    let typed = |router: &mut Router, text: &str| -> Frame {
+        let mut last = None;
+        for c in text.chars() {
+            let vk = if c == '\'' { 0xDE } else { c as u32 };
+            last = Some(key(router, vk, Some(c), normal).2);
+        }
+        last.expect("typed at least one key")
+    };
+    let fresh = || {
+        let mut router = Router::new(
+            Engine::new(Dictionary::parse("西安\txi an\t100\n先\txian\t100\n").unwrap()),
+            RouterConfig {
+                page_size: 9,
+                ..Default::default()
+            },
+        );
+        router.handle(ClientMessage::OpenSession {
+            session: SessionId(1),
+            app: None,
+            protocol: PROTOCOL_VERSION,
+        });
+        router
+    };
+
+    let plain = texts(&typed(&mut fresh(), "xian"));
+    assert!(plain.contains(&"先".to_owned()), "{plain:?}");
+
+    let bounded = texts(&typed(&mut fresh(), "xi'an"));
+    assert!(bounded.contains(&"西安".to_owned()), "{bounded:?}");
+    assert!(
+        !bounded.contains(&"先".to_owned()),
+        "隔音符该挡住整音节 xian：{bounded:?}"
+    );
+}
+
+/// 帧里拼接起来的拼音串（各段首尾相接）。
+fn preedit(frame: &Frame) -> String {
+    frame.preedit.iter().map(|s| s.text.as_str()).collect()
+}
+
 #[test]
 fn page_keys_move_by_page_and_boundaries_hold() {
     for size in [1, 4, 5, 9] {
@@ -233,6 +421,46 @@ fn mouse_click_and_hover_work_in_both_states() {
     assert_eq!(poll_commit(&mut r).0.highlight, 1);
 }
 
+/// `[candidate] mouse_word_selection`：关闭时悬停 / 点选都不理会；「仅更多候选项时」只有展开成网格
+/// 才点得着。
+#[test]
+fn mouse_word_selection_gates_clicking_and_hover() {
+    let normal = KeyModifiers::default();
+    let poll_commit = |r: &mut Router| match r
+        .handle(ClientMessage::Poll {
+            session: SessionId(1),
+        })
+        .unwrap()
+    {
+        ServerMessage::Update { commit, .. } => commit,
+        _ => panic!("update"),
+    };
+
+    // 关闭：点第 2 格不理会，组句还在（Poll 没有要上屏的文本）
+    let mut r = router(5);
+    r.config.mouse_word_selection = MouseWordSelection::Off;
+    compose(&mut r, "qq", normal);
+    r.handle_candidate_event(CandidateEvent::Commit(1));
+    assert_eq!(poll_commit(&mut r), None);
+
+    // 「仅更多候选项时」：收起态点不着；按 Tab 展开成网格后点得着
+    let mut r = router(5);
+    r.config.mouse_word_selection = MouseWordSelection::MoreCandidates;
+    r.config.show_more_candidate_items = true;
+    compose(&mut r, "qq", normal);
+    r.handle_candidate_event(CandidateEvent::Commit(1));
+    assert_eq!(poll_commit(&mut r), None);
+    key(&mut r, 9, None, normal);
+    r.handle_candidate_event(CandidateEvent::Commit(6));
+    assert_eq!(poll_commit(&mut r).as_deref(), Some("第7项"));
+
+    // 「全部开启」（`router` 的缺省）：收起态直接点得着
+    let mut r = router(5);
+    compose(&mut r, "qq", normal);
+    r.handle_candidate_event(CandidateEvent::Commit(1));
+    assert_eq!(poll_commit(&mut r).as_deref(), Some("第2项"));
+}
+
 /// 鼠标指着某一格、高亮也在那一格时，再编辑拼音不把高亮拉回第 1 格（收起态与展开态一样）。
 /// 鼠标移出候选窗后恢复原样。
 #[test]
@@ -259,6 +487,7 @@ fn typing_keeps_the_highlight_under_the_mouse() {
             engine,
             RouterConfig {
                 page_size: 5,
+                mouse_word_selection: MouseWordSelection::Always,
                 ..Default::default()
             },
         );
@@ -305,6 +534,7 @@ fn right_click_does_nothing_without_a_dictionary() {
             RouterConfig {
                 page_size: 5,
                 translate_enabled: enabled,
+                mouse_word_selection: MouseWordSelection::Always,
                 ..Default::default()
             },
         );
@@ -395,6 +625,78 @@ fn the_sense_chooser_moves_with_arrows_and_picks_with_space() {
     assert!(r.self_drawn_frame().tip_choices.is_none());
 }
 
+/// 脚本能改候选窗尺寸（`cloudime.candidate.set_page_size` 等）：**只在本次组句内有效**，
+/// 组句结束回配置值（这里用 9 条 `qq` 短语候选看「一页几个」的变化）。
+#[test]
+fn a_script_can_resize_the_candidate_window() {
+    let dir = std::env::temp_dir().join("cloudime-key-tests-candidate-size");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("size.lua"),
+        "cloudime.script{ api = 1, budget = 1000000, timeout = 10000, \
+         sync = false, handover = 'callback', on_error = false }\n\
+         cloudime.on('key', function(event)\n\
+             if event.ctrl and event.vk == 90 then cloudime.candidate.set_page_size(6) end\n\
+         end)\n",
+    )
+    .unwrap();
+
+    let mut r = router(9);
+    r.scripts = cloudime_script::Runtime::load(&dir, &[]);
+    let normal = KeyModifiers::default();
+    compose(&mut r, "qq", normal);
+    assert_eq!(r.self_drawn_frame().candidates.items.len(), 9);
+
+    // 脚本把一页改成 6：`Ctrl+Z` 触发（不碰拼音，9 条 `qq` 短语还在）
+    let ctrl = KeyModifiers {
+        ctrl: true,
+        ..KeyModifiers::default()
+    };
+    key(&mut r, 0x5A, Some('\u{1a}'), ctrl);
+    assert_eq!(
+        r.self_drawn_frame().candidates.items.len(),
+        6,
+        "脚本设的 page_size 应当生效（当前脚本值：{:?}）",
+        r.config.script_page_size
+    );
+
+    // Esc 结束组句：回配置值
+    key(&mut r, 0x1B, None, normal);
+    compose(&mut r, "qq", normal);
+    assert_eq!(r.self_drawn_frame().candidates.items.len(), 9);
+}
+
+/// `Ctrl + 反引号` 也认「在线翻译那一行」：脚本给**当前**高亮候选翻好的那条会一起上屏 ——
+/// 只有它一条就直接上屏；换过候选之后（陈旧）不认。
+#[test]
+fn ctrl_backquote_also_commits_the_online_translation() {
+    let normal = KeyModifiers::default();
+    let ctrl = KeyModifiers {
+        ctrl: true,
+        ..Default::default()
+    };
+    let line = OnlineLine {
+        text: "hello".to_owned(),
+        state: OnlineState::Done,
+    };
+
+    // 给**当前**高亮候选写的那一行：直接上屏它（本地词典里「你」没有释义，所以只有这一条）
+    let mut r = router(5);
+    compose(&mut r, "ni", normal);
+    r.online.set(line.clone(), "你".to_owned());
+    let result = key(&mut r, 0xC0, None, ctrl);
+    assert_eq!(result.0, KeyOutcome::Consumed);
+    assert_eq!(result.1.as_deref(), Some("hello"));
+
+    // 给**别的**候选写的那一行（陈旧）：不认它，本地又没释义 → 什么都不上屏
+    let mut r = router(5);
+    compose(&mut r, "ni", normal);
+    r.online.set(line, "别的词".to_owned());
+    let result = key(&mut r, 0xC0, None, ctrl);
+    assert_eq!(result.1, None, "陈旧的那一行不该被上屏");
+}
+
 /// 一条释义直接念、多条不念（多条要进选择界面里一条条念）。
 #[test]
 fn only_a_single_sense_is_spoken_outside_the_chooser() {
@@ -434,6 +736,7 @@ fn shift_backquote_speaks_the_sense() {
             RouterConfig {
                 page_size: 5,
                 translate_enabled: enabled,
+                mouse_word_selection: MouseWordSelection::Always,
                 ..Default::default()
             },
         );
@@ -494,6 +797,7 @@ fn middle_click_speaks_like_shift_backquote() {
             RouterConfig {
                 page_size: 5,
                 translate_enabled: enabled,
+                mouse_word_selection: MouseWordSelection::Always,
                 ..Default::default()
             },
         );

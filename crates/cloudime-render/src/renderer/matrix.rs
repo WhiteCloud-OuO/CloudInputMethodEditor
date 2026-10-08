@@ -50,10 +50,10 @@ impl Renderer {
         }
         let cells = self.matrix_cells(frame, m, layout);
         let grid_rows = frame.rows.len().div_ceil(cells.columns);
-        let info_height = self.bottom_line_height(frame, m);
+        let info = self.info_height(frame, m);
         (
             cells.width(m.column_gap()) + m.px(HIGHLIGHT_INSET) * 2.0,
-            cells.row_height * grid_rows as f32 + info_height,
+            cells.row_height * grid_rows as f32 + info,
         )
     }
 
@@ -127,12 +127,12 @@ impl Renderer {
                 top,
             );
         }
-        // 底部那一行：左侧翻译 Tip、右侧页码
+        // 底部信息区：本地 Tip / 页码那一行，下面可能还有在线翻译那一行
         let grid_rows = frame.rows.len().div_ceil(columns);
         // 底部那一行的基准与竖排 / 横排保持一致（都是「最后一行的底边 + 一个行内留白」）：
         // 展开 / 收起切换时 Tip 不会上下跳。
         let info_top = y + cells.row_height * grid_rows as f32 + m.row_padding();
-        self.draw_bottom_line(canvas, frame, m, left, info_top, content_width);
+        self.draw_info(canvas, frame, m, left, info_top, content_width);
         rects
     }
 
@@ -168,40 +168,38 @@ impl Renderer {
         };
         // 格子里除候选词以外的宽度（展开态就只剩间距与角标）
         let chrome = index_width + m.px(INDEX_GAP) + badge_space;
-        // 下限：收起时那条高亮条的宽度；展开态另有两档按候选字宽算的下限——
+        // 宽度基准：收起时那条高亮条的宽度；展开态另有两档按候选字宽算的下限——
         // 横排是「6 个字宽 + 角标宽度」，竖排是「这一屏最长的候选 + 2 个字宽 + 一个角标字宽」
         // （竖排这个**不管有没有角标都把角标字宽算进去**）。
+        let widest = frame
+            .rows
+            .iter()
+            .map(|row| self.measure(&row.text, &text_style).width)
+            .fold(0.0_f32, f32::max);
         let min_width = if horizontal {
             frame
                 .min_cell_width
                 .max(self.horizontal_min_cell_width(m, badge_width))
         } else {
-            let longest = frame
-                .rows
-                .iter()
-                .map(|row| self.measure(&row.text, &text_style).width)
-                .fold(0.0_f32, f32::max);
             let vertical =
-                longest + VERTICAL_CELL_MIN_EMS * self.char_width(m) + self.badge_char_width(m);
+                widest + VERTICAL_CELL_MIN_EMS * self.char_width(m) + self.badge_char_width(m);
             frame.min_cell_width.max(vertical)
         };
-        let limit = if min_width > chrome {
-            min_width - chrome
+        let basis = if min_width > chrome {
+            min_width
         } else {
-            let widest = frame
-                .rows
-                .iter()
-                .map(|row| self.measure(&row.text, &text_style).width)
-                .fold(0.0_f32, f32::max);
-            widest.min(em * MAX_CELL_EMS)
+            (chrome + widest.min(em * MAX_CELL_EMS)).max(min_width)
         };
+        // 「展开后每个候选项的最大宽度」（点，0 不限）：超过就截尾加「…」，格子不再跟着候选词变长
+        let cap = m.px(m.theme.max_cell_width);
+        let cell_width = if cap > 0.0 { basis.min(cap) } else { basis };
+        let limit = (cell_width - chrome).max(0.0);
         let texts = frame
             .rows
             .iter()
             .map(|row| self.truncate(&row.text, &text_style, limit))
             .collect();
         let row_height = self.measure("国", &text_style).height + m.row_padding() * 2.0;
-        let cell_width = (chrome + limit).max(min_width);
         let used = columns.min(frame.rows.len().max(1)).max(1);
         Cells {
             texts,

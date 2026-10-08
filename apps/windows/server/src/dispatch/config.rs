@@ -1,4 +1,8 @@
-use cloudime_platform::{Config, ItemNumberStyle, LayoutMode, PreeditMode, SimpTrad};
+use std::path::PathBuf;
+
+use cloudime_platform::{
+    Config, ItemNumberStyle, LayoutMode, MouseWordSelection, PreeditMode, SimpTrad,
+};
 
 use super::RenderSettings;
 
@@ -25,8 +29,12 @@ pub struct RouterConfig {
     /// 序号的写法（`[candidate] item_number_style`）。
     pub item_number_style: ItemNumberStyle,
 
-    /// 竖排时窗口的最小宽度（`[candidate] candidate_box_minimum_width`，物理像素）。
+    /// 候选窗口的最小宽度（`[candidate] candidate_box_minimum_width`，物理像素）：竖排、横排都生效。
     pub min_width_pixels: f32,
+
+    /// 展开（「展示更多候选项」）成网格时每格的最大宽度
+    /// （`[candidate] candidate_item_maximum_width`，点；`0` 表示不限）。
+    pub max_cell_width: f32,
 
     /// 拼音显示位置（`[candidate] preedit`）。
     pub preedit: PreeditMode,
@@ -34,6 +42,10 @@ pub struct RouterConfig {
     /// 「展示更多候选项」（`[candidate] show_more_candidate_items`）：组句里 Tab 把候选窗展开成
     /// 一屏（竖排 5 列 / 横排 5 行）；关掉时 Tab 吃掉但什么也不做。
     pub show_more_candidate_items: bool,
+
+    /// 使用鼠标选词（`[candidate] mouse_word_selection`）：鼠标能不能在候选窗里悬停 / 点选候选。
+    /// `off` 一律不能（缺省）/ `more_candidates` 只有「展示更多候选项」展开成网格时能 / `always` 都能。
+    pub mouse_word_selection: MouseWordSelection,
 
     /// 启用翻译 Tip（`[translate] enabled`）。
     pub translate_enabled: bool,
@@ -84,9 +96,36 @@ pub struct RouterConfig {
 
     /// 状态切换提示（`[input] show_status_change_tip`）：状态一变在光标附近弹一个 1 秒的提示条。
     pub show_status_change_tip: bool,
+
+    /// 用户脚本目录（**安装目录**的 `Scripts\`，与 `Phrases\`、`WordBank\` 同级），`None` = 不加载脚本。
+    ///
+    /// **不放**在 [`RouterConfig::from`] 里解析：测试与 `RouterConfig::default()` 会去读开发机上
+    /// 真实的脚本目录。只有 Server 正式跑时经 [`RouterConfig::with_bundled_scripts`] 指过来。
+    pub scripts_dir: Option<PathBuf>,
+
+    /// 禁用的脚本文件名（`[script] disabled`，大小写不敏感）：加载时跳过它们。
+    pub script_disabled: Vec<String>,
+
+    /// 脚本在本组句里要的候选窗**最小宽度**（`cloudime.candidate.set_min_width`，物理像素）：
+    /// `None` = 用配置里的 `min_width_pixels`。**只在本次组句内有效**，组句结束清掉。
+    pub script_min_width: Option<f32>,
+
+    /// 脚本在本组句里要的**一页候选数**（`cloudime.candidate.set_page_size`，5–9）：
+    /// `None` = 用配置里的 `page_size`。同样组句结束清掉。
+    pub script_page_size: Option<usize>,
+
+    /// 脚本在本组句里要的**缩放倍数**（`cloudime.candidate.set_scale`）：`None` = 按用户 `Ctrl + 滚轮`。
+    pub script_scale: Option<f32>,
 }
 
 impl RouterConfig {
+    /// 把脚本目录指到**安装目录**的 `Scripts\`（与 `Phrases\`、`WordBank\` 同级）。
+    pub fn with_bundled_scripts(mut self) -> Self {
+        self.scripts_dir = cloudime_platform::resources::bundled_root()
+            .map(|root| root.join(cloudime_script::DIRECTORY));
+        self
+    }
+
     /// 交给 UI 线程的渲染设置。
     pub fn render_settings(&self) -> RenderSettings {
         RenderSettings {
@@ -94,8 +133,10 @@ impl RouterConfig {
             candidate_font: self.candidate_font.clone(),
             item_number_font: self.item_number_font.clone(),
             translate_font: self.translate_font.clone(),
-            min_width_pixels: self.min_width_pixels,
+            min_width_pixels: self.script_min_width.unwrap_or(self.min_width_pixels),
             item_number_style: self.item_number_style,
+            scale: self.script_scale,
+            max_cell_width: self.max_cell_width,
         }
     }
 
@@ -136,8 +177,10 @@ impl From<&Config> for RouterConfig {
             ),
             item_number_style: candidate.item_number_style,
             min_width_pixels: candidate.candidate_box_minimum_width as f32,
+            max_cell_width: candidate.candidate_item_maximum_width as f32,
             preedit: candidate.preedit,
             show_more_candidate_items: candidate.show_more_candidate_items,
+            mouse_word_selection: candidate.mouse_word_selection,
             translate_enabled: config.translate.enabled,
             translate_dictionary: config.translate.dictionary.clone(),
             translate_need_times: config.translate.need_times(),
@@ -155,6 +198,12 @@ impl From<&Config> for RouterConfig {
             auto_hide_float_tool_bar: config.debugging.auto_hide_float_tool_bar,
             auto_disable_without_text_input: config.debugging.auto_disable_without_text_input,
             show_status_change_tip: input.show_status_change_tip,
+            scripts_dir: None,
+            script_disabled: config.script.disabled.clone(),
+            // 脚本设的候选窗尺寸：会话内状态，配置（热）加载时保留，只有 `Router::reset_composition` 清
+            script_min_width: None,
+            script_page_size: None,
+            script_scale: None,
         }
     }
 }

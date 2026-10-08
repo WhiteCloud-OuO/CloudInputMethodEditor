@@ -41,6 +41,9 @@ Windows 10 22H2 上点开始菜单的「云朵输入法 设置」，弹的是系
 - `apps/windows/settings/build.rs`：① `windows_reactor_setup::as_self_contained()` 铺运行时并嵌自包含清单；
   ② 链接参数加 `/DELAYLOAD:api-ms-win-appmodel-runtime-l1-1-5.dll` + `delayimp.lib`，把这两个名字从 IAT 挪到
   延迟加载描述符——自包含部署下它们永远不会被调用，Windows 10 也就不会去找它们。
+  ③ 清单写好后往里面补一条 `Microsoft.Windows.Common-Controls 6.0.0.0` 依赖：`rfd` 的确认框（`MessageBox`）、
+  启动失败提示与字体对话框 `ChooseFontW` 这类**系统对话框**只有清单里声明了这个依赖才用主题控件，
+  否则退回 comctl32 v5、按钮是老式 3D 外观（框架自绘的控件不受影响，缺了也不报错）。
 - `apps/windows/installer/`：`settings-runtime.txt` 记要跟着装的运行时清单，`build.ps1` 按清单从
   `target\release` 挑进 `target\installer\settings-runtime`，`cloudime.iss` 整个目录装进 `{app}`。
   清单的语言资源只留简体中文（`zh-cn`）：界面不做多语言，别的语言由资源默认值兜底，少装 150 个 `.mui`。

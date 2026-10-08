@@ -23,10 +23,15 @@ pub use numeral::{
 /// 表达式模式的固定前缀。`v` 不是任何拼音音节的开头，用它不会和拼音冲突。
 pub const EXPRESSION_PREFIX: char = 'v';
 
-/// 表达式模式下允许敲进缓冲区的非字母字符：数字与四则运算符号。
-/// 字母（`x` 当乘号）本来就能进缓冲区，不在此列。
+/// 表达式模式下允许敲进缓冲区的非字母字符：数字、四则运算、求余 `%`、阶乘 `!`、复数模 `@`、
+/// 幂 `^` 与 `,`（函数的参数分隔）。字母（函数名、虚数单位 `i`）本来就能进缓冲区，不在此列；
+/// `x` 不是乘号，乘要敲 `*`。
 pub fn is_expression_char(c: char) -> bool {
-    c.is_ascii_digit() || matches!(c, '+' | '-' | '*' | '/' | '(' | ')' | '.' | '^')
+    c.is_ascii_digit()
+        || matches!(
+            c,
+            '+' | '-' | '*' | '/' | '%' | '!' | '@' | '(' | ')' | ',' | '.' | '^'
+        )
 }
 
 /// 按输入算快捷候选；不是快捷输入时为空。表达式固定用 [`EXPRESSION_PREFIX`]；`now` 由调用方给，测试可固定时间。
@@ -50,6 +55,26 @@ pub fn candidates(input: &str, now: &Zoned) -> Vec<Candidate> {
             reading: None,
         })
         .collect()
+}
+
+/// 表达式计算面板（V 模式里按 Tab 进来）的候选：**只有结果这一条** —— 算式空着显示 `0`，
+/// 算错 / 溢出就是空表（面板那边显示成没有候选）。
+pub fn result_candidates(body: &str) -> Vec<Candidate> {
+    let text = if body.trim().is_empty() {
+        "0".to_owned()
+    } else {
+        match evaluate(body) {
+            Some(result) => result,
+            None => return Vec::new(),
+        }
+    };
+    vec![Candidate {
+        text,
+        display: None,
+        kind: CandidateKind::Shortcut,
+        syllables: Vec::new(),
+        reading: None,
+    }]
 }
 
 /// 金额最多几位小数（角、分）。

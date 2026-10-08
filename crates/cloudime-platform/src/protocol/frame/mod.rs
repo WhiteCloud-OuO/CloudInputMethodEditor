@@ -56,6 +56,16 @@ pub struct Frame {
     #[serde(default)]
     pub tip_choices: Option<TipChoices>,
 
+    /// 候选窗底部**单独一行**的在线翻译（`Ctrl+T`）：等待 / 译文 / 失败原因。
+    /// 与 [`tip`](Self::tip) 同理，只给 Server 自绘的候选窗用，不单独升协议版本。
+    #[serde(default)]
+    pub online: Option<OnlineLine>,
+
+    /// 不画候选项序号：表达式计算面板只有一条「结果」候选，给它编号没有意义。
+    /// 与 [`online`](Self::online) 同理，只给 Server 自绘的候选窗用，不单独升协议版本。
+    #[serde(default)]
+    pub hide_index: bool,
+
     /// 屏幕提示：画在 preedit 行下方，显示到下一次按键。当前没有来源写入，字段保留。无则 `None`。
     /// 不参与 [`is_empty`](Self::is_empty)：单有提示不算在组句，否则空组句也会撑开候选窗口。
     #[serde(default)]
@@ -77,4 +87,27 @@ pub struct TipChoices {
 
     /// 各条释义，序号按顺序从 1 起。
     pub senses: Vec<cloudime_translate::Sense>,
+}
+
+/// 候选窗底部单独一行的在线翻译（`Ctrl+T`）。
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OnlineLine {
+    /// 这一行要画什么：「在线翻译中…」/ 译文 / 失败原因。
+    pub text: String,
+
+    /// 现在处在哪一步（渲染端据此上色）。
+    pub state: OnlineState,
+}
+
+/// 在线翻译那一行处在哪一步。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum OnlineState {
+    /// 请求已经发出去，还没回来。
+    Waiting,
+
+    /// 拿到了译文。
+    Done,
+
+    /// 失败（超时 / 网络 / 服务端报错），[`OnlineLine::text`] 里带原因。
+    Failed,
 }

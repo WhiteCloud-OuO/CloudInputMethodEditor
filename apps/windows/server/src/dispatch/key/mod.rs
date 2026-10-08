@@ -2,7 +2,7 @@
 
 mod codes;
 mod effect;
-mod input;
+pub(super) mod input;
 
 pub(super) use self::effect::Effect;
 

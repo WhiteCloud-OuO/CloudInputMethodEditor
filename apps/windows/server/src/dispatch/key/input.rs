@@ -40,8 +40,43 @@ fn is_speak_key(event: &KeyEvent) -> bool {
         && event.virtual_key == codes::BACKQUOTE
 }
 
+/// 这一键是不是**输入法自己占用的组合键**：`Ctrl + 数字`（主键盘 / 小键盘）、`Ctrl + Enter`、
+/// `Ctrl + 反引号`、`Shift + 反引号`。
+///
+/// 这些是输入法的核心操作（杀词 / 原样上屏 / 翻译 Tip / 发音），脚本一抢用户就用不了了 ——
+/// 用户定的规则是「软件本身的组合键优先」：**这些组合不派发给脚本**，Server 只按自己的语义处理。
+/// 别的 `Ctrl` 组合（含 `Ctrl+Shift+…`）与所有不带修饰键的键都不在这里，脚本随便绑
+/// （见 `docs/design/script.md` 的「按键」一节）。简繁 / 标点那两个（`Ctrl+Alt+,` `.`）是 TSF
+/// 保留键、走状态那条路，脚本本来就看不到，所以不用列进来。
+pub(crate) fn reserved_combo(event: &KeyEvent) -> bool {
+    let modifiers = event.modifiers;
+    if modifiers.ctrl && !modifiers.alt && !modifiers.win {
+        if event.virtual_key == codes::RETURN || event.virtual_key == codes::BACKQUOTE {
+            return true;
+        }
+        // Ctrl + 主键盘 / 小键盘数字：杀词 / 上屏短语与整句
+        if codes::digit_virtual_key(event.virtual_key).is_some() {
+            return true;
+        }
+    }
+    // Shift + 反引号：发音（条件与 `is_speak_key` 一致）
+    is_speak_key(event)
+}
+
 impl Router {
     /// 功能键靠键码，其余靠字符。带 Ctrl / Alt / Win 的键归应用。
+    /// 表达式计算面板里按回车要上屏的文本：`算式=结果`（`5*6` → `5*6=30`）。
+    /// 不在面板里、或者算式算不出来（含空算式）返回 `None` —— 调用方退回「原样上屏」。
+    fn calculator_expression(&self) -> Option<String> {
+        if !self.engine.calculator() {
+            return None;
+        }
+        let text = self.engine.composition().text();
+        let body = text.strip_prefix(shortcut::EXPRESSION_PREFIX)?;
+        let result = shortcut::evaluate(body)?;
+        Some(format!("{body}={result}"))
+    }
+
     /// 表达式模式里 Shift + 数字打的是 `^ * ( )`，进算式。
     pub(crate) fn apply_key(&mut self, event: &KeyEvent) -> Effect {
         // 多释义选择中（Ctrl + 反引号之后）：只有数字与 Esc 有效，别的键一律吃掉、拼音串不动
@@ -237,19 +272,41 @@ impl Router {
                 Effect::Changed(None)
             }
             codes::ESCAPE => {
-                self.engine.clear();
+                // 表达式计算面板里 Esc = 退出表达式计算（回到 V 模式，不清空组句）
+                if self.engine.calculator() {
+                    self.engine.set_calculator(false);
+                } else {
+                    self.engine.clear();
+                }
                 Effect::Changed(None)
             }
             // Insert：已选的中文上屏，还没选的拼音丢掉（`云朵shurufa` → 上屏 `云朵`）
             codes::INSERT => Effect::Changed(self.engine.take_selected()),
-            codes::RETURN => Effect::Changed(Some(self.engine.take_raw())),
-            // Tab：展开 / 收起「更多候选项」（原来是翻页，Shift + Tab 上一页）。设置里关掉时
-            // 这一键照样吃掉但什么也不做——组句还在，放行给应用会在拼音中间插一个制表符。
+            // 回车：表达式计算面板里算得出来就上屏「算式=结果」（`5*6` → `5*6=30`，算式里的 `v` 不算）；
+            // 算不出来（或不在面板里）照旧把所敲内容原样上屏。
+            codes::RETURN => {
+                let expression = self.calculator_expression();
+                let raw = self.engine.take_raw();
+                Effect::Changed(Some(expression.unwrap_or(raw)))
+            }
+            // Tab：表达式模式里是「进 / 出表达式计算面板」；否则展开 / 收起「更多候选项」
+            // （原来是翻页，Shift + Tab 上一页）。设置里关掉时这一键照样吃掉但什么也不做——
+            // 组句还在，放行给应用会在拼音中间插一个制表符。
             codes::TAB => {
-                if self.config.show_more_candidate_items {
-                    self.toggle_show_more();
+                if self.engine.calculator() {
+                    // 面板里再按 Tab：退出表达式计算，回到 V 模式（算式留着，可以再按 Tab 进来）
+                    self.engine.set_calculator(false);
+                    Effect::Changed(None)
+                } else if self.engine.expression_mode() {
+                    // V 模式里按 Tab：进表达式计算面板（候选从此固定成结果那一条）
+                    self.engine.set_calculator(true);
+                    Effect::Changed(None)
+                } else {
+                    if self.config.show_more_candidate_items {
+                        self.toggle_show_more();
+                    }
+                    Effect::Navigated
                 }
-                Effect::Navigated
             }
             // 方向键（收起态）：沿着**列表方向**的那个轴挪高亮、另一个轴翻页
             // —— 竖排收起是「上下挪高亮、左右翻页」，横排收起是「左右挪高亮、上下翻页」。
@@ -309,6 +366,12 @@ impl Router {
             }
             codes::END => {
                 self.engine.move_cursor_end();
+                Effect::Changed(None)
+            }
+            // Delete：表达式计算面板里清空算式（结果跟着回 0）—— 面板留着，只把算式清空
+            codes::DELETE if self.engine.calculator() => {
+                self.engine.clear();
+                self.engine.push(shortcut::EXPRESSION_PREFIX);
                 Effect::Changed(None)
             }
             _ => Effect::Passthrough,
@@ -431,6 +494,12 @@ impl Router {
     /// 标点先选高亮候选再把整段补完上屏，其余进英文直输段；已在直输段里就一律追加。
     /// 表达式模式（`v1+2`）里数字和运算符进算式。
     fn apply_printable(&mut self, c: char, event: &KeyEvent) -> Effect {
+        // 表达式计算面板里：标点一律按西文进算式（忽略全角 / 符号映射那套设置），字母数字也照收。
+        // `[` `]` 除外 —— 面板里它们仍然是「移拼音光标」（与 `v` 模式一致）。
+        if self.engine.calculator() && c.is_ascii_graphic() && !matches!(c, '[' | ']') {
+            self.engine.push(c);
+            return Effect::Changed(None);
+        }
         let expression = self.engine.expression_mode();
         if expression && shortcut::is_expression_char(c) {
             self.engine.push(c);
@@ -536,7 +605,7 @@ impl Router {
         }
     }
 
-    fn composing(&self) -> bool {
+    pub(crate) fn composing(&self) -> bool {
         !self.engine.composition().is_empty()
     }
 

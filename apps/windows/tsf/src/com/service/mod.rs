@@ -102,6 +102,19 @@ pub struct TextService {
 thread_local! {
     /// 本线程当前激活的文本服务，供 compartment 回调 / 轮询定时器切模式。`Activate` 设、`Deactivate` 清。
     static ACTIVE: RefCell<Option<ComObject<TextService>>> = const { RefCell::new(None) };
+
+    /// Server 要不要整篇文本快照（`ServerMessage::ModeSync` 的 `want_document`）：下一次起组句时读一份。
+    static WANT_DOCUMENT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// Server 在一次同步里请我们下次带上整篇文本（脚本要用 `cloudime.text.*`）。
+pub(super) fn on_document_request(want: bool) {
+    WANT_DOCUMENT.with(|cell| cell.set(want));
+}
+
+/// 现在要不要读整篇：起组句时问一次（读了就随光标前文一起送走）。
+pub(super) fn want_document() -> bool {
+    WANT_DOCUMENT.with(Cell::get)
 }
 
 pub(super) fn with_active(f: impl FnOnce(&TextService_Impl)) {

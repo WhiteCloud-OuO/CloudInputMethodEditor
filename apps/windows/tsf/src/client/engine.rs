@@ -1,8 +1,8 @@
 use std::io::{Read, Write};
 
 use cloudime_platform::protocol::{
-    ClientMessage, IndicatorCommand, InputMode, InputSettings, KeyEvent, PROTOCOL_VERSION,
-    ScreenRect, ServerMessage, SessionId, read_message, write_message,
+    ClientMessage, DocumentText, IndicatorCommand, InputMode, InputSettings, KeyEvent,
+    PROTOCOL_VERSION, ScreenRect, ServerMessage, SessionId, read_message, write_message,
 };
 
 use super::{KeyResponse, ModeSyncReply, PollReply};
@@ -106,11 +106,17 @@ impl<S: Read + Write> EngineClient<S> {
         }
     }
 
-    /// 组句起始时把应用光标前的文字送给 Server（本地整句模型的前文）。不回话。
-    pub fn surrounding(&mut self, text: String) -> Result<(), ClientError> {
+    /// 组句起始时把应用光标前的文字送给 Server（本地整句模型的前文），
+    /// 以及（Server 请过的话）一份整篇文本快照（脚本的 `cloudime.text.*`）。不回话。
+    pub fn surrounding(
+        &mut self,
+        text: String,
+        document: Option<DocumentText>,
+    ) -> Result<(), ClientError> {
         self.send(&ClientMessage::Surrounding {
             session: self.session,
             text,
+            document,
         })
     }
 
@@ -152,11 +158,13 @@ impl<S: Read + Write> EngineClient<S> {
                 mode,
                 input,
                 indicator,
+                want_document,
                 ..
             } => Ok(ModeSyncReply {
                 mode,
                 input,
                 indicator,
+                want_document,
             }),
             _ => Err(ClientError::Unexpected("expected mode sync")),
         }

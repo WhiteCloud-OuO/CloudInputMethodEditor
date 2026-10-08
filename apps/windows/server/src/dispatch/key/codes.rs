@@ -7,6 +7,9 @@ pub(crate) const TAB: u32 = 0x09;
 pub(crate) const RETURN: u32 = 0x0D;
 pub(crate) const ESCAPE: u32 = 0x1B;
 
+/// Delete：表达式计算面板里清空算式（结果跟着回 0）；别处交给应用。
+pub(crate) const DELETE: u32 = 0x2E;
+
 /// 空格：组句里选中高亮候选；多释义选择里选高亮那条译文。
 pub(crate) const SPACE: u32 = 0x20;
 
