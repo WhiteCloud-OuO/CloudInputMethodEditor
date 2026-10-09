@@ -76,6 +76,105 @@ enum Handover {
     Callback,
 }
 
+/// 清单里的 `trigger_condition`：这个脚本**由什么触发**；Server 只按它派对应的事件。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum TriggerCondition {
+    /// 组合键（`key` 事件）：没组句时也收得到 Ctrl 组合（DLL 由 Server 下发一个开关）。
+    CombinationKey,
+
+    /// 系统时间（`time` 事件）：到清单里 `trigger_time` 那个点（本地时间 HH:MM）派一次。
+    SysTime,
+
+    /// 候选窗口里的内容（`candidates` 事件）：引擎排完候选之后那一拍。
+    CandidateContext,
+
+    /// 声明过的**具体按键**（`keys = { "enter", … }`；`key` 事件）：不要求组合键，
+    /// 没组句时也送（脚本自己看事件里的修饰键）。这些键由 DLL 放行时会**重放回应用**。
+    Key,
+}
+
+/// 清单 `keys` 认的键名 → 虚拟键码。**只收不产生字符的键**：字母 / 数字 / 标点在中文模式下本来就会
+/// 送到脚本，不必在这里声明。
+const KEY_NAMES: [(u32, &str); 26] = [
+    (0x0D, "enter"),
+    (0x09, "tab"),
+    (0x20, "space"),
+    (0x08, "backspace"),
+    (0x2E, "delete"),
+    (0x1B, "esc"),
+    (0x25, "left"),
+    (0x26, "up"),
+    (0x27, "right"),
+    (0x28, "down"),
+    (0x24, "home"),
+    (0x23, "end"),
+    (0x21, "pageup"),
+    (0x22, "pagedown"),
+    (0x70, "f1"),
+    (0x71, "f2"),
+    (0x72, "f3"),
+    (0x73, "f4"),
+    (0x74, "f5"),
+    (0x75, "f6"),
+    (0x76, "f7"),
+    (0x77, "f8"),
+    (0x78, "f9"),
+    (0x79, "f10"),
+    (0x7A, "f11"),
+    (0x7B, "f12"),
+];
+
+/// 清单里 `combination_modifiers` 认的那几套修饰键（位图：bit0 ctrl / bit1 alt / bit2 shift / bit3 win）。
+/// 别的组合（单独的 `shift` / `win`、以及没列到的多键组合）一概不接受。
+const COMBINATION_MODIFIERS: [(u8, &str); 10] = [
+    (0b0001, "ctrl"),
+    (0b0011, "ctrl+alt"),
+    (0b0101, "ctrl+shift"),
+    (0b0110, "alt+shift"),
+    (0b0010, "alt"),
+    (0b1001, "win+ctrl"),
+    (0b1010, "win+alt"),
+    (0b1100, "win+shift"),
+    (0b1011, "win+alt+ctrl"),
+    (0b1101, "win+ctrl+shift"),
+];
+
+/// 解析清单里的 `combination_modifiers`（`"ctrl"` / `"ctrl+alt"` / …；`+` 连接的顺序随意，
+/// 大小写不敏感）。不在 [`COMBINATION_MODIFIERS`] 里的一律报错。
+fn parse_combination_modifiers(text: &str) -> mlua::Result<u8> {
+    let invalid = || {
+        mlua::Error::RuntimeError(format!(
+            "清单的 combination_modifiers = \"{text}\" 不认识（只有这几种：{}）",
+            COMBINATION_MODIFIERS
+                .iter()
+                .map(|(_, name)| *name)
+                .collect::<Vec<_>>()
+                .join(" / ")
+        ))
+    };
+    let mut mask = 0u8;
+    for part in text.split('+') {
+        let bit = match part.trim().to_ascii_lowercase().as_str() {
+            "ctrl" => 0b0001,
+            "alt" => 0b0010,
+            "shift" => 0b0100,
+            "win" => 0b1000,
+            _ => return Err(invalid()),
+        };
+        if mask & bit != 0 {
+            return Err(invalid());
+        }
+        mask |= bit;
+    }
+    if !COMBINATION_MODIFIERS
+        .iter()
+        .any(|(allowed, _)| *allowed == mask)
+    {
+        return Err(invalid());
+    }
+    Ok(mask)
+}
+
 /// 一个脚本的清单（`cloudime.script{…}`）：每个脚本必须**最先**声明一次。
 struct Manifest {
     /// 日志里点名用；缺省 = 文件名。
@@ -98,6 +197,18 @@ struct Manifest {
 
     /// 合并顺序：大的排在后面，于是盖住前面的（同值按登记顺序）。
     priority: i32,
+
+    /// 由什么触发（清单**必填**）：只按它收对应的事件。
+    trigger: TriggerCondition,
+
+    /// `sys_time` 的时间点（本地时间的 `(小时, 分钟)`）：每天到这个点派一次；其余触发条件是 `None`。
+    trigger_at: Option<(i8, i8)>,
+
+    /// `combination_key` 要的修饰键（清单 `combination_modifiers` 的位图）；其余触发条件是 `0`。
+    combination_modifiers: u8,
+
+    /// `key` 触发要的那些键（虚拟键码）；其余触发条件是空。
+    wanted_keys: Vec<u32>,
 }
 
 impl Manifest {
@@ -108,6 +219,27 @@ impl Manifest {
                 .apps
                 .iter()
                 .any(|name| name.trim().eq_ignore_ascii_case(app.trim()))
+    }
+
+    /// 这个事件该不该派给这个脚本：`startup` 谁都收；其余按清单的 `trigger_condition` 分
+    /// （`time` 还要对得上 `trigger_time` 的那一分钟；`key` 触发还要对得上清单声明的 `keys` ——
+    /// 组句里 Server 会派发**所有**按键，别的键不该打扰它）；不认识的事件不拦（将来加的照样送到）。
+    fn accepts(&self, event: &str, key: Option<u32>) -> bool {
+        match event {
+            "startup" => true,
+            "key" => match self.trigger {
+                // 组合键脚本：组句里一律送（脚本自己看 `event.ctrl` 等），没组句时 DLL 已按修饰键筛过
+                TriggerCondition::CombinationKey => true,
+                // `key` 脚本只收清单里声明的那几个键
+                TriggerCondition::Key => key.is_some_and(|vk| self.wanted_keys.contains(&vk)),
+                _ => false,
+            },
+            "candidates" => self.trigger == TriggerCondition::CandidateContext,
+            "time" => {
+                self.trigger == TriggerCondition::SysTime && self.trigger_at == current_clock()
+            }
+            _ => true,
+        }
     }
 
     /// 这一次调用用多少条指令（清单给了就收窄，不超全局上限）。
@@ -203,6 +335,14 @@ pub type ClipboardSetHook = Rc<dyn Fn(&str) -> Result<(), String>>;
 /// `Ok(None)` = 剪贴板里没有文本（图片 / 文件 / 空）。
 pub type ClipboardGetHook = Rc<dyn Fn() -> Result<Option<String>, String>>;
 
+/// `cloudime.get_curr_config` 背后的实现：由 Server 装（[`Runtime::set_config_hook`]），
+/// 把当前配置拼成一张 Lua 表（键名与 `config.toml` 一致，另加 `theme.available`；见 `lua.md`）。
+pub type ConfigHook = Rc<dyn Fn(&Lua) -> mlua::Result<Table>>;
+
+/// `cloudime.foreground_app` 背后的实现：由 Server 装（[`Runtime::set_app_hook`]），
+/// 返回当前聚焦的宿主程序 exe 名；没聚焦任何程序时给 `None`（脚本那边是 `nil`）。
+pub type AppHook = Rc<dyn Fn() -> Option<String>>;
+
 /// 脚本要的候选窗尺寸（`cloudime.candidate.set_*`）。
 ///
 /// 每一项都是「这次有没有提 / 提了什么」：`None` = 没提，`Some(None)` = 恢复默认（配置 / 滚轮），
@@ -296,6 +436,10 @@ pub struct Runtime {
     /// 脚本要的候选窗尺寸（`cloudime.candidate.set_*`）：派发/回调结束后 Server 取一次。
     size: Rc<RefCell<SizeRequest>>,
 
+    /// 脚本要换的主题（`cloudime.apply_theme`）：`None` = 没提，`Some(None)` = 去掉这次设的主题，
+    /// `Some(Some(名))` = 换到它。派发/回调结束后 Server 取一次。
+    theme: Rc<RefCell<Option<Option<String>>>>,
+
     /// 候选窗最近一次画出来的内容区尺寸（点）；`cloudime.candidate.width()` 读它。
     viewport: Rc<RefCell<Option<(f32, f32)>>>,
 
@@ -309,12 +453,34 @@ pub struct Runtime {
     clipboard_set: Rc<RefCell<Option<ClipboardSetHook>>>,
     clipboard_get: Rc<RefCell<Option<ClipboardGetHook>>>,
 
+    /// 当前配置（`cloudime.get_curr_config`）：Server 用 [`Runtime::set_config_hook`] 装进来。
+    config_hook: Rc<RefCell<Option<ConfigHook>>>,
+
+    /// 当前前台程序名（`cloudime.foreground_app`）：Server 用 [`Runtime::set_app_hook`] 装进来。
+    app_hook: Rc<RefCell<Option<AppHook>>>,
+
     /// `cloudime` 表本体：脚本只拿到只读代理，运行时自己写 `context` 这类刷新值。
     host: Rc<RefCell<Option<Table>>>,
 
     /// 加载成功的脚本名（清单里的 `name`，按加载顺序）。
     scripts: Vec<String>,
+
+    /// 各脚本清单里的 `trigger_condition`（与 `scripts` 一一对应）：Server 据此决定
+    /// 「要不要让 DLL 在没有组句时也送 Ctrl 组合」「要不要跑定时检查」。
+    triggers: Vec<TriggerCondition>,
+
+    /// 各 `combination_key` 脚本要的修饰键位图（清单 `combination_modifiers`）。
+    combination_modifiers: Vec<u8>,
+
+    /// 各 `key` 脚本声明的键（虚拟键码，清单 `keys`）。
+    wanted_keys: Vec<u32>,
+
+    /// 上一次派 `time` 事件的那个本地时间整分（`sys_time` 脚本一天只跑一次那个点）。
+    sys_time_last: Rc<RefCell<Option<ClockStamp>>>,
 }
+
+/// 本地时间的一个整分：`(年, 月, 日, 时, 分)`。
+type ClockStamp = (i16, i8, i8, i8, i8);
 
 impl Runtime {
     /// 建一个不读盘、也没有脚本的运行时：`RouterConfig::scripts_dir` 为空（测试、或以后「脚本开关
@@ -331,13 +497,20 @@ impl Runtime {
             requests: Rc::new(Requests::new()),
             redraw: Rc::new(Cell::new(false)),
             size: Rc::new(RefCell::new(SizeRequest::default())),
+            theme: Rc::new(RefCell::new(None)),
             viewport: Rc::new(RefCell::new(None)),
             measure: Rc::new(RefCell::new(None)),
             text_hook: Rc::new(RefCell::new(None)),
             clipboard_set: Rc::new(RefCell::new(None)),
             clipboard_get: Rc::new(RefCell::new(None)),
+            config_hook: Rc::new(RefCell::new(None)),
+            app_hook: Rc::new(RefCell::new(None)),
             host: Rc::new(RefCell::new(None)),
             scripts: Vec::new(),
+            triggers: Vec::new(),
+            combination_modifiers: Vec::new(),
+            wanted_keys: Vec::new(),
+            sys_time_last: Rc::new(RefCell::new(None)),
         };
         if let Err(error) = install_host_api(&runtime) {
             // 装不上就少了 `cloudime` 表，脚本会报 nil：记一条，别让 Server 起不来。
@@ -445,6 +618,15 @@ impl Runtime {
             "脚本已加载"
         );
         self.scripts.push(manifest.name.clone());
+        self.triggers.push(manifest.trigger);
+        if manifest.trigger == TriggerCondition::Key {
+            self.wanted_keys
+                .extend(manifest.wanted_keys.iter().copied());
+        }
+        if manifest.trigger == TriggerCondition::CombinationKey {
+            self.combination_modifiers
+                .push(manifest.combination_modifiers);
+        }
     }
 
     /// 撤掉这次加载里登记的处理函数（序号 `>= first_new_seq` 的），别的脚本的原样留着。
@@ -464,6 +646,10 @@ impl Runtime {
     /// 返回处理函数们**返回的表**（按 `priority` + 登记顺序）：返回 `nil` 或别的东西的当没说话，跳过。
     /// 某个处理函数报错 / 超限额只中止这一次（先调它清单里的 `on_error`），其余照常。
     pub fn dispatch(&self, event: &str, payload: Table, app: Option<&str>) -> Vec<Table> {
+        // `key` 事件按清单声明的键 (`keys`) 过滤：组句里 Server 会派发所有按键，`key` 脚本只该收它声明的
+        let key = (event == "key")
+            .then(|| payload.get::<u32>("vk").ok())
+            .flatten();
         // 先把要调的东西 clone 出来再放开借用：处理函数里再 `cloudime.on` 会重入 `handlers`。
         let handlers: Vec<(Rc<Manifest>, Function)> = self
             .handlers
@@ -472,6 +658,7 @@ impl Runtime {
             .map(|list| {
                 list.iter()
                     .filter(|handler| app.is_none_or(|app| handler.manifest.runs_in(app)))
+                    .filter(|handler| handler.manifest.accepts(event, key))
                     .map(|handler| (handler.manifest.clone(), handler.function.clone()))
                     .collect()
             })
@@ -541,6 +728,79 @@ impl Runtime {
     /// 取了就清。Server 据此在本组句内改候选窗的大小（组句结束它自己回配置值，不归这里管）。
     pub fn take_size_request(&self) -> SizeRequest {
         std::mem::take(&mut *self.size.borrow_mut())
+    }
+
+    /// 取一次「脚本要换的主题」（`cloudime.apply_theme`）：取了就清。
+    /// `None` = 没提；`Some(None)` = 回配置里的主题；`Some(Some(名))` = 换到它。
+    pub fn take_theme_request(&self) -> Option<Option<String>> {
+        self.theme.borrow_mut().take()
+    }
+
+    /// 有没有清单声明的触发条件是 `trigger` 的脚本：Server 据此决定要不要让 DLL 在没有组句时
+    /// 也送 Ctrl 组合（`CombinationKey`）、要不要每次 tick 检查到点（`SysTime`）。
+    pub fn uses_trigger(&self, trigger: TriggerCondition) -> bool {
+        self.triggers.contains(&trigger)
+    }
+
+    /// 有没有脚本要「按键那一刻的光标前文」：`trigger_condition = "key"` 的脚本要 ——
+    /// Server 据此让 DLL 在每个按键**之前**现读一份光标前文送上来（`cloudime.text.*` 读到的就是它）。
+    /// 没有这类脚本时为 `false`，按键路径上一分钱不花。
+    pub fn wants_surrounding_text(&self) -> bool {
+        self.triggers.contains(&TriggerCondition::Key)
+    }
+
+    /// 脚本声明的那些键（清单 `keys`）的并集（虚拟键码，去重升序）：DLL 据此在没组句时也把这些键
+    /// 送来问一趟（脚本不吃就重放回应用）。
+    pub fn wanted_keys(&self) -> Vec<u32> {
+        let mut keys = self.wanted_keys.clone();
+        keys.sort_unstable();
+        keys.dedup();
+        keys
+    }
+
+    /// 组合键脚本们要的那几套修饰键（清单 `combination_modifiers` 的并集）：    /// 返回值的第 N 位置位 = 「修饰键位图 N」这套组合键要送上来（bit0 ctrl / bit1 alt / bit2 shift / bit3 win）。
+    /// `0` = 一个 `combination_key` 脚本都没有，DLL 那边按键路径与以前逐字节一致。
+    pub fn combination_key_masks(&self) -> u16 {
+        self.combination_modifiers
+            .iter()
+            .fold(0u16, |masks, mask| masks | (1u16 << mask))
+    }
+
+    /// `sys_time` 脚本这一分钟该派 `time` 了吗：按**本地时间的整分**去重（同一天同一分钟只算一次）。
+    /// 没有 `sys_time` 脚本时永远 `false`（一秒都不花）。到点由 `dispatch("time", …)` 里的
+    /// `Manifest::accepts` 逐脚本核对（只跑 `trigger_time` 正好是这一刻的那些）。
+    pub fn sys_time_due(&self) -> bool {
+        if !self.uses_trigger(TriggerCondition::SysTime) {
+            return false;
+        }
+        let now = jiff::Zoned::now();
+        let stamp = (now.year(), now.month(), now.day(), now.hour(), now.minute());
+        let mut last = self.sys_time_last.borrow_mut();
+        if *last == Some(stamp) {
+            return false;
+        }
+        *last = Some(stamp);
+        true
+    }
+
+    /// `time` 事件的载荷：与 `cloudime.get_time()` 同一张表，另加 `app`
+    /// （这一刻聚焦的宿主程序 exe 名，没有则 `nil`）。
+    pub fn time_payload(&self, app: Option<&str>) -> mlua::Result<Table> {
+        let fields = time_table(&self.lua)?;
+        fields.set("app", app)?;
+        Ok(fields)
+    }
+
+    /// 装一个「当前配置」接口：脚本调 `cloudime.get_curr_config` 时用它拼一张表。
+    /// 由 Server 在建好 Router 时与每次配置热加载后调（没装时脚本调它会报错）。
+    pub fn set_config_hook(&self, hook: ConfigHook) {
+        *self.config_hook.borrow_mut() = Some(hook);
+    }
+
+    /// 装一个「当前前台程序」接口：脚本调 `cloudime.foreground_app` 时用它问（`None` = 没聚焦任何程序）。
+    /// 由 Server 在建好 Router 时调（没装时脚本调它会报错）。
+    pub fn set_app_hook(&self, hook: AppHook) {
+        *self.app_hook.borrow_mut() = Some(hook);
     }
 
     /// 装一个量尺：脚本调 `cloudime.ui.measure` / `measure_tip` 时用它量文字宽度（单位点）。
@@ -668,11 +928,14 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     let requests = &runtime.requests;
     let redraw = &runtime.redraw;
     let size = &runtime.size;
+    let theme = &runtime.theme;
     let viewport = &runtime.viewport;
     let measure = &runtime.measure;
     let text_hook = &runtime.text_hook;
     let clipboard_set = &runtime.clipboard_set;
     let clipboard_get = &runtime.clipboard_get;
+    let config_hook = &runtime.config_hook;
+    let app_hook = &runtime.app_hook;
     let host = &runtime.host;
     let table = lua.create_table()?;
     // 光标前文：第一次派发前也能读到（空串），不用先判断 nil
@@ -914,6 +1177,63 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
         })?,
     )?;
     table.set("clipboard", clipboard)?;
+    // 当前时间：`cloudime.get_time()` → `{ year, month, day, hour, minute, second, weekday, unix }`。
+    // 前七个字段是**本地时间**；`weekday` 1 = 周一 … 7 = 周日；`unix` 是 Unix 秒。
+    // （脚本本来也能用标准库的 `os.date` / `os.time`，这一份是不依赖标准库的稳定形状。）
+    let config_state = config_hook.clone();
+    table.set(
+        "get_curr_config",
+        lua.create_function(move |lua, ()| {
+            let hook = config_state.borrow().clone().ok_or_else(|| {
+                mlua::Error::RuntimeError(
+                    "cloudime.get_curr_config 用不了：这次运行没有装这个接口".to_owned(),
+                )
+            })?;
+            hook(lua)
+        })?,
+    )?;
+    let app_state = app_hook.clone();
+    table.set(
+        "foreground_app",
+        lua.create_function(move |_, ()| {
+            let hook = app_state.borrow().clone().ok_or_else(|| {
+                mlua::Error::RuntimeError(
+                    "cloudime.foreground_app 用不了：这次运行没有装这个接口".to_owned(),
+                )
+            })?;
+            Ok(hook())
+        })?,
+    )?;
+    table.set("get_time", lua.create_function(|lua, ()| time_table(lua))?)?;
+    // 换主题：`cloudime.apply_theme("Panic")` 换上（按名字找，可带 / 不带 `.json`）；
+    // `cloudime.apply_theme(false)` 去掉这次设的主题。具体的落法（写配置 + 重启输入法服务）由 Server 定，
+    // 这里只留一个请求；Server 在派发 / 回调结束后取一次（见 `Runtime::take_theme_request`）。
+    let theme_state = theme.clone();
+    table.set(
+        "apply_theme",
+        lua.create_function(move |_, name: mlua::Value| {
+            let request = match name {
+                mlua::Value::String(name) => Some(
+                    name.to_str()
+                        .map_err(|_| {
+                            mlua::Error::RuntimeError(
+                                "cloudime.apply_theme 的主题名不是合法 UTF-8".to_owned(),
+                            )
+                        })?
+                        .to_string(),
+                ),
+                mlua::Value::Boolean(false) | mlua::Value::Nil => None,
+                value => {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "cloudime.apply_theme 要主题名字符串（想去掉这次设的主题就传 false），给的是 {}",
+                        value.type_name()
+                    )));
+                }
+            };
+            *theme_state.borrow_mut() = Some(request);
+            Ok(())
+        })?,
+    )?;
     let requests_state = requests.clone();
     let requests_current = current.clone();
     let requests_manifest = manifest.clone();
@@ -1144,6 +1464,43 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
 }
 
 /// 读一个脚本清单（`cloudime.script{…}`）：缺字段 / 类型不对 / 对不上都报错 —— 那个脚本判无效。
+/// 解析清单里的 `HH:MM`（本地时间，24 小时制）→ `(小时, 分钟)`。
+fn parse_clock(text: &str) -> mlua::Result<(i8, i8)> {
+    let invalid = || {
+        mlua::Error::RuntimeError(format!(
+            "清单的 trigger_time = \"{text}\" 读不出时间（要 \"HH:MM\"，本地时间，24 小时制）"
+        ))
+    };
+    let (hour, minute) = text.trim().split_once(':').ok_or_else(invalid)?;
+    let hour: i8 = hour.trim().parse().map_err(|_| invalid())?;
+    let minute: i8 = minute.trim().parse().map_err(|_| invalid())?;
+    if !(0..=23).contains(&hour) || !(0..=59).contains(&minute) {
+        return Err(invalid());
+    }
+    Ok((hour, minute))
+}
+
+/// 现在的本地时间 `(小时, 分钟)`（拿不到时给 `None`，任何 `trigger_time` 都对不上）。
+fn current_clock() -> Option<(i8, i8)> {
+    let now = jiff::Zoned::now();
+    Some((now.hour(), now.minute()))
+}
+
+/// 当前本地时间的一张表：`cloudime.get_time()` 与 `time` 事件的载荷共用。
+fn time_table(lua: &Lua) -> mlua::Result<Table> {
+    let now = jiff::Zoned::now();
+    let fields = lua.create_table()?;
+    fields.set("year", now.year())?;
+    fields.set("month", now.month())?;
+    fields.set("day", now.day())?;
+    fields.set("hour", now.hour())?;
+    fields.set("minute", now.minute())?;
+    fields.set("second", now.second())?;
+    fields.set("weekday", now.date().weekday().to_monday_one_offset())?;
+    fields.set("unix", now.timestamp().as_second())?;
+    Ok(fields)
+}
+
 fn parse_manifest(options: &Table, default_name: &str) -> mlua::Result<Manifest> {
     let api = options
         .get::<Option<u32>>("api")?
@@ -1188,6 +1545,91 @@ fn parse_manifest(options: &Table, default_name: &str) -> mlua::Result<Manifest>
             "清单的 timeout = {timeout_ms} 超出范围（1–{MAX_TIMEOUT_MS} 毫秒）"
         )));
     }
+    // 触发条件（**必填**）：Server 只按它派对应的事件；`sys_time` 还要一个时间点。
+    let trigger = match options
+        .get::<Option<String>>("trigger_condition")?
+        .as_deref()
+    {
+        Some("combination_key") => TriggerCondition::CombinationKey,
+        Some("key") => TriggerCondition::Key,
+        Some("sys_time") => TriggerCondition::SysTime,
+        Some("candidate_context") => TriggerCondition::CandidateContext,
+        Some(other) => {
+            return Err(mlua::Error::RuntimeError(format!(
+                "清单的 trigger_condition = \"{other}\" 不认识（只有 \"combination_key\" / \"key\" / \"sys_time\" / \"candidate_context\"）"
+            )));
+        }
+        None => {
+            return Err(mlua::Error::RuntimeError(
+                "清单必须写 trigger_condition（\"combination_key\" 组合键 / \"key\" 声明过的具体按键 / \"sys_time\" 系统时间 / \"candidate_context\" 候选窗内容）".to_owned(),
+            ));
+        }
+    };
+    let trigger_at = if trigger == TriggerCondition::SysTime {
+        let text = options
+            .get::<Option<String>>("trigger_time")?
+            .ok_or_else(|| {
+                mlua::Error::RuntimeError(
+                "trigger_condition = \"sys_time\" 时清单必须写 trigger_time（\"HH:MM\"，本地时间）"
+                    .to_owned(),
+            )
+            })?;
+        Some(parse_clock(&text)?)
+    } else {
+        None
+    };
+    // `combination_key` 还要声明要哪一套修饰键（其余触发条件不看这一项）。
+    let combination_modifiers = if trigger == TriggerCondition::CombinationKey {
+        let text = options
+            .get::<Option<String>>("combination_modifiers")?
+            .ok_or_else(|| {
+                mlua::Error::RuntimeError(
+                    "trigger_condition = \"combination_key\" 时清单必须写 combination_modifiers（\"ctrl\" / \"ctrl+alt\" / \"ctrl+shift\" / \"alt+shift\" / \"alt\" / \"win+ctrl\" / \"win+alt\" / \"win+shift\" / \"win+alt+ctrl\" / \"win+ctrl+shift\"）"
+                        .to_owned(),
+                )
+            })?;
+        parse_combination_modifiers(&text)?
+    } else {
+        0
+    };
+    // `key` 触发要声明是哪几个键（其余触发条件不看这一项）。
+    let wanted_keys = if trigger == TriggerCondition::Key {
+        let names = options.get::<Option<Table>>("keys")?.ok_or_else(|| {
+            mlua::Error::RuntimeError(
+                "trigger_condition = \"key\" 时清单必须写 keys（键名数组，如 { \"enter\" }；认得的键名见 lua.md）"
+                    .to_owned(),
+            )
+        })?;
+        let mut keys = Vec::new();
+        for name in names.sequence_values::<String>() {
+            let name = name?;
+            let key = KEY_NAMES
+                .iter()
+                .find(|(_, known)| known.eq_ignore_ascii_case(name.trim()))
+                .map(|(vk, _)| *vk)
+                .ok_or_else(|| {
+                    mlua::Error::RuntimeError(format!(
+                        "清单 keys 里的 \"{name}\" 不认识（只有：{}）",
+                        KEY_NAMES
+                            .iter()
+                            .map(|(_, known)| *known)
+                            .collect::<Vec<_>>()
+                            .join(" / ")
+                    ))
+                })?;
+            if !keys.contains(&key) {
+                keys.push(key);
+            }
+        }
+        if keys.is_empty() {
+            return Err(mlua::Error::RuntimeError(
+                "清单的 keys 是空的：至少写一个键".to_owned(),
+            ));
+        }
+        keys
+    } else {
+        Vec::new()
+    };
     let budget = match options.get::<Option<u32>>("budget")? {
         Some(0) => {
             return Err(mlua::Error::RuntimeError(
@@ -1239,6 +1681,10 @@ fn parse_manifest(options: &Table, default_name: &str) -> mlua::Result<Manifest>
         timeout: Duration::from_millis(timeout_ms),
         apps,
         on_error,
+        trigger,
+        trigger_at,
+        combination_modifiers,
+        wanted_keys,
         priority,
     })
 }
@@ -1560,7 +2006,7 @@ mod tests {
 
     /// 一个合法清单：测试脚本都用它（`write_script` 自动加在最前面）。
     /// **不写 `name`** —— 于是脚本名取文件名，`scripts()` 的断言还能一眼看出是哪个脚本。
-    const MANIFEST: &str = "cloudime.script{ api = 1, budget = 1000000, timeout = 10000, \
+    const MANIFEST: &str = "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', budget = 1000000, timeout = 10000, \
                              sync = false, handover = 'callback', on_error = false }\n";
 
     /// 写一个脚本文件（自动在最前面补一份合法清单）。
@@ -2116,6 +2562,196 @@ mod tests {
         assert!(error.contains("量不了"), "{error}");
     }
 
+    /// `cloudime.get_time()`：一张本地时间的表，字段齐全、取值在合理范围内。
+    #[test]
+    fn get_time_reports_the_local_clock() {
+        let runtime = Runtime::none();
+        let lua = runtime.lua();
+        let (year, month, day, hour, minute, second, weekday, unix): (
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+            i64,
+        ) = lua
+            .load(
+                "local t = cloudime.get_time()\n\
+                 return t.year, t.month, t.day, t.hour, t.minute, t.second, t.weekday, t.unix",
+            )
+            .eval()
+            .unwrap();
+        // 不写死时间：只校验形状与范围（什么时候跑都成立）
+        assert!((2020..2100).contains(&year), "year={year}");
+        assert!((1..=12).contains(&month), "month={month}");
+        assert!((1..=31).contains(&day), "day={day}");
+        assert!((0..=23).contains(&hour), "hour={hour}");
+        assert!((0..=59).contains(&minute), "minute={minute}");
+        assert!((0..=60).contains(&second), "second={second}");
+        assert!((1..=7).contains(&weekday), "weekday={weekday}");
+        // Unix 秒：晚于 2020-01-01
+        assert!(unix > 1_577_836_800, "unix={unix}");
+    }
+
+    /// `cloudime.apply_theme`：留一个请求给 Server，取一次就清；`false` 是「去掉这次设的主题」。
+    #[test]
+    fn apply_theme_leaves_one_request_for_the_host() {
+        let runtime = Runtime::none();
+        let lua = runtime.lua();
+        assert!(runtime.take_theme_request().is_none(), "还没调过就没有请求");
+        lua.load("cloudime.apply_theme('Panic.json')")
+            .exec()
+            .unwrap();
+        assert_eq!(
+            runtime.take_theme_request(),
+            Some(Some("Panic.json".to_owned()))
+        );
+        assert!(runtime.take_theme_request().is_none(), "取过就清");
+        // `false` = 回配置里的主题
+        lua.load("cloudime.apply_theme(false)").exec().unwrap();
+        assert_eq!(runtime.take_theme_request(), Some(None));
+        // 类型不对当场报错（别静默什么都不做）
+        let error = lua
+            .load("cloudime.apply_theme(42)")
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("apply_theme"), "{error}");
+    }
+
+    /// `trigger_condition = "key"` + `keys`：解析成虚拟键码、汇总出 `wanted_keys`，
+    /// 并从「有 `key` 脚本」推出 `wants_surrounding_text`（DLL 要按键前现读光标前文）。
+    #[test]
+    fn key_trigger_collects_the_declared_keys() {
+        let dir = script_dir("keys-trigger");
+        std::fs::write(
+            dir.join("auto-number.lua"),
+            "cloudime.script{ api = 1, trigger_condition = 'key', keys = { 'Enter', 'tab' }, \
+             budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
+             cloudime.on('key', function(event) return {} end)\n",
+        )
+        .unwrap();
+        let runtime = Runtime::load(&dir, &[]);
+        assert_eq!(runtime.wanted_keys(), vec![0x09, 0x0D], "键名 → 虚拟键码");
+        assert!(
+            runtime.wants_surrounding_text(),
+            "有 key 脚本就要现读光标前文"
+        );
+        assert!(runtime.has_handlers("key"));
+
+        // 键名不认识 → 判无效
+        let dir = script_dir("keys-bad");
+        std::fs::write(
+            dir.join("bad.lua"),
+            "cloudime.script{ api = 1, trigger_condition = 'key', keys = { 'nope' }, \
+             budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n",
+        )
+        .unwrap();
+        let runtime = Runtime::load(&dir, &[]);
+        assert!(runtime.scripts().is_empty(), "键名不认识应该判无效");
+        assert!(runtime.wanted_keys().is_empty());
+
+        // 没有 key 脚本时不要现读前文
+        assert!(!Runtime::none().wants_surrounding_text());
+    }
+
+    /// `key` 触发脚本只收清单声明的那个键：组句里 Server 会派发**所有**按键，别的键不该打扰它。
+    #[test]
+    fn a_key_trigger_only_receives_its_own_keys() {
+        let dir = script_dir("key-filter");
+        std::fs::write(
+            dir.join("only-enter.lua"),
+            "cloudime.script{ api = 1, trigger_condition = 'key', keys = { 'enter' }, \
+             budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
+             cloudime.on('key', function() return {} end)\n",
+        )
+        .unwrap();
+        let runtime = Runtime::load(&dir, &[]);
+
+        // Enter 派得到（`payload` 的第一个参数就是 `vk`）
+        assert_eq!(
+            runtime
+                .dispatch("key", payload(&runtime, Some(0x0D)), None)
+                .len(),
+            1
+        );
+        // 别的键（组句里 Server 也会派发）派不到
+        assert_eq!(
+            runtime
+                .dispatch("key", payload(&runtime, Some(0x41)), None)
+                .len(),
+            0
+        );
+        // 载荷里没有 `vk` 的更派不到（正常派发一定有）
+        assert_eq!(
+            runtime.dispatch("key", payload(&runtime, None), None).len(),
+            0
+        );
+    }
+
+    /// `cloudime.foreground_app`：走 Server 装的接口；没装时报错。
+    #[test]
+    fn foreground_app_goes_through_the_host() {
+        let runtime = Runtime::none();
+        let error = runtime
+            .lua()
+            .load("cloudime.foreground_app()")
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("foreground_app"), "{error}");
+
+        let app: Rc<RefCell<Option<String>>> = Rc::new(RefCell::new(None));
+        runtime.set_app_hook({
+            let app = app.clone();
+            Rc::new(move || app.borrow().clone())
+        });
+        // 没聚焦任何程序 → nil
+        assert!(
+            runtime
+                .lua()
+                .load("return cloudime.foreground_app() == nil")
+                .eval::<bool>()
+                .unwrap()
+        );
+        *app.borrow_mut() = Some("notepad.exe".to_owned());
+        assert_eq!(
+            runtime
+                .lua()
+                .load("return cloudime.foreground_app()")
+                .eval::<String>()
+                .unwrap(),
+            "notepad.exe"
+        );
+    }
+
+    /// `cloudime.get_curr_config`：走 Server 装的接口；没装时报错。
+    #[test]
+    fn get_curr_config_goes_through_the_host() {
+        let runtime = Runtime::none();
+        let error = runtime
+            .lua()
+            .load("cloudime.get_curr_config()")
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("get_curr_config"), "{error}");
+
+        runtime.set_config_hook(Rc::new(|lua| {
+            let table = lua.create_table()?;
+            table.set("候选数", 7)?;
+            Ok(table)
+        }));
+        let count: i64 = runtime
+            .lua()
+            .load("return cloudime.get_curr_config()['候选数']")
+            .eval()
+            .unwrap();
+        assert_eq!(count, 7);
+    }
+
     /// `cloudime.clipboard.settext` / `gettext`：走 Server 装的两条路；没装接口报错。
     #[test]
     fn clipboard_goes_through_the_host() {
@@ -2375,7 +3011,7 @@ mod tests {
         write_raw_script(
             &dir,
             "bad.lua",
-            "cloudime.script{ api = 1, timeout = 100, sync = true, handover = 'callback', on_error = false }\n\
+            "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', timeout = 100, sync = true, handover = 'callback', on_error = false }\n\
              cloudime.on('key', function() ran = true end)\n",
         );
         let runtime = Runtime::load(&dir, &[]);
@@ -2396,7 +3032,7 @@ mod tests {
         write_raw_script(
             &dir,
             "notepad.lua",
-            "cloudime.script{ api = 1, timeout = 100, apps = { 'NotePad.EXE' }, sync = true, handover = 'return', on_error = false }\n\
+            "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', timeout = 100, apps = { 'NotePad.EXE' }, sync = true, handover = 'return', on_error = false }\n\
              cloudime.on('key', function() return {} end)\n\
              cloudime.on('startup', function() return {} end)\n",
         );
@@ -2428,13 +3064,13 @@ mod tests {
         write_raw_script(
             &dir,
             "a.lua",
-            "cloudime.script{ name = 'a', api = 1, timeout = 100, priority = 10, sync = true, handover = 'return', on_error = false }\n\
+            "cloudime.script{ name = 'a', api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', timeout = 100, priority = 10, sync = true, handover = 'return', on_error = false }\n\
              cloudime.on('key', function() return { notice = 'a' } end)\n",
         );
         write_raw_script(
             &dir,
             "b.lua",
-            "cloudime.script{ name = 'b', api = 1, timeout = 100, priority = 1, sync = true, handover = 'return', on_error = false }\n\
+            "cloudime.script{ name = 'b', api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', timeout = 100, priority = 1, sync = true, handover = 'return', on_error = false }\n\
              cloudime.on('key', function() return { notice = 'b' } end)\n",
         );
         let runtime = Runtime::load(&dir, &[]);
@@ -2452,7 +3088,7 @@ mod tests {
         write_raw_script(
             &dir,
             "careful.lua",
-            "cloudime.script{ api = 1, timeout = 100, sync = true, handover = 'return', \
+            "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', timeout = 100, sync = true, handover = 'return', \
              on_error = function(event, message) seen = event .. '/' .. message end }\n\
              cloudime.on('key', function() error('故意炸') end)\n",
         );
@@ -2470,7 +3106,7 @@ mod tests {
         write_raw_script(
             &dir,
             "greedy.lua",
-            "cloudime.script{ api = 1, budget = 1000, timeout = 2000, sync = true, handover = 'return', on_error = false }\n\
+            "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', budget = 1000, timeout = 2000, sync = true, handover = 'return', on_error = false }\n\
              cloudime.on('key', function() local n = 0 for _ = 1, 100000 do n = n + 1 end end)\n\
              cloudime.on('key', function() return {} end)\n",
         );
@@ -2531,7 +3167,7 @@ mod tests {
         write_raw_script(
             &dir,
             "b-bad.lua",
-            "cloudime.script{ api = 1, timeout = 100, sync = true, handover = 'return', on_error = false }\n\
+            "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', timeout = 100, sync = true, handover = 'return', on_error = false }\n\
              cloudime.on('key', function() return {} end)\n\
              error('加载到一半就炸')\n",
         );
@@ -2551,7 +3187,7 @@ mod tests {
         write_raw_script(
             &dir,
             "greedy.lua",
-            "cloudime.script{ api = 1, timeout = 100, sync = false, handover = 'callback', on_error = false }\n\
+            "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', timeout = 100, sync = false, handover = 'callback', on_error = false }\n\
              cloudime.on('startup', function()\n\
                  cloudime.http_get('http://127.0.0.1:1/', 5000, function() end)\n\
              end)\n",

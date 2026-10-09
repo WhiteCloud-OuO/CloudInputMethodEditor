@@ -248,6 +248,9 @@ v15 给 `IndicatorCommand` 加了 `RestartServer`（托盘菜单的「重启输�
 与删字段一样，老 DLL 整条帧解析失败、必须 +1 并重装 DLL，老 Server 下点了这一项没反应）。
 v15 之后给 `Candidate` 加了 `display`（候选里显示的内容，上屏仍用 `text`）：带 `serde(default)` 的新字段两边仍能对话，
 老 DLL 只读候选条数、不读内容，行为不变，所以没有 +1。
+再往后 +1 的三次：**v16** 给 `ServerMessage::Update` 加了 `commit`（鼠标点候选窗上屏，`Frame` 顺带加 `columns`）；
+**v17** 给 `ClientMessage::SyncMode` 加了 `in_text_input` / `caps`（状态切换提示）；
+**v18** 给 `InputSettings` 加了 `script_key_modifiers`（组合键脚本在清单里声明的 `combination_modifiers` 的并集：修饰键位图的第 N 位置位 = 那一套组合键要送上来）；同一版还加了 `script_keys`（`trigger_condition = "key"` 脚本声明的键：虚拟键码的 256 位位图 `[u64; 4]`，这样 `InputSettings` 仍是 `Copy`，DLL 据此在没组句时也把这些键送来）与 `script_wants_text`（有 `key` 脚本时为真，DLL 每个按键前现读一份光标前文送上来）。三者都带 `serde(default)`，老 DLL 不读也不受影响，所以没有再次 +1。
 
 **主题文件**（`theme.rs`）：`Themes\*.json` 装候选窗口 / 悬浮工具栏 / 状态切换提示三个窗口的 21 个颜色，分 `candidate`（15 项）/ `bar`（背景 / 图标 / 阴影）/ `tip`（同三项）三组；`ThemeColor` 是一个 `#AARRGGBB`（也认 `#RRGGBB`，serde 走字符串、缺键回缺省，`Default` 对齐现有观感）。`ThemeFile::{load, save}`（`save` 建父目录 + 美化 JSON）；`theme_dirs(bundled_root)` 给出两个候选目录 —— 用户目录 `%APPDATA%\CloudIME\Themes`（可写）与随包目录 `<安装目录>\Themes`（只读），`list_themes` 两处都扫、**用户目录优先**（同名盖掉随包的）、按名字排序，`find_theme` 在它上面按名字找（可带 / 不带 `.json`、大小写不敏感）；`DEFAULT_THEME_FILE` = `Default.json`（随包另有一份 `Panic.json`，两份都是内置主题）、`THEMES_DIR` = `Themes`。`[theme]` 只有一个 `curr_theme`（文件名，不是路径；缺省 `Default.json`），设置页「主题」页写它、Server 靠它选主题。注解色（`gloss` / `pos` / `fresh`）暂不进主题文件。
 
@@ -370,7 +373,9 @@ LuaJIT 源码随 crate 编译进二进制，装机包不依赖机器上装的 Lu
 清单的 `description` 只是记下来进日志（设置页自己扫文件取它，见 `docs/design/script.md`）。
 `dispatch` 把处理函数**返回的表**按登记顺序递回调用方
 （返回 `nil` / 别的类型的跳过）—— 返回值是什么意思本 crate 不管，由派发方（Server）定；`has_handlers(事件名)`
-让派发方在没人关心时连载荷都不拼。
+让派发方在没人关心时连载荷都不拼。`wanted_keys()` 汇总清单里 `keys` 声明的那几个虚拟键码、
+`wants_surrounding_text()` 从「有没有 `key` 脚本」推出真 —— Server 把它们折进 `InputSettings.script_keys` /
+`script_wants_text`（见 apps/windows server 一节的触发条件）。
 
 **HTTP**（`http.rs`）：`cloudime.http_get(url, timeout_ms, callback)` 与
 `cloudime.http_post(url, body, { timeout_ms, headers }, callback)` 共用同一条管线
@@ -450,6 +455,7 @@ Server 装配直接退出，表现成「装完打不出候选、按键没反应�
 | `order` | `{2, 1}` | 候选排序：1 起下标按这个顺序排到前面，没列到的按原顺序接在后面 |
 | `display` | `{[1] = "译①"}` | 候选显示：原下标（1 起）→ 显示的文本（上屏的仍是 `text`） |
 | `adjust` | `{["云朵"] = 2.0}` | 加权 / 降权：词文本 → 系数（>1 加权、<1 降权、0 沉底）；整份替换，空表全清 |
+| `theme` | 字符串 / `false` | 换主题（写进配置并重启输入法服务；`false` 回本进程启动时那份），见下 |
 
 `order` / `display` **不绕开引擎**（2026-10-07 定）：`apply_candidate_actions` 把重排 / 改显示落到
 `Composed::Candidates` 的 `CandidateLayout` 上（`CandidateLayout::new` 重建），之后的方向键、数字键、鼠标
@@ -529,6 +535,22 @@ Server 装配直接退出，表现成「装完打不出候选、按键没反应�
 （`apps/windows/server/Cargo.toml` 因此加了 `Win32_System_DataExchange` / `Win32_System_Memory` /
 `Win32_System_Ole` 三个 windows feature。）
 
+**当前时间**（`cloudime.get_time`）：`jiff::Zoned::now()`（`cloudime-script` 因此加了 `jiff`）拼一张**本地时间**的表
+—— `year` / `month` / `day` / `hour` / `minute` / `second` / `weekday`（1 = 周一 … 7 = 周日）/ `unix`（Unix 秒）。
+脚本本来也能用标准库的 `os.date` / `os.time`（`os` 表只换了 `exit` / `execute`），这一份是不依赖标准库的稳定形状。
+
+**换主题**（`cloudime.apply_theme(名字)` 与动作表的 `theme`）：两条路都落到 `apply_script_theme` →
+**候选窗开着时先存进 `Router.pending_theme`**（换主题要重建 painter、整屏重画），组句结束、候选窗关掉那两处
+（`handle_key` 的「不在组句了」与 `reset_composition`）调 `flush_pending_theme` 补上；真换在
+`switch_script_theme`：先改 `RouterConfig.script_theme`（`render_settings` 里它盖过 `curr_theme`）即时换上、
+`candidates.configure` 重建 painter、状态条重画一帧；要落到配置的主题名和 `curr_theme` 不一样时再
+`persist("theme", "curr_theme", …)` 写配置 + `spawn_replacement_server()` + `restart_pending = true` **重启输入法服务**
+（与设置页「应用主题」同一套 —— 重启才一定换上、选择也留了下来）。方法走请求通道（`Runtime::take_theme_request` →
+`Option<Option<String>>`：没提 / 回本进程启动时那份 `/ 换到某份`），Server 在按键、`candidates`、回调三处取；
+动作表那条由 `apply_common_actions` 落地，一拍里两个都给时**返回值优先**。`false` 回 `Router.theme_at_startup`
+（建 Router 时记下的 `curr_theme`）；名字找不到时记一条日志、按缺省主题画，**不写配置也不重启**。
+`apply_config` 仍保留 `script_theme`（热加载不打断脚本设的那份）。
+
 **候选窗尺寸**（`cloudime.candidate.set_min_width` / `set_page_size` / `set_scale`）：Runtime 里收成一个
 `SizeRequest`（三项都是 `Option<Option<T>>`：没提 / 恢复默认 / 设成某值，`take_size_request` 取一次就清），
 Server 用 `apply_size_request` 落到 `RouterConfig` 的 `script_min_width` / `script_page_size` / `script_scale`
@@ -558,9 +580,46 @@ Server 只按自己的语义处理 —— 谁先定义谁优先，脚本抢不�
 动作语义合并后落到当前这一屏，再 `reconcile_candidates` 重画。这一拍**没有按键**，所以 `passthrough` / `commit`
 从语义上无从谈起：给了就记一条日志忽略；`order` / `display` / `notice` / `adjust` / `online` 照常生效。
 
+**触发条件**（清单必填的 `trigger_condition`）：`combination_key` / `key` / `sys_time` / `candidate_context`，
+`sys_time` 还要 `trigger_time`（本地 `"HH:MM"`）；`combination_key` 还要 `combination_modifiers`（要哪一套修饰键，
+10 选一：`ctrl` / `ctrl+alt` / `ctrl+shift` / `alt+shift` / `alt` / `win+ctrl` / `win+alt` / `win+shift` /
+`win+alt+ctrl` / `win+ctrl+shift`，位图 bit0 ctrl / bit1 alt / bit2 shift / bit3 win）；`key` 还要 `keys`
+（具体的键，26 个键名 → 虚拟键码，`KEY_NAMES` 表，必填、去重、有一个不认识整个脚本判无效）。`runtime.rs::parse_manifest`
+里解析，`Manifest::accepts` 按它过滤事件 —— `startup` 谁都收，`key` / `candidates` / `time` 只给对应的那一种
+（`key` 两种触发条件都收 `key`；`key` 触发还要**对得上清单声明的 `keys`**：组句里 Server 会把所有按键派出去
+给引擎，但运行时只把声明的那些转给 `key` 脚本；`time` 还要对得上 `trigger_time` 的**当前本地整分**）。`Runtime::wanted_keys()` 汇总出
+声明的虚拟键码（`wanted_keys` 供 Server 折成 `InputSettings.script_keys` 位图），`wants_surrounding_text()`
+从「有没有 `key` 脚本」推出 `InputSettings.script_wants_text`。Server 这边两处用它：`RouterConfig::from` 不收，
+`input_settings()` 里 `combination_key_masks()` 折成 `InputSettings.script_key_modifiers`、`config::script_key_bits()`
+把 `wanted_keys()` 折成 `script_keys`（虚拟键码的 256 位位图；DLL 据此在没组句时也送这些键，**精确到键、不看修饰键**，
+见 `wants_declared_key`）；
+`Router::tick` 里 `poll_script_time()` 先问 `Runtime::sys_time_due()`（本地整分去重，没有 `sys_time` 脚本时
+一次都不花），到点就 `dispatch("time", time_payload(focused_app()), …)` 并按「没有按键的那一拍」落地
+（`apply_common_actions` + 重画；载荷同 `get_time()` 另加 `app`）。`cloudime.foreground_app()` 与那个 `app`
+读的都是 `Router::sync_focused_app` 维护的快照（焦点一变就刷新：`ensure_focus` 与两处断开焦点）。
+DLL 那边：`would_eat` 命中声明的修饰键或声明的键（`wants_script_key` / `wants_declared_key`）就答「吃」，
+Server 回 Passthrough 时用 `SendInput` `replay_to_app` 把键还回应用（`SendInput` 只注键本身，修饰键按用户手上还按着的算），
+并给 `replaying` 打标记让下一次 `OnTestKeyDown` 别重复吃（`is_replay`，别的键先到就作废）。
+**重放延后**：**不带修饰键的键**（`Enter` / `Tab` 这类）延后 ~150ms（`event.rs::send_key_deferred` 起个小线程）——
+物理键还按着那一刻注入同名键会被系统标成「自动重复」（`lParam` previous-state 位），Chromium 系（Electron）
+直接丢掉这个键（真机：OpenCode 里回车失效）；等物理键松开再注入就不是重复键了。**带修饰键的组合**
+（`Ctrl+C` 这类）**立刻注入**：延后的话用户多半已经松开修饰键，应用只看到光秃秃的那个键、复制粘贴失效
+（组合键在 Chromium 里也不受自动重复影响）。注入带**扫描码**（`MapVirtualKeyW`），有的宿主按它映射按键。
+⚠️ 脚本自己上屏的文本里带 `\r\n` 时，**紧接着读回的前文可能少最后一个字符**（Firefox 实测：宿主把光标停在
+最后一个字符之前，不是读取的锅，`ShiftStart` 与 ACP 两种读法都如此）—— `key` 脚本自己上屏后下一键读前文
+得自己做点容错（自动序号示例记着刚写的序号补全）。
+`script_wants_text` 为真时 DLL 还在**没组句时每个按键之前**请一个**异步只读编辑会话**（`com/edit/surrounding.rs::request_surrounding_now`
+→ `SurroundingSession`），现读一份光标前文发 `ClientMessage::Surrounding` —— 读发生在按键之后，所以那一份反映的是
+**上一键之后**的文档（自动序号按 `Enter` 时能读到刚敲的 `1.`）。这份前文经 `set_surrounding` 落进脚本的
+**`cloudime.context`**（`document` 仍是 `None`，整篇快照只随组句起始更新；`set_surrounding` 现在没组句也收，
+只喂脚本、不喂引擎）。**只能异步**：同步编辑会话会把沉浸式应用的宿主搞崩
+（见 `com/edit/update.rs` 文件头）。
+**修饰键本身**（Ctrl / Alt / Shift / Win，含左右键）在 `would_eat` / `eats_key` 里一律放行
+（`is_modifier_key`）—— 吃了 `Ctrl` 的 key-down，后面那个键在 TSF 与应用眼里就没有修饰键了
+（`Ctrl+A` 变成打出一个 `a`、全选失效）。
+
 **还没接的**（目标清单）：改「组句里已经选中的那一段」（Engine 没有「改组句内容」的入口，要 Core 侧新接口）、
-把 Core 的排序数据（词频 / 出处）交给脚本（`candidates` 载荷现在只有文本与来源，脚本改权重时不看 Core 的数字）、
-主题（主题功能本身还没做，先在动作表里留位）。
+把 Core 的排序数据（词频 / 出处）交给脚本（`candidates` 载荷现在只有文本与来源，脚本改权重时不看 Core 的数字）。
 **启动可执行文件**不用接：完整标准库的 `os.execute('start notepad.exe')` 已经能做。
 
 改脚本要重启 Server 才生效（托盘右键「重启输入法服务」），没有热重载。
@@ -609,7 +668,7 @@ Server 只按自己的语义处理 —— 谁先定义谁优先，脚本抢不�
 `theme/preview.rs` 里的 `apply_colors` 与 Server 的 `apply_theme_colors` 是同一份映射（两边依赖的东西不同，谁也不能反过来依赖谁，所以各留一份，**改键名 / 加颜色时两处一起改**）。
 「导入主题」挑 `.json` → 先 `ThemeFile::load` 验一遍 → `save` 进用户目录 → `refresh_theme_names()` + `select_theme()`（自动刷新列表，但不自动应用）；「导出当前主题」把草稿 `save` 到用户挑的位置。
 两行控件的首列固定 120（`PICKER_LABEL_WIDTH`，WinUI 的 `Button` 最小宽度本来就是 120），让「选择主题」的下拉与上面一行的名字框左边对齐。
-状态在 `panel/mod.rs`（`theme_names` / `theme_selected` / `theme_draft` / `theme_new_name` / `theme_status` / `color_dialog` / `color_slot`），消息 `Theme*` 在 `message.rs`，处理在 `component.rs`：**改色只动草稿** —— 点颜色（`ThemeColorOpen(slot)`）开对话框，`ColorDialog`「确定」后 `slot.set(&mut theme_draft, ..)`，预览与那一行跟着变。「确认保存」只 `ThemeFile::save` 到 `%APPDATA%\CloudIME\Themes\<名字>.json`（**存下来但不换**）；「应用主题」才把选中的名字写进 `[theme] curr_theme`（同值也写）→ mtime 变 → Server 热加载重读主题（没选中就提示先选一份，也不走保留名校验）。「新建主题」从内置的 `Themes\Default.json` 复制（`find_theme` 找不到就 `ThemeFile::default()`）；名字由纯函数 `theme_stem` 定（名字框空则沿用当前选中的那份；与随包两份内置主题 `Default` / `Panic` 同名的一律拒 —— 大小写不敏感，带 `.json` 后缀也认）。「刷新主题」重扫 `list_themes`。
+状态在 `panel/mod.rs`（`theme_names` / `theme_selected` / `theme_draft` / `theme_new_name` / `theme_status` / `color_dialog` / `color_slot`），消息 `Theme*` 在 `message.rs`，处理在 `component.rs`：**改色只动草稿** —— 点颜色（`ThemeColorOpen(slot)`）开对话框，`ColorDialog`「确定」后 `slot.set(&mut theme_draft, ..)`，预览与那一行跟着变。「确认保存」只 `ThemeFile::save` 到 `%APPDATA%\CloudIME\Themes\<名字>.json`（**存下来但不换**）；「应用主题」才把选中的名字写进 `[theme] curr_theme`（同值也写）并**立刻重启输入法服务**（`crate::server::restart`，与托盘右键 / 脚本页那条同一条路）—— 重启才盖得过脚本临时换过的主题（没选中就提示先选一份，也不走保留名校验）。「新建主题」从内置的 `Themes\Default.json` 复制（`find_theme` 找不到就 `ThemeFile::default()`）；名字由纯函数 `theme_stem` 定（名字框空则沿用当前选中的那份；与随包两份内置主题 `Default` / `Panic` 同名的一律拒 —— 大小写不敏感，带 `.json` 后缀也认）。「刷新主题」重扫 `list_themes`。
 「脚本」页在 `pages/scripts.rs`：顶部一行加粗红字的声明、三列 `Grid` 列表（文件名 / 介绍 / 启用开关 + 「删除此脚本」「编辑此脚本」）、「新建脚本」按钮；列宽与单元格抽成通用的 `controls::grid_row` / `controls::text_cell`（上面短语页那个 5 列 `Grid` 也改用它俩）；操作列宽 300 DIP，开关与两个按钮都放开最小宽度（`min_width(0)`，WinUI 的 `Button` 默认最小宽度是 120）、开关用 `ToggleSwitchSlot::OnContent` / `OffContent` 置空自带的「开 / 关」文字 —— 否则三个控件按默认宽度加起来顶出列外，最后那个按钮会被右边缘切掉一截。脚本目录 = 安装目录 `Scripts\`（与 `cloudime-script` 的 `DIRECTORY`、Server 读的同一处），列表跳过 `template.lua`；第二列的介绍是从文件里**文本扫**出来的（`describe_in` 认 `description = "…"` / `'…'`、跳过 `--` 注释）——设置程序里不执行脚本，Lua 运行时只在 Server；开关写 `[script] disabled`（`Config::set_array`，缺分节会补出来），删除先用 `rfd` 确认、再顺手把它从名单里摘掉；「新建脚本」在 `Scripts\` 取不重名的文件名（`script.lua` → `script-2.lua`…）、写入 `include_str!` 编进 exe 的 `Scripts\template.lua`，随后 `panel/notepad.rs` 用记事本打开并把模板 `WM_SETTEXT` 塞进它的 `Edit` 子控件（`EnumWindows` 先按我们刚起的进程号认主窗口、机器上本来开着别的记事本时才按类名 `Notepad` 兜底；等窗口与填字都在后台线程轮询，上限 4 秒，不卡界面）。这一页的改动（含开关）都要重启 Server 才生效 —— 「新建脚本」右边那个「重启输入法服务」按钮走 `crate::server::restart()`：连 `\\.\pipe\cloudime` 发一条 `ClientMessage::Indicator { RestartServer }`（设置程序不常驻连接，开一次用完即走），与托盘那条路完全一样（这条消息 Server 不回包，所以发完不等；连不上就把原因写在页面状态里）。
 「调试」页在 `pages/debugging.rs`：**原「统计」页整页搬来的输入统计面板**（末尾是「数据与组件」说明）与紧随其后的 `[debugging]` 自动隐藏开关、
 原来「高级」页的数据 / 日志入口（打开数据目录 / 打开日志目录 / 打包日志到桌面 / 清空输入日志四个按钮一行）与项目 GitHub 页面 / 帮助手册两个按钮一行、详细日志、学习输入习惯、记录输入日志。
@@ -773,9 +832,12 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 `Router::translate_action` 把 `Online::translation_for(word)` 当成一条释义**插在最前面**
 （`pos = ONLINE_POS`「在线」，列表里显示成 `(在线)`）—— 只有它一条就直接上屏，和本地释义一起就进释义选择；
 上屏它**不**记本地词典的「学会」（`commit_sense` 的 `record` 参数按来源给），陈旧的那一行（挪过候选）不认。
-TSF 那边 `key_sink::eats_key` 在**组句里**（候选窗显示着）把带 Ctrl（不带 Alt / Win）的组合先送进 Server 问一趟（没在组句时一律归应用：`Ctrl+A` / `Ctrl+C` 这类快捷键不能被输入法吃掉）
+TSF 那边 `key_sink::would_eat` / `eats_key` 在**组句里**（候选窗显示着）把带 Ctrl（不带 Alt / Win）的组合先送进 Server 问一趟
 （以前是个白名单：数字 / 回车 / 反引号 / T）—— 脚本才绑得上任意 `Ctrl` 组合；没人绑时 Server 回
-`Passthrough`，按键照旧交给应用。`Alt` / `Win` 不碰（AltGr = Ctrl+Alt、Win 是系统键，都在外壳那一层）。
+`Passthrough`，按键照旧交给应用。**没在组句时**默认一律归应用（`Ctrl+A` / `Ctrl+C` 这类快捷键不能被输入法吃掉），
+只有脚本声明过的那几套修饰键（`combination_key`，DLL 的 `wants_script_key`）与那几个具体的键（`key`，
+DLL 的 `wants_declared_key`）才先问一趟（见「用户脚本」一节的触发条件）。`Alt` / `Win` 不碰
+（AltGr = Ctrl+Alt、Win 是系统键，都在外壳那一层）。
 随包在安装目录 `Scripts\lib\` 下给两样东西做这件事：`md5.lua`（纯 Lua MD5，只依赖 LuaJIT 的 `bit`，
 拿 RFC 1321 向量回归）与 `example-niutrans.lua`（完整示例）；`lib\` 是子目录，加载器不认，所以不会被执行。
 示例拿到译文后会按 `cloudime.candidate.width()`（候选窗内容区宽度，点）折行（最多 5 行、超出的补「…」），

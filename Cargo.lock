@@ -545,6 +545,7 @@ dependencies = [
 name = "cloudime-script"
 version = "0.0.3"
 dependencies = [
+ "jiff",
  "mlua",
  "reqwest",
  "tokio",
@@ -593,6 +594,7 @@ dependencies = [
  "cloudime-translate",
  "cloudime-update",
  "embed-manifest",
+ "serde_json",
  "thiserror 2.0.21",
  "toml_edit",
  "tracing",

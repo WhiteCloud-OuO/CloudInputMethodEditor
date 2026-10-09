@@ -160,8 +160,22 @@ pub struct Router {
     /// 之后每次按键派发一次事件（见 [`script`]）。
     scripts: cloudime_script::Runtime,
 
+    /// 脚本 `cloudime.get_curr_config()` 读的那份配置快照：建 Router 时与每次热加载后刷新
+    /// （[`Router::set_script_config`]）。存的是 `Config` 的一份拷贝，所以脚本拿到的总是当前那份。
+    script_config: Rc<RefCell<cloudime_platform::Config>>,
+
+    /// 脚本 `cloudime.foreground_app()` 读的「当前前台应用」快照：焦点一变就 [`Router::sync_focused_app`] 刷新。
+    focused_app_snapshot: Rc<RefCell<Option<String>>>,
+
     /// 在线翻译（`Ctrl+T`）：候选窗底部单独一行的译文 / 等待 / 失败。
     online: translate::online::Online,
+
+    /// 脚本在**候选窗开着时**要换的主题（`apply_theme` / 动作表 `theme`）：先挂起，等候选窗关掉
+    /// 再补上（`script::flush_pending_theme`）—— 免得正在看候选的人被整屏重画打断。
+    pending_theme: Option<script::ThemeCommand>,
+
+    /// 本进程启动时配置里的主题（`[theme] curr_theme`）：脚本 `apply_theme(false)` 回退到它。
+    theme_at_startup: String,
 
     /// 脚本的量尺（`cloudime.ui.measure`）：`(当前字体设置, 懒加载的量尺)`。
     /// 字体设置由 `apply_config` 刷新，量尺自己看到变了就重建。
@@ -204,6 +218,8 @@ impl Router {
         scripts.set_clipboard(Rc::new(clipboard::set_text), Rc::new(clipboard::get_text));
         // 中文模式的符号映射缺省表在配置里（Core 自己缺省是空表），在这里接上，测试与正式跑的是同一条路
         engine.set_punctuation_mapping(config.punctuation_mapping.clone());
+        // 本进程启动时配置里的主题：脚本 `apply_theme(false)` 回退到它
+        let theme_at_startup = config.curr_theme.clone();
         let mut router = Self {
             engine,
             config: RouterConfig {
@@ -248,10 +264,24 @@ impl Router {
                 Translate::new()
             },
             online: translate::online::Online::default(),
+            pending_theme: None,
+            theme_at_startup,
             measure,
             document,
             scripts,
+            script_config: Rc::new(RefCell::new(cloudime_platform::Config::default())),
+            focused_app_snapshot: Rc::new(RefCell::new(None)),
         };
+        // 脚本的 `cloudime.get_curr_config()`：读上面那份快照（`set_script_config` / 热加载时刷新）
+        router.scripts.set_config_hook({
+            let snapshot = router.script_config.clone();
+            Rc::new(move |lua| script::config_table(lua, &snapshot.borrow()))
+        });
+        // 脚本的 `cloudime.foreground_app()`：读「当前前台应用」快照（焦点一变就刷新）
+        router.scripts.set_app_hook({
+            let snapshot = router.focused_app_snapshot.clone();
+            Rc::new(move || snapshot.borrow().clone())
+        });
         // 把当前状态先记成基线：之后第一次真的变了才弹提示（否则第一次切换总被当成基线吞掉）。
         router.last_tip = Some(router.tip_state());
         // 启动时也要走一遍本地词典（`apply_config` 那条路只在配置**变了**时才走：
@@ -284,6 +314,13 @@ impl Router {
             full_width_chars: self.config.full_width_chars,
             raw_input,
             auto_disable_without_text_input: self.config.auto_disable_without_text_input,
+            // 组合键脚本在清单里声明的那几套修饰键（`combination_modifiers`）的并集：DLL 据此把命中的
+            // 组合键（组句与否都算）送来问一趟；一个这类脚本都没有时是 0，按键路径与以前逐字节一致。
+            script_key_modifiers: self.scripts.combination_key_masks(),
+            // `key` 触发脚本声明的具体按键（`keys`）：位图，DLL 据此在没组句时也送这些键。
+            script_keys: config::script_key_bits(&self.scripts.wanted_keys()),
+            // 有 `key` 触发脚本时让 DLL 每个按键前现读一份光标前文送上来（`cloudime.text.*`）。
+            script_wants_text: self.scripts.wants_surrounding_text(),
         }
     }
 
@@ -294,6 +331,17 @@ impl Router {
             english_full_width_punctuation: self.config.english_full_width_punctuation,
             update_available: self.update_available(),
         }
+    }
+
+    /// 焦点变了：把「当前前台应用」记进脚本那个只读快照（`cloudime.foreground_app()`）。
+    fn sync_focused_app(&self) {
+        *self.focused_app_snapshot.borrow_mut() = self.focused_app().map(str::to_owned);
+    }
+
+    /// 把当前配置给一份给脚本（`cloudime.get_curr_config`）：`main.rs` 建好 Router 时调一次，
+    /// 之后每次配置热加载（`apply_config`）再刷新一次。
+    pub fn set_script_config(&mut self, config: &cloudime_platform::Config) {
+        *self.script_config.borrow_mut() = config.clone();
     }
 
     pub fn set_candidate_sink(&mut self, sink: Box<dyn CandidateSink>) {

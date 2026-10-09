@@ -40,6 +40,25 @@ pub struct InputSettings {
     /// 可输入文本区域时关掉系统的「输入法开 / 关」，回到文本区域再放回来。DLL 需要它才能在焦点变化时动作。
     #[serde(default)]
     pub auto_disable_without_text_input: bool,
+
+    /// 组合键脚本在清单里声明的那几套修饰键（`combination_modifiers`）的并集：
+    /// 第 N 位置位 = 「修饰键位图 N」这套组合键要送上来（bit0 ctrl / bit1 alt / bit2 shift / bit3 win）。
+    /// DLL 据此把命中的组合键送来问一趟 —— 脚本不吃就回 Passthrough、按键重放回应用。
+    /// `0` = 一个组合键脚本都没有，按键路径与以前逐字节一致。
+    #[serde(default)]
+    pub script_key_modifiers: u16,
+
+    /// 脚本声明的那些键（清单 `trigger_condition = "key"` 的 `keys`）：按虚拟键码占的位图
+    /// （第 `vk / 64` 个 `u64` 的第 `vk % 64` 位）。DLL 据此在**没组句时**也把这些键送来问一趟 ——
+    /// 脚本不吃就回 Passthrough、按键重放回应用。全 0 = 没有这类脚本，按键路径与以前逐字节一致。
+    #[serde(default)]
+    pub script_keys: [u64; 4],
+
+    /// 有脚本要「按键那一刻的光标前文」（`trigger_condition = "key"`）：DLL 据此在**每个按键之前**
+    /// 现读一份光标前文送上来（`ClientMessage::Surrounding`），脚本的 `cloudime.text.*` 读到的就是它。
+    /// `false` = 没有这类脚本，不读、不送。
+    #[serde(default)]
+    pub script_wants_text: bool,
 }
 
 impl Default for InputSettings {
@@ -51,6 +70,9 @@ impl Default for InputSettings {
             full_width_chars: false,
             raw_input: false,
             auto_disable_without_text_input: false,
+            script_key_modifiers: 0,
+            script_keys: [0; 4],
+            script_wants_text: false,
         }
     }
 }

@@ -14,8 +14,8 @@ mod runtime;
 
 pub use mlua;
 pub use runtime::{
-    ClipboardGetHook, ClipboardSetHook, DIRECTORY, MeasureFont, Runtime, SizeRequest,
-    TEMPLATE_FILE, TextHook, TextRange,
+    AppHook, ClipboardGetHook, ClipboardSetHook, ConfigHook, DIRECTORY, MeasureFont, Runtime,
+    SizeRequest, TEMPLATE_FILE, TextHook, TextRange, TriggerCondition,
 };
 
 #[cfg(test)]

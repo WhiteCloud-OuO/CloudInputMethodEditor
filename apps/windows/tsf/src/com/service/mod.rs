@@ -60,6 +60,10 @@ pub struct TextService {
     /// 上次连 Server 失败的时间，按 [`RECONNECT_INTERVAL`] 退避。
     last_connect_failure: Cell<Option<Instant>>,
 
+    /// 刚由输入法自己 `SendInput` 重放回应用的那个虚拟键码：下一次 `OnTestKeyDown` 见到它**不能再吃**
+    /// （否则应用还是拿不到）。别的键先到就把标记作废（那次重放没回来）。见 `key_sink.rs::replay_to_app`。
+    replaying: Cell<Option<u32>>,
+
     /// 中 / 英模式（单击切换键翻转，见 `[shortcut] switch_mode`），与语言栏按钮共用。
     mode_state: Rc<ModeState>,
 
@@ -201,6 +205,7 @@ impl TextService {
             engine,
             poll_timer: RefCell::new(None),
             last_connect_failure: Cell::new(None),
+            replaying: Cell::new(None),
             mode_state: ModeState::new(),
             mode_button: RefCell::new(None),
             mode_sinks: RefCell::new(Vec::new()),

@@ -213,6 +213,8 @@ fn main() {
     engine.log_session(env!("CARGO_PKG_VERSION"), "windows");
     let router_config = RouterConfig::from(&config).with_bundled_scripts();
     let mut router = Router::new(engine, router_config.clone());
+    // 脚本的 `cloudime.get_curr_config()` 从这里拿到第一份配置（之后热加载会刷新）
+    router.set_script_config(&config);
     let model_path = dispatch::find_model(user_dir().as_deref(), &root);
     router.configure_local_model(
         model_path.clone(),

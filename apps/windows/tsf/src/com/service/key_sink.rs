@@ -41,6 +41,23 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         if self.char_width_hotkey(vk) {
             return Ok(TRUE);
         }
+        // 有 `key` 触发脚本（`script_wants_text`）：**没在组句时每个按键**前现读一份光标前文（异步只读会话）。
+        // 读发生在这一键之后，于是下一次按键时脚本读到的就是「上一键之后」的文档 —— 自动序号按 `Enter`
+        // 时 `cloudime.context` 里已经有刚敲的 `1.`（挂在这一层是因为它对**所有**键都调，见上面注释）。
+        // 组句里不另读：那份前文由起组句那次读写会话送，且组句期间不变。
+        if self
+            .input_settings
+            .get()
+            .is_some_and(|input| input.script_wants_text)
+            && !self.shared.composing()
+            && let Ok(context) = pic.ok()
+        {
+            crate::com::edit::request_surrounding_now(
+                context,
+                self.client_id.get(),
+                self.engine.clone(),
+            );
+        }
         Ok(self.would_eat(&self.key_event(vk)).into())
     }
 
@@ -162,20 +179,58 @@ impl TextService_Impl {
     /// 组句中功能键 / 方向键 / 可打印字符都吃；没在组句时数字 / 标点也先「测吃」送去转全角（中英各有一份开关），
     /// Server 不转的回 Passthrough 再放行。
     fn would_eat(&self, event: &KeyEvent) -> bool {
+        // 刚由输入法自己重放回应用的那个键：不能再吃（否则应用还是拿不到）。
+        // 别的键先到就把标记作废 —— 那次重放的键没回来（比如前台换了窗口），别误伤后面的同键按键。
+        if is_replay(&self.replaying, event.virtual_key) {
+            return false;
+        }
         // 这个程序在「不显示候选框」名单里（`[candidate] program_list_of_hiding_candidate`），
         // 或者输入法被禁用（Ctrl + Space）：完全不接管
         if self.raw_input() || self.mode_state.disabled() {
             return false;
         }
+        // 修饰键本身不吃（见 [`is_modifier_key`]）：这一拍与「Ctrl 组合要不要接管」无关。
+        if is_modifier_key(event.virtual_key) {
+            return false;
+        }
         let input = self.input_settings.get();
         let shift_letter_compose = input.is_some_and(|input| input.shift_letter_compose);
         let full_width_chars = input.is_some_and(|input| input.full_width_chars);
+        // 脚本声明要的键（清单 `keys`）：没组句也先问一趟 Server —— 脚本不吃就重放回应用。
+        if input.is_some_and(|input| wants_declared_key(event, input.script_keys)) {
+            return true;
+        }
+        // 脚本在清单里声明的那几套修饰键（`combination_modifiers`）：组句与否都命中就送来问一趟，
+        // 脚本不吃就回 Passthrough、按键原样归应用。一个组合键脚本都没有（`wanted` 为 0）时这条不生效。
+        let wanted = input.map_or(0, |input| input.script_key_modifiers);
+        if wants_script_key(event, wanted) {
+            return true;
+        }
         eats_key(
             event,
             self.shared.composing(),
             shift_letter_compose,
             full_width_chars,
         )
+    }
+
+    /// 把已经吃下、Server 又没接管的键**重放回应用**：`SendInput` 注入一次同样的键（修饰键不用注入，
+    /// 用户手上还按着），并给下一次 `OnTestKeyDown` 打个「这是我注入的、别吃」的标记。
+    fn replay_to_app(&self, event: &KeyEvent) {
+        self.replaying.set(Some(event.virtual_key));
+        let m = event.modifiers;
+        if m.ctrl || m.alt || m.shift || m.win {
+            // 按住修饰键的组合：**立刻**注入 —— 延后的话用户多半已经松开修饰键，应用只看到光秃秃的
+            // 那个键（`Ctrl+C` 变成 `c`，复制失效）；组合键在 Chromium 里也不受「自动重复」影响。
+            crate::com::key::event::send_key(event.virtual_key);
+        } else {
+            // 不带修饰键的键（`Enter` / `Tab` 这类）：延后到物理键松开再注入，免得被当成自动重复丢掉。
+            crate::com::key::event::send_key_deferred(event.virtual_key);
+        }
+        log(&format!(
+            "Server 没接管，重放回应用 vk={}",
+            event.virtual_key
+        ));
     }
 
     /// 当前设置是不是「完全不接管」（名单里的程序）。
@@ -293,13 +348,17 @@ impl TextService_Impl {
                 );
                 true
             }
-            // 放行的功能键：Server 没动缓冲区，交还应用（应用处理这个键时光标可能会移）。
+            // 放行（Server 没接管）：**重放回应用** —— `OnTestKeyDown` 已经答过「吃」，光返回 false
+            // 应用是拿不到的（可打印字符那条已经自己插进文档；这里管的是 Ctrl / Alt / Win 组合与功能键）。
             (
                 Next::Document {
                     consumed: false, ..
                 },
                 _,
-            ) => false,
+            ) => {
+                self.replay_to_app(&event);
+                true
+            }
             (
                 Next::Document {
                     commit,
@@ -338,14 +397,64 @@ fn eats_without_server(event: &KeyEvent) -> bool {
         && !(event.modifiers.caps || event.modifiers.english_mode)
 }
 
+/// 带 Ctrl（不带 Alt / Win）的组合：输入法自己占的那几个（`Ctrl+数字` / `Ctrl+回车` / `Ctrl+反引号`）
+/// 也在内 —— 送上去由 Server 那套「谁先定义谁优先」的规则处理。
+fn ctrl_combo(event: &KeyEvent) -> bool {
+    event.modifiers.ctrl && !event.modifiers.alt && !event.modifiers.win
+}
+
+/// 事件修饰键的位图：bit0 ctrl / bit1 alt / bit2 shift / bit3 win（没有修饰键时是 `0`）。
+/// 与清单 `combination_modifiers` / `InputSettings.script_key_modifiers` 用同一套位数。
+fn modifier_mask(event: &KeyEvent) -> u8 {
+    let modifiers = event.modifiers;
+    u8::from(modifiers.ctrl)
+        | (u8::from(modifiers.alt) << 1)
+        | (u8::from(modifiers.shift) << 2)
+        | (u8::from(modifiers.win) << 3)
+}
+
+/// 这个键是不是脚本声明要的（`InputSettings.script_keys` 位图，见清单的 `keys`）：
+/// 是就**没组句也先问一趟 Server**（脚本不吃就重放回应用）。
+fn wants_declared_key(event: &KeyEvent, keys: [u64; 4]) -> bool {
+    let vk = event.virtual_key as usize;
+    vk < 256 && keys[vk / 64] & (1u64 << (vk % 64)) != 0
+}
+
+/// 这个键要不要**先问一趟 Server**：它的修饰键组合被某个脚本声明了（`wanted`，见清单的
+/// `combination_modifiers`；第 N 位置位 = 「位图 N」那一套）。组句与否都一样 ——
+/// 声明的是哪一套，就只有哪一套送上来，脚本不必自己再筛修饰键。
+fn wants_script_key(event: &KeyEvent, wanted: u16) -> bool {
+    wanted & (1u16 << modifier_mask(event)) != 0
+}
+
+/// 这个键是不是「输入法刚 `SendInput` 重放回应用的那个」：是就别再吃（顺带清掉标记）。
+/// 别的键先到也清掉 —— 那次重放没回来（前台换了窗口之类），别误伤后面同键的按键。
+fn is_replay(replaying: &std::cell::Cell<Option<u32>>, vk: u32) -> bool {
+    replaying.take() == Some(vk)
+}
+
+/// 修饰键**本身**（Ctrl / Alt / Shift / Win 的左右键）：不是「组合键」，一律不吃。
+///
+/// 这条很关键：`OnTestKeyDown` 一旦吃了 `Ctrl` 的 key-down，**后面那个键在 TSF 与应用眼里就没有
+/// 修饰键了**（`modifiers.ctrl` 变 false），表现成 `Ctrl+A` 打出一个 `a`、全选失效 —— 而 Ctrl 组合
+/// 该不该吃是「按 A 那一拍」的事，与按 Ctrl 这一拍无关。
+fn is_modifier_key(vk: u32) -> bool {
+    // VK_SHIFT / VK_CONTROL / VK_MENU / VK_LWIN / VK_RWIN
+    matches!(vk, 0x10 | 0x11 | 0x12 | 0x5B | 0x5C)
+        // 左右 Shift / Ctrl / Alt
+        || matches!(vk, 0xA0..=0xA5)
+}
+
 /// 这个键吃不吃（[`TextService_Impl::would_eat`] 的纯逻辑，便于单测）。
 ///
-/// - **组句里带 Ctrl（但不带 Alt / Win）的组合：先问一趟 Server** —— 脚本可以绑任意 Ctrl 组合
+/// - **修饰键本身一律不吃**（[`is_modifier_key`]）：吃了 `Ctrl` 的 key-down，后面那个键在 TSF
+///   与应用眼里就没有修饰键了（`Ctrl+A` 会变成打出一个 `a`）。
+/// - **带 Ctrl（不带 Alt / Win）的组合：组句里先问一趟 Server** —— 脚本可以绑任意 Ctrl 组合
 ///   （`Ctrl+字母` / `Ctrl+标点` / `Ctrl+Shift+…` 都算），「问」只是问：Server 没接管就回
-///   `Passthrough`，按键照旧交给应用。**没在组句时（候选窗没显示）一律不问**：`Ctrl+A` / `Ctrl+C`
-///   这类快捷键必须原样归应用，`OnTestKeyDown` 一旦答「吃」，应用就再拿不到这个键。
-///   **Alt / Win 不碰**：AltGr 就是 Ctrl+Alt（打字用）、Win 是系统键，
-///   而且这两类本来就在系统 / 外壳那一层被处理掉了，输入法也不该拦。
+///   `Passthrough`，按键由输入法用 `SendInput` **重放回应用**（`replay_to_app`）。
+///   没组句时走 [`wants_script_key`] 那条：只认脚本在清单里声明的修饰键组合。
+///   **Alt / Win** 不在上面这一条里（AltGr 就是 Ctrl+Alt，Win 是系统键），脚本要它们得在清单里声明，
+///   那时同样由重放机制兜着。
 /// - 字母：组句中一定吃（拼音要接着写下去）；没在组句时只有「中文模式、Caps 灭、
 ///   没按 Shift）」才吃。英文模式是纯直通、
 ///   Caps 只管大小写，这两种字母都归应用。`⇧C` 接 `pan` 出「C盘」靠的是后面这条；
@@ -360,11 +469,16 @@ fn eats_key(
     shift_letter_compose: bool,
     full_width_chars: bool,
 ) -> bool {
+    // 修饰键本身一律不吃（见 [`is_modifier_key`]）：吃了 Ctrl，后面的 `Ctrl+A` 就变成打出一个 `a`。
+    if is_modifier_key(event.virtual_key) {
+        return false;
+    }
     let modifiers = event.modifiers;
     // 带 Ctrl（不带 Alt / Win）的组合：**只在组句里**（候选窗口显示着）才问一趟 Server ——
     // 脚本能在打字过程中接管组合键；不在组句时一律归应用，否则记事本里的 `Ctrl+A` / `Ctrl+C`
     // 这类快捷键会被输入法吃掉（`OnTestKeyDown` 那边一旦答「吃」，应用就再也拿不到这个键）。
-    if composing && modifiers.ctrl && !modifiers.alt && !modifiers.win {
+    // **不在组句时也送**的那几套见 [`wants_script_key`] 与 `would_eat`（清单的 `combination_modifiers`）。
+    if composing && ctrl_combo(event) {
         return true;
     }
     if modifiers.has_command_key() {
@@ -391,7 +505,10 @@ fn eats_key(
 mod tests {
     use cloudime_platform::protocol::{KeyEvent, KeyModifiers};
 
-    use super::{eats_key, eats_without_server};
+    use super::{
+        eats_key, eats_without_server, is_modifier_key, is_replay, wants_declared_key,
+        wants_script_key,
+    };
     use crate::com::key::event::to_key_event;
 
     /// 中文模式（`caps` / `english_mode` 都灭）。
@@ -415,8 +532,124 @@ mod tests {
         event
     }
 
-    /// 任意 Ctrl 组合（不带 Alt / Win）都先问一趟 Server：脚本想绑什么绑什么；
-    /// 组句与不组句都一样（`Ctrl+C` 这类也会走一趟，没有人接管就 Passthrough 交回应用）。
+    /// 脚本声明的键（`keys` → `InputSettings.script_keys` 位图）：命中的才在没组句时也送来问一趟。
+    #[test]
+    fn only_the_declared_keys_are_sent() {
+        let ctrl = KeyModifiers {
+            ctrl: true,
+            ..KeyModifiers::default()
+        };
+        // 声明了 Enter（0x0D）
+        let mut keys = [0u64; 4];
+        keys[0] |= 1u64 << 13;
+        assert!(wants_declared_key(
+            &KeyEvent::new(0x0D, None, KeyModifiers::default()),
+            keys
+        ));
+        assert!(
+            wants_declared_key(&KeyEvent::new(0x0D, None, ctrl), keys),
+            "带着修饰键也算（声明的是键，不是组合）"
+        );
+        assert!(
+            !wants_declared_key(
+                &KeyEvent::new(0x41, Some('a'), KeyModifiers::default()),
+                keys
+            ),
+            "没声明的键不算"
+        );
+        assert!(
+            !wants_declared_key(
+                &KeyEvent::new(0x0D, None, KeyModifiers::default()),
+                [0u64; 4]
+            ),
+            "一个都没声明"
+        );
+    }
+
+    /// 修饰键**本身**一律不吃（`Ctrl` / `Alt` / `Shift` / `Win` 左右键）：吃了它，后面那个键在 TSF
+    /// 与应用眼里就没有修饰键了 —— `Ctrl+A` 会变成打出一个 `a`、全选失效。
+    #[test]
+    fn modifier_keys_are_never_eaten() {
+        let ctrl = KeyModifiers {
+            ctrl: true,
+            ..KeyModifiers::default()
+        };
+        for vk in [
+            0x10, 0x11, 0x12, 0x5B, 0x5C, 0xA0, 0xA1, 0xA2, 0xA3, 0xA4, 0xA5,
+        ] {
+            assert!(is_modifier_key(vk), "vk={vk} 是修饰键");
+            assert!(
+                !eats_key(&KeyEvent::new(vk, None, ctrl), true, false, false),
+                "组句里也不吃 vk={vk}"
+            );
+        }
+        assert!(!is_modifier_key(0x41), "A 不是修饰键");
+    }
+
+    /// 重放回去的键不再吃；别的键先到就把标记作废（别误伤后面同键的按键）。
+    #[test]
+    fn a_replayed_key_is_not_eaten_again() {
+        let replaying = std::cell::Cell::new(None);
+        assert!(!is_replay(&replaying, 0x41), "没重放过，照旧");
+        replaying.set(Some(0x41));
+        assert!(is_replay(&replaying, 0x41), "就是刚重放的那个");
+        assert_eq!(replaying.get(), None, "匹配过就清掉");
+        // 重放的那个没回来，先来了别的键：标记作废，同键的下一次按键照旧吃
+        replaying.set(Some(0x41));
+        assert!(!is_replay(&replaying, 0x42), "别的键不算");
+        assert!(!is_replay(&replaying, 0x41), "标记已作废");
+    }
+
+    /// 脚本声明的那几套修饰键（`combination_modifiers` → `InputSettings.script_key_modifiers`）：
+    /// 命中的才送来，别的一律归应用。
+    #[test]
+    fn only_the_declared_modifier_combos_are_sent() {
+        let ctrl = KeyModifiers {
+            ctrl: true,
+            ..KeyModifiers::default()
+        };
+        let ctrl_shift = KeyModifiers {
+            shift: true,
+            ..ctrl
+        };
+        let alt = KeyModifiers {
+            alt: true,
+            ..KeyModifiers::default()
+        };
+        // 只声明 `ctrl`（位图 0b0001 → 第 1 位）
+        let only_ctrl = 1u16 << 0b0001;
+        assert!(wants_script_key(
+            &with_modifiers(0x41, 'a', ctrl),
+            only_ctrl
+        ));
+        assert!(
+            !wants_script_key(&with_modifiers(0x41, 'A', ctrl_shift), only_ctrl),
+            "ctrl+shift 是另一套，没声明就不送"
+        );
+        assert!(!wants_script_key(
+            &with_modifiers(0x41, 'a', alt),
+            only_ctrl
+        ));
+        assert!(
+            !wants_script_key(
+                &with_modifiers(0x41, 'a', KeyModifiers::default()),
+                only_ctrl
+            ),
+            "没有修饰键的普通按键不归这条路"
+        );
+        // 两组都声明时两套都送
+        let both = only_ctrl | (1u16 << 0b0101);
+        assert!(wants_script_key(
+            &with_modifiers(0x41, 'A', ctrl_shift),
+            both
+        ));
+        // 一个组合键脚本都没有：什么也不送
+        assert!(!wants_script_key(&with_modifiers(0x41, 'a', ctrl), 0));
+    }
+
+    /// 任意 Ctrl 组合（不带 Alt / Win）**在组句里**都先问一趟 Server：脚本想绑什么绑什么；
+    /// `Ctrl+C` 这类也会走一趟，没有人接管就 Passthrough 交回应用。
+    /// （没组句时要不要问见上面那个用例。）
     #[test]
     fn any_ctrl_combo_goes_to_the_server_first() {
         let ctrl = KeyModifiers {

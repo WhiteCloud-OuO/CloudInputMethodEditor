@@ -2,7 +2,8 @@
 //! （与真实窗口同一套渲染器，见 [`preview`]）。
 //!
 //! 改动先进「草稿」：点「确认保存」只写到 `%APPDATA%\CloudIME\Themes\<名字>.json`；
-//! 点「应用主题」才把 `curr_theme` 写一遍、触发 Server 热加载换上。颜色点一下弹 `ColorDialog` 选。
+//! 点「应用主题」把 `curr_theme` 写进配置**并立刻重启输入法服务**（重启才盖得过脚本临时主题）。
+//! 颜色点一下弹 `ColorDialog` 选。
 
 mod preview;
 

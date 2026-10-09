@@ -24,3 +24,4 @@ build-installer.ps1
 git-push.ps1
 clear-products.ps1
 .gitignore
+/WanXiang

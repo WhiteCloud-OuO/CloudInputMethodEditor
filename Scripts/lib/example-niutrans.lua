@@ -15,6 +15,8 @@ cloudime.script{
     name        = "小牛翻译",
     description = "Ctrl+T 翻高亮候选，译文写在候选窗底部那一行（初次使用点击编辑，然后填写user_id和user_key）",
     api         = 1,
+    trigger_condition = "combination_key",   -- Ctrl+T 触发（key 事件）
+    combination_modifiers = "ctrl",          -- 要哪一套修饰键（10 选一）
     timeout     = 8000,      -- 单次调用墙钟上限（毫秒）：要 ≥ 下面 http_post 的时限
     sync        = false,     -- 只用异步回调
     handover    = "callback",

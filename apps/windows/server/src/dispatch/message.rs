@@ -8,7 +8,7 @@ use cloudime_platform::protocol::{
 use super::Router;
 use super::key::Effect;
 use super::key::input::reserved_combo;
-use super::script::ScriptActions;
+use super::script::{ScriptActions, ThemeCommand};
 use super::session::SessionInfo;
 
 impl Router {
@@ -33,6 +33,7 @@ impl Router {
                 if self.focused == Some(session) {
                     self.reset_composition();
                     self.focused = None;
+                    self.sync_focused_app();
                     // 重连：DLL 的文本快照重新读一份
                     self.document.clear();
                 }
@@ -130,6 +131,7 @@ impl Router {
                 if self.focused == Some(session) {
                     self.reset_composition();
                     self.focused = None;
+                    self.sync_focused_app();
                 }
                 // 会话没了：文本快照也作废
                 self.document.clear();
@@ -194,12 +196,17 @@ impl Router {
         };
         // 脚本要的在线翻译那一行（`online`）：放在按键派发**之后**，脚本看到的是这一拍之后的状态
         self.apply_online_actions(&actions);
+        // 脚本换主题：动作表里的 `theme` 是这一拍的最终决定，其次才看 `cloudime.apply_theme` 提的请求
+        let requested = ThemeCommand::from_request(self.scripts.take_theme_request());
+        self.apply_script_theme(actions.theme.clone().or(requested));
         // 这一拍之后不在组句了（Esc / 上屏完 / 断线）：候选窗都没了，那一行与脚本设的尺寸都收掉 ——
         // 它们只活在一次组句里（脚本自己写的那一份也归这条规则）
         if !self.composing() {
             self.online.clear();
             self.clear_script_size();
             self.engine.set_calculator(false);
+            // 候选窗关掉了：脚本在组句里要换的主题这时才补上（不打断刚才在看候选的人）
+            self.flush_pending_theme();
         }
         // 脚本要了「重画」（`cloudime.candidate.redraw()`）：按它最新的状态把这一屏重算一遍，
         // 这样异步回调里改的状态能立刻反映到候选窗上（重算会重新派发 `candidates` 事件）。

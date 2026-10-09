@@ -113,7 +113,7 @@ pub(crate) fn apply(
 }
 
 /// 告诉 Server 输入框私密与否（客户端只在变了时真发）；引擎正被别处借着（罕见）就算了，下段组句再报。
-fn report_privacy(engine: &SharedClient, private: bool) {
+pub(crate) fn report_privacy(engine: &SharedClient, private: bool) {
     if let Ok(mut guard) = engine.try_borrow_mut()
         && let Some(client) = guard.as_mut()
         && let Err(error) = client.set_private(private)
@@ -124,7 +124,7 @@ fn report_privacy(engine: &SharedClient, private: bool) {
 
 /// 把光标前文（和 Server 请过的整篇快照）送给 Server；引擎正被别处借着（罕见）就算了，
 /// Server 退回会话历史 / 下一段组句再读。
-fn report_surrounding(
+pub(crate) fn report_surrounding(
     engine: &SharedClient,
     before: String,
     document: Option<cloudime_platform::protocol::DocumentText>,
@@ -380,6 +380,13 @@ fn move_selection(
     caret_shift: i16,
 ) -> Result<()> {
     let caret = unsafe { range.Clone()? };
+    // 不用挪（0 就在末尾）：直接把范围收成**结束端**，别按字符数去数。
+    // 数步数会在含 `\r\n` 的文本上差一格（有的宿主把 CRLF 当一步计，`ShiftStart` 少挪一位，
+    // 上屏 `"\r\n2."` 后光标停在 `.` 之前 —— 自动序号下一次读回前文就少最后一个字符）。
+    if caret_shift == 0 {
+        unsafe { caret.Collapse(ec, TF_ANCHOR_END)? };
+        return set_selection(context, ec, caret);
+    }
     unsafe { caret.Collapse(ec, TF_ANCHOR_START)? };
     let steps = i64::try_from(text_chars)
         .unwrap_or(i64::MAX)

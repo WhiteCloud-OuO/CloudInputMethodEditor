@@ -116,7 +116,7 @@ impl Router {
     }
 
     /// 写回配置文件一个键；没有配置路径（测试）就只改内存。
-    fn persist(&self, section: &str, key: &str, value: impl Into<toml_edit::Value>) {
+    pub(super) fn persist(&self, section: &str, key: &str, value: impl Into<toml_edit::Value>) {
         let Some(path) = self.config_path() else {
             return;
         };
@@ -220,7 +220,7 @@ pub(super) struct TipState {
 ///（两个 Server 建管道时第二个会被 `FILE_FLAG_FIRST_PIPE_INSTANCE` 挡下）。工作目录设为 exe 所在目录，
 /// 随包数据按 exe 位置找；`CREATE_NO_WINDOW` 避免弹控制台。UiAccess 的 exe 由同样带 UiAccess 的 Server 起没问题。
 #[cfg(windows)]
-fn spawn_replacement_server() {
+pub(super) fn spawn_replacement_server() {
     use std::os::windows::process::CommandExt;
     const CREATE_NO_WINDOW: u32 = 0x0800_0000;
     let exe = match std::env::current_exe() {
@@ -250,4 +250,4 @@ fn spawn_replacement_server() {
 }
 
 #[cfg(not(windows))]
-fn spawn_replacement_server() {}
+pub(super) fn spawn_replacement_server() {}

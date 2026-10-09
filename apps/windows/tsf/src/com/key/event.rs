@@ -74,6 +74,47 @@ pub(crate) fn clear_caps_lock() {
     unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
 }
 
+/// 把一次按键（按下 + 抬起）注入回系统：给「`OnTestKeyDown` 已经声明吃、Server 又没接管」的键
+/// 还给应用用。修饰键不用注入 —— 用户手上还按着，系统状态里就是按着的，应用照样看到 `Ctrl+A`。
+///
+/// **延后一点再注入**：物理键还按着的那一刻注入同名键，系统会把注入的按下当成「自动重复」
+/// （`lParam` 的 previous-state 位置位），Chromium 系（Electron）会直接丢掉这个键 —— 表现为
+/// 「拦截了又没还回去」。等物理键松开（~150ms）再注入，就不是重复键了。
+pub(crate) fn send_key_deferred(vk: u32) {
+    std::thread::spawn(move || {
+        std::thread::sleep(std::time::Duration::from_millis(150));
+        send_key(vk);
+    });
+}
+
+pub(crate) fn send_key(vk: u32) {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBDINPUT, KEYEVENTF_KEYUP, MAPVK_VK_TO_VSC,
+        MapVirtualKeyW, SendInput, VIRTUAL_KEY,
+    };
+    let key = |flags: KEYBDINPUT| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 { ki: flags },
+    };
+    // 带上扫描码：Chromium 系（Electron）按扫描码映射 DOM `code` / 判定按键，只给 wVk 时
+    // 它会把注入的键当无效事件丢掉（Firefox 不看扫描码，所以之前只在 Electron 里失效）。
+    let scan = unsafe { MapVirtualKeyW(vk, MAPVK_VK_TO_VSC) } as u16;
+    let inputs = [
+        key(KEYBDINPUT {
+            wVk: VIRTUAL_KEY(vk as u16),
+            wScan: scan,
+            ..Default::default()
+        }),
+        key(KEYBDINPUT {
+            wVk: VIRTUAL_KEY(vk as u16),
+            wScan: scan,
+            dwFlags: KEYEVENTF_KEYUP,
+            ..Default::default()
+        }),
+    ];
+    unsafe { SendInput(&inputs, size_of::<INPUT>() as i32) };
+}
+
 /// Shift 按下没有。
 pub(crate) fn shift_down() -> bool {
     key_down(VK_SHIFT)

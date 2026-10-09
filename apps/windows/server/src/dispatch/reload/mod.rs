@@ -118,6 +118,8 @@ impl Router {
 
     /// 应用新配置。
     fn apply_config(&mut self, config: &Config) {
+        // 脚本的 `cloudime.get_curr_config()` 跟着换成新配置
+        self.set_script_config(config);
         self.engine.set_fuzzy(config.input.fuzzy_rules());
         self.engine.set_use_jian_pin(config.input.use_jian_pin);
         self.engine.set_mixture_input(config.input.mixture_input);
@@ -140,6 +142,8 @@ impl Router {
         let script_min_width = self.config.script_min_width;
         let script_page_size = self.config.script_page_size;
         let script_scale = self.config.script_scale;
+        // 脚本换的主题也是会话内状态（这次运行一直有效），别被热加载抹掉
+        let script_theme = self.config.script_theme.clone();
         self.config = RouterConfig::from(config);
         // 本地词典 / 学习状态跟着配置走：换词典、重置学习内容都在这里落地
         self.translate.configure(
@@ -150,6 +154,7 @@ impl Router {
         self.config.script_min_width = script_min_width;
         self.config.script_page_size = script_page_size;
         self.config.script_scale = script_scale;
+        self.config.script_theme = script_theme;
         self.config.full_width_punctuation = full_width_punctuation;
         self.config.english_full_width_punctuation = english_full_width_punctuation;
         self.config.full_width_chars = full_width_chars;

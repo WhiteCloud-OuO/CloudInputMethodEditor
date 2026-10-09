@@ -111,7 +111,7 @@ pub(crate) enum Message {
     ThemeNewName(String),
     /// 把草稿写到用户目录（只存主题，不换到它）。
     ThemeSave,
-    /// 把选中的主题写进 `[theme] curr_theme`（触发热加载，换到它）。
+    /// 把选中的主题写进 `[theme] curr_theme` 并立刻重启输入法服务（确保换上它）。
     ThemeApply,
     /// 挑一个 `.json` 主题文件导入到用户主题目录，成功后刷新列表。
     ThemeImport,

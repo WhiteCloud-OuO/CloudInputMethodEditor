@@ -70,7 +70,7 @@ mod tests {
         std::fs::write(
             dir.join("line.lua"),
             format!(
-                "cloudime.script{{ api = 1, budget = 1000000, timeout = 10000, \
+                "cloudime.script{{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', budget = 1000000, timeout = 10000, \
                  sync = false, handover = 'callback', on_error = false }}\n{body}"
             ),
         )

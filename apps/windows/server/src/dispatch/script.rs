@@ -26,6 +26,9 @@
 //! | `notice` | 字符串 | 候选窗里显示一行提示（随这一帧下发，下一次按键清） |
 //! | `order` | `{2, 1}` | 候选排序：1 起的下标按这个顺序排到前面，没列到的按原顺序接在后面 |
 //! | `display` | `{[1] = "译①"}` | 候选显示：原下标（1 起）→ 显示的文本（上屏的仍是 `text`） |
+//! | `adjust` | `{["云朵"] = 2.0}` | 加权 / 降权：词文本 → 系数 |
+//! | `online` | 字符串 / 表 / `false` | 候选窗底部那一行（在线翻译）：写 / 清 |
+//! | `theme` | 字符串 / `false` | 换主题：写进配置 `[theme] curr_theme` 并重启输入法服务（`false` 回本进程启动时那份） |
 //!
 //! `order` / `display` **不绕开引擎**：改的是 `composed` 里那份候选布局本身，之后的方向键、数字键、
 //! 鼠标点选都按新顺序走，选中第几个仍然由 Engine 去上屏 / 并进组句；高亮跟着原来那个候选走。
@@ -34,10 +37,11 @@
 //! （DLL 在组句起始时送来，每次派发前刷新）。
 //!
 //! 还没接的（清单见 `docs/notes/crate-notes.md`）：改「已选文本 / 组句里已经选中的那一段」（要 Engine
-//! 侧的接口）、翻译 Tip、词库与短语的权重、主题（主题功能还没做）、启动可执行文件（用标准库的
+//! 侧的接口）、翻译 Tip、词库与短语的权重、启动可执行文件（用标准库的
 //! `os.execute` / `io.popen` 已经能做）。
 
 use cloudime_core::{Candidate, CandidateKind, CandidateLayout};
+use cloudime_platform::Config;
 use cloudime_platform::protocol::{InputMode, KeyEvent, OnlineLine, OnlineState};
 use cloudime_script::SizeRequest;
 use cloudime_script::mlua;
@@ -70,6 +74,29 @@ pub(super) struct ScriptActions {
 
     /// 候选窗底部那一行在线翻译：脚本直接写 / 清（`online = …`）。
     pub online: Option<OnlineCommand>,
+
+    /// 换主题（`theme = "Panic"`；`theme = false` 回本进程启动时配置里那份）。
+    pub theme: Option<ThemeCommand>,
+}
+
+/// 脚本要换的主题。
+#[derive(Debug, Clone)]
+pub(super) enum ThemeCommand {
+    /// 回本进程启动时配置里的主题（`theme = false`）。
+    Clear,
+
+    /// 换到这份主题（`theme = "Panic"`）。
+    Set(String),
+}
+
+impl ThemeCommand {
+    /// `cloudime.apply_theme` 那个请求：`None` = 没提，`Some(None)` = 回本进程启动时那份，`Some(Some(名))` = 换到它。
+    pub(super) fn from_request(request: Option<Option<String>>) -> Option<Self> {
+        match request? {
+            None => Some(Self::Clear),
+            Some(name) => Some(Self::Set(name)),
+        }
+    }
 }
 
 /// 脚本对候选窗底部那一行（在线翻译）的要求。
@@ -92,6 +119,7 @@ impl ScriptActions {
             && self.display.is_empty()
             && self.adjust.is_none()
             && self.online.is_none()
+            && self.theme.is_none()
     }
 
     /// 把一张返回的表并进来：认得的键逐个读，读不动的（类型不对）记一条日志当没写。
@@ -125,6 +153,9 @@ impl ScriptActions {
         }
         if let Some(value) = field(table, "online") {
             self.online = read_online(&value);
+        }
+        if let Some(value) = field(table, "theme") {
+            self.theme = read_theme(&value);
         }
     }
 }
@@ -185,6 +216,24 @@ fn read_online(value: &mlua::Value) -> Option<OnlineCommand> {
         }
         value => {
             wrong_type("online", value);
+            None
+        }
+    }
+}
+
+/// `theme = "Panic"`（换到它）/ `theme = false`（回配置里的主题）：脚本换主题。
+fn read_theme(value: &mlua::Value) -> Option<ThemeCommand> {
+    match value {
+        mlua::Value::Boolean(false) | mlua::Value::Nil => Some(ThemeCommand::Clear),
+        mlua::Value::String(name) => match name.to_str() {
+            Ok(name) => Some(ThemeCommand::Set(name.to_owned())),
+            Err(_) => {
+                wrong_type("theme", value);
+                None
+            }
+        },
+        value => {
+            wrong_type("theme", value);
             None
         }
     }
@@ -360,6 +409,10 @@ impl Router {
         // （已经在算了），清掉标记，免得下一拍白白再算一遍。
         self.scripts.take_redraw_request();
         self.scripts.take_size_request();
+        // 换主题不是「重算」的事：脚本在这一拍里要换就换（`cloudime.apply_theme`）
+        self.apply_script_theme(ThemeCommand::from_request(
+            self.scripts.take_theme_request(),
+        ));
     }
 
     /// 两个「非按键」时机（`candidates` 事件、HTTP 回调）共用的那几项：提示与加权 / 降权。
@@ -375,6 +428,9 @@ impl Router {
         }
         if actions.notice.is_some() {
             self.notice = actions.notice.clone();
+        }
+        if let Some(command) = &actions.theme {
+            self.apply_script_theme(Some(command.clone()));
         }
         self.apply_online_actions(actions);
     }
@@ -435,6 +491,77 @@ impl Router {
         if request.page_size.is_some() {
             self.recompose();
         }
+    }
+
+    /// 脚本换主题（`cloudime.apply_theme(...)` 与动作表的 `theme`）：**写进配置 `[theme] curr_theme`
+    /// 并立刻重启输入法服务**（与设置页「应用主题」同一套语义 —— 重启才一定换上、选择也留了下来）。
+    /// `None` = 没提，`Clear` = 回本进程启动时配置里那份。名字找不到时不写配置、不重启，只本次按缺省画。
+    ///
+    /// **候选窗开着时先挂起**（`pending_theme`）：换主题要重建 painter、整屏重画，正在看候选的人会觉得闪；
+    /// 等这一段组句结束、候选窗关掉再补上（[`flush_pending_theme`](Self::flush_pending_theme)）。
+    pub(super) fn apply_script_theme(&mut self, command: Option<ThemeCommand>) {
+        let Some(command) = command else {
+            return;
+        };
+        if self.composing() {
+            self.pending_theme = Some(command);
+            return;
+        }
+        self.switch_script_theme(command);
+    }
+
+    /// 候选窗关掉了（组句结束）：把组句里挂着的换主题补上；没有挂着的就什么也不做。
+    pub(super) fn flush_pending_theme(&mut self) {
+        let Some(command) = self.pending_theme.take() else {
+            return;
+        };
+        self.switch_script_theme(command);
+    }
+
+    /// 真的换：先改 `RouterConfig.script_theme`（本次运行立刻换上）、重建 painter；要落到配置的主题名
+    /// 和配置里那份不一样时，再写 `[theme] curr_theme` 并**重启输入法服务**（新实例按配置换上它）——
+    /// 配置里已经是这份就不折腾，免得同一主题反复重启。
+    fn switch_script_theme(&mut self, command: ThemeCommand) {
+        let next = match &command {
+            ThemeCommand::Clear => None,
+            ThemeCommand::Set(name) => Some(name.clone()),
+        };
+        if self.config.script_theme == next {
+            return;
+        }
+        // 配置里该写哪一份（`Clear` = 本进程启动时那份）
+        let target = match &command {
+            ThemeCommand::Clear => self.theme_at_startup.clone(),
+            ThemeCommand::Set(name) => {
+                if cloudime_platform::find_theme(
+                    cloudime_platform::resources::bundled_root().as_deref(),
+                    name,
+                )
+                .is_none()
+                {
+                    // 名字找不到：不写配置、不重启（免得下次启动按缺省画），只本次按缺省画并记一条
+                    tracing::warn!(%name, "脚本要的主题不存在，按缺省主题画");
+                    self.config.script_theme = next;
+                    let settings = self.config.render_settings();
+                    self.candidates.configure(settings);
+                    self.reconcile_status();
+                    return;
+                }
+                format!("{name}.json")
+            }
+        };
+        self.config.script_theme = next;
+        // 只有真跑（有配置路径）才写配置 + 重启；测试里没开热加载，`config_path` 是 `None`，别去拉新进程
+        let can_persist = self.config_path().is_some();
+        if can_persist && self.config.curr_theme != target {
+            self.persist("theme", "curr_theme", target.clone());
+            self.config.curr_theme = target;
+            super::status::spawn_replacement_server();
+            self.restart_pending = true;
+        }
+        let settings = self.config.render_settings();
+        self.candidates.configure(settings);
+        self.reconcile_status();
     }
 
     /// 派发一类事件并合并返回值；顺路把光标前文刷给脚本。
@@ -509,6 +636,45 @@ impl Router {
         }
     }
 
+    /// `sys_time` 脚本到点了：派一次 `time`（载荷与 `cloudime.get_time()` 同一张表），把脚本要改的
+    /// 落到当前这一屏上再重画。
+    ///
+    /// 「到点」按**本地时间的整分**去重（`Runtime::sys_time_due`，同一天同一分钟只跑一次；
+    /// `Manifest::accepts` 再逐脚本核对 `trigger_time`）。一个 `sys_time` 脚本都没有时一次都不花。
+    pub(super) fn poll_script_time(&mut self) {
+        if !self.scripts.sys_time_due() {
+            return;
+        }
+        let payload = match self.scripts.time_payload(self.focused_app()) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::warn!(%error, "建 `time` 事件载荷失败");
+                return;
+            }
+        };
+        let responses = self.scripts.dispatch("time", payload, self.focused_app());
+        let redraw = self.scripts.take_redraw_request();
+        let size = self.scripts.take_size_request();
+        let theme = ThemeCommand::from_request(self.scripts.take_theme_request());
+        if responses.is_empty() && !redraw && size.is_empty() && theme.is_none() {
+            return;
+        }
+        let mut actions = ScriptActions::default();
+        for response in responses {
+            actions.merge(&response);
+        }
+        // 脚本在 `time` 里调过 `cloudime.candidate.redraw()`：先按它最新的状态重算这一屏
+        if redraw {
+            self.recompose();
+        }
+        // 没有按键的那一拍：`passthrough` / `commit` 给了由 `apply_common_actions` 记日志忽略
+        self.apply_size_request(size);
+        self.apply_common_actions(&actions);
+        self.apply_script_theme(theme);
+        // 换主题 / 改提示 / 在线那一行要立刻看得见
+        self.reconcile_candidates(&self.self_drawn_frame());
+    }
+
     /// 收脚本的 HTTP 结果：调回调，把回调要改的（候选 / 提示 / 加权）落到当前这一屏上再重画。
     ///
     /// 这是「没有按键的那一拍」：`passthrough` / `commit` 无从谈起，给了也忽略（记一条日志）。
@@ -534,7 +700,8 @@ impl Router {
         let responses = self.scripts.poll_requests(candidates);
         let redraw = self.scripts.take_redraw_request();
         let size = self.scripts.take_size_request();
-        if responses.is_empty() && !redraw && size.is_empty() {
+        let theme = ThemeCommand::from_request(self.scripts.take_theme_request());
+        if responses.is_empty() && !redraw && size.is_empty() && theme.is_none() {
             return;
         }
         let mut actions = ScriptActions::default();
@@ -548,6 +715,8 @@ impl Router {
         }
         // 脚本在回调里设过候选窗尺寸（本组句内有效）
         self.apply_size_request(size);
+        // 回调里换的主题（`cloudime.apply_theme`）
+        self.apply_script_theme(theme);
         self.apply_common_actions(&actions);
         if (!actions.order.is_empty() || !actions.display.is_empty())
             && let Some(Composed::Candidates { layout, .. }) = self.composed.as_ref()
@@ -601,12 +770,69 @@ fn key_payload(
     payload.set("ctrl", modifiers.ctrl)?;
     payload.set("alt", modifiers.alt)?;
     payload.set("shift", modifiers.shift)?;
+    payload.set("win", modifiers.win)?;
     payload.set("caps", modifiers.caps)?;
     payload.set("english_mode", modifiers.english_mode)?;
     payload.set("composing", composing)?;
     payload.set("mode", mode_key(mode))?;
     payload.set("highlight", highlight)?;
     Ok(payload)
+}
+
+/// 脚本 `cloudime.get_curr_config()` 看到的那张表：**整份配置**（键名与 `config.toml` 一致，
+/// 分节同名），再给 `theme` 补一个 `available`（可选主题名列表 —— 这项不在配置文件里）。
+pub(super) fn config_table(lua: &mlua::Lua, config: &Config) -> mlua::Result<mlua::Table> {
+    let table = lua.create_table()?;
+    if let serde_json::Value::Object(sections) =
+        serde_json::to_value(config).unwrap_or(serde_json::Value::Null)
+    {
+        for (name, value) in sections {
+            table.set(name.as_str(), json_value(lua, &value)?)?;
+        }
+    }
+    // 主题那一节：`curr_theme` 配置里就有，可选列表要读主题目录
+    let theme = match table.get::<Option<mlua::Table>>("theme")? {
+        Some(theme) => theme,
+        None => {
+            let theme = lua.create_table()?;
+            table.set("theme", theme.clone())?;
+            theme
+        }
+    };
+    let root = cloudime_platform::resources::bundled_root();
+    let names: Vec<String> = cloudime_platform::list_themes(root.as_deref())
+        .into_iter()
+        .map(|entry| entry.name)
+        .collect();
+    theme.set("available", names)?;
+    Ok(table)
+}
+
+/// `serde_json` 的值 → Lua 值：对象 → 表（键是字符串）、数组 → 1 起的表、其余标量照搬。
+fn json_value(lua: &mlua::Lua, value: &serde_json::Value) -> mlua::Result<mlua::Value> {
+    Ok(match value {
+        serde_json::Value::Null => mlua::Value::Nil,
+        serde_json::Value::Bool(flag) => mlua::Value::Boolean(*flag),
+        serde_json::Value::Number(number) => match number.as_i64() {
+            Some(int) => mlua::Value::Integer(int),
+            None => mlua::Value::Number(number.as_f64().unwrap_or(0.0)),
+        },
+        serde_json::Value::String(text) => mlua::Value::String(lua.create_string(text)?),
+        serde_json::Value::Array(items) => {
+            let table = lua.create_table()?;
+            for (index, item) in items.iter().enumerate() {
+                table.set(index + 1, json_value(lua, item)?)?;
+            }
+            mlua::Value::Table(table)
+        }
+        serde_json::Value::Object(fields) => {
+            let table = lua.create_table()?;
+            for (key, item) in fields {
+                table.set(key.as_str(), json_value(lua, item)?)?;
+            }
+            mlua::Value::Table(table)
+        }
+    })
 }
 
 /// 一屏候选在脚本那边的样子：1 起的数组，另有 `app` 字段说明这是哪个应用；每项

@@ -60,7 +60,11 @@ mod session;
 /// v17 给 [`ClientMessage::SyncMode`] 加了 `in_text_input` 与 `caps`（「状态切换提示」判断在不在输入状态、
 /// Caps Lock 亮不亮用）：老 DLL 不带这两个字段，读成 `false`，表现成「在那台机器上提示条从来不弹」——
 /// 同样是静默少一个功能，所以 +1 并重装 DLL。
-pub const PROTOCOL_VERSION: u32 = 17;
+///
+/// v18 给 [`InputSettings`] 加了 `script_key_modifiers`（组合键脚本声明的那几套修饰键的并集，
+/// 见清单的 `combination_modifiers`）：老 DLL 不带这个字段、读成 `0`，表现成「组合键脚本不生效」——
+/// 静默少一个功能，+1 并重装 DLL。
+pub const PROTOCOL_VERSION: u32 = 18;
 
 /// 从哪个协议版本起 DLL 会在 `OpenSession` 后阻塞读一条 [`ServerMessage::SessionOpened`]。
 /// 门槛是固定值而不是当前版本：以后版本再升，没重启的应用里那些旧 DLL 仍在等这条回包，

@@ -24,6 +24,7 @@ impl Router {
             self.reset_composition();
             self.focused = Some(session);
             let app = self.focused_app().map(str::to_owned);
+            *self.focused_app_snapshot.borrow_mut() = app.clone();
             self.engine.set_application(app);
             let private = self.focused_private();
             self.engine.set_private(private);
@@ -86,5 +87,7 @@ impl Router {
         // 表达式计算面板只活在一次组句里
         self.engine.set_calculator(false);
         self.hide_candidate_window();
+        // 候选窗关掉了：脚本在组句里要换的主题这时才补上
+        self.flush_pending_theme();
     }
 }

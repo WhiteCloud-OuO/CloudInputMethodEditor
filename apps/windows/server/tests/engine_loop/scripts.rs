@@ -14,20 +14,26 @@ fn script_dir(name: &str) -> PathBuf {
     dir
 }
 
-/// 每个测试脚本都要的清单，`write_script` 自动加在最前面（缺清单的脚本判无效）。
-/// **不写 `name`** —— 脚本名取文件名。
-const MANIFEST: &str = "cloudime.script{ api = 1, budget = 1000000, timeout = 10000, \
-                        sync = false, handover = 'callback', on_error = false }\n";
-
-/// 写一个测试脚本（自动补一份合法清单）。
+/// 写一个测试脚本（自动补一份合法清单）：`trigger_condition` 按脚本体挑 —— 登记了 `candidates`
+/// 就给 `candidate_context`，否则给 `combination_key`。**不写 `name`** —— 脚本名取文件名。
+/// 用例只关心逻辑，不必每个都手写一份清单。
 fn write_script(
     dir: impl AsRef<std::path::Path>,
     name: &str,
     body: impl AsRef<str>,
 ) -> std::io::Result<()> {
+    let body = body.as_ref();
+    let trigger = if body.contains("on('candidates'") || body.contains("on(\"candidates\"") {
+        "candidate_context"
+    } else {
+        "combination_key"
+    };
     std::fs::write(
         dir.as_ref().join(name),
-        format!("{MANIFEST}{}", body.as_ref()),
+        format!(
+            "cloudime.script{{ api = 1, trigger_condition = '{trigger}', combination_modifiers = 'ctrl', \
+             budget = 1000000, timeout = 10000, sync = false, handover = 'callback', on_error = false }}\n{body}"
+        ),
     )
 }
 
@@ -413,6 +419,53 @@ fn a_script_can_read_the_surrounding_text() {
     assert!(written.contains("已经输入的文字"), "{written}");
 }
 
+/// `key` 触发脚本（没组句）也能读光标前文（`cloudime.context`）：DLL 没组句时每个按键前现读一份送上来。
+/// 这是自动序号的地基 —— 所以 `set_surrounding` 没组句也得收下（只给脚本、不喂引擎）。
+#[test]
+fn a_key_script_reads_the_surrounding_text_without_composing() {
+    let dir = script_dir("key-context");
+    let log = dir.join("context.txt");
+    std::fs::write(
+        dir.join("auto.lua"),
+        format!(
+            "cloudime.script{{ api = 1, trigger_condition = 'key', keys = {{ 'enter' }}, \
+             budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }}\n\
+             cloudime.on('key', function()\n\
+                 local file = io.open([[{log}]], 'a')\n\
+                 file:write('context=' .. cloudime.context .. '\\n')\n\
+                 file:close()\n\
+             end)\n",
+            log = log.display()
+        ),
+    )
+    .unwrap();
+
+    let mut router = router_with(config_with_scripts(dir));
+    // 第一键先让 Server 认下聚焦会话（`ensure_focus` 在这一拍才设 `focused`），此时还没有前文
+    press(
+        &mut router,
+        KeyEvent::new(0x0D, Some('\r'), KeyModifiers::default()),
+    );
+    // 没组句：DLL 每键前现读一份前文送上来（自动序号按 Enter 时读到的就是刚敲的 `1.`）
+    router.handle(ClientMessage::Surrounding {
+        session: SESSION,
+        text: "1.".to_owned(),
+        document: None,
+    });
+    // 下一键里脚本就读到刚送来的前文
+    press(
+        &mut router,
+        KeyEvent::new(0x0D, Some('\r'), KeyModifiers::default()),
+    );
+
+    let written = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        written.lines().last(),
+        Some("context=1."),
+        "没组句时脚本也要读得到现读前文：{written}"
+    );
+}
+
 /// 脚本能读输入框整篇 / 光标前那一段（`cloudime.text.*`）：DLL 送来的快照 + 按显示宽度上限切。
 /// 第一次调用还没有快照时给 `nil`；只要还有脚本，`SyncMode` 的回复就一直请 DLL 带一份新的。
 #[test]
@@ -577,13 +630,16 @@ fn a_script_http_result_lands_on_a_later_tick() {
 
 /// 载荷里带着「这是哪个应用」：`key` 与 `candidates` 都读得到，脚本据此按应用分支
 ///（比如「在游戏里放行按键、在编辑器里照旧」）。
+///
+/// 一个脚本只有**一个**触发条件（清单的 `trigger_condition`），所以这里分两个脚本：
+/// 一个收 `key`（`combination_key`）、一个收 `candidates`（`candidate_context`）。
 #[test]
 fn the_payloads_carry_the_app_name() {
     let dir = script_dir("app");
     let log = dir.join("app.txt");
     write_script(
         &dir,
-        "watch.lua",
+        "keys.lua",
         format!(
             "local path = [[{log}]]\n\
              local function note(text)\n\
@@ -591,7 +647,21 @@ fn the_payloads_carry_the_app_name() {
                  file:write(text .. '\\n')\n\
                  file:close()\n\
              end\n\
-             cloudime.on('key', function(event) note('key:' .. tostring(event.app)) end)\n\
+             cloudime.on('key', function(event) note('key:' .. tostring(event.app)) end)\n",
+            log = log.display()
+        ),
+    )
+    .unwrap();
+    write_script(
+        &dir,
+        "list.lua",
+        format!(
+            "local path = [[{log}]]\n\
+             local function note(text)\n\
+                 local file = io.open(path, 'a')\n\
+                 file:write(text .. '\\n')\n\
+                 file:close()\n\
+             end\n\
              cloudime.on('candidates', function(list)\n\
                  if list[1] then note('candidates:' .. tostring(list.app)) end\n\
              end)\n",

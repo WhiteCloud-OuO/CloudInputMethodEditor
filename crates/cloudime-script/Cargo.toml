@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+jiff.workspace = true
 mlua.workspace = true
 reqwest = { workspace = true, features = ["native-tls", "system-proxy"] }
 tokio.workspace = true

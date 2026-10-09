@@ -2,9 +2,14 @@
 
 ## 0.1.0 · 2026-10-09 · beta
 
-- 新增**主题**：候选窗口、悬浮工具栏、状态切换提示三个窗口的颜色都收进主题文件，随包带两份**内置主题** —— **Default**（现有外观）与 **Panic**（深色、橙色字）；「设置 → 主题」页可选择 / 新建 / 导入 / 导出主题，页顶的预览与真实窗口由同一套渲染器画出（阴影、尺寸、图标都一致）。改色只动草稿：点「确认保存」把主题存下来，点「应用主题」才让三个窗口一秒内换上。
+- 新增**主题**：候选窗口、悬浮工具栏、状态切换提示三个窗口的颜色都收进主题文件，随包带两份**内置主题** —— **Default**（默认外观）与 **Panic**（为致谢Panic大佬专门制作）；「设置 → 主题」页可选择 / 新建 / 导入 / 导出主题，页顶的预览与真实窗口由同一套渲染器画出（阴影、尺寸、图标都一致）。改色只动草稿：点「确认保存」把主题存下来，点「应用主题」会把它写进配置并**重启输入法服务**，几秒后三个窗口一起换上。
 - 「设置 → 候选」新增**使用鼠标选词**：关闭（缺省）/ 仅更多候选项时 / 全部开启，控制鼠标在候选窗里悬停与点选。
 - 新增 **脚本**：支持用户编写lua脚本完成高级操作，详情可见lua.md。
+- 脚本新增 **`cloudime.apply_theme(名字)`** / 动作表 **`theme`**（换主题：写进配置 `[theme] curr_theme` 并重启输入法服务，`false` 回本进程启动时那份；**候选窗开着时等它关掉再换/重启**）、**`cloudime.get_time()`**（当前本地时间）、**`cloudime.get_curr_config()`**（当前配置，键名与 `config.toml` 一致）与 **`cloudime.foreground_app()`**（当前前台程序名；`time` 事件的载荷里也带 `app`）。
+- 脚本清单新增**必填** `trigger_condition`（`combination_key` 组合键 / `key` 具体的键 / `sys_time` 系统时间 / `candidate_context` 候选窗里的内容），脚本只按它收对应的事件；`combination_key` 的脚本**没组句也能用组合键**且要写 `combination_modifiers`（修饰键 10 选一：`ctrl` / `ctrl+alt` / `ctrl+shift` / `alt+shift` / `alt` / `win+ctrl` / `win+alt` / `win+shift` / `win+alt+ctrl` / `win+ctrl+shift`）；`key` 的脚本要写 `keys`（`enter` / `tab` / `f1`–`f12` 等 26 个键名，**没组句也能收到这些键**，不吃就重放回应用）；`sys_time` 要写 `trigger_time`（本地 `"HH:MM"`，每天到点一次）。
+- 新增 `key` 触发脚本的**按键前光标前文**：这类脚本每次按键前现读一份光标前文，`cloudime.text.before()` 读到的是刚敲完的那一行；随包示例 `Scripts/lib/example-auto-number.lua`（自动序号：`1.` / `一、` 后敲 `Enter` 自动接下一条）。
+- 修复：脚本声明了组合键后，**输入法没接管的组合键会重放回应用**（`SendInput`）—— 之前「答了吃、Server 又没接管」的键会被静默吞掉，表现为记事本里 `Ctrl+A` / `Ctrl+C` 失效；顺带修了**修饰键本身被吃掉**的问题（那时 `Ctrl+A` 会被当成打出一个 `a`）。
+- ⚠️ **现有脚本要补上 `trigger_condition`**（清单里加一行，如 `trigger_condition = "combination_key"`）与 `combination_modifiers`（如 `combination_modifiers = "ctrl"`），否则判无效、不加载。
 - 修复：脚本读输入框文本（`cloudime.text.all` / `before` / `after`）时，光标前后两半的读取不再互相牵连。
 
 ## 0.0.4 · 2026-10-07 · alpha

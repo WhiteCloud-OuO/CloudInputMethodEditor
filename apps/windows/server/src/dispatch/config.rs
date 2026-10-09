@@ -119,6 +119,23 @@ pub struct RouterConfig {
 
     /// 脚本在本组句里要的**缩放倍数**（`cloudime.candidate.set_scale`）：`None` = 按用户 `Ctrl + 滚轮`。
     pub script_scale: Option<f32>,
+
+    /// 脚本要换的主题（`cloudime.apply_theme` / 动作表的 `theme`）：`None` = 用配置里的 `curr_theme`。
+    ///
+    /// **会话内状态**：不写 `config.toml`，热加载时保留（与 `script_scale` 同样处理），重启回配置值。
+    pub script_theme: Option<String>,
+}
+
+/// 脚本声明的按键（虚拟键码）→ 256 位位图（`InputSettings.script_keys`）。
+pub(super) fn script_key_bits(keys: &[u32]) -> [u64; 4] {
+    let mut bits = [0u64; 4];
+    for vk in keys {
+        let vk = *vk as usize;
+        if vk < 256 {
+            bits[vk / 64] |= 1u64 << (vk % 64);
+        }
+    }
+    bits
 }
 
 impl RouterConfig {
@@ -140,7 +157,7 @@ impl RouterConfig {
             item_number_style: self.item_number_style,
             scale: self.script_scale,
             max_cell_width: self.max_cell_width,
-            theme: load_theme(&self.curr_theme),
+            theme: load_theme(self.script_theme.as_deref().unwrap_or(&self.curr_theme)),
         }
     }
 
@@ -250,6 +267,7 @@ impl From<&Config> for RouterConfig {
             script_min_width: None,
             script_page_size: None,
             script_scale: None,
+            script_theme: None,
         }
     }
 }

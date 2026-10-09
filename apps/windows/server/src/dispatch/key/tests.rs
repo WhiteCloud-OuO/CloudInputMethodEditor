@@ -634,7 +634,7 @@ fn a_script_can_resize_the_candidate_window() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("size.lua"),
-        "cloudime.script{ api = 1, budget = 1000000, timeout = 10000, \
+        "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', budget = 1000000, timeout = 10000, \
          sync = false, handover = 'callback', on_error = false }\n\
          cloudime.on('key', function(event)\n\
              if event.ctrl and event.vk == 90 then cloudime.candidate.set_page_size(6) end\n\
@@ -665,6 +665,133 @@ fn a_script_can_resize_the_candidate_window() {
     key(&mut r, 0x1B, None, normal);
     compose(&mut r, "qq", normal);
     assert_eq!(r.self_drawn_frame().candidates.items.len(), 9);
+}
+
+/// `cloudime.get_curr_config()` 那张表：整份配置（键名与 `config.toml` 一致）+ `theme.available`。
+#[test]
+fn the_script_config_table_mirrors_the_config_file() {
+    let lua = cloudime_script::mlua::Lua::new();
+    let config = cloudime_platform::Config::default();
+    let table = crate::dispatch::script::config_table(&lua, &config).unwrap();
+
+    // 分节与配置文件同名
+    for section in [
+        "candidate",
+        "input",
+        "general",
+        "theme",
+        "translate",
+        "status_bar",
+        "debugging",
+        "script",
+    ] {
+        assert!(
+            table
+                .get::<Option<cloudime_script::mlua::Table>>(section)
+                .unwrap()
+                .is_some(),
+            "{section} 那一节缺了"
+        );
+    }
+    // 候选那一节的几项对得上
+    let candidate: cloudime_script::mlua::Table = table.get("candidate").unwrap();
+    assert_eq!(
+        candidate.get::<i64>("candidate_count").unwrap(),
+        config.candidate.candidate_count() as i64
+    );
+    // 主题：当前用的是哪份 + 可选列表（后者不在配置文件里，读主题目录）
+    let theme: cloudime_script::mlua::Table = table.get("theme").unwrap();
+    assert_eq!(
+        theme.get::<String>("curr_theme").unwrap(),
+        config.theme.curr_theme
+    );
+    // 可选列表从主题目录读（单测环境里那个目录未必找得到，所以只验证它是张字符串表）
+    let _available: Vec<String> = theme.get("available").unwrap();
+}
+
+/// 脚本能换主题：动作表里的 `theme` 与 `cloudime.apply_theme(...)` 都落到 `RouterConfig.script_theme`
+/// （本次运行立刻换上；真跑时还会写配置 + 重启输入法服务，测试里没配置路径就不写、也不重启）。
+#[test]
+fn a_script_can_switch_the_theme() {
+    let dir = std::env::temp_dir().join("cloudime-key-tests-theme");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("theme.lua"),
+        "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', budget = 1000000, timeout = 10000, \
+         sync = false, handover = 'callback', on_error = false }\n\
+         cloudime.on('key', function(event)\n\
+             if event.ctrl and event.vk == 90 then cloudime.apply_theme('Panic') end\n\
+             if event.ctrl and event.vk == 88 then return { theme = 'Default.json' } end\n\
+             if event.ctrl and event.vk == 67 then return { theme = false } end\n\
+         end)\n",
+    )
+    .unwrap();
+
+    let mut r = router(5);
+    r.scripts = cloudime_script::Runtime::load(&dir, &[]);
+    let ctrl = KeyModifiers {
+        ctrl: true,
+        ..KeyModifiers::default()
+    };
+    assert_eq!(r.config.script_theme, None, "一开始用配置里的主题");
+
+    // 方法：`cloudime.apply_theme('Panic')`
+    key(&mut r, 0x5A, Some('\u{1a}'), ctrl);
+    assert_eq!(r.config.script_theme.as_deref(), Some("Panic"));
+
+    // 动作表：`{ theme = 'Default.json' }` 盖过它
+    key(&mut r, 0x58, Some('\u{18}'), ctrl);
+    assert_eq!(r.config.script_theme.as_deref(), Some("Default.json"));
+
+    // 清掉：去掉这次设的主题（`false` 回本进程启动时那份）
+    key(&mut r, 0x43, Some('\u{3}'), ctrl);
+    assert_eq!(r.config.script_theme, None);
+}
+
+/// 候选窗开着时脚本换主题要**等它关掉**再生效（不打断正在看候选的人）。
+#[test]
+fn a_script_theme_waits_until_the_candidate_window_closes() {
+    let dir = std::env::temp_dir().join("cloudime-key-tests-theme-deferred");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("theme.lua"),
+        "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', budget = 1000000, \
+         timeout = 10000, sync = false, handover = 'callback', on_error = false }\n\
+         cloudime.on('key', function(event)\n\
+             if event.ctrl and event.vk == 90 then cloudime.apply_theme('Panic') end\n\
+         end)\n",
+    )
+    .unwrap();
+
+    let mut r = router(5);
+    r.scripts = cloudime_script::Runtime::load(&dir, &[]);
+    let normal = KeyModifiers::default();
+    let ctrl = KeyModifiers {
+        ctrl: true,
+        ..KeyModifiers::default()
+    };
+    // 组句起来，候选窗开着
+    compose(&mut r, "ni", normal);
+    assert!(r.composing(), "应该正在组句");
+
+    // 脚本换主题：候选窗还开着 → 先挂起
+    key(&mut r, 0x5A, Some('\u{1a}'), ctrl);
+    assert!(r.composing(), "Ctrl+Z 不吃组句");
+    assert_eq!(
+        r.config.script_theme, None,
+        "候选窗还开着：主题先不换（等它关掉）"
+    );
+
+    // Esc 结束组句、候选窗关掉 → 补上
+    key(&mut r, 0x1B, None, normal);
+    assert!(!r.composing());
+    assert_eq!(
+        r.config.script_theme.as_deref(),
+        Some("Panic"),
+        "候选窗关掉之后才换"
+    );
 }
 
 /// `Ctrl + 反引号` 也认「在线翻译那一行」：脚本给**当前**高亮候选翻好的那条会一起上屏 ——

@@ -12,6 +12,8 @@
 | [`docs/notes/crate-notes.md`](docs/notes/crate-notes.md) | 实现要点（`crates/cloudime-script`、Server 的「用户脚本」两节） |
 | [`Scripts/template.lua`](Scripts/template.lua) | 「新建脚本」用的模板（只有清单骨架） |
 | [`Scripts/lib/example-niutrans.lua`](Scripts/lib/example-niutrans.lua) | 完整示例：小牛翻译（签名、表单编码、折行、多行显示） |
+| [`Scripts/lib/example-theme-by-app.lua`](Scripts/lib/example-theme-by-app.lua) | 示例：按前台程序换主题（组合键触发 + `cloudime.foreground_app()` / `cloudime.apply_theme()`） |
+| [`Scripts/lib/example-auto-number.lua`](Scripts/lib/example-auto-number.lua) | 示例：自动序号（`key` 触发 + `cloudime.text.before()` + `commit`「换行 + 下一条序号」） |
 
 ## 目录
 
@@ -102,6 +104,10 @@ end)
 | 字段 | 必写 | 类型 | 语义 |
 |---|---|---|---|
 | `api` | **是** | 整数 | 面向的脚本 API 版本，现在只有 `1`。不认识 → 无效 |
+| `trigger_condition` | **是** | 字符串 | **由什么触发**，四选一：`"combination_key"` 组合键（收 `key`）/ `"key"` 具体的键（收 `key`，见 `keys`）/ `"sys_time"` 系统时间（收 `time`）/ `"candidate_context"` 候选窗里的内容（收 `candidates`）。写别的 → 无效 |
+| `trigger_time` | `trigger_condition = "sys_time"` 时**是** | 字符串 | 本地时间 `"HH:MM"`（24 小时制）：每天到那个点收一次 `time` |
+| `combination_modifiers` | `trigger_condition = "combination_key"` 时**是** | 字符串 | 要哪一套**修饰键**，10 选一：`"ctrl"` / `"ctrl+alt"` / `"ctrl+shift"` / `"alt+shift"` / `"alt"` / `"win+ctrl"` / `"win+alt"` / `"win+shift"` / `"win+alt+ctrl"` / `"win+ctrl+shift"`（`+` 连接的顺序随意）。写别的 → 无效 |
+| `keys` | `trigger_condition = "key"` 时**是** | 字符串数组 | 要哪几个键：`"enter"` / `"tab"` / `"space"` / `"backspace"` / `"delete"` / `"esc"` / `"left"` / `"up"` / `"right"` / `"down"` / `"home"` / `"end"` / `"pageup"` / `"pagedown"` / `"f1"`…`"f12"`。可写多个；去重、忽略大小写与首尾空白。有一个不认识 → 整个脚本无效 |
 | `sync` | **是** | 布尔 | `true` = 同步（处理函数算完就返回）；`false` = 只用异步回调（配 `http_get` / `http_post`） |
 | `handover` | **是** | 字符串 | `"return"` / `"callback"`，**必须与 `sync` 一致**（`true`↔`"return"`、`false`↔`"callback"`） |
 | `timeout` | **是** | 整数 | 单次调用的**墙钟上限**（毫秒，`1`–`60000`）：同步处理函数与异步回调都按它算，到点中止这一次 |
@@ -120,18 +126,37 @@ end)
 - **持久状态写数据目录**（`%APPDATA%\CloudIME\` 下），别写安装目录 —— 普通用户写不进去，
   而且**升级 / 卸载会删掉安装目录整棵**（`Scripts\` 里的脚本也会没，记得备份）。
 - **不许长时间占住工人线程**：唯一允许的「等」是两个**异步** HTTP（时限必给）。
-- `apps` 只过滤 `key` 与 `candidates`：`startup` 早于任何应用、异步回调在请求发出时就已经判过。
+- `apps` 只过滤 `key` / `candidates` / `time`（都按当时聚焦的程序）；`startup` 早于任何应用、异步回调在请求发出时就已经判过。
+- **一个脚本只有一个触发条件**（清单的 `trigger_condition`）：Server 只把对应的事件派给它 ——
+  `combination_key` / `key` 收 `key`、`sys_time` 收 `time`、`candidate_context` 收 `candidates`；
+  `startup` 与 HTTP 回调不受它限制。
+- **组合键脚本要声明修饰键**（`combination_modifiers`）：只把你声明的那一套送上来 ——
+  组句与否都一样，`ctrl` 与 `ctrl+shift` 是两套。输入法为此让 DLL 在没组句时也把命中的组合键送来问一趟
+  （脚本不吃就**重放回应用**：DLL 用 `SendInput` 注入同一个键，见 `replay_to_app`）；修饰键**本身**
+  （`Ctrl` / `Alt` / `Shift` / `Win`）不会被动，照常归应用；没有任何组合键脚本时这条不生效。`key` 载荷里的 `ctrl` / `alt` / `shift` / `win`
+  就是那一刻按着的修饰键（`win` 是 Win 键）。
+  ⚠️ `Alt+Tab` / `Alt+F4` / `Win+L` / `Win+D` 这类**系统 / 外壳自己会处理的**组合，输入法根本收不到，
+  声明了也没用；`AltGr` 就是 `Ctrl+Alt`（打字用），声明 `ctrl+alt` 要当心吃掉它。
+- **`key` 触发脚本要声明具体的键**（`keys`）：只把你声明的那几个键送上来 —— **没组句也一样**（输入法为此让
+  DLL 把命中的键先问一趟 Server，脚本不吃就**重放回应用**）。**声明的是键本身、不带修饰键**：`keys = { "enter" }`
+  时 `Shift+Enter` / `Ctrl+Enter` 也会送到脚本（自己按 `event.ctrl` / `event.shift` 分支）。不声明就一个键都收不到；
+  没有任何 `key` 脚本时这条不生效。**声明之外的键不会到脚本手里**（组句里 Server 虽然会把所有按键派出去，但只有
+  你声明的那些会转给 `key` 脚本）。
+  ⚠️ 在 `key` 里返回 `passthrough` 等于本来就会发生的事；真正有意义的是 `commit`（吃掉这一键、自己上屏）——
+  所以只对确实需要的输入框（多行编辑的自动序号之类）生效才好，`Enter` / `Tab` 被吃掉会改变输入框行为。
 
 ## 4. 事件与载荷
 
-用 `cloudime.on(事件名, 处理函数)` 登记。现在会派发的只有三种（别的名字登记了也不会被调）：
+用 `cloudime.on(事件名, 处理函数)` 登记。现在会派发的就下面几种（别的名字登记了也不会被调）；
+**只有触发条件对上的那一种会派给你**（见清单的 `trigger_condition`）：
 
 | 事件 | 什么时候调 | 能改什么 |
 |---|---|---|
-| `startup` | 全部脚本加载完 | 只做自己的准备（开文件、发首个请求）。**返回值会被丢掉** |
-| `key` | 一次按键、**引擎处理之前** | 见[动作表](#5-返回值动作表)全部项；`passthrough` / `commit` 只有这一拍认 |
-| `candidates` | **引擎排完之后**（每次重排） | `order` / `display` / `notice` / `adjust` / `online`；`passthrough` / `commit` 给了只记日志 |
-| 异步回调 | HTTP 结果回来那一拍 | 同 `candidates`；`passthrough` / `commit` 给了只记日志 |
+| `startup` | 全部脚本加载完（**所有脚本**都收） | 只做自己的准备（开文件、发首个请求）。**返回值会被丢掉** |
+| `key` | 一次按键、**引擎处理之前**（只有 `combination_key` / `key` 脚本收） | 见[动作表](#5-返回值动作表)全部项；`passthrough` / `commit` 只有这一拍认 |
+| `candidates` | **引擎排完之后**（每次重排；只有 `candidate_context` 脚本收） | `order` / `display` / `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 给了只记日志 |
+| `time` | 到清单里 `trigger_time` 那个点（本地时间 `HH:MM`；只有 `sys_time` 脚本收） | `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 给了只记日志。载荷同 `cloudime.get_time()`，另加 `app`（那一刻前台程序） |
+| 异步回调 | HTTP 结果回来那一拍（**所有脚本**） | 同 `candidates`；`passthrough` / `commit` 给了只记日志 |
 
 多个脚本按 `(priority, 文件名)` 顺序合并，**后面返回的盖前面的**（表里没写的项不动）。
 返回值类型严格匹配，写错记一条日志当没写。
@@ -147,6 +172,14 @@ end)
 | `composing` | 布尔 | 是不是在组句（**这一拍是「引擎处理之前」，所以反映的是上一拍**） |
 | `mode` | 字符串 | `"chinese"` / `"english"` / `"disabled"` |
 | `highlight` | 字符串 | 这一刻**高亮候选的文本**（按键那一刻窗口里高亮的那条；没有候选时是空串）—— 想自己翻它就用它 |
+
+`key` 触发脚本大多不在组句里：这类脚本要读光标前文就用 **`cloudime.context`**（不是 `cloudime.text.*`）——
+有 `key` 脚本时输入法在**没组句的每个按键之前**现刷一份，所以你按 `Enter` 时它已经包含**上一次按键**的结果
+（刚敲的 `1.` 就在里面）—— 自动序号那类脚本靠的就是这个。**能不能读到取决于宿主**：Windows 11 记事本不给
+光标前的文字，那里 `cloudime.context` 一直是空串（见[第 11 节](#11-调试与排错)）。`cloudime.text.*` 那份整篇快照
+只随**组句**更新，`key` 脚本一般用不上（可能 `nil` 或偏旧）。
+⚠️ **脚本自己刚上屏的那一行，紧接着读回来可能少最后一个字符**（宿主差异，Firefox 实测）—— 靠它判断
+「上一行是不是序号」时要能容忍；`Scripts/lib/example-auto-number.lua` 记着自己刚写的序号来补全。
 
 ### `candidates` 的载荷
 
@@ -175,7 +208,7 @@ callback(result, candidates)
 
 - `result`：成功是 `{ url = …, status = 整数, body = 字符串 }`；连不上 / 超时是 `{ url = …, error = 字符串 }`。
 - `candidates`：回调**这一刻**的候选表（与 `candidates` 事件那张一样，可能是空的表）。
-  发请求那个应用名要靠脚本自己记（闭包捕获 `event.app`），回调不带它。
+  这张表里也带 `app`（回调那一刻**聚焦**的宿主程序名）；要按「发请求时那个应用」分支，才需要自己用闭包记下 `event.app`。
 
 ## 5. 返回值：动作表
 
@@ -190,6 +223,7 @@ callback(result, candidates)
 | `display` | `{[1] = "译①"}` | 候选显示：原下标（1 起）→ 显示的文本（**上屏的仍是 `text`**） | 都认 |
 | `adjust` | `{["云朵"] = 2.0}` | 加权 / 降权：词文本 → 系数（`> 1` 加权、`< 1` 降权、给 `0` 沉底） | 都认 |
 | `online` | 字符串 / 表 / `false` | 候选窗**底部单独那一行**（在线翻译）：写 / 清 | 都认 |
+| `theme` | 字符串 / `false` | 换主题：给名字（可带 / 不带 `.json`）**写进配置并重启输入法服务**换上，`false` 回本进程启动时配置里那份（**候选窗开着时等它关掉再换/重启**） | 都认 |
 
 细节：
 
@@ -204,6 +238,10 @@ callback(result, candidates)
   这一行**支持多行**（文本里有 `\n` 就按几行画，窗口跟着变高），也参与 `Ctrl + 反引号`
   （在线那条排在释义列表最前面、标 `(在线)`），详见 [`docs/design/online-translate.md`](docs/design/online-translate.md)。
 - 只有那一次调用的返回值算数：**没有按键的两拍**给 `passthrough` / `commit` 只记一条日志。
+- **`theme` 会写配置并重启输入法服务**：给名字就把它写进 `[theme] curr_theme` 再重启服务（和设置页「应用主题」同一套 —— 重启才一定换上，选择也留了下来）；`false` 回**本进程启动时**配置里那份。它与 `cloudime.apply_theme(名字)` 是同一条路，一拍里两个都给了**返回值优先**；
+  **候选窗开着（正在组句）时先挂起、等候选窗关掉那一拍才换/重启**（免得正在看候选的人被打断）；
+  名字找不到时按缺省主题画、记一条日志，**不写配置也不重启**（免得下次启动按缺省画）。
+  ⚠️ 重启会把输入法服务换成新进程，正在打字的程序会断一下再连上（约 1–3 秒）—— 别在「每按一键」的场景里反复换主题。
 
 ## 6. `cloudime` 表：API 参考
 
@@ -226,6 +264,10 @@ cloudime.on(事件名, function(载荷) … end)   -- 登记处理函数，只�
 | `cloudime.clipboard.settext(文本)` | 把 `文本` 写进剪贴板（覆盖原来的内容）。写不进去（被别的程序占着）**报错** |
 | `cloudime.clipboard.gettext()` | 读剪贴板里的文本 → 字符串；里面没有文本（图片 / 文件 / 空）给 `nil`；打不开**报错** |
 | `cloudime.run(命令)` | 起外部程序，**启动就返回、不等子进程**（等同 `os.execute`） |
+| `cloudime.get_time()` | 当前**本地时间** → `{ year, month, day, hour, minute, second, weekday, unix }`；`weekday` 1 = 周一 … 7 = 周日，`unix` 是 Unix 秒（标准库的 `os.date` / `os.time` 也能用，这一份是不依赖标准库的稳定形状） |
+| `cloudime.get_curr_config()` | 当前**配置**的一张表：**键名与 `config.toml` 一致**、分节同名（`candidate` / `input` / `general` / `theme` / `translate` / `status_bar` / `debugging` / `script` / `word_bank` / `phrase` / `update`）；`theme` 那一节多一个 `available`（可选主题名列表）。每次调用读的都是**当前**那份（配置热加载后跟着变） |
+| `cloudime.foreground_app()` | 当前**前台程序**的 exe 名（如 `"notepad.exe"`）；没聚焦任何程序给 `nil`。**随时可问**，不必等事件 —— 事件载荷里的 `app` 也是同一个值（`key` / `candidates` / `time` / 回调都带） |
+| `cloudime.apply_theme(名字)` | 换上这份主题：**写进配置 `[theme] curr_theme` 并重启输入法服务**（与设置页「应用主题」同一套；重启才一定换上、选择也留下）。名字可带 / 不带 `.json`；`false` 回本进程启动时配置里那份；名字写错按缺省主题画并记一条日志（**不写配置、不重启**）。**候选窗开着时等它关掉再换/重启** |
 
 `cloudime.clipboard.*` 两条要知道的：
 
@@ -243,10 +285,14 @@ cloudime.on(事件名, function(载荷) … end)   -- 登记处理函数，只�
   起组句那一键的编辑会话里、晚于按键本身，所以**起组句那一键**的脚本拿到的还是上一份。**组句结束不清快照**：
   同一段组句从第二键起、以及**下一段组句的第一键**都能拿到，而**下一段组句起始又会把新的一份送上来** ——
   快照跟着文档走（刚上屏的字也在里面；当前还没上屏的拼音不在）。
+  **`key` 触发脚本**（一般不在组句里）读前文请用 **`cloudime.context`**：没组句时每个按键之前现刷一份，
+  读到的是**上一次按键之后**的光标前文；`cloudime.text.*` 这份整篇快照仍只随**组句起始**更新（`key` 脚本
+  一般拿不到）。
 - **读不到的地方永远 `nil`**：密码框与声明了私密的输入框（浏览器无痕窗口就是）、不支持读光标外范围的控件，
   以及**只把输入框暴露成「局部上下文」的宿主**（Windows 11 记事本实测：它的 TSF 上下文按选区 / 组句
   圈成局部，整篇读不到，这时一律 `nil`）。整篇最多 20 万个 UTF-16 单元（约 10 万汉字，写死不可配）；
-  **没有任何脚本时完全不读**（零开销），有脚本时每段组句起始读一次（成本与文档大小成正比）。
+  **没有任何脚本时完全不读**（零开销），有需要整篇的脚本时每段组句起始读一次（成本与文档大小成正比），
+  有 `key` 脚本时每个按键前读一次光标前文（很短，几十个字）。
 
 ### HTTP（异步，时限必给）
 
@@ -409,8 +455,10 @@ end
 | `startup` 里返回动作没生效 | `startup` 的返回值会被丢掉（只用来做准备、发首个请求） |
 | 卡了一下、所有应用都打不了字 | 处理函数里做了同步等待 / 死循环（只有异步 HTTP 允许「等」） |
 | `cloudime.text.all()` 返回 `nil` | 刚启动 / 换了输入框之后的第一次调用常见（Server 已请 DLL 读一份，下一次就有）；私密输入框或那个控件读不到光标外的文本也一样 |
+| `cloudime.context` 一直是空串、自动序号没反应 | 这个宿主不把光标**前**的文字给输入法（Windows 11 记事本实测：TSF 上下文按选区 / 组句圈成局部，读不到前面的字）—— 与「整篇读不到」同源；换 Firefox / 多数编辑器就正常 |
 | 候选窗尺寸改了没反应 | 尺寸只在**本次组句**内有效、组句结束就回配置值 |
 | 在游戏里按 `Ctrl` 组合没反应 | **组句里**那些键先到脚本：要放行就返回 `passthrough = true`；没在组句时带 `Ctrl` 的键不问脚本、原样归应用。输入法自己占用的四个组合（`Ctrl+数字` / `Ctrl+Enter` / `Ctrl+反引号` / `Shift+反引号`）脚本抢不走 |
+| `key` 触发的脚本收不到某个键 | `keys` 里没声明它（键名拼错时整个脚本判无效，日志里有原因）；或那一键被系统 / 外壳先拿走了（`Alt+Tab` 之类） |
 
 ## 12. 示例集
 
@@ -637,12 +685,45 @@ end)
 两个要点：`Ctrl+A` **只在组句里**到得了脚本（不然应用自己的「全选」就被抢了）；第一次调用可能是 `nil`
 （刚启动 / 换了输入框），按提示再按一次即可。
 
+### 12.13 自动序号（`key` 触发 + 光标前文 + `commit`）
+
+在 `1.` / `一、` 后面敲回车，自动接下一条的序号（像 Word）。完整版（含中文数字 `一、`→`二、`）见
+[`Scripts/lib/example-auto-number.lua`](Scripts/lib/example-auto-number.lua)。
+
+```lua
+cloudime.script{
+    name              = "自动序号",
+    api               = 1,
+    trigger_condition = "key",
+    keys              = { "enter" },
+    timeout           = 200,
+    sync              = true,
+    handover          = "return",
+    on_error          = false,
+}
+
+cloudime.on("key", function(event)
+    if event.vk ~= 0x0D then                 -- 只认 Enter
+        return
+    end
+    local line = cloudime.context:match("[^\r\n]*$")   -- 光标前那一行
+    local digits, tail = line:match("^(%d+)%.(%s*)$")
+    if digits then
+        -- Enter 由脚本自己吃：换行 + 新序号一起上屏
+        return { commit = "\r\n" .. tostring(tonumber(digits) + 1) .. "." .. tail }
+    end
+end)
+```
+
+要点：`Enter` 必须**由脚本吃**（`commit`），不能「放行 `Enter` 再插文本」—— 那样会先换行、序号再插到下一行；
+`\r\n` 是 TSF 文档里的换行。只对多行编辑框有意义（单行框里换行会被忽略或变空格）。
+
 ## 13. 版本与边界
 
 - **API 版本是 `1`**（清单里的 `api`）。将来改了不兼容的地方会加新版本号，
   老脚本会因为 `api` 不认识被判无效（而不是悄悄行为不对）。
 - **不做热重载**：改脚本 → 重启输入法服务。
-- **还没做的**（设计文档里记着）：惰性 Lua 状态（没脚本时不建状态）、主题相关动作、
+- **还没做的**（设计文档里记着）：惰性 Lua 状态（没脚本时不建状态）、
   改组句里「已选文本」的内容、把翻译 Tip 交给脚本写（现在是内置的本地词典 Tip + 独立的 `online` 行）。
 - **没有脚本时不付代价**：`Scripts\` 不存在或里面没有真脚本时，按键路径上一次查表就返回，
   行为与「没有脚本功能」时逐字节一致。

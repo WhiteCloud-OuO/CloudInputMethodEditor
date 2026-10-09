@@ -247,8 +247,9 @@ impl Settings {
         );
     }
 
-    /// 「应用主题」：把选中的主题写进 `[theme] curr_theme`（同值也写）—— mtime 变一下，
-    /// Server 的热加载就会重读主题、三个窗口一起换。
+    /// 「应用主题」：把选中的主题写进 `[theme] curr_theme`，再**立刻重启输入法服务**——
+    /// 新实例起来后按配置换上它。重启（而不是等热加载）是为了稳：脚本临时换过的主题（`cloudime.apply_theme`
+    /// / 动作表 `theme`）只活在本进程里，热加载会保留它，重启才会清掉、让配置里的这一份说了算。
     fn apply_theme(&mut self) {
         let Some(name) = self.theme_selected.clone() else {
             self.theme_status =
@@ -257,7 +258,10 @@ impl Settings {
         };
         let value = format!("{name}.json");
         self.save("theme", "curr_theme", value.as_str());
-        self.theme_status = format!("已应用「{name}」，三个窗口一秒内换上。");
+        self.theme_status = match crate::server::restart() {
+            Ok(()) => format!("已应用「{name}」并重启输入法服务：几秒后三个窗口换上它。"),
+            Err(message) => format!("已写入配置，但重启输入法服务失败：{message}"),
+        };
     }
 
     fn page_content(&self, context: &mut ViewContext<Self>) -> View {

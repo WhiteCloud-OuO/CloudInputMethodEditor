@@ -114,8 +114,8 @@ Source: "{#Repo}\data\generated\lm.qj";          DestDir: "{app}\data\generated"
 Source: "{#Repo}\WordBank\*.db";   DestDir: "{app}\WordBank"; Flags: ignoreversion; Excludes: "UserWordBank.db"
 ; —— 短语库：安装目录 Phrases\Phrase.db（user 与 cloudime_default 两张表）——
 ; 用户脚本目录：只装「新建脚本」用的模板（用户在设置页里建的脚本不随包走；升级会覆盖模板）。
-; lib\ 里放脚本用的工具（纯 Lua 的 md5.lua）与一份完整示例（example-niutrans.lua）——
-; 它们在子目录里，加载器只认 Scripts\ 根部的 *.lua，所以不会被当成脚本执行。
+; lib\ 里放脚本用的工具（纯 Lua 的 md5.lua）与几份完整示例（example-niutrans.lua、example-theme-by-app.lua、
+; example-auto-number.lua）—— 它们在子目录里，加载器只认 Scripts\ 根部的 *.lua，所以不会被当成脚本执行。
 Source: "{#Repo}\Scripts\template.lua"; DestDir: "{app}\Scripts"; Flags: ignoreversion
 Source: "{#Repo}\Scripts\lib\*"; DestDir: "{app}\Scripts\lib"; Flags: ignoreversion
 

@@ -3,20 +3,64 @@
 //! 拼音还没插进去），不另开会话。
 
 use std::mem::ManuallyDrop;
+use std::panic::{AssertUnwindSafe, catch_unwind};
 
+use windows::Win32::Foundation::E_FAIL;
 use windows::Win32::System::Com::CoTaskMemFree;
 use windows::Win32::System::Variant::VT_UNKNOWN;
 use windows::Win32::UI::TextServices::{
     GUID_PROP_INPUTSCOPE, IS_ALPHANUMERIC_PIN, IS_NUMERIC_PASSWORD, IS_NUMERIC_PIN, IS_PASSWORD,
-    IS_PRIVATE, ITfContext, ITfInputScope, ITfRange, InputScope, TF_ANCHOR_START,
-    TF_DEFAULT_SELECTION, TF_SELECTION,
+    IS_PRIVATE, ITfContext, ITfEditSession, ITfEditSession_Impl, ITfInputScope, ITfRange,
+    InputScope, TF_ANCHOR_START, TF_DEFAULT_SELECTION, TF_ES_READ, TF_SELECTION,
 };
-use windows::core::Interface;
+use windows::core::{Error, Interface, implement};
 
 use cloudime_platform::protocol::DocumentText;
 
+use crate::com::composition::{report_privacy, report_surrounding};
+use crate::com::service::SharedClient;
+
 /// 往前读多少字。
 const LOOKBACK: i32 = 64;
+
+/// 一次性的**只读**会话：按键前现读一份光标前文（与私密判定）发给 Server。
+///
+/// 和读写会话一样必须**异步**：沉浸式应用上同步编辑会话会把宿主整个搞崩（见 `com/edit/update.rs`
+/// 文件头）。于是它读到的是**上一次按键之后**的文档 —— 对「按键触发的脚本」来说正好：脚本在这一次
+/// 按键里要的就是上一键敲完的那个状态。
+#[implement(ITfEditSession)]
+pub(crate) struct SurroundingSession {
+    context: ITfContext,
+    engine: SharedClient,
+}
+
+impl ITfEditSession_Impl for SurroundingSession_Impl {
+    fn DoEditSession(&self, ec: u32) -> windows::core::Result<()> {
+        let result = catch_unwind(AssertUnwindSafe(|| {
+            let input = input_context(&self.context, ec, false);
+            report_privacy(&self.engine, input.private);
+            // 读不到也送一条**空的**：让 Server 把上一段的前文清掉。记事本 / OpenCode 这类宿主不给
+            // 光标前文，`cloudime.context` 该是空串，而不是上一段组句的残留（残留会让脚本误判、胡乱上屏）。
+            report_surrounding(&self.engine, input.before.unwrap_or_default(), None);
+        }));
+        if result.is_err() {
+            crate::com::log::log("按键前读光标前文 panic（已兜住）");
+            return Err(Error::from(E_FAIL));
+        }
+        Ok(())
+    }
+}
+
+/// 请求一个异步只读会话，按键前现读光标前文（只有 `InputSettings.script_wants_text` 时才调）。
+pub(crate) fn request_surrounding_now(context: &ITfContext, client_id: u32, engine: SharedClient) {
+    let session = SurroundingSession {
+        context: context.clone(),
+        engine,
+    };
+    if let Err(error) = super::update::request(context, client_id, session.into(), TF_ES_READ) {
+        crate::com::log::log(&format!("读光标前文的编辑会话没被受理: {error}"));
+    }
+}
 
 /// 起组句时对输入框的判断：私密不私密、光标前的文字，以及（Server 请过的话）一份整篇快照。
 pub(crate) struct InputContext {

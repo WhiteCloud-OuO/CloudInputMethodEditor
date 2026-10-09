@@ -113,14 +113,20 @@ impl Router {
         // 焦点 / 会话真变了才清（见 `ensure_focus` / `OpenSession` / `CloseSession`）。
     }
 
-    /// DLL 送来聚焦会话的光标前文：给 Engine 当前文，缓存里按旧前文记的「要打分的」作废，重新攒一次并重新计时。
-    /// 组句已经结束 / 不是聚焦会话的丢掉。
+    /// DLL 送来聚焦会话的光标前文：刷给脚本（`cloudime.context`），组句里再给 Engine 当前文。
+    /// 不是聚焦会话的丢掉；没组句时只留给脚本 —— `key` 触发脚本没组句也要读光标前文（见 `script_wants_text`）。
     pub(super) fn set_surrounding(&mut self, session: SessionId, text: String) {
-        if self.focused != Some(session) || self.engine.composition().is_empty() {
+        if self.focused != Some(session) {
             return;
         }
-        // 脚本也要看这段前文（`cloudime.context`）
+        // 脚本的 `cloudime.context`：`key` 触发脚本每个按键前现读的那份前文走这里
         self.surrounding = text.clone();
+        // 本地整句模型的前文只在组句里有意义：没组句就到这儿（引擎那边保持无前文）
+        if self.engine.composition().is_empty() {
+            self.engine.set_rescoring_context(None);
+            return;
+        }
+        // 缓存里按旧前文记的「要打分的」作废，重新攒一次并重新计时
         self.engine
             .set_rescoring_context((!text.is_empty()).then_some(text));
         if matches!(self.composed, Some(Composed::Candidates { .. })) {
@@ -155,6 +161,8 @@ impl Router {
         self.poll_config_reload();
         // 脚本的 HTTP 结果也借这一拍收：到了就调回调、按回调要的改候选显示再重画
         self.poll_scripts_requests();
+        // `sys_time` 脚本到点（本地时间 HH:MM）也借这一拍派一次 `time`
+        self.poll_script_time();
     }
 
     /// 防抖到点就发请求；在等结果就收一次，收到了重查并重画当前页。
