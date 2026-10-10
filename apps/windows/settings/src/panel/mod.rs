@@ -9,6 +9,7 @@ mod message;
 mod notepad;
 mod notice;
 mod pages;
+mod window;
 
 use std::path::{Path, PathBuf};
 

@@ -2,18 +2,6 @@
 
 use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
-use std::sync::atomic::{AtomicBool, Ordering};
-
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
-};
-use windows::Win32::System::Threading::GetCurrentThreadId;
-use windows::Win32::UI::WindowsAndMessaging::{
-    CallNextHookEx, EnumWindows, GetWindowRect, GetWindowThreadProcessId, HCBT_ACTIVATE,
-    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, SetWindowsHookExW, WH_CBT,
-};
-use windows::core::BOOL;
 
 use cloudime_platform::{
     Config, FullHalfPunctuation, ItemNumberStyle, LayoutMode, LogLevel, MAX_ASSOCIATION_COUNTS,
@@ -30,6 +18,7 @@ use super::font_dialog;
 use super::notice::Notice;
 use super::pages::phrase::PhraseForm;
 use super::pages::{dictionaries, phrase, scripts, theme, translate};
+use super::window;
 use super::{Message, REPOSITORY_URL, Settings};
 
 /// 标题栏图标：exe 旁的 `cloudime.ico`（装机包装到 `{app}`，`build.rs` 也给开发时的 exe 旁拷一份）。
@@ -47,151 +36,13 @@ fn window_icon() -> Option<&'static str> {
     })
 }
 
-/// 居中只做一次（钩子与 `view` 里那条兜底都会调，不能各挪一次）。
-static CENTERED: AtomicBool = AtomicBool::new(false);
-
-/// 把窗口挪到它所在显示器的中央；已经挪过或挪不动返回 `false`。
-fn center_window(hwnd: HWND) -> bool {
-    if CENTERED.load(Ordering::Relaxed) {
-        return false;
-    }
-    let mut rect = RECT::default();
-    if unsafe { GetWindowRect(hwnd, &mut rect) }.is_err() || rect.right - rect.left <= 320 {
-        return false;
-    }
-    let monitor = unsafe { MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST) };
-    let mut info = MONITORINFO {
-        cbSize: size_of::<MONITORINFO>() as u32,
-        ..Default::default()
-    };
-    if !unsafe { GetMonitorInfoW(monitor, &mut info) }.as_bool() {
-        return false;
-    }
-    let work = info.rcWork;
-    let x = work.left + ((work.right - work.left) - (rect.right - rect.left)) / 2;
-    let y = work.top + ((work.bottom - work.top) - (rect.bottom - rect.top)) / 2;
-    let moved = unsafe {
-        SetWindowPos(
-            hwnd,
-            None,
-            x,
-            y,
-            0,
-            0,
-            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
-        )
-    };
-    if moved.is_err() {
-        return false;
-    }
-    CENTERED.store(true, Ordering::Relaxed);
-    true
-}
-
-/// 框架建窗后组件只拿得到 `WindowVisuals`，那里面没有位置；等它再到组件里跑一趟（下一次 `view`）
-/// 窗口**已经显示**了，挪过去会看到「先左后中」闪一下。所以挂一个本线程的 CBT 钩子：
-/// `HCBT_ACTIVATE` 在窗口真正显示之前同步回调，在这里挪就看不到闪动。
-fn install_center_hook() {
-    unsafe extern "system" fn cbt(code: i32, wparam: WPARAM, _lparam: LPARAM) -> LRESULT {
-        // HCBT_ACTIVATE：窗口即将被激活（还没显示），wparam 就是它的 hwnd。
-        if code == HCBT_ACTIVATE as i32 {
-            center_window(HWND(wparam.0 as *mut core::ffi::c_void));
-        }
-        unsafe { CallNextHookEx(None, code, wparam, _lparam) }
-    }
-
-    // 只钩本线程（也就是 UI 线程）的 CBT 事件：本进程自己的窗口，钩子过程不必放进 DLL。
-    let hook = unsafe { SetWindowsHookExW(WH_CBT, Some(cbt), None, GetCurrentThreadId()) };
-    if hook.is_err() {
-        crate::log::warn("装居中钩子失败，窗口位置会晚一步才对上");
-    }
-    // 一直挂着不摘：除激活以外的 CBT 事件只做一次比较就返回，代价可以忽略。
-}
-
-/// 兜底：万一下一次 `view` 时窗口已经出现而钩子没生效，这里再挪一次。
-fn center_window_once() {
-    if CENTERED.load(Ordering::Relaxed) {
-        return;
-    }
-    struct Probe {
-        pid: u32,
-        hwnd: HWND,
-    }
-    unsafe extern "system" fn visit(hwnd: HWND, lparam: LPARAM) -> BOOL {
-        // SAFETY: `lparam` 是下面传进来的 `&mut Probe`，回调期间一直有效。
-        let probe = unsafe { &mut *(lparam.0 as *mut Probe) };
-        let mut pid = 0u32;
-        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)) };
-        if pid != probe.pid {
-            return true.into();
-        }
-        let mut rect = RECT::default();
-        // 框架可能还有别的本进程小窗口（消息窗之类）：只认够大的那个。
-        if unsafe { GetWindowRect(hwnd, &mut rect) }.is_ok() && rect.right - rect.left > 320 {
-            probe.hwnd = hwnd;
-            return false.into();
-        }
-        true.into()
-    }
-
-    let mut probe = Probe {
-        pid: std::process::id(),
-        hwnd: HWND(std::ptr::null_mut()),
-    };
-    unsafe {
-        let _ = EnumWindows(
-            Some(visit),
-            LPARAM(std::ptr::from_mut(&mut probe).cast::<core::ffi::c_void>() as isize),
-        );
-    }
-    if !probe.hwnd.0.is_null() {
-        center_window(probe.hwnd);
-    }
-}
-
-/// 设置窗口打开时的客户区尺寸（DIP）。
-///
-/// **尺寸必须赶在窗口建出来之前就声明**：框架是「建窗 → 应用 `WindowVisuals` → `Activate`（显示）」
-/// 三步，只有第一次 publication 里就给具体值，窗口才会一出现就是最终大小；晚一步（等布局把尺寸
-/// 回报上来再缩，那条路删掉了）就会看到「先按系统默认宽度闪一下、再缩」。
-///
-/// 那一刻窗口还不存在、量不到系统默认值（试过：第一次 `view` 时枚举本进程窗口，一个都没有），
-/// 所以直接写死：本机（2560×1440、100% 缩放）系统给的默认客户区是 1912×1028，「宽取 2/3、
-/// 高不变」即 1275×1028。小屏由 [`clamp_to_work_area`] 兜住。
-const WINDOW_CLIENT_SIZE: (f64, f64) = (1275.0, 1028.0);
+// 窗口的位置 / 尺寸记忆（位置恢复、居中兜底、失焦 / 关闭时落盘）都在 `super::window`。
 
 /// 随包的使用手册：安装目录根的 `tutorial.md`（开发时就是仓库根那份，`bundled_root` 会退到那儿）。
 /// 文件不在（老版本装的包）返回 `None`，调用方只记一条日志。
 fn tutorial_path() -> Option<std::path::PathBuf> {
     let path = cloudime_platform::resources::bundled_root()?.join("tutorial.md");
     path.is_file().then_some(path)
-}
-
-/// 把想要的客户区尺寸夹进主显示器工作区（DIP），别在小屏上顶出屏幕。
-fn clamp_to_work_area((width, height): (f64, f64)) -> (f64, f64) {
-    use windows::Win32::Foundation::RECT;
-    use windows::Win32::UI::HiDpi::GetDpiForSystem;
-    use windows::Win32::UI::WindowsAndMessaging::{
-        SPI_GETWORKAREA, SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS, SystemParametersInfoW,
-    };
-
-    let mut rect = RECT::default();
-    let params = unsafe {
-        SystemParametersInfoW(
-            SPI_GETWORKAREA,
-            0,
-            Some(std::ptr::from_mut(&mut rect).cast::<core::ffi::c_void>()),
-            SYSTEM_PARAMETERS_INFO_UPDATE_FLAGS(0),
-        )
-    };
-    if params.is_err() {
-        return (width, height);
-    }
-    let scale = f64::from(unsafe { GetDpiForSystem() }.max(96)) / 96.0;
-    (
-        width.min(f64::from(rect.right - rect.left) / scale),
-        height.min(f64::from(rect.bottom - rect.top) / scale),
-    )
 }
 
 impl Component for Settings {
@@ -216,8 +67,8 @@ impl Component for Settings {
             .unwrap_or_else(|| PathBuf::from("."));
         let root = cloudime_platform::resources::bundled_root().unwrap_or_else(|| data_dir.clone());
         let (phrases, phrase_status) = phrase::load(&cloudime_platform::PhraseStore::locate(&root));
-        // 窗口一出现就居中的钩子：得赶在框架建窗之前装好（`create` 就够早，那时窗口还没建）。
-        install_center_hook();
+        // 窗口的位置 / 尺寸记忆：读一次上次的几何 + 装窗口钩子，得赶在框架建窗之前装好（`create` 就够早）。
+        window::install();
         let mut settings = Self {
             config,
             path,
@@ -576,13 +427,13 @@ impl Component for Settings {
     }
 
     fn view(&self, _input: &(), context: &mut ViewContext<Self>) -> View {
-        // 窗口一出现就挪到屏幕中央（框架没有位置接口，只能自己来）。
-        center_window_once();
+        // 窗口一出现就摆到上次的位置；没有记录（新用户）或那个位置已经不在屏幕上就居中。
+        window::place_once();
         context.window_title("云朵输入法 设置");
-        // 窗口尺寸要在「显示之前」就定好（见 WINDOW_CLIENT_SIZE）：第一次 publication 就给具体值，
+        // 窗口尺寸要在「显示之前」就定好（见 `window::initial_client_size`）：第一次 publication 就给具体值，
         // 框架建窗时就用它，用户看不到「先宽后窄」。
         // WinUI 3 的标题栏图标不会自动取 exe 里嵌的资源，得显式给 `.ico` 文件路径。
-        let (width, height) = clamp_to_work_area(WINDOW_CLIENT_SIZE);
+        let (width, height) = window::initial_client_size();
         let mut visuals = WindowVisuals::new().client_size(width, height);
         if let Some(icon) = window_icon() {
             visuals = visuals.icon(icon);

@@ -5,6 +5,8 @@
 //!   `server.<日期>.log` / `tsf.<日期>.log` / `settings.<日期>.log`，用户反馈问题时整个目录打包即可。
 //!   放本机目录有两个原因：日志本来就是这台机器的东西，不该跟账户漫游；DLL 被加载进
 //!   AppContainer 应用（任务栏搜索 / 设置）时写不了漫游目录，Server 启动时会给这个目录授权。
+//! - **本机状态** `%LOCALAPPDATA%\CloudIME`：现在只有设置窗口的位置 / 尺寸
+//!   （[`settings_window_path`]）——与日志同理，换机器不该带着走，删掉即回到默认。
 //!
 //! 只查环境变量、不碰系统 API（拿不到为 `None`）。
 
@@ -23,4 +25,14 @@ pub fn config_path() -> Option<PathBuf> {
 /// 运行日志目录 `%LOCALAPPDATA%\CloudIME\logs`，不负责创建。
 pub fn log_dir() -> Option<PathBuf> {
     std::env::var_os("LOCALAPPDATA").map(|base| PathBuf::from(base).join("CloudIME").join("logs"))
+}
+
+/// 设置窗口的位置 / 尺寸 `%LOCALAPPDATA%\CloudIME\settings-window.toml`，不负责创建。
+/// 只有设置程序读写；删掉就回到缺省位置与尺寸（见设置程序 `panel::window`）。
+pub fn settings_window_path() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|base| {
+        PathBuf::from(base)
+            .join("CloudIME")
+            .join("settings-window.toml")
+    })
 }
