@@ -527,7 +527,7 @@ end)
 
 ```lua
 cloudime.on("key", function(event)
-    if not (event.ctrl and event.vk == 84) then      -- Ctrl + T
+    if not (event.ctrl and event.alt and event.vk == 84) then  -- Ctrl + Alt + T
         return
     end
     local text = event.highlight
@@ -571,7 +571,7 @@ local function show_translation(text)
 end
 
 cloudime.on("key", function(event)
-    if not (event.ctrl and event.vk == 84) then                  -- Ctrl + T
+    if not (event.ctrl and event.alt and event.vk == 84) then                  -- Ctrl + Alt + T
         return
     end
     local text = event.highlight

@@ -1,4 +1,4 @@
--- 小牛翻译：Ctrl + T 翻**高亮候选**，译文写在候选窗底部那一行。
+-- 小牛翻译：Ctrl + Alt + T 翻**高亮候选**，译文写在候选窗底部那一行。
 --
 -- 这份是**活跃**的那个脚本（放在 Scripts\ 根部就会被加载）。`Scripts\lib\example-niutrans.lua`
 -- 是随包发出去的同一份参考（放 lib\ 里所以不会被加载）。
@@ -8,15 +8,15 @@
 --      别填进仓库里这一份 —— 这份是跟着 git 走的。仓库里放的是占位。
 --   2. 改完要**重启输入法服务**（任务栏「中 / 英」图标右键 → 重启输入法服务）才生效。
 --
--- 占位 key 按 Ctrl+T 会看到「在线翻译失败：…（鉴权失败 / 参数错误之类）」—— 那是服务端回的，
+-- 占位 key 按 Ctrl + Alt + T 会看到「在线翻译失败：…（鉴权失败 / 参数错误之类）」—— 那是服务端回的，
 -- 说明请求这条路是通的，填上真凭据就能出译文。
 
 cloudime.script{
     name        = "小牛翻译",
-    description = "Ctrl+T 翻高亮候选，译文写在候选窗底部那一行（初次使用点击编辑，然后填写user_id和user_key）",
+    description = "Ctrl + Alt + T 翻高亮候选，译文写在候选窗底部那一行（初次使用点击编辑，然后填写user_id和user_key）",
     api         = 1,
-    trigger_condition = "combination_key",   -- Ctrl+T 触发（key 事件）
-    combination_modifiers = "ctrl",          -- 要哪一套修饰键（10 选一）
+    trigger_condition = "combination_key",   -- Ctrl + Alt + T 触发（key 事件）
+    combination_modifiers = "ctrl+alt",      -- 要哪一套修饰键（10 选一）
     timeout     = 8000,      -- 单次调用墙钟上限（毫秒）：要 ≥ 下面 http_post 的时限
     sync        = false,     -- 只用异步回调
     handover    = "callback",
@@ -63,10 +63,10 @@ end
 local pending = false
 
 cloudime.on("key", function(event)
-    -- 组合键自己定：组句内外，带 Ctrl（不带 Alt / Win）的组合都会先到脚本一趟（Ctrl+字母 / Ctrl+Shift+… 都行）；
--- Alt / Win 组合到不了脚本 —— 那些在系统 / 外壳那一层，输入法也拦不到。
--- 例外：输入法自己的四个组合（Ctrl+数字 / Ctrl+回车 / Ctrl+反引号 / Shift+反引号）脚本抢不走，绑了也不生效。
-    if not (event.ctrl and event.vk == 84) then
+    -- 组合键自己定：清单里声明的那一套（这里是 Ctrl+Alt）命中就会先到脚本一趟，组句与否都一样；
+    -- 系统 / 外壳先一步处理掉的组合（Alt+Tab、Win+字母 之类）到不了脚本 —— 那种得换一套；
+    -- 例外：输入法自己的四个组合（Ctrl+数字 / Ctrl+回车 / Ctrl+反引号 / Shift+反引号）脚本抢不走，绑了也不生效。
+    if not (event.ctrl and event.alt and event.vk == 84) then
         return
     end
     if pending then
