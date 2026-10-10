@@ -591,15 +591,19 @@ Server 只按自己的语义处理 —— 谁先定义谁优先，脚本抢不�
 声明的虚拟键码（`wanted_keys` 供 Server 折成 `InputSettings.script_keys` 位图），`wants_surrounding_text()`
 从「有没有 `key` 脚本」推出 `InputSettings.script_wants_text`。Server 这边两处用它：`RouterConfig::from` 不收，
 `input_settings()` 里 `combination_key_masks()` 折成 `InputSettings.script_key_modifiers`、`config::script_key_bits()`
-把 `wanted_keys()` 折成 `script_keys`（虚拟键码的 256 位位图；DLL 据此在没组句时也送这些键，**精确到键、不看修饰键**，
-见 `wants_declared_key`）；
+把 `wanted_keys()` 折成 `script_keys`（虚拟键码的 256 位位图；DLL 据此在没组句时也送这些键，
+**只认不带修饰键的那些按下** —— 组合键归应用，见 `wants_declared_key`）；
 `Router::tick` 里 `poll_script_time()` 先问 `Runtime::sys_time_due()`（本地整分去重，没有 `sys_time` 脚本时
 一次都不花），到点就 `dispatch("time", time_payload(focused_app()), …)` 并按「没有按键的那一拍」落地
 （`apply_common_actions` + 重画；载荷同 `get_time()` 另加 `app`）。`cloudime.foreground_app()` 与那个 `app`
 读的都是 `Router::sync_focused_app` 维护的快照（焦点一变就刷新：`ensure_focus` 与两处断开焦点）。
-DLL 那边：`would_eat` 命中声明的修饰键或声明的键（`wants_script_key` / `wants_declared_key`）就答「吃」，
+DLL 那边：`would_eat` 命中声明的修饰键（`wants_script_key`）或声明的键**本身**（`wants_declared_key`，
+只认**不带** Ctrl / Alt / Shift / Win 的那些按下 —— 组合键原样归应用）就答「吃」，
 Server 回 Passthrough 时用 `SendInput` `replay_to_app` 把键还回应用（`SendInput` 只注键本身，修饰键按用户手上还按着的算），
 并给 `replaying` 打标记让下一次 `OnTestKeyDown` 别重复吃（`is_replay`，别的键先到就作废）。
+**为什么要排除带修饰键的键**（2026-10-10 真机：OpenCode 里 `Shift+Enter` 不换行）：
+`keys = { "enter" }` 连 `Shift+Enter` 一起吃掉，Server 没接管后重放，而带修饰键走的是下面的**立刻注入** ——
+Chromium 把「物理键还按着时注入的同名键」当自动重复，宿主一个 `event.repeat` 就把这一键丢了。
 **重放延后**：**不带修饰键的键**（`Enter` / `Tab` 这类）延后 ~150ms（`event.rs::send_key_deferred` 起个小线程）——
 物理键还按着那一刻注入同名键会被系统标成「自动重复」（`lParam` previous-state 位），Chromium 系（Electron）
 直接丢掉这个键（真机：OpenCode 里回车失效）；等物理键松开再注入就不是重复键了。**带修饰键的组合**
@@ -835,8 +839,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 TSF 那边 `key_sink::would_eat` / `eats_key` 在**组句里**（候选窗显示着）把带 Ctrl（不带 Alt / Win）的组合先送进 Server 问一趟
 （以前是个白名单：数字 / 回车 / 反引号 / T）—— 脚本才绑得上任意 `Ctrl` 组合；没人绑时 Server 回
 `Passthrough`，按键照旧交给应用。**没在组句时**默认一律归应用（`Ctrl+A` / `Ctrl+C` 这类快捷键不能被输入法吃掉），
-只有脚本声明过的那几套修饰键（`combination_key`，DLL 的 `wants_script_key`）与那几个具体的键（`key`，
-DLL 的 `wants_declared_key`）才先问一趟（见「用户脚本」一节的触发条件）。`Alt` / `Win` 不碰
+只有脚本声明过的那几套修饰键（`combination_key`，DLL 的 `wants_script_key`）与那几个具体的键本身（`key`，
+DLL 的 `wants_declared_key`，**不带修饰键时**）才先问一趟（见「用户脚本」一节的触发条件）。`Alt` / `Win` 不碰
 （AltGr = Ctrl+Alt、Win 是系统键，都在外壳那一层）。
 随包在安装目录 `Scripts\lib\` 下给两样东西做这件事：`md5.lua`（纯 Lua MD5，只依赖 LuaJIT 的 `bit`，
 拿 RFC 1321 向量回归）与 `example-niutrans.lua`（完整示例）；`lib\` 是子目录，加载器不认，所以不会被执行。

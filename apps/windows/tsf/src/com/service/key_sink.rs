@@ -197,6 +197,7 @@ impl TextService_Impl {
         let shift_letter_compose = input.is_some_and(|input| input.shift_letter_compose);
         let full_width_chars = input.is_some_and(|input| input.full_width_chars);
         // 脚本声明要的键（清单 `keys`）：没组句也先问一趟 Server —— 脚本不吃就重放回应用。
+        // 只认**不带修饰键**的按键（见 [`wants_declared_key`]）：`Shift+Enter` 这类组合原样归应用。
         if input.is_some_and(|input| wants_declared_key(event, input.script_keys)) {
             return true;
         }
@@ -415,7 +416,16 @@ fn modifier_mask(event: &KeyEvent) -> u8 {
 
 /// 这个键是不是脚本声明要的（`InputSettings.script_keys` 位图，见清单的 `keys`）：
 /// 是就**没组句也先问一趟 Server**（脚本不吃就重放回应用）。
+///
+/// **只认不带修饰键的按键**（Ctrl / Alt / Shift / Win 一个都没按）：`keys` 声明的是「这个具体的键」
+/// 本身，要组合键得写清单的 `combination_modifiers`。带修饰键的键必须原样归应用 —— 这里答「吃」，
+/// 应用就再也拿不到，只能靠重放还回去；而重放回去的键应用未必还认（物理键还按着时注入的同名键会被
+/// 系统当成自动重复，Chromium 系直接丢掉、`event.repeat` 也是 `true`），表现成「按了这一键没反应」
+/// —— 真机：OpenCode 输入框里 `Shift+Enter` 不换行。
 fn wants_declared_key(event: &KeyEvent, keys: [u64; 4]) -> bool {
+    if event.modifiers.has_command_key() || event.modifiers.shift {
+        return false;
+    }
     let vk = event.virtual_key as usize;
     vk < 256 && keys[vk / 64] & (1u64 << (vk % 64)) != 0
 }
@@ -535,10 +545,6 @@ mod tests {
     /// 脚本声明的键（`keys` → `InputSettings.script_keys` 位图）：命中的才在没组句时也送来问一趟。
     #[test]
     fn only_the_declared_keys_are_sent() {
-        let ctrl = KeyModifiers {
-            ctrl: true,
-            ..KeyModifiers::default()
-        };
         // 声明了 Enter（0x0D）
         let mut keys = [0u64; 4];
         keys[0] |= 1u64 << 13;
@@ -546,10 +552,6 @@ mod tests {
             &KeyEvent::new(0x0D, None, KeyModifiers::default()),
             keys
         ));
-        assert!(
-            wants_declared_key(&KeyEvent::new(0x0D, None, ctrl), keys),
-            "带着修饰键也算（声明的是键，不是组合）"
-        );
         assert!(
             !wants_declared_key(
                 &KeyEvent::new(0x41, Some('a'), KeyModifiers::default()),
@@ -564,6 +566,72 @@ mod tests {
             ),
             "一个都没声明"
         );
+    }
+
+    /// 声明的是「键本身」：带修饰键的组合一律归应用（要组合键得写清单的 `combination_modifiers`）。
+    /// 吃掉再重放回去的键，应用未必还认（注入时物理键还按着 → 被当自动重复丢掉），
+    /// 所以这一层不能把 `Shift+Enter` 这类组合吞进来。
+    #[test]
+    fn declared_keys_leave_modifier_combinations_to_the_app() {
+        let mut keys = [0u64; 4];
+        keys[0] |= 1u64 << 13;
+        for (name, modifiers) in [
+            (
+                "ctrl",
+                KeyModifiers {
+                    ctrl: true,
+                    ..KeyModifiers::default()
+                },
+            ),
+            (
+                "shift",
+                KeyModifiers {
+                    shift: true,
+                    ..KeyModifiers::default()
+                },
+            ),
+            (
+                "alt",
+                KeyModifiers {
+                    alt: true,
+                    ..KeyModifiers::default()
+                },
+            ),
+            (
+                "win",
+                KeyModifiers {
+                    win: true,
+                    ..KeyModifiers::default()
+                },
+            ),
+        ] {
+            assert!(
+                !wants_declared_key(&KeyEvent::new(0x0D, None, modifiers), keys),
+                "带 {name} 的组合归应用"
+            );
+        }
+        // Caps Lock 亮着、英文模式都不是「按着的修饰键」：照样是声明的那个键
+        for (name, modifiers) in [
+            (
+                "caps",
+                KeyModifiers {
+                    caps: true,
+                    ..KeyModifiers::default()
+                },
+            ),
+            (
+                "english_mode",
+                KeyModifiers {
+                    english_mode: true,
+                    ..KeyModifiers::default()
+                },
+            ),
+        ] {
+            assert!(
+                wants_declared_key(&KeyEvent::new(0x0D, None, modifiers), keys),
+                "{name} 不影响"
+            );
+        }
     }
 
     /// 修饰键**本身**一律不吃（`Ctrl` / `Alt` / `Shift` / `Win` 左右键）：吃了它，后面那个键在 TSF
