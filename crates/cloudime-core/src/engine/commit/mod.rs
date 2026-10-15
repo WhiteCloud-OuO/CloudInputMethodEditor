@@ -221,6 +221,7 @@ impl Engine {
             kind: CandidateKind::Chinese,
             syllables,
             reading: None,
+            auxiliary: None,
         };
         if !self.knows_word(&candidate)
             && self.learner.choice_weight(&key, &candidate.text) >= AUTO_WORD_THRESHOLD_SAME_BUFFER
@@ -317,6 +318,10 @@ impl Engine {
 
     /// 这个候选上屏算接受了哪些音节级敲错：纠错读法按那处编辑换算，普通读法靠对齐时对上的敲错变体。
     pub(super) fn accepted_typos(&self, candidate: &Candidate) -> Vec<(String, String)> {
+        // 双键拼音下敲的不是拼音本身（`vhgo` 对 `zhong'guo`），「敲错」这套对不上，不记
+        if self.shuangpin.is_some() {
+            return Vec::new();
+        }
         let keys = self.composition.scope();
         if let Some(correction) = self.correction_reading_for(keys, &candidate.syllables) {
             let alignment = self.align(&correction.corrected, &candidate.syllables);
@@ -372,6 +377,17 @@ impl Engine {
     /// 纠错读法按纠正后的拼音算，再按那处编辑换算回原串。
     pub(super) fn consumed_by(&self, candidate: &Candidate) -> (usize, String) {
         let keys = self.composition.scope();
+        // 双键拼音：敲的不是拼音本身（`vhgo` → `zhong'guo`），按「两键一个音节（+ 辅助码）」
+        // 把候选的音节数换算回按键字节数 —— 否则选完候选，拼音串里原来那些按键还留着。
+        // 候选**末音节只按了第一个键**时（`yzd` 的「云朵」：`d` 是「朵」的声母）按键也还没按全，
+        // `typed_covered` 把这半个音节的键也算上；落到下面全拼那套（拿按键当拼音去对齐）
+        // 只会吃掉一两个键，拼音串里会残留半截按键。
+        if let Some(table) = &self.shuangpin {
+            let consumed = table
+                .typed_covered(&self.composition.typed_scope(), candidate.syllables.len())
+                .min(keys.len());
+            return (consumed, choice_key(keys, consumed));
+        }
         let consumed = match self.correction_reading_for(keys, &candidate.syllables) {
             Some(correction) => correction
                 .edit
@@ -556,6 +572,7 @@ impl Engine {
             kind: CandidateKind::Chinese,
             syllables: joined_syllables,
             reading: None,
+            auxiliary: None,
         };
         if self.knows_word(&candidate) {
             return;

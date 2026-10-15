@@ -96,6 +96,30 @@ pub(crate) struct Settings {
     /// 「主题」页选中的主题名（去 `.json`）。
     theme_selected: Option<String>,
 
+    /// 「输入」页：双键拼音方案目录里扫到的方案（按文件名升序；读不出来的也列着，带原因）。
+    scheme_entries: Vec<cloudime_platform::input_schemes::SchemeEntry>,
+
+    /// 「输入」页：当前用的双键拼音方案 id（存在 `use_input_scheme.cfg` 里）。
+    scheme_current: Option<String>,
+
+    /// 「输入」页：`AuxiliaryCodes\` 下的辅助码方案文件（含后缀，按名升序）。
+    auxiliary_files: Vec<String>,
+
+    /// 「输入」页：当前选的辅助码方案（`use_input_scheme.cfg` 的 `auxiliary` 行）；`None` = 不用。
+    auxiliary_selected: Option<String>,
+
+    /// 「输入」页：双键拼音的「中英文混合输入」（`use_input_scheme.cfg` 的 `mixture_input`，缺省开）。
+    scheme_mixture_input: bool,
+
+    /// 「输入」页：双键拼音的「在候选项显示辅助码」（`use_input_scheme.cfg` 的 `candidate_auxiliary`，缺省关）。
+    candidate_auxiliary: bool,
+
+    /// 「输入」页：什么时候显示键位映射参考（`use_input_scheme.cfg` 的 `key_map_reference`）。
+    key_map_reference: cloudime_platform::input_schemes::KeyMapReference,
+
+    /// 「输入」页：键位映射参考的组合键（`use_input_scheme.cfg` 的 `key_map_hotkey`）。
+    key_map_hotkey: cloudime_platform::input_schemes::KeyMapHotkey,
+
     /// 「主题」页正在编辑的草稿；点「确认保存」才落盘。
     theme_draft: ThemeFile,
 
@@ -189,6 +213,207 @@ impl Settings {
         {
             self.theme_selected = None;
         }
+    }
+
+    /// 扫一遍双键拼音方案目录，并定下当前方案：目录空（或不存在）先把内置样例写出来。
+    /// 顺带列一遍辅助码方案（`AuxiliaryCodes\`）与当前选的那份。
+    fn refresh_schemes(&mut self) {
+        let Some(dir) = cloudime_platform::input_schemes::double_keys_dir() else {
+            self.scheme_entries.clear();
+            self.scheme_current = None;
+            self.auxiliary_files.clear();
+            self.auxiliary_selected = None;
+            self.scheme_mixture_input = true;
+            self.candidate_auxiliary = false;
+            self.key_map_reference = cloudime_platform::input_schemes::KeyMapReference::Off;
+            self.key_map_hotkey = cloudime_platform::input_schemes::KeyMapHotkey::default();
+            return;
+        };
+        if let Err(error) = cloudime_platform::input_schemes::ensure_sample(&dir) {
+            crate::log::warn(format!("写双键拼音样例失败: {error}"));
+        }
+        self.scheme_entries = cloudime_platform::input_schemes::list(&dir);
+        self.scheme_current =
+            cloudime_platform::input_schemes::resolve_current(&dir, &self.scheme_entries);
+        self.auxiliary_files = cloudime_platform::input_schemes::list_auxiliary(&dir);
+        self.auxiliary_selected = cloudime_platform::input_schemes::read_auxiliary(&dir);
+        self.scheme_mixture_input = cloudime_platform::input_schemes::read_mixture_input(&dir);
+        self.candidate_auxiliary = cloudime_platform::input_schemes::read_candidate_auxiliary(&dir);
+        self.key_map_reference = cloudime_platform::input_schemes::read_key_map_reference(&dir);
+        self.key_map_hotkey = cloudime_platform::input_schemes::read_key_map_hotkey(&dir);
+    }
+
+    /// 方案 / 辅助码方案一改：把 `input_schemes` **原样再写一遍**，Server 才会顺着配置热加载重读方案文件。
+    fn reload_scheme_for_server(&mut self, prefix: &str) {
+        let scheme = self.config.input.input_schemes;
+        self.save("input", "input_schemes", scheme.key());
+        self.notice.note = Some(format!("{prefix}输入法服务会重读方案文件。"));
+    }
+
+    /// 换当前双键拼音方案：写 `use_input_scheme.cfg`（`config.toml` 只管「哪一类输入方案」，不动它）。
+    fn pick_dual_key_scheme(&mut self, index: usize) {
+        let Some(entry) = self.scheme_entries.get(index) else {
+            return;
+        };
+        let (id, label) = (entry.id.clone(), entry.label());
+        let Some(dir) = cloudime_platform::input_schemes::double_keys_dir() else {
+            self.notice.error = Some("找不到安装目录，换不了方案。".to_owned());
+            return;
+        };
+        match cloudime_platform::input_schemes::set_current(&dir, &id) {
+            Ok(()) => {
+                self.scheme_current = Some(id);
+                self.notice.note = Some(format!("双键拼音已记下「{label}」；点「应用方案」生效。"));
+            }
+            Err(error) => {
+                self.notice.error = Some(format!("写 use_input_scheme.cfg 失败：{error}"));
+            }
+        }
+    }
+
+    /// 「应用方案」：把 `input_schemes` **原样再写一遍** —— 文件 mtime 一变，Server 就顺着「配置热加载」
+    /// 那条路重读方案文件并重挂表（同值也写，否则 Server 不会重读）。**方案文件本身不做热加载**。
+    /// 顺便**重启输入法服务**：方案里 `WordBank` 指的词库只有重新装配才接得上（热加载不重装配词库）。
+    fn apply_dual_key_scheme(&mut self) {
+        self.refresh_schemes();
+        let scheme = self.config.input.input_schemes;
+        self.save("input", "input_schemes", scheme.key());
+        self.notice.note = match crate::server::restart() {
+            Ok(()) => Some("已应用：正在重启输入法服务（顺带重新装配词库）。".to_owned()),
+            Err(message) => {
+                self.notice.error = Some(format!("已写入配置，但重启输入法服务失败：{message}"));
+                None
+            }
+        };
+    }
+
+    /// 「使用辅助码」开关：改写当前方案文件的 `[Auxiliary] UsingAuxiliaryCodes`，再让 Server 重读。
+    fn set_auxiliary_codes(&mut self, on: bool) {
+        let Some(path) = self.scheme_current.as_ref().and_then(|current| {
+            self.scheme_entries
+                .iter()
+                .find(|entry| &entry.id == current)
+                .map(|entry| entry.path.clone())
+        }) else {
+            self.notice.error = Some("还没有正在使用的方案，先点「刷新方案」。".to_owned());
+            return;
+        };
+        if let Err(error) = cloudime_platform::input_schemes::set_using_auxiliary_codes(&path, on) {
+            self.notice.error = Some(format!("写方案文件失败：{error}"));
+            return;
+        }
+        self.refresh_schemes();
+        // 方案文件本身不热加载：把 `input_schemes` 原样再写一遍，Server 才会重读它
+        let mut prefix = format!("已{}辅助码", if on { "打开" } else { "关闭" });
+        if on && self.auxiliary_selected.is_none() {
+            prefix.push_str("（还没选辅助码方案，选一个才会真的筛候选）");
+        }
+        prefix.push('；');
+        self.reload_scheme_for_server(&prefix);
+    }
+
+    /// 「中英文混合输入」（双键拼音那份）：写 `use_input_scheme.cfg` 的 `mixture_input` 行，再让 Server 重读。
+    fn set_scheme_mixture_input(&mut self, on: bool) {
+        let Some(dir) = cloudime_platform::input_schemes::double_keys_dir() else {
+            self.notice.error = Some("找不到安装目录，改不了。".to_owned());
+            return;
+        };
+        match cloudime_platform::input_schemes::set_mixture_input(&dir, on) {
+            Ok(()) => {
+                self.scheme_mixture_input = on;
+                let state = if on { "打开" } else { "关闭" };
+                self.reload_scheme_for_server(&format!("已{state}双键拼音的中英文混合输入；"));
+            }
+            Err(error) => {
+                self.notice.error = Some(format!("写 use_input_scheme.cfg 失败：{error}"));
+            }
+        }
+    }
+
+    /// 「辅助码方案」下拉：写 `use_input_scheme.cfg` 的 `auxiliary` 行（第 0 项是「（不使用）」）。
+    fn pick_auxiliary_scheme(&mut self, index: usize) {
+        let name = index
+            .checked_sub(1)
+            .and_then(|index| self.auxiliary_files.get(index))
+            .cloned();
+        let Some(dir) = cloudime_platform::input_schemes::double_keys_dir() else {
+            self.notice.error = Some("找不到安装目录，换不了辅助码方案。".to_owned());
+            return;
+        };
+        match cloudime_platform::input_schemes::set_auxiliary(&dir, name.as_deref()) {
+            Ok(()) => {
+                let label = name.clone().unwrap_or_else(|| "（不使用）".to_owned());
+                self.auxiliary_selected = name;
+                self.reload_scheme_for_server(&format!("辅助码方案已记下「{label}」；"));
+            }
+            Err(error) => {
+                self.notice.error = Some(format!("写 use_input_scheme.cfg 失败：{error}"));
+            }
+        }
+    }
+
+    /// 「在候选项显示辅助码」：写 `use_input_scheme.cfg` 的 `candidate_auxiliary` 行，再让 Server 重读。
+    fn set_candidate_auxiliary(&mut self, on: bool) {
+        let Some(dir) = cloudime_platform::input_schemes::double_keys_dir() else {
+            self.notice.error = Some("找不到安装目录，改不了。".to_owned());
+            return;
+        };
+        match cloudime_platform::input_schemes::set_candidate_auxiliary(&dir, on) {
+            Ok(()) => {
+                self.candidate_auxiliary = on;
+                let state = if on { "打开" } else { "关闭" };
+                self.reload_scheme_for_server(&format!("已{state}「在候选项显示辅助码」；"));
+            }
+            Err(error) => {
+                self.notice.error = Some(format!("写 use_input_scheme.cfg 失败：{error}"));
+            }
+        }
+    }
+
+    /// 「键位映射参考」开关：写 `use_input_scheme.cfg` 的 `key_map_reference` 行，再让 Server 重读。
+    fn set_key_map_reference(&mut self, mode: cloudime_platform::input_schemes::KeyMapReference) {
+        let Some(dir) = cloudime_platform::input_schemes::double_keys_dir() else {
+            self.notice.error = Some("找不到安装目录，改不了。".to_owned());
+            return;
+        };
+        match cloudime_platform::input_schemes::set_key_map_reference(&dir, mode) {
+            Ok(()) => {
+                self.key_map_reference = mode;
+                self.reload_scheme_for_server(&format!("键位映射参考：{}；", mode.label()));
+            }
+            Err(error) => {
+                self.notice.error = Some(format!("写 use_input_scheme.cfg 失败：{error}"));
+            }
+        }
+    }
+
+    /// 「键位映射参考组合键」：同上，只是写 `key_map_hotkey` 那一行。
+    fn set_key_map_hotkey(&mut self, hotkey: cloudime_platform::input_schemes::KeyMapHotkey) {
+        let Some(dir) = cloudime_platform::input_schemes::double_keys_dir() else {
+            self.notice.error = Some("找不到安装目录，改不了。".to_owned());
+            return;
+        };
+        match cloudime_platform::input_schemes::set_key_map_hotkey(&dir, hotkey) {
+            Ok(()) => {
+                self.key_map_hotkey = hotkey;
+                self.reload_scheme_for_server(&format!("键位映射参考组合键：{}；", hotkey.value()));
+            }
+            Err(error) => {
+                self.notice.error = Some(format!("写 use_input_scheme.cfg 失败：{error}"));
+            }
+        }
+    }
+
+    /// 打开双键拼音方案目录：不存在就建，空目录先写出内置样例（免得打开一看是空的）。
+    fn open_dual_key_scheme_dir(&mut self) {
+        let Some(dir) = cloudime_platform::input_schemes::double_keys_dir() else {
+            self.notice.error = Some("找不到用户目录（%APPDATA%）。".to_owned());
+            return;
+        };
+        if let Err(error) = cloudime_platform::input_schemes::ensure_sample(&dir) {
+            crate::log::warn(format!("写双键拼音样例失败: {error}"));
+        }
+        crate::panel::controls::open_with_explorer(&dir.to_string_lossy());
     }
 
     /// 选中某个主题：读进草稿，清掉「新建」名字框。

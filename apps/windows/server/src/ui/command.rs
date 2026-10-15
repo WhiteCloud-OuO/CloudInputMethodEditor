@@ -24,4 +24,13 @@ pub(super) enum UiCommand {
 
     /// 换渲染器（字体 / 主题变了才重建）。
     Configure(Box<RenderSettings>),
+
+    /// 开关「辅助窗口」（`auxiliary_window`，眼下是键位映射参考）：挂在配置的组合键上。
+    AuxiliaryToggle,
+
+    /// 换「辅助窗口」的显示方式（`use_input_scheme.cfg` 的 `key_map_reference`）。
+    AuxiliaryMode(cloudime_platform::input_schemes::KeyMapReference),
+
+    /// 换「辅助窗口」显示的内容（键位映射参考的键盘版面）。
+    AuxiliaryKeyMap(cloudime_platform::input_schemes::KeyMapLayout),
 }

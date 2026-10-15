@@ -1,4 +1,4 @@
-/// 候选窗口的一行：序号、候选词、annotation 片段、右侧来源角标。
+/// 候选窗口的一行：序号、候选词、annotation 片段、右侧来源角标、紧跟候选词的辅助码。
 use super::tone::Tone;
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -14,6 +14,10 @@ pub struct Row {
 
     /// 右侧来源角标（用户短语「短」/ 用户自造词「造」），没有为 `None`；右对齐到候选那一格的圆角矩形内。
     pub badge: Option<String>,
+
+    /// 紧跟候选词的辅助码（`[XH]` 这样），与候选词**隔一个空格**；字体与颜色跟角标一致。
+    /// 没有为 `None`（见 `docs/design/input-schemes.md` §4）。
+    pub auxiliary: Option<String>,
 }
 
 impl Row {
@@ -24,6 +28,7 @@ impl Row {
             text: text.into(),
             annotation: Vec::new(),
             badge: None,
+            auxiliary: None,
         }
     }
 }

@@ -95,8 +95,26 @@ pub struct Engine {
     /// 使用简拼（配置 `[input] use_jian_pin`，缺省开）：关掉只认完整音节与末尾没打完的前缀。
     use_jian_pin: bool,
 
+    /// 双键拼音的键位表（配置 `[input] input_schemes = "dual_key_pinyin"` 时挂上）；
+    /// `None` = 全键拼音。表由 `cloudime-platform` 从方案文件读出来后转成
+    /// [`crate::shuangpin::Table`] 交进来 —— Core 不读文件。
+    shuangpin: Option<crate::shuangpin::Table>,
+
+    /// 辅助码表（方案里 `UsingAuxiliaryCodes` 开着时挂上）：只用来**筛选**候选，不参与排序。
+    /// 同样由 `cloudime-platform` 读文件后注入（Core 只认 trait）。
+    auxiliary_codes: Option<Box<dyn crate::shuangpin::AuxiliaryTable>>,
+
+    /// 双键拼音下「显示原始输入按键」（配置 `[input] show_raw_input`，缺省开）：
+    /// 拼音行显示敲的按键、未选候选回车也上屏原始按键；关掉则显示 / 上屏展开后的完整拼音。
+    show_raw_input: bool,
+
     /// 中英混合输入（配置 `[input] mixture_input`，缺省开）：中文模式下也出英文词与英文补全。
     mixture_input: bool,
+
+    /// 双键拼音下的「中英混合输入」（`use_input_scheme.cfg` 的 `mixture_input`，缺省开）：
+    /// 开着才**按敲的原始按键**匹配英文词（整段英文词 + 前缀补全，不纠错）；关着一律不匹配。
+    /// 与上面那份各管各的 —— 这一项在方案目录的 `.cfg` 里，不进 `config.toml`。
+    shuangpin_mixture_input: bool,
 
     /// 英文候选的大小写档位（反引号轮换）：每次开一段新拼音回到原样。
     english_case: EnglishCase,
@@ -299,7 +317,11 @@ impl Engine {
             punctuation: Punctuation::default(),
             full_width_punctuation: true,
             use_jian_pin: true,
+            shuangpin: None,
+            auxiliary_codes: None,
+            show_raw_input: true,
             mixture_input: true,
+            shuangpin_mixture_input: true,
             english_case: EnglishCase::Lower,
             association_counts: MAX_ASSOCIATION_COUNTS,
             calculator: false,

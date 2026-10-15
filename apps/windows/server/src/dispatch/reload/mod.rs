@@ -122,6 +122,24 @@ impl Router {
         self.set_script_config(config);
         self.engine.set_fuzzy(config.input.fuzzy_rules());
         self.engine.set_use_jian_pin(config.input.use_jian_pin);
+        // 双键拼音：换配置时一并重挂（切走就把表清掉）
+        self.engine.set_shuangpin(
+            (config.input.input_schemes == cloudime_platform::InputScheme::DualKeyPinyin)
+                .then(cloudime_platform::input_schemes::current_table)
+                .flatten(),
+        );
+        self.engine.set_auxiliary_codes(
+            (config.input.input_schemes == cloudime_platform::InputScheme::DualKeyPinyin)
+                .then(cloudime_platform::input_schemes::current_auxiliary_boxed)
+                .flatten(),
+        );
+        self.engine.set_show_raw_input(config.input.show_raw_input);
+        // 双键拼音单独一份「中英混合输入」（`use_input_scheme.cfg`，不进 `config.toml`）
+        self.engine
+            .set_shuangpin_mixture_input(cloudime_platform::input_schemes::mixture_input());
+        // 方案换了：「辅助窗口」的键位映射参考也跟着换一份（内容）
+        self.candidates
+            .set_auxiliary(cloudime_platform::input_schemes::key_map_layout());
         self.engine.set_mixture_input(config.input.mixture_input);
         self.engine
             .set_punctuation_mapping(config.input.punctuation_mapping());
@@ -158,6 +176,10 @@ impl Router {
         self.config.full_width_punctuation = full_width_punctuation;
         self.config.english_full_width_punctuation = english_full_width_punctuation;
         self.config.full_width_chars = full_width_chars;
+        // 「辅助窗口」的显示方式跟着新配置走（`use_input_scheme.cfg` 的 `key_map_reference`）：
+        // 换成「始终跟随候选窗口」时这会儿就把资产带上，不用等下一次组句。
+        self.candidates
+            .set_auxiliary_mode(self.config.key_map_reference);
         let settings = self.config.render_settings();
         // 别拿 `settings != previous` 当门：那种 `previous` 是拿**此刻磁盘上的主题文件**读出来的，主题文件
         // 先被「确认保存」改过时它已经是新主题，两边相等就把「重新应用同一个主题」吞掉（只有换主题才生效）。

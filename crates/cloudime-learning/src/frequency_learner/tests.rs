@@ -7,6 +7,7 @@ fn candidate(text: &str) -> Candidate {
         kind: cloudime_core::CandidateKind::Chinese,
         syllables: Vec::new(),
         reading: None,
+        auxiliary: None,
     }
 }
 
@@ -74,6 +75,7 @@ fn unrecord_reverses_each_kind_of_record() {
         kind: cloudime_core::CandidateKind::Chinese,
         syllables: vec!["kai".into(), "fang".into()],
         reading: None,
+        auxiliary: None,
     };
     learner.record(&candidate);
     learner.record_choice("kaifa", "开放");

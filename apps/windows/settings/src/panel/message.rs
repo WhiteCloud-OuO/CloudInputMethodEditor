@@ -7,7 +7,33 @@ pub(crate) enum Message {
     Navigate(Option<String>),
 
     // 输入页
+    /// 输入方案（`InputScheme::ALL` 的下标；`None` 是取消选中，忽略）。
+    InputScheme(Option<usize>),
+    /// 双键拼音用哪一份方案（`Settings::scheme_entries` 的下标；写 `use_input_scheme.cfg`）。
+    DualKeyScheme(Option<usize>),
+    /// 重新扫一遍双键拼音方案目录。
+    RefreshDualKeySchemes,
+    /// 让输入法服务重新读方案文件并重挂（写一遍 `input_schemes`，走配置热加载那条路）。
+    ApplyDualKeyScheme,
+    /// 打开双键拼音方案目录（不存在就建，空目录先写出内置样例）。
+    OpenDualKeySchemeDir,
+    /// 双键拼音当前方案用不用辅助码（改方案文件的 `[Auxiliary] UsingAuxiliaryCodes`）。
+    AuxiliaryCodes(bool),
+    /// 用哪个辅助码方案（`AuxiliaryCodes\` 文件列表的下标，第 0 项是「（不使用）」；写 `use_input_scheme.cfg`）。
+    AuxiliaryScheme(Option<usize>),
+    /// 双键拼音的「中英文混合输入」（写 `use_input_scheme.cfg` 的 `mixture_input`，不进 `config.toml`）。
+    DualKeyMixtureInput(bool),
+    /// 双键拼音的「在候选项显示辅助码」（写 `use_input_scheme.cfg` 的 `candidate_auxiliary`）。
+    CandidateAuxiliary(bool),
+    /// 什么时候显示键位映射参考（写 `use_input_scheme.cfg` 的 `key_map_reference`）。
+    KeyMapReference(cloudime_platform::input_schemes::KeyMapReference),
+    /// 键位映射参考的修饰键（写 `use_input_scheme.cfg` 的 `key_map_hotkey`）。
+    KeyMapHotkeyModifiers(cloudime_platform::input_schemes::KeyMapModifiers),
+    /// 键位映射参考的功能键（同上）。
+    KeyMapHotkeyKey(cloudime_platform::input_schemes::KeyMapKey),
     UseJianPin(bool),
+    /// 双键拼音下显示原始输入按键（`[input] show_raw_input`）。
+    ShowRawInput(bool),
     /// 模糊音位下标（见 `MO_HU_YIN_BITS`）+ 新值。
     MoHuYin(usize, bool),
     SimpTrad(Option<usize>),

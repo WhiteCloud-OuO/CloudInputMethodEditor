@@ -21,6 +21,46 @@ impl Engine {
         self.use_jian_pin
     }
 
+    /// 双键拼音：挂上当前方案的键位表（`None` = 用全键拼音）。换表等于换一套切分，格子缓存一起作废。
+    pub fn set_shuangpin(&mut self, table: Option<crate::shuangpin::Table>) {
+        if self.shuangpin != table {
+            self.forget_span_cache();
+        }
+        self.shuangpin = table;
+    }
+
+    /// 当前挂着的双键拼音键位表（`None` = 全键拼音）。
+    pub fn shuangpin(&self) -> Option<&crate::shuangpin::Table> {
+        self.shuangpin.as_ref()
+    }
+
+    /// 辅助码表：只筛选候选（不排序）。`None` = 不筛。
+    pub fn set_auxiliary_codes(
+        &mut self,
+        table: Option<Box<dyn crate::shuangpin::AuxiliaryTable>>,
+    ) {
+        if self.auxiliary_codes.is_some() != table.is_some() {
+            self.forget_span_cache();
+        }
+        self.auxiliary_codes = table;
+    }
+
+    /// 当前挂着的辅助码表。
+    pub fn auxiliary_codes(&self) -> Option<&dyn crate::shuangpin::AuxiliaryTable> {
+        self.auxiliary_codes.as_deref()
+    }
+
+    /// 双键拼音下「显示原始输入按键」（缺省 `true`）：拼音行显示敲的按键（`ypdo`）、
+    /// 未选候选回车也上屏原始按键；`false` 时显示 / 上屏展开后的完整拼音（`yun'duo`）。
+    pub fn set_show_raw_input(&mut self, on: bool) {
+        self.show_raw_input = on;
+    }
+
+    /// 见 [`Self::set_show_raw_input`]。
+    pub fn show_raw_input(&self) -> bool {
+        self.show_raw_input
+    }
+
     /// 中英混合输入（配置 `[input] mixture_input`，缺省开）：关掉中文模式不再出英文词与英文补全。
     pub fn set_mixture_input(&mut self, on: bool) {
         if self.mixture_input != on {
@@ -31,6 +71,22 @@ impl Engine {
 
     pub fn mixture_input(&self) -> bool {
         self.mixture_input
+    }
+
+    /// 双键拼音下的「中英混合输入」（`use_input_scheme.cfg` 的 `mixture_input`，缺省开）：
+    /// 开着才按敲的**原始按键**匹配英文词（整段英文词 + 前缀补全，不纠错）；关掉一律不匹配。
+    /// 与全键拼音那份（[`Self::set_mixture_input`]）互不相干 —— 这一项在方案目录的 `.cfg` 里，
+    /// **不进 `config.toml`**（见 `docs/design/input-schemes.md` §4）。
+    pub fn set_shuangpin_mixture_input(&mut self, on: bool) {
+        if self.shuangpin_mixture_input != on {
+            self.forget_span_cache();
+        }
+        self.shuangpin_mixture_input = on;
+    }
+
+    /// 见 [`Self::set_shuangpin_mixture_input`]。
+    pub fn shuangpin_mixture_input(&self) -> bool {
+        self.shuangpin_mixture_input
     }
 
     /// 英文候选当前的大小写档位。

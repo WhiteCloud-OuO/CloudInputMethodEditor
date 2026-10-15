@@ -258,9 +258,9 @@ fn english_mode_suggests_from_the_word_list_and_keeps_the_typed_text() {
     assert!(engine.composition().is_empty());
     engine.set_input("comp");
     assert_eq!(texts_of(&engine), ["compare", "company"]);
-    // 拼错一个字母也有候选；回车原样上屏敲的字母
+    // 不做拼错纠正：`helo` 一个候选都没有；回车原样上屏敲的字母
     engine.set_input("helo");
-    assert_eq!(texts_of(&engine), ["hello", "help"]);
+    assert!(texts_of(&engine).is_empty());
     assert_eq!(engine.take_raw(), "helo");
     // 离开英文模式后同一串又按拼音算
     engine.set_english_mode(false);

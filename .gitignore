@@ -25,3 +25,5 @@ git-push.ps1
 clear-products.ps1
 .gitignore
 /WanXiang
+# 双键拼音方案目录（开发布局：仓库根；装机在安装目录，安装程序会建好并授权）
+/InputSchemes

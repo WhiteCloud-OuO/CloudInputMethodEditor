@@ -69,6 +69,7 @@ impl RenderData {
         frame: &Frame,
         badges: &[Option<char>],
         index_style: ItemNumberStyle,
+        candidate_auxiliary: bool,
     ) {
         self.layout = frame.layout;
         self.columns = frame.columns;
@@ -103,6 +104,7 @@ impl RenderData {
                             candidate,
                             badges.get(i).copied().flatten(),
                             index_style,
+                            candidate_auxiliary,
                         )
                     })
                     .collect();
@@ -175,6 +177,7 @@ fn chooser_row(index: usize, sense: &Sense, style: ItemNumberStyle) -> Row {
             .map(|pos| vec![(format!("({pos})"), Tone::Faint)])
             .unwrap_or_default(),
         badge: None,
+        auxiliary: None,
     }
 }
 

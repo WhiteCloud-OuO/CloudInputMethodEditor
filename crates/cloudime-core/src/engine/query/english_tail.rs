@@ -142,6 +142,7 @@ impl Engine {
                 kind: CandidateKind::Sentence,
                 syllables,
                 reading: None,
+                auxiliary: None,
             },
             weight,
         ))

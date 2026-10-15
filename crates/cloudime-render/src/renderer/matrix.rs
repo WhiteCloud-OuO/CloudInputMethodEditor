@@ -116,6 +116,10 @@ impl Renderer {
             shown.text.clone_from(text);
             let text_x = x + cells.index_width + m.px(INDEX_GAP);
             self.draw_word(canvas, m, &shown, text_x, top, frame.highlighted == Some(i));
+            // 辅助码紧跟候选词（截断过的那份）、中间隔一个空格
+            let shown_width = self.measure(&shown.text, &m.text_style()).width;
+            let auxiliary_x = text_x + shown_width + self.space_width(m);
+            self.draw_auxiliary(canvas, m, row.auxiliary.as_deref(), auxiliary_x, top);
             // 展开态：角标贴在**格右边缘**（往里让 `BADGE_GAP`）——与收起横排的
             // 「文字后面跟 2 个字宽」不同，展开是格子对齐，角标各自靠右。
             let badge_width = self.badge_width(row.badge.as_deref(), m);
@@ -166,8 +170,15 @@ impl Renderer {
         } else {
             0.0
         };
-        // 格子里除候选词以外的宽度（展开态就只剩间距与角标）
-        let chrome = index_width + m.px(INDEX_GAP) + badge_space;
+        // 辅助码：紧跟候选词（中间一个空格），各格一样宽，按最宽的那段留位置 ——
+        // 截断上限跟着让出来（`chrome`），文字与它不会叠在一起。
+        let auxiliary_space = frame
+            .rows
+            .iter()
+            .map(|row| self.auxiliary_width(row.auxiliary.as_deref(), m))
+            .fold(0.0_f32, f32::max);
+        // 格子里除候选词以外的宽度（展开态就只剩间距、辅助码与角标）
+        let chrome = index_width + m.px(INDEX_GAP) + auxiliary_space + badge_space;
         // 宽度基准：收起时那条高亮条的宽度；展开态另有两档按候选字宽算的下限——
         // 横排是「6 个字宽 + 角标宽度」，竖排是「这一屏最长的候选 + 2 个字宽 + 一个角标字宽」
         // （竖排这个**不管有没有角标都把角标字宽算进去**）。

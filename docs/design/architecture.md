@@ -62,7 +62,7 @@ cloudime-core
 ├── candidate       # 候选数据模型（Candidate / CandidateKind）；layout 是分页排布，壳与设置程序共用
 ├── ranking         # 候选排序
 ├── shortcut        # 快捷候选：日期 / 时间 / 星期、v 表达式模式（四则运算、中文数字），不查词库
-├── english         # 英文候选：词表精确词 / 前缀补全 / 一处编辑纠正（edit.rs），大小写跟着敲的走；主要用在中文模式的中英混输
+├── english         # 英文候选：词表精确词 / 前缀补全，大小写跟着敲的走；主要用在中文模式的中英混输
 ├── sentence        # 离线整句转换：词图 + bigram Viterbi + 束搜索，LanguageModel trait（cloudime-lm 实现，缺省退化为一元），UserNgram 个人 n-gram（二元 + 三元），Context 上文（前两个词），
 │               #   SentenceScorer trait（cloudime-neural 实现）：convert_paths 出前 K 条路径，Engine（engine/rescoring）按 路径分 + λ·(神经分 − 静态分) 重排，异步时后台线程打分、壳停顿后取
 ├── fuzzy           # 模糊音：FuzzyRules（配置 [input] mo_hu_yin_list，一位一条规则）把每个音节扩展成多种写法，Expanded 借出给词库多写法查询

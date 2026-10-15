@@ -11,7 +11,7 @@ use std::path::{Path, PathBuf};
 
 use windows_reactor::*;
 
-use crate::panel::controls::{feedback, grid_row, note, page, text_cell};
+use crate::panel::controls::{feedback, grid_row, header_row, note, page, table, text_cell};
 use crate::panel::notepad;
 use crate::panel::{Message, Settings};
 
@@ -205,7 +205,7 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
     let (scripts, error) = list(settings);
     let mut rows: Vec<KeyedView> = vec![KeyedView::new(
         "header",
-        grid_row(
+        header_row(
             COLUMNS,
             [
                 text_cell("header-file", "文件名", 0, true, false),
@@ -288,7 +288,7 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
              写法（清单字段、事件、能返回的动作、cloudime 表的全部方法与例子）见安装目录下的 lua.md。",
             directory(settings).display()
         )),
-        StackPanel::new().spacing(4.0).keyed_children(rows),
+        table(rows),
         StackPanel::new()
             .orientation(Orientation::Horizontal)
             .spacing(12.0)

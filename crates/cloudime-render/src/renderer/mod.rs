@@ -5,6 +5,7 @@
 mod columns;
 mod horizontal;
 mod item;
+mod key_map;
 mod matrix;
 mod rendered;
 mod status;
@@ -21,6 +22,7 @@ use crate::shadow::Shadow;
 use crate::text::{TextPainter, TextSize, TextStyle};
 use crate::theme::{FontSpec, Theme};
 
+pub use key_map::{KeyCap, KeyMapLayout, key_map_cell, key_map_size};
 pub use rendered::Rendered;
 pub use status::{RenderedStatus, StatusCell};
 
@@ -241,6 +243,87 @@ impl Renderer {
         })
     }
 
+    /// 量一帧排出来的**内容区**像素尺寸（宽, 高）—— 不画位图。
+    ///
+    /// 给「辅助窗口模板」（`server` 的 `auxiliary_window_template`）按候选窗口的形状算默认大小用：
+    /// 拿一个「9 个两字候选」的帧去量竖排高度、拿「6 个两字候选」的帧去量横排宽度。
+    pub fn measure_frame(
+        &mut self,
+        frame: &Frame,
+        layout: Layout,
+        theme: &Theme,
+        scale: f32,
+    ) -> (u32, u32) {
+        let metrics = Metrics { theme, scale };
+        let (width, height) = self.preferred_size(frame, layout, &metrics);
+        (width.ceil() as u32, height.ceil() as u32)
+    }
+
+    /// 画一块**空面板**：主题背景色 + 圆角（带 `shadow` 时四周留阴影边），内容区尺寸由调用方给。
+    ///
+    /// 给「辅助窗口模板」（`server` 的 `auxiliary_window_template`）用 —— 往里面画什么由用它的那件资产自己定。
+    pub fn render_panel(
+        &mut self,
+        content_width: f32,
+        content_height: f32,
+        theme: &Theme,
+        scale: f32,
+        shadow: Option<&Shadow>,
+    ) -> Result<Rendered, RenderError> {
+        let (canvas, margin) =
+            Self::panel_canvas(content_width, content_height, theme, scale, shadow)?;
+        Ok(Self::panel_rendered(
+            canvas,
+            margin,
+            (content_width, content_height),
+            scale,
+        ))
+    }
+
+    /// 面板类窗口的画布与内容区留白（阴影边）：[`Self::render_panel`] / [`Self::render_key_map`] 共用。
+    fn panel_canvas(
+        content_width: f32,
+        content_height: f32,
+        theme: &Theme,
+        scale: f32,
+        shadow: Option<&Shadow>,
+    ) -> Result<(Canvas, f32), RenderError> {
+        let metrics = Metrics { theme, scale };
+        let margin = shadow.map_or(0.0, |s| metrics.px(s.margin()));
+        let width = (content_width + margin * 2.0).ceil();
+        let height = (content_height + margin * 2.0).ceil();
+        let mut canvas = Canvas::new(width as u32, height as u32)?;
+        let radius = metrics.corner_radius();
+        if let Some(shadow) = shadow
+            && let Some(content) =
+                tiny_skia::Rect::from_xywh(margin, margin, content_width, content_height)
+        {
+            shadow.paint(&mut canvas, content, radius, scale);
+        }
+        canvas.fill_round_rect(
+            margin,
+            margin,
+            content_width,
+            content_height,
+            radius,
+            theme.colors.background,
+        );
+        Ok((canvas, margin))
+    }
+
+    /// 画布 + 内容区尺寸 → [`Rendered`]。
+    fn panel_rendered(canvas: Canvas, margin: f32, content: (f32, f32), scale: f32) -> Rendered {
+        Rendered {
+            pixmap: canvas.into_pixmap(),
+            content_x: margin as u32,
+            content_y: margin as u32,
+            content_width: content.0.ceil() as u32,
+            content_height: content.1.ceil() as u32,
+            scale,
+            highlight_rects: Vec::new(),
+        }
+    }
+
     /// 量一段文字在 `size` 点字号下的宽度（点），与原生排版的数值对照用。
     pub fn measure_points(&mut self, text: &str, size: f32) -> f32 {
         let style = TextStyle::new(FontSpec::new(size, size), size, Color::rgb(0, 0, 0), 1.0);
@@ -332,6 +415,18 @@ impl Renderer {
         badge.map_or(0.0, |text| self.measure(text, &m.badge_style()).width)
     }
 
+    /// 候选词与辅助码之间那**一个空格**的宽度（点）——`[XH]` 前面隔的就是它。
+    pub(super) fn space_width(&mut self, m: &Metrics) -> f32 {
+        self.measure(" ", &m.text_style()).width
+    }
+
+    /// 辅助码那一段的宽度（点）：**一个空格 + 码本身**；没有为 0。
+    pub(super) fn auxiliary_width(&mut self, auxiliary: Option<&str>, m: &Metrics) -> f32 {
+        auxiliary.map_or(0.0, |text| {
+            self.space_width(m) + self.measure(text, &m.badge_style()).width
+        })
+    }
+
     /// 一个候选字的宽度（点）。用来按「字宽」定间距 / 最小宽度：取一个汉字量，
     /// 楷体 / 雅黑下一个汉字就是一个 em，横排的候选里也以汉字为主。
     pub(super) fn char_width(&mut self, m: &Metrics) -> f32 {
@@ -365,6 +460,30 @@ impl Renderer {
         top: f32,
     ) {
         let Some(text) = badge else {
+            return;
+        };
+        let style = m.badge_style();
+        let text_height = m.px(m.theme.text_font.line_height);
+        self.draw_text(
+            canvas,
+            text,
+            &style,
+            left,
+            top + m.index_offset(text_height),
+        );
+    }
+
+    /// 把辅助码（`[XH]`）画在 `left` 处 —— 调用方给的是「候选词右边再加一个空格」那个位置
+    /// （即 `text_x + 候选词宽度 + `[`Self::space_width`]），字体与颜色跟来源角标一致。
+    pub(super) fn draw_auxiliary(
+        &mut self,
+        canvas: &mut Canvas,
+        m: &Metrics,
+        auxiliary: Option<&str>,
+        left: f32,
+        top: f32,
+    ) {
+        let Some(text) = auxiliary else {
             return;
         };
         let style = m.badge_style();
@@ -541,7 +660,7 @@ fn highlight_rect(frame: &Frame, rects: &[HighlightRect]) -> Option<HighlightRec
 mod tests {
     use super::highlight_rect;
     use crate::fonts::FontLibrary;
-    use crate::frame::{Frame, HighlightAnimation, HighlightRect, Row, TipSegment, Tone};
+    use crate::frame::{Frame, HighlightAnimation, HighlightRect, Preedit, Row, TipSegment, Tone};
     use crate::layout::Layout;
     use crate::renderer::Renderer;
     use crate::theme::Theme;
@@ -586,6 +705,44 @@ mod tests {
     fn no_highlight_row_draws_nothing() {
         let frame = Frame::default();
         assert_eq!(highlight_rect(&frame, &rects()), None);
+    }
+
+    /// 窗口模板要的**空面板**：内容区尺寸就是要的那个（不跟内容走），且尺寸与位图一致。
+    #[test]
+    fn a_panel_keeps_the_size_it_was_given() {
+        let Some(mut renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let out = renderer
+            .render_panel(320.0, 480.0, &Theme::new(), 1.0, None)
+            .unwrap();
+        assert_eq!((out.content_width, out.content_height), (320, 480));
+        assert_eq!((out.pixmap.width(), out.pixmap.height()), (320, 480));
+    }
+
+    /// 量帧尺寸跟着候选个数走：竖排 9 个比 6 个高、横排 6 个比 3 个宽
+    /// （窗口模板的默认大小按这两条算）。
+    #[test]
+    fn measuring_a_frame_follows_the_row_count() {
+        let Some(mut renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let theme = Theme::new();
+        let frame = |rows: usize| Frame {
+            preedit: Some(Preedit::plain("shu'ru'fa", 0)),
+            rows: (0..rows).map(|index| Row::plain(index, "国国")).collect(),
+            footer: Some("1/1".to_owned()),
+            ..Frame::default()
+        };
+        let (_, nine) = renderer.measure_frame(&frame(9), Layout::Vertical, &theme, 1.0);
+        let (_, six_v) = renderer.measure_frame(&frame(6), Layout::Vertical, &theme, 1.0);
+        assert!(nine > six_v, "竖排 9 个该比 6 个高：{nine} vs {six_v}");
+        // 横排的宽度会被「候选框最小宽度」兜住，比较时先关掉它，免得差异被盖住
+        let mut wide = Theme::new();
+        wide.min_width_pixels = 0.0;
+        let (six, _) = renderer.measure_frame(&frame(6), Layout::Horizontal, &wide, 1.0);
+        let (three, _) = renderer.measure_frame(&frame(3), Layout::Horizontal, &wide, 1.0);
+        assert!(six > three, "横排 6 个该比 3 个宽：{six} vs {three}");
     }
 
     /// 在线翻译那一行里写了换行就按多行算高度：每多一行窗口就多一条行高。

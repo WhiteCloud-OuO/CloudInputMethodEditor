@@ -59,6 +59,18 @@ pub struct InputSettings {
     /// `false` = 没有这类脚本，不读、不送。
     #[serde(default)]
     pub script_wants_text: bool,
+
+    /// 「键位映射参考」那套组合键（`use_input_scheme.cfg` 的 `key_map_hotkey`，设置页写）：修饰键位图
+    /// （与 [`Self::script_key_modifiers`] 同一套位数）+ 虚拟键码。**只在「按下组合键时」那种显示方式下有用**
+    /// （Server 那边不是那种方式就发 `0`），DLL 据此在**组句里**把这一个组合键送来问一趟 ——
+    /// Server 不吃就回 Passthrough、按键重放回应用。`0` = 不用组合键，按键路径与以前逐字节一致
+    /// （`Ctrl` 那一套本来就在 `eats_key` 的组合键规则里，不受影响）。
+    #[serde(default)]
+    pub key_map_modifiers: u16,
+
+    /// 见 [`Self::key_map_modifiers`]。
+    #[serde(default)]
+    pub key_map_key: u32,
 }
 
 impl Default for InputSettings {
@@ -73,6 +85,8 @@ impl Default for InputSettings {
             script_key_modifiers: 0,
             script_keys: [0; 4],
             script_wants_text: false,
+            key_map_modifiers: 0,
+            key_map_key: 0,
         }
     }
 }

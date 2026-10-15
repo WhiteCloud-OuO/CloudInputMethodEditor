@@ -183,6 +183,20 @@ fn build_engine(args: &Args) -> Result<Engine, CliError> {
     );
     engine.set_fuzzy(fuzzy);
     engine.set_use_jian_pin(config.input.use_jian_pin);
+    // 双键拼音：与 Server 同一条路（`--scheme` 之类的开关以后再说）
+    engine.set_shuangpin(
+        (config.input.input_schemes == cloudime_platform::InputScheme::DualKeyPinyin)
+            .then(cloudime_platform::input_schemes::current_table)
+            .flatten(),
+    );
+    engine.set_auxiliary_codes(
+        (config.input.input_schemes == cloudime_platform::InputScheme::DualKeyPinyin)
+            .then(cloudime_platform::input_schemes::current_auxiliary_boxed)
+            .flatten(),
+    );
+    engine.set_show_raw_input(config.input.show_raw_input);
+    // 双键拼音自己的「中英混合输入」（`use_input_scheme.cfg` 的 `mixture_input`，不进 `config.toml`）
+    engine.set_shuangpin_mixture_input(cloudime_platform::input_schemes::mixture_input());
     engine.set_mixture_input(config.input.mixture_input);
     engine.set_punctuation_mapping(config.input.punctuation_mapping());
     engine.set_half_wide_after_digit(config.input.use_half_wide_punctuation_marks_after_digital);

@@ -18,6 +18,7 @@ pub mod punctuation;
 pub mod ranking;
 pub mod sentence;
 pub mod shortcut;
+pub mod shuangpin;
 pub mod storage;
 
 pub use custom_phrase::CustomPhrase;

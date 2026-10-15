@@ -47,6 +47,10 @@ pub struct RouterConfig {
     /// `off` 一律不能（缺省）/ `more_candidates` 只有「展示更多候选项」展开成网格时能 / `always` 都能。
     pub mouse_word_selection: MouseWordSelection,
 
+    /// 在候选项显示辅助码（`use_input_scheme.cfg` 的 `candidate_auxiliary`，缺省关）：
+    /// 候选词右边隔一个空格显示**光标前那个音节**对应的那个字的辅助码。只在双键拼音下有效。
+    pub candidate_auxiliary: bool,
+
     /// 当前主题的文件名（`[theme] curr_theme`，`Themes\` 下）。
     pub curr_theme: String,
 
@@ -99,6 +103,20 @@ pub struct RouterConfig {
 
     /// 状态切换提示（`[input] show_status_change_tip`）：状态一变在光标附近弹一个 1 秒的提示条。
     pub show_status_change_tip: bool,
+
+    /// 「键位映射参考」什么时候显示、用哪套组合键（`use_input_scheme.cfg` 的 `key_map_reference` /
+    /// `key_map_hotkey`，设置页写）：
+    ///
+    /// - [`KeyMapReference::Off`]：不显示；
+    /// - [`KeyMapReference::Hotkey`]：组句里按 [`Self::key_map_hotkey`] 弹出 / 收起；
+    /// - [`KeyMapReference::Always`]：候选窗口一出现就跟着显示。
+    ///
+    /// 值来自**方案目录的 `.cfg`** 而不是 `config.toml`（与辅助码方案同一处），
+    /// `RouterConfig::from` 从那儿读；热加载时会跟着刷新。选了别的输入方案时恒为 `Off`（不是双拼没有键位映射）。
+    pub key_map_reference: cloudime_platform::input_schemes::KeyMapReference,
+
+    /// 上面那种方式用的组合键（`Ctrl + F1` 之类）。
+    pub key_map_hotkey: cloudime_platform::input_schemes::KeyMapHotkey,
 
     /// 用户脚本目录（**安装目录**的 `Scripts\`，与 `Phrases\`、`WordBank\` 同级），`None` = 不加载脚本。
     ///
@@ -157,6 +175,7 @@ impl RouterConfig {
             item_number_style: self.item_number_style,
             scale: self.script_scale,
             max_cell_width: self.max_cell_width,
+            candidate_auxiliary: self.candidate_auxiliary,
             theme: load_theme(self.script_theme.as_deref().unwrap_or(&self.curr_theme)),
         }
     }
@@ -243,6 +262,10 @@ impl From<&Config> for RouterConfig {
             preedit: candidate.preedit,
             show_more_candidate_items: candidate.show_more_candidate_items,
             mouse_word_selection: candidate.mouse_word_selection,
+            // 值在方案目录的 `.cfg` 里（与辅助码方案同一处），不走 `config.toml`；只有双键拼音才认它
+            candidate_auxiliary: input.input_schemes
+                == cloudime_platform::InputScheme::DualKeyPinyin
+                && cloudime_platform::input_schemes::candidate_auxiliary(),
             curr_theme: config.theme.curr_theme.clone(),
             translate_enabled: config.translate.enabled,
             translate_dictionary: config.translate.dictionary.clone(),
@@ -261,6 +284,15 @@ impl From<&Config> for RouterConfig {
             auto_hide_float_tool_bar: config.debugging.auto_hide_float_tool_bar,
             auto_disable_without_text_input: config.debugging.auto_disable_without_text_input,
             show_status_change_tip: input.show_status_change_tip,
+            // 值在方案目录的 `.cfg` 里（与辅助码方案同一处），不走 `config.toml`；只有双键拼音才认它
+            key_map_reference: if input.input_schemes
+                == cloudime_platform::InputScheme::DualKeyPinyin
+            {
+                cloudime_platform::input_schemes::key_map_reference()
+            } else {
+                cloudime_platform::input_schemes::KeyMapReference::Off
+            },
+            key_map_hotkey: cloudime_platform::input_schemes::key_map_hotkey(),
             scripts_dir: None,
             script_disabled: config.script.disabled.clone(),
             // 脚本设的候选窗尺寸：会话内状态，配置（热）加载时保留，只有 `Router::reset_composition` 清

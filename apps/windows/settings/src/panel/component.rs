@@ -4,10 +4,11 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use cloudime_platform::{
-    Config, FullHalfPunctuation, ItemNumberStyle, LayoutMode, LogLevel, MAX_ASSOCIATION_COUNTS,
-    MAX_CANDIDATE_COUNT, MAX_NEED_TIMES, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT,
-    MIN_NEED_TIMES, MO_HU_YIN_BITS, MouseWordSelection, PAIRWISE_COMPLETION_BITS,
-    PUNCTUATION_MAPPING_BITS, PreeditMode, SimpTrad, ThemeColor, ThemeFile,
+    Config, FullHalfPunctuation, InputScheme, ItemNumberStyle, LayoutMode, LogLevel,
+    MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MAX_NEED_TIMES, MIN_ASSOCIATION_COUNTS,
+    MIN_CANDIDATE_COUNT, MIN_NEED_TIMES, MO_HU_YIN_BITS, MouseWordSelection,
+    PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PreeditMode, SimpTrad, ThemeColor,
+    ThemeFile,
 };
 use windows_reactor::*;
 
@@ -83,6 +84,14 @@ impl Component for Settings {
             script_status: String::new(),
             theme_names: Vec::new(),
             theme_selected: None,
+            scheme_entries: Vec::new(),
+            scheme_current: None,
+            auxiliary_files: Vec::new(),
+            auxiliary_selected: None,
+            scheme_mixture_input: true,
+            candidate_auxiliary: false,
+            key_map_reference: cloudime_platform::input_schemes::KeyMapReference::Off,
+            key_map_hotkey: cloudime_platform::input_schemes::KeyMapHotkey::default(),
             theme_draft: ThemeFile::default(),
             theme_new_name: String::new(),
             theme_status: String::new(),
@@ -91,6 +100,8 @@ impl Component for Settings {
         };
         // 主题：列一遍两个目录，再把配置里指定的那份读进草稿。
         settings.refresh_theme_names();
+        // 双键拼音：扫一遍方案目录（目录不在 / 一个方案都没有就写出内置样例），并定下当前方案。
+        settings.refresh_schemes();
         let current = settings.config.theme.curr_theme.clone();
         let stem = current.trim().trim_end_matches(".json").to_owned();
         settings.select_theme(&stem);
@@ -108,7 +119,33 @@ impl Component for Settings {
             Message::Navigate(None) => {}
 
             // 输入页
+            Message::InputScheme(Some(index)) if index < InputScheme::ALL.len() => {
+                self.save("input", "input_schemes", InputScheme::ALL[index].key());
+            }
+            Message::DualKeyScheme(Some(index)) => self.pick_dual_key_scheme(index),
+            Message::RefreshDualKeySchemes => {
+                self.refresh_schemes();
+                self.notice.note = Some("已重新扫描双键拼音方案目录。".to_owned());
+            }
+            Message::ApplyDualKeyScheme => self.apply_dual_key_scheme(),
+            Message::OpenDualKeySchemeDir => self.open_dual_key_scheme_dir(),
+            Message::AuxiliaryCodes(on) => self.set_auxiliary_codes(on),
+            Message::AuxiliaryScheme(Some(index)) => self.pick_auxiliary_scheme(index),
+            Message::DualKeyMixtureInput(on) => self.set_scheme_mixture_input(on),
+            Message::CandidateAuxiliary(on) => self.set_candidate_auxiliary(on),
+            Message::KeyMapReference(mode) => self.set_key_map_reference(mode),
+            Message::KeyMapHotkeyModifiers(modifiers) => {
+                let mut hotkey = self.key_map_hotkey;
+                hotkey.modifiers = modifiers;
+                self.set_key_map_hotkey(hotkey);
+            }
+            Message::KeyMapHotkeyKey(key) => {
+                let mut hotkey = self.key_map_hotkey;
+                hotkey.key = key;
+                self.set_key_map_hotkey(hotkey);
+            }
             Message::UseJianPin(on) => self.save("input", "use_jian_pin", on),
+            Message::ShowRawInput(on) => self.save("input", "show_raw_input", on),
             Message::MoHuYin(index, on) => {
                 if let Some((bit, _)) = MO_HU_YIN_BITS.get(index) {
                     let mut list = self.config.input.mo_hu_yin_list;

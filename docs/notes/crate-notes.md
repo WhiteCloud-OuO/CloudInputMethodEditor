@@ -56,6 +56,49 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 面板：「按Tab/Esc退出表达式计算」）。面板里回车走 `calculator_expression`：算得出来就上屏「算式=结果」
 （`5*6=30`），否则原样上屏（`take_raw` 顺手清组句，`calculator` 由 `handle_key` 的空组句那一拍清掉）。
 
+**双键拼音**（`shuangpin.rs`，2026-10-10；方案文件与规范见 `docs/design/input-schemes.md`）：`Table`（`zero_initials` / `remapping` / `exchange` / `auxiliary` / `raw_input`）把按键还原成完整拼音。
+`expand(keys)` 两键一个音节、`'` 强制分词（不上屏）、开了辅助码时**小写是拼音键、大写是辅助码**（只能跟在完整音节后面，最多 4 位；音节位上出现大写或落单的大写就切不出来）；同键多义两端都匹配（封顶 9 种解法）、
+零声母**完全按 `zero_initials` 表查**（`(两键) → 韵母`，没有内置引导、也没有通则兜底）；
+`syllable()` 拼出来的组合只留 `parser::is_syllable` 认的**合法音节**（`sh` + `iang` 直接丢，否则它会先被挑走、挡住同键另一义的 `shuang`）；
+拼接走 `spelled()`：`j` / `q` / `x` / `y` 后面的 `v`（ü）归一成 `u`（方案写 `b = "ve"` 时 `j` + `b` = `jve` → `jue`，「觉」才出得来；`l` / `n` 后面的 `lve` / `nve` 本来就是标准写法，不动）；
+`segmentations(&expansion)` 把一种解法**直接当切分**交给拼音侧（`Expansion` → 若干 `Segmentation`）：**不再让全键那套切分器重切一遍** ——
+不认简拼（`kai` 会被切成 `k` + `ai`）、不放宽末尾音节、不纠错，`ceshi` 因此只读成 `ce` + `song` + 半个音节，而不是被读成 `ce'shi` 匹配到「测试」。
+`lowered_leading_key(keys)`：开了辅助码时**第一个键是大写**（Caps Lock / Shift 卡着）就把它压成小写（大写只能当辅助码，
+开头一个大写本来整段都切不出来）——**只动第一个键**，后面的辅助码照旧（`YpdoYP` → `ypdoYP`）；
+查询与 `raw_commit_text` 都走它，候选窗里的拼音行与回车原样上屏因此是同一份。
+尾巴上那半个音节（只按了一个键）按这个键**可能接出**的音节**一族一份切分**、候选取并集：声母那一族收成一条前缀（`g` → `g…`、首道的 `e` → `sh…`），
+零声母那几族一个音节一份（首道 `u` → `e` / `ei` / `eng`；收成公共前缀会把同前缀的 `en` / `er` 也放进来）；两族都在就都出，一个都接不出来时尾巴不参与。
+`Engine::query_reading` 拿到的 `Reading`（`segmentations` + `spans`）里 `spans[n]` 由 `Table::typed_covered` 算 —— 双拼的「覆盖多少」用**按键数**，
+不用读法里的字母数：同一段按键的几种切法得用同一把尺子，不然半个音节的几种猜法会互相压（`a` 的 `ang` 比 `a` 长，候选就全被 `ang` 那一族占了）。全键拼音照旧按字母数。
+`raw_input` 决定拼音行与回车原样上屏用哪一份。`AuxiliaryTable` trait + `keeps` 做「只筛选不排序」的辅助码判定：
+**逐字对应**（`Table::auxiliary` 只是个 bool，没有「位置」），敲了码的那个字必须对上、没敲码的字不参与；
+先按**整条词码**比（敲的码按字连起来，或传统一格一位地切），对不上再逐字查单字表。
+`Candidate::auxiliary` 是**「在候选项显示辅助码」**要画的那颗码（平台层看设置决定画不画）：
+`candidate_auxiliary()` 取**光标前那个音节**对应候选的那个字的码（作用域的 `segmentations[0].syllables.len()` - 1 那一位；
+`ai|qg` 显示「爱」的码、`aiqg|` 显示「情」的码），单字表里没有就按整词码「一格一位」切开取那一位，
+候选比那个位置短就是 `None`；只有 `table.auxiliary` + 挂着辅助码表时才填。
+`Engine::set_shuangpin` / `set_auxiliary_codes` 挂表；`query_inner` 里双拼分支排在 `is_raw` **与表达式之前**（`v` / `u` / `i` 三种面板仅全键拼音）；
+`query_shuangpin` 每种解法按它那几份切分跑一遍 `query_reading`（`query_phonetic` 多了个 `reading` 参数：给定就**不再自己切**，
+同一段按键的几份切分按**并集**查，简拼 / 末尾放宽 / 纠错读法都不参与）、
+取第一个能出候选的，并传 `allow_extras=false`（不插 `rq` 这类快捷候选与英文尾段）+ `english = Engine::shuangpin_mixture_input`
+（`use_input_scheme.cfg` 的 `mixture_input`，`Engine::set_shuangpin_mixture_input` 挂）—— **英文词按敲的原始按键匹配**，
+开着才匹配、关掉一律不匹配（与全键拼音那份 `[input] mixture_input` 各管各的），且**不做拼错纠正**；
+一种解法都没有（按键不是这套方案的键、开了辅助码还大小写混用）就是
+`ParseError::NoSegmentation` —— **按键一律不按全拼再读一遍**（双拼的按键不是拼音字母，按全拼读就是「另一种解释」）；
+这一支在开着中英混输时按原始按键查一遍英文词（走 `english_only_query`：整段英文词 + 前缀补全，查得到就只出英文候选）。
+`push_english` 只管「整段英文词 + 前缀补全」两件事（`hallo` 不出 hello），要不要调用由调用方传的 `english` 决定
+（全键拼音是 `[input] mixture_input`、双键拼音是 `.cfg` 那份）；英文模式（`english::suggest`）同样不做纠错 ——
+`english/edit.rs` 与 `MIN_CORRECTION_LETTERS` 已删，`suggest` 只剩精确词与前缀补全。
+`raw_commit_text` 按 `Engine::show_raw_input`（配置 `[input] show_raw_input`，缺省开）决定回车上屏原始按键还是展开后的拼音；
+拼音行同理：开着走 `Table::typed_marked`（按音节补半角 `'`：`vhgo` → `vh'go`，辅助码贴在那个音节上），
+关掉时显示展开后的完整拼音并置 `Query::expanded_pinyin`（光标按这段显示算，`es` → `shou|`；Shift 那套按按键长度切的显示串这时候不能顶上来）。
+`Engine::expression_mode` 见到挂着双拼表直接返回 `false` —— `v` / `u` / `i` 三种模式仅全键拼音，双拼下 `v` 只是方案键
+（否则 `vhgo` 会被当表达式、候选窗左下角还会冒出「输入数字或表达式」）。
+选中候选时 `Engine::consumed_by` 走 `Table::typed_covered`（按「两键一个音节 + 辅助码」把候选的几个音节换算成按键字节数；
+候选**末音节只按了第一个键**时那半个音节的键也算它的 —— 那种前缀候选（`yzd` 的「云朵」，`d` 是「朵」的声母）
+从前算不出按键数会落到全拼那套对齐上，只吃掉一两个键，拼音串里残留半截按键），
+这样选完候选对应的按键才从缓冲区里去掉（不然拼音串里会留着 `vhgo`）；双拼下不记「敲错」（按键不是拼音本身）。
+
 `Engine` 是对外唯一门面，`Learner` trait 在 `engine` 模块；词库是「用户词 + 主词库 + 稀有词库（`with_rare` / `set_rare_enabled`，缺省关闭）+ 附加词库（`set_extra_dictionaries`，按添加顺序）」的列表，**按优先级从高到低**；同一个词在靠前词库里命中后，后面的词库不再重复产出（跨词库去重、靠前优先：词级在 `Engine::lookup_across_dictionaries`，整句词图在 `sentence::span_candidates`，都按 `text` 挡重），**同一本词库内部的重复不去重**，留给 `ranking::rank` / `dedup_by` 按名次保留最高的一条。繁体输出（`traditional` 开关与 `traditional_map` 映射）依赖 `ferrous-opencc`（`s2tw`）在出候选与上屏边界转换，内部保持简体。
 - 候选排序分两级：先按**结构键**，同一结构下再按**权重**降序、`hit.text` 升序。结构键（`ranking::Scored`）依序：
   ① 覆盖的输入字母数降序（`kaif` 的 开发 先于只覆盖 `kai` 的 开）；② 非末尾的简拼音节数升序（`kai f a` 是 1、`kai fa` 是 0）；
@@ -103,6 +146,7 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 `Engine::raw_preedit()`（`engine/raw/`）只读返回 `RawPreedit { text, cursor_bytes }`：完整未上屏组合（已选文本 + 未选拼音）及 UTF-8 字节光标，与随后 `take_raw()` 共用文本生成，保留大小写、显式分隔符及光标后的剩余内容；不运行候选查询、不学习、不记日志、统计、历史或展示回报。首位固定 0，末位固定完整文本长度；`take_raw()` 的提交和清理顺序不变（回车 = 已选文本 + 剩余拼音原样，去掉手敲的 `'`；已选段在选中时已各自记过输入日志，这里只补未选拼音那一段）。
 
 拼音串**显示**走另一条路：`Query::marked_segments()` 把最优切分按音节用 `'` 拼起来（`join_marked`），光标后的剩余拼音另起一段、前面带一颗 `'`，所以显示串可能与敲的原文不同（`ni'hao` 是拼出来的）。光标前**末尾**那颗手敲的 `'` 没有「下一个音节」可接，`join_marked` 会丢，所以在 `marked_segments` 里补回来（光标后还有拼音时不补 —— 那一段自己就带一颗）；`segments_cursor` 早就按「显示串里有它」算光标，补上正好对齐。
+双键拼音关掉「显示原始输入按键」时显示的是**展开后的拼音**（`es` → `shou`），显示串的字母跟敲的按键不是一回事，`Query::expanded_pinyin` 让 `segments_cursor` 把光标落在这段显示的末尾（不然它会拿「光标前有几个按键」去数展开串里的字母，`es` 就画成 `sh|ou`）。
 
 `Engine::discard_input` / `EngineSession::discard_input` 用于隐私能力变化时无痕清理输入，包括透传缓冲、学习链和暂存词汇曝光；`set_private` 只切换写入开关，保留已输入的组句。
 
@@ -210,7 +254,8 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 候选字体 13pt / 序号 11pt、全屏不自动收起悬浮工具栏、翻译词典缺省 `glossary-en.db`、`translate.reset_counter` 缺省 0
 （它是「重置学习内容」的计数器，不是开关：改小 / 改大都会让 Server 把那本词典的学习记录清掉）。
 配置按「输入 / 候选 / 词库 / 短语」四节重排完成：`[input]`（原来散在 `[general] traditional`、整个 `[fuzzy]`
-与写死在 Core 里的标点规则）：`use_jian_pin`、`mo_hu_yin_list`（位图，**一位一条规则**共十二位：zh/z 1、ch/c 2、sh/s 4、r/l 8、n/l 16、
+与写死在 Core 里的标点规则）：`input_schemes`（`InputScheme`：`full_pinyin` 全拼（缺省）/ `dual_key_pinyin` 双键拼音 /
+`shape_code` 形码输入；**双键拼音已实现**（方案文件与解码器见 `docs/design/input-schemes.md`），形码输入还没实现、选了与全拼一样；选非全拼时设置页把简拼 / 模糊音 / 中英文混合输入三项置灰）、`show_raw_input`（双键拼音下显示原始输入按键，**缺省开**；见 `Engine::show_raw_input`）、`use_jian_pin`、`mo_hu_yin_list`（位图，**一位一条规则**共十二位：zh/z 1、ch/c 2、sh/s 4、r/l 8、n/l 16、
 f/h 32、u/ü 64、uo/o 128、an/ang 256、en/eng 512、in/ing 1024、wang/huang 2048，`MO_HU_YIN_BITS`；0.0.3 起从「五组合并位」改成一位一条，
 老配置同一数值的含义会变，用户重勾一遍即可。Core 侧的规则见 `FuzzyRules`：`uo_o` 走 `luo`↔`lo` 这类合法音节对，
 `wang_huang` 是 `wang`↔`huang` 整音节成对互换，只对完整音节生效）、`simp_trad_chinese_chars_toggle`、`mixture_input`、`full_half_punctuation_marks_toggle`、
@@ -252,7 +297,47 @@ v15 之后给 `Candidate` 加了 `display`（候选里显示的内容，上屏�
 **v17** 给 `ClientMessage::SyncMode` 加了 `in_text_input` / `caps`（状态切换提示）；
 **v18** 给 `InputSettings` 加了 `script_key_modifiers`（组合键脚本在清单里声明的 `combination_modifiers` 的并集：修饰键位图的第 N 位置位 = 那一套组合键要送上来）；同一版还加了 `script_keys`（`trigger_condition = "key"` 脚本声明的键：虚拟键码的 256 位位图 `[u64; 4]`，这样 `InputSettings` 仍是 `Copy`，DLL 据此在没组句时也把这些键送来）与 `script_wants_text`（有 `key` 脚本时为真，DLL 每个按键前现读一份光标前文送上来）。三者都带 `serde(default)`，老 DLL 不读也不受影响，所以没有再次 +1。
 
+**v19** 给 `InputSettings` 加了 `key_map_modifiers` / `key_map_key` —— 「键位映射参考」在「按下组合键时」那种显示方式下用的那**一个**组合键
+（修饰键位图 + 虚拟键码，`input_schemes::KeyMapModifiers::mask()` / `KeyMapKey::virtual_key()`）。
+DLL 据此在**组句里**把这一个键送来问一趟（`eats_key` 里那条规则）：`Ctrl+Alt` / `Alt+Shift` 不在「带 Ctrl 的组合」那条里，
+没有它就到不了 Server；Server 不吃照旧回 `Passthrough` 重放回应用。不选那种方式时两个字段都是 `0`，按键路径与以前逐字节一致。
+老 DLL 读成 `0` = 「设成组合键那种方式时按不出来」，是静默少一个功能，所以按规矩 +1。同一版里给
+`Candidate` 加了 `auxiliary`（候选右侧要显示的辅助码，见「双键拼音」那段）：与 `display` 同理，老 DLL 不读候选内容，不单独影响版本。
+
 **主题文件**（`theme.rs`）：`Themes\*.json` 装候选窗口 / 悬浮工具栏 / 状态切换提示三个窗口的 21 个颜色，分 `candidate`（15 项）/ `bar`（背景 / 图标 / 阴影）/ `tip`（同三项）三组；`ThemeColor` 是一个 `#AARRGGBB`（也认 `#RRGGBB`，serde 走字符串、缺键回缺省，`Default` 对齐现有观感）。`ThemeFile::{load, save}`（`save` 建父目录 + 美化 JSON）；`theme_dirs(bundled_root)` 给出两个候选目录 —— 用户目录 `%APPDATA%\CloudIME\Themes`（可写）与随包目录 `<安装目录>\Themes`（只读），`list_themes` 两处都扫、**用户目录优先**（同名盖掉随包的）、按名字排序，`find_theme` 在它上面按名字找（可带 / 不带 `.json`、大小写不敏感）；`DEFAULT_THEME_FILE` = `Default.json`（随包另有一份 `Panic.json`，两份都是内置主题）、`THEMES_DIR` = `Themes`。`[theme]` 只有一个 `curr_theme`（文件名，不是路径；缺省 `Default.json`），设置页「主题」页写它、Server 靠它选主题。注解色（`gloss` / `pos` / `fresh`）暂不进主题文件。
+
+**输入方案文件**（`input_schemes`，2026-10-10；规范见 `docs/design/input-schemes.md`）：`double_keys.rs` 读双键拼音方案文件（`.toml` / `.ini`）——
+两种格式各自先读成同一张**大小写不敏感**的键值表（`flatten_toml` / `flatten_ini`，值统一成字符串、数组按逗号拼），
+再走同一套 `validate`；`[Exchange]` 仅 TOML、`;` 键 TOML 写 `";"`、INI 写全角 `；`（`single_key` 归一成半角）。
+校验一次列全（`Vec<SchemeError>`，thiserror）：必填缺失、辅助码那一节写了 `Location` / `File`（已经不认这两项了）、
+布尔不是 0/1/true/false、韵母拼错（对着一张 34 个韵母的白名单）、未知节 / 未知键、INI 里出现 `[Exchange]`、交换键链式、
+`[Shengmu]` 缺节 / 左边不是零声母韵母 / 右边不是两键 / 两组撞键 —— 都判该方案无效。
+`SAMPLE_SHOUDAO` / `SAMPLE_XIAOHE` / `SAMPLE_ZIRANMA` 是三份内置样例（键位表与零声母表取自青简时期的 `shuangpin/table.rs`）。三份都把 ü 那一族挂在 u 那一族那个键上（`un,vn` / `uan,van` / `ve,ue`），
+`required_finals()` 校验 `[Remapping]` 里这六个韵母一个都不能少（少一个整份无效，报缺哪几个）—— 与 `FINALS` 白名单（36 个，`v` / `ve` / `vn` / `van` 与 `u` / `ue` / `un` / `uan` 都在）配套。
+`SAMPLES` 按 id 升序排（`shoudao` 在前 → 缺省方案就是首道双拼）。`DoubleKeysScheme::using_auxiliary_codes` 就是
+`[Auxiliary] UsingAuxiliaryCodes` 那一个开关（**没有「辅助码位置」**：辅助码逐字对应、紧跟在它那个音节后面，
+`current_table` 转成 Core `Table::auxiliary` 那个 bool）。
+**用哪份辅助码表不在方案文件里**，只由 `use_input_scheme.cfg` 的 `auxiliary` 行说了算（用户级）。
+`mod.rs` 管**方案目录**（`bundled_root()` 下的 `InputSchemes\DoubleKeysPinyin` = `double_keys_dir()`；
+装机就是安装目录，安装程序已给 `InputSchemes\` 授「普通用户可写」）：
+`list` 扫目录（同名只认 toml、按文件名升序）；`ensure_sample` 在空目录把 `SAMPLES` 全写出来、顺手建 `AuxiliaryCodes\`；
+`use_input_scheme.cfg` 是**键值行**（`scheme = ` / `auxiliary = ` / `mixture_input = ` / `key_map_reference = ` / `key_map_hotkey = `，
+老的单行格式不再认）——`read_config` 解析、`read_current` / `read_auxiliary` / `read_mixture_input` 取值、
+`set_current` / `set_auxiliary` / `set_mixture_input` / `set_key_map_reference` / `set_key_map_hotkey`
+读-改-写（互不覆盖）、`resolve_current` 指不到就回到第一个并重建（`auxiliary` 沿用原值，没写过才给默认的 `yutang.tsv`）；
+`mixture_input` 是双键拼音那份「中英混合输入」（`flag_of` / `flag_key`：写 `on` / `off`，也认 `1` / `0` / `true` / `false`，
+缺省**开**），`input_schemes::mixture_input()` 给 Server / CLI 挂到 `Engine::set_shuangpin_mixture_input`；
+`candidate_auxiliary` 是「在候选项显示辅助码」（同一套 `flag_of` / `flag_key`，缺省**关**），
+`input_schemes::candidate_auxiliary()` 给 Server 落到 `RouterConfig::candidate_auxiliary`（只有双键拼音才认它）；
+`key_map.rs` 是「键位映射参考」的那两个用户级设置与**版面**：`KeyMapReference`（`off` / `hotkey` / `always`，老版本写的 `1` / `0` 仍读得出来，
+`1` = `hotkey`）、`KeyMapModifiers`（四套修饰键，`mask()` 给的是与 DLL 对齐的位图）、`KeyMapKey`（`F1`–`F12`，`virtual_key()` 给虚拟键码）
+与 `KeyMapHotkey`（`ctrl+f1` 这样读写），以及 `KeyMapLayout` / `KeyCap`（三排键盘格子 `KEYBOARD_ROWS` + 零声母表，
+`DoubleKeysScheme::key_map_layout()` 按当前方案填）；
+`list_auxiliary` 列 `AuxiliaryCodes\` 下的 `.tsv` / `.txt`。
+`current_table` 转给 Core 解码器；`current_auxiliary[_boxed]` 按 `auxiliary` 行到 `AuxiliaryCodes\` 取表
+（方案没开辅助码 / 没选表就不装）。
+`set_using_auxiliary_codes`（+ 纯文本的 `rewrite_auxiliary_flag`）给设置页那个「使用辅助码」开关用：
+只改 `[Auxiliary]` 节里的 `UsingAuxiliaryCodes` 一行，别的行（含注释、`\r\n`）原样不动。
 
 ## crates/cloudime-render
 
@@ -273,6 +358,14 @@ v15 之后给 `Candidate` 加了 `display`（候选里显示的内容，上屏�
 `matrix-vertical` 两个场景（矩阵那个带一个「造」角标，竖排那屏里还有一条 12 字的候选）用来看这两条规则。
 网格下固定留一行信息（被截断的高亮候选全文、译文、页码）。
 （早期那套「列宽由帧给 `column_ems`、滚动时不跳宽」的设计已随 `Frame::column_ems` 一起删掉——没有壳在用它。）
+
+**候选词右侧的辅助码**（`Row::auxiliary`，双键拼音「在候选项显示辅助码」用）：紧跟候选词、中间隔**一个空格**
+（`Renderer::space_width` 量那个空格），字体与颜色跟来源角标同一套（`badge_style` = `index_font` + `colors.badge`）；
+宽度 = `Renderer::auxiliary_width`（一个空格 + 码本身），横排算进 `Item::auxiliary_width`、竖排算进候选词那一列
+（`Columns::text_width` 按 `text + auxiliary` 取最大）、展开态算进 `chrome`；三套排布各在 `draw_horizontal` /
+`draw_vertical` / `draw_matrix` 里紧跟 `draw_word` 画一处（调用方先量好 x 再调 `draw_auxiliary`，避免同时借 `self`）。
+预览示例里有 `auxiliary-vertical` / `auxiliary-horizontal` 两个场景（`ai'qg` 那一拍：`爱情 [XH]`、单字的「爱」没有码、
+第二行同时带「造」角标）。
 
 底部那一行（`Frame::tip` + `Frame::footer`）：**左侧翻译 Tip、右侧页码**，由 `Renderer::bottom_line_height` /
 `draw_bottom_line` 统一画，竖排 / 横排 / 矩阵三条路都走它（矩阵原来那行「被截断候选的全文 + 译文」被它取代）。
@@ -420,6 +513,17 @@ LuaJIT 源码随 crate 编译进二进制，装机包不依赖机器上装的 Lu
 
 配置是这些页面背后的唯一通路：设置程序与 Server 都只读写 `config.toml`，Server 激活期间每秒看一次 mtime，变了就 `apply_config` 热加载。
 词库在随包根的 `WordBank\` 下，主词库是 `Dict.db`（7 张表：中文普通组 / 稀有组 + 英文，`DictDb` 按语言与稀有度分流；稀有组由 `[word_bank] rare_items` 控制、缺省关闭），用户导入的附加词库也在同目录、都加载。
+
+**输入方案**（`[input] input_schemes`）：Server 启动与配置热加载时按当前双键拼音方案挂 `Engine::set_shuangpin` / `set_auxiliary_codes`
+（`input_schemes::current_table()` / `current_auxiliary_boxed()`），并挂 `.cfg` 里那份中英混合输入
+（`input_schemes::mixture_input()` → `Engine::set_shuangpin_mixture_input`；`config.toml` 里那份只管全键拼音）。
+「在候选项显示辅助码」也读 `.cfg`（`input_schemes::candidate_auxiliary()` → `RouterConfig::candidate_auxiliary`，
+只有双键拼音认它）→ `RenderSettings::candidate_auxiliary` → 候选窗口 `configure` 存进 `Cell` → 组行时
+（`ui/candidates/row.rs::from_candidate`）把 `Candidate::auxiliary` 套成 `[XH]` 填进 `Row::auxiliary`。
+方案里 `WordBank` 指了词库（相对方案目录）就用它**顶掉随包主词库**
+（`main.rs` 的 `scheme_word_bank`，第三方词库与用户自造词库照旧）；热加载不重装配词库，所以设置页「应用方案」会**重启输入法服务**让它接上。
+`;` 进不进组句看当前方案的 `Remapping` 里有没有 `;`（`Table::uses_semicolon`；`dispatch/key/input.rs` 的 `semicolon_is_a_key`
+把它从标点里放行，落进 `engine.push`）。辅助码筛到一个候选都不剩时 `composed::auxiliary_filter_notice` 往 `Frame.notice` 写一行提示。
 
 启动装配（`server/src/assembly/`）里语言模型读不出来就**就地降级**——退化成一元词频整句——而不是让 Server 起不来；
 只有主词库坏了才回落 `assets/sample/dict.tsv`，连样例都装不起来才 `exit(1)`。数据坏了只该掉效果：曾因为随包 `.qj` 还是改名前的魔数，
@@ -663,9 +767,9 @@ Chromium 把「物理键还按着时注入的同名键」当自动重复，宿�
 各进程都是同样那几个值，拿它当会话号会在 Server 那边撞号。四条切换入口都汇到
 `service/mode.rs::switch_mode` 一处拦住（内置英文模式下发为关时才拦英文，协议值现在恒开）；状态条点击在 Server 侧（`dispatch/status/mod.rs`）走同一条路，
 「输入」页在 `settings/src/panel/pages/input.rs`，
-对应 `[input]` 那八项（模糊音、符号映射、符号成对补全三组勾选都用 `ListView`，每项是一份 `ListViewItem`、内容就是一个自带文本的 `CheckBox`（`CheckBox` 是 `ContentControl`，文本直接 `.content(label)`，不用再套 `TextBlock`）；列表共用 `controls::scroll_list`——`selection_mode(None)` 不要选中高亮，`max_height` 卡在 5 行（`LIST_ROW_HEIGHT × LIST_VISIBLE_ROWS`），超出的组（符号成对补全 10 项）由列表自己出滚动条；简繁单选与候选页的排布单选走 `controls::radio_row`——**独立 `RadioButton`** 横排（同一个 `group_name` 互斥），**不用框架的 `RadioButtons` 容器**：容器一行内容的「期望高度」比实际渲染矮（渲染 32、期望 25），渲染出来的选项比自己盒子低 3.5px，左边的标签按盒子居中后看着总差一点，从外面（`min_height` / 套一层面板）也调不动；独立控件和开关 / 下拉一样是单控件，居中对得上；标点全半角下拉等）；标签与控件默认**垂直居中**（`controls::labeled`，标签不设对齐会被拉伸到整行高、文字却画在自己顶部，40 高的开关行里就偏上约 10px）；一行很高的控件（`ListView`、单选）改用 `controls::labeled_top` / `field_top`，标签顶对齐、与第一行内容对齐；「候选」页在 `pages/candidates.rs`，
+对应 `[input]` 那九项（最前面是「输入方案」下拉 `ComboBox`（**全键拼音**（缺省；界面名，配置值仍是 `full_pinyin`）/ 双键拼音 / 形码输入，落 `input_schemes`；形码输入还没实现）；选中的方案会在下拉**紧跟后面**生成它自己的那块面板（`scheme_body`：粗体标题 + 若干行，套 `scheme_card` 的卡片外观 —— `Border` 的卡片底色 / 圆角 / 1 DIP 边框 / 内边距；没实现的方案用 `scheme_placeholder` 占位）—— 使用简拼、模糊音、中英文混合输入就放在「全键拼音」那一块里，双键拼音那块是方案下拉 + 「显示原始输入按键」开关（`show_raw_input`，配置项）+ 「中英文混合输入」开关（`set_scheme_mixture_input` 写 `use_input_scheme.cfg` 的 `mixture_input`，`[input] mixture_input` 那份只管全键拼音）+ 「使用辅助码」开关（`set_auxiliary_codes` 改写方案文件的 `[Auxiliary] UsingAuxiliaryCodes`）+「辅助码方案」下拉 + 「在候选项显示辅助码」开关（`set_candidate_auxiliary` 写 `candidate_auxiliary`，开了辅助码且表读得出来时才可点）（`pick_auxiliary_scheme` 写 `use_input_scheme.cfg` 的 `auxiliary` 行；第 0 项是「（不使用）」，选了就写文件名）+「启用键位映射参考」下拉（`set_key_map_reference` 写 `key_map_reference`：关闭 / 按下组合键时 / 始终跟随候选窗口）+「键位映射参考组合键」两个下拉夹一个 `+` 的 `TextBlock`（`set_key_map_hotkey` 写 `key_map_hotkey`，`ctrl+f1` 这样；下面那行注说明组合键可能被系统 / 应用占用）+ `[刷新方案] [应用方案] [打开方案目录]`（`apply_dual_key_scheme` 写 `input_schemes` 并 `crate::server::restart`，让方案 `WordBank` 的词库重新装配；无效方案红字列原因），别的方案下**压根不生成**，所以不用 `is_enabled` 置灰（早先那版置灰的写法已删）；框架**没导出 `Visibility`**（整个 crate 搜 `visibility` 一处都没有，也没有 `Popup` / `Flyout` 元素、没有「拿到底层 XAML 对象」的公开口子；`LayoutControl` 只给 `opacity` / 对齐 / `margin` / `exit_transition`，`CanvasChildExt` 给 `canvas_left` / `canvas_top`），所以「隐藏」就是不把它放进 children（`controls::feedback` 同一条路）。面板会改变子项个数，而 `children` 是**按位置认身份**的，插进来会让后面每一项换身份被重建（丢焦点 / 选中态）—— 所以这一页改用 `keyed_children` 并给每项一个 key。模糊音、符号映射、符号成对补全三组勾选都用 `ListView`，每项是一份 `ListViewItem`、内容就是一个自带文本的 `CheckBox`（`CheckBox` 是 `ContentControl`，文本直接 `.content(label)`，不用再套 `TextBlock`）；列表共用 `controls::scroll_list`——`selection_mode(None)` 不要选中高亮，`max_height` 卡在 5 行（`LIST_ROW_HEIGHT × LIST_VISIBLE_ROWS`），超出的组（符号成对补全 10 项）由列表自己出滚动条；简繁单选与候选页的排布单选走 `controls::radio_row`——**独立 `RadioButton`** 横排（同一个 `group_name` 互斥），**不用框架的 `RadioButtons` 容器**：容器一行内容的「期望高度」比实际渲染矮（渲染 32、期望 25），渲染出来的选项比自己盒子低 3.5px，左边的标签按盒子居中后看着总差一点，从外面（`min_height` / 套一层面板）也调不动；独立控件和开关 / 下拉一样是单控件，居中对得上；标点全半角下拉等）；标签与控件默认**垂直居中**（`controls::labeled`，标签不设对齐会被拉伸到整行高、文字却画在自己顶部，40 高的开关行里就偏上约 10px）；一行很高的控件（`ListView`、单选）改用 `controls::labeled_top` / `field_top`，标签顶对齐、与第一行内容对齐；「候选」页在 `pages/candidates.rs`，
 对应 `[candidate]`（本地整句模型开关、排布单选、个数滑轨（右侧跟一个当前值数字）、联想候选项目上限滑轨 0–4、三个「字体…」按钮弹系统字体对话框 `font_dialog.rs`、
-序号样式下拉、最小宽度、展示更多候选项、按程序隐藏的名单（下面每行一个 2 列 `Grid`——`Star` 列放程序名、「删除」按钮放第二列，外壳用 `controls::scroll_list` 卡 5 行，多了自己滚动））；「短语」页在 `pages/phrase.rs`（顶部「启用软件自带短语」开关；列表每行是一个 5 列 `Grid`——短语内容（`Star` 列，`Wrap` + `max_lines(3)` + 省略号）/ 候选内容 / 触发字母串 / 位置 / 编辑·删除两个按钮，列宽全部钉死（含操作列，否则表头那行没有按钮、`Star` 列会多占一截导致表头与数据行错位）；表单 + 列表读写安装目录 `Phrases\Phrase.db` 的 `user` 表）；
+序号样式下拉、最小宽度、展示更多候选项（`ToggleSwitch`：**非全键拼音方案下置灰**，`is_enabled(false)` —— 它下面的「使用鼠标选词」下拉（`mode_combo` 返回的是 `ComboBox`，能直接接 `.is_enabled()`）与「展开后每个候选项的最大宽度」（`NumberBox`）跟着一起置灰；它的 U / I / V 三种模式也只在「全键拼音」下有效，写在说明里）、按程序隐藏的名单（下面每行一个 2 列 `Grid`——`Star` 列放程序名、「删除」按钮放第二列，外壳用 `controls::scroll_list` 卡 5 行，多了自己滚动））；「短语」页在 `pages/phrase.rs`（顶部「启用软件自带短语」开关；列表每行是一个 5 列 `Grid`——短语内容（`Star` 列，`Wrap` + `max_lines(3)` + 省略号）/ 候选内容 / 触发字母串 / 位置 / 编辑·删除两个按钮，列宽全部钉死（含操作列，否则表头那行没有按钮、`Star` 列会多占一截导致表头与数据行错位）；表单 + 列表读写安装目录 `Phrases\Phrase.db` 的 `user` 表）；
 「主题」页在 `pages/theme/`：`mod.rs` 是页面（`Slot` 是那 21 个颜色槽，`ALL` / `label()` / `get()` / `set()`，顺序与页面一致；高亮 / 普通候选序号各一项；「新建主题」按钮 + 名字 `TextBox` + 「确认保存」按钮、「选择主题」`ComboBox` + 「刷新主题」/「应用主题」两个按钮、21 行「名称 + 可点的 `#aarrggbb`」，末尾挂 `color_dialog::ColorDialog`）；
 `preview.rs` 是页顶那块预览，**走真渲染器**：按草稿 + 配置里的四项字体拼一份 `cloudime_render::Theme`（`min_width_pixels` 固定 200），拼一帧样例（拼音行、两条候选、角标「句」/「造」、页码、译文 Tip、在线那一行），用 `Renderer::render` 画候选窗、`render_status` 画悬浮工具栏（7 个图标）与状态切换提示（前 4 个），三份各自带主题阴影色的 `Shadow`；
 图标用 `include_str!` 把 `server/src/ui/status/icons/*.svg` 编进来（那几个文件是 cargo 的编译依赖，改了会重编）；位图 `encode_png()` 后交给 `Image::source_data(EncodedImage)`、`Stretch::None` 1:1 贴出来——所以预览与真实窗口像素一致（真阴影 / 真尺寸 / 真图标并按主题色染色）。
@@ -673,7 +777,9 @@ Chromium 把「物理键还按着时注入的同名键」当自动重复，宿�
 「导入主题」挑 `.json` → 先 `ThemeFile::load` 验一遍 → `save` 进用户目录 → `refresh_theme_names()` + `select_theme()`（自动刷新列表，但不自动应用）；「导出当前主题」把草稿 `save` 到用户挑的位置。
 两行控件的首列固定 120（`PICKER_LABEL_WIDTH`，WinUI 的 `Button` 最小宽度本来就是 120），让「选择主题」的下拉与上面一行的名字框左边对齐。
 状态在 `panel/mod.rs`（`theme_names` / `theme_selected` / `theme_draft` / `theme_new_name` / `theme_status` / `color_dialog` / `color_slot`），消息 `Theme*` 在 `message.rs`，处理在 `component.rs`：**改色只动草稿** —— 点颜色（`ThemeColorOpen(slot)`）开对话框，`ColorDialog`「确定」后 `slot.set(&mut theme_draft, ..)`，预览与那一行跟着变。「确认保存」只 `ThemeFile::save` 到 `%APPDATA%\CloudIME\Themes\<名字>.json`（**存下来但不换**）；「应用主题」才把选中的名字写进 `[theme] curr_theme`（同值也写）并**立刻重启输入法服务**（`crate::server::restart`，与托盘右键 / 脚本页那条同一条路）—— 重启才盖得过脚本临时换过的主题（没选中就提示先选一份，也不走保留名校验）。「新建主题」从内置的 `Themes\Default.json` 复制（`find_theme` 找不到就 `ThemeFile::default()`）；名字由纯函数 `theme_stem` 定（名字框空则沿用当前选中的那份；与随包两份内置主题 `Default` / `Panic` 同名的一律拒 —— 大小写不敏感，带 `.json` 后缀也认）。「刷新主题」重扫 `list_themes`。
-「脚本」页在 `pages/scripts.rs`：顶部一行加粗红字的声明、三列 `Grid` 列表（文件名 / 介绍 / 启用开关 + 「删除此脚本」「编辑此脚本」）、「新建脚本」按钮；列宽与单元格抽成通用的 `controls::grid_row` / `controls::text_cell`（上面短语页那个 5 列 `Grid` 也改用它俩）；操作列宽 300 DIP，开关与两个按钮都放开最小宽度（`min_width(0)`，WinUI 的 `Button` 默认最小宽度是 120）、开关用 `ToggleSwitchSlot::OnContent` / `OffContent` 置空自带的「开 / 关」文字 —— 否则三个控件按默认宽度加起来顶出列外，最后那个按钮会被右边缘切掉一截。脚本目录 = 安装目录 `Scripts\`（与 `cloudime-script` 的 `DIRECTORY`、Server 读的同一处），列表跳过 `template.lua`；第二列的介绍是从文件里**文本扫**出来的（`describe_in` 认 `description = "…"` / `'…'`、跳过 `--` 注释）——设置程序里不执行脚本，Lua 运行时只在 Server；开关写 `[script] disabled`（`Config::set_array`，缺分节会补出来），删除先用 `rfd` 确认、再顺手把它从名单里摘掉；「新建脚本」在 `Scripts\` 取不重名的文件名（`script.lua` → `script-2.lua`…）、写入 `include_str!` 编进 exe 的 `Scripts\template.lua`，随后 `panel/notepad.rs` 用记事本打开并把模板 `WM_SETTEXT` 塞进它的 `Edit` 子控件（`EnumWindows` 先按我们刚起的进程号认主窗口、机器上本来开着别的记事本时才按类名 `Notepad` 兜底；等窗口与填字都在后台线程轮询，上限 4 秒，不卡界面）。这一页的改动（含开关）都要重启 Server 才生效 —— 「新建脚本」右边那个「重启输入法服务」按钮走 `crate::server::restart()`：连 `\\.\pipe\cloudime` 发一条 `ClientMessage::Indicator { RestartServer }`（设置程序不常驻连接，开一次用完即走），与托盘那条路完全一样（这条消息 Server 不回包，所以发完不等；连不上就把原因写在页面状态里）。
+「脚本」页在 `pages/scripts.rs`：顶部一行加粗红字的声明、三列 `Grid` 列表（文件名 / 介绍 / 启用开关 + 「删除此脚本」「编辑此脚本」）、「新建脚本」按钮；列宽与单元格抽成通用的 `controls::grid_row` / `controls::text_cell`（上面短语页那个 5 列 `Grid` 也改用它俩）；表格整体另有 `controls::table`（外面一圈 1 DIP `ThemeBrush::CardStroke` 边框 + 6 DIP 圆角 + 12 DIP 内边距）与 `controls::header_row`（表头那行整行铺 `CardBackground`）——
+**`windows-reactor 0.100` 的 `Grid` 没有 `border_brush` / `border_thickness`**（只有 `rows` / `columns` / `row_spacing` / `column_spacing` / `background` / `children`；整个框架里带 `border_brush` 的只有 `Border` 与 `TextBox`），所以「表格的边」是外面套的那层 `Border`；
+行与行之间那条线由 `grid_row` 自己在 `Grid` 下面压一个 1 DIP 的 `Border`（`background(CardStroke)` + `opacity(0.5)` + `height(1.0)`）画出来。表头那行的底色**不带内边距**（`header_row` 只包一层），表头与数据行才都从 `table` 那 12 DIP 内边距起算、列不会错开；操作列宽 300 DIP，开关与两个按钮都放开最小宽度（`min_width(0)`，WinUI 的 `Button` 默认最小宽度是 120）、开关用 `ToggleSwitchSlot::OnContent` / `OffContent` 置空自带的「开 / 关」文字 —— 否则三个控件按默认宽度加起来顶出列外，最后那个按钮会被右边缘切掉一截。脚本目录 = 安装目录 `Scripts\`（与 `cloudime-script` 的 `DIRECTORY`、Server 读的同一处），列表跳过 `template.lua`；第二列的介绍是从文件里**文本扫**出来的（`describe_in` 认 `description = "…"` / `'…'`、跳过 `--` 注释）——设置程序里不执行脚本，Lua 运行时只在 Server；开关写 `[script] disabled`（`Config::set_array`，缺分节会补出来），删除先用 `rfd` 确认、再顺手把它从名单里摘掉；「新建脚本」在 `Scripts\` 取不重名的文件名（`script.lua` → `script-2.lua`…）、写入 `include_str!` 编进 exe 的 `Scripts\template.lua`，随后 `panel/notepad.rs` 用记事本打开并把模板 `WM_SETTEXT` 塞进它的 `Edit` 子控件（`EnumWindows` 先按我们刚起的进程号认主窗口、机器上本来开着别的记事本时才按类名 `Notepad` 兜底；等窗口与填字都在后台线程轮询，上限 4 秒，不卡界面）。这一页的改动（含开关）都要重启 Server 才生效 —— 「新建脚本」右边那个「重启输入法服务」按钮走 `crate::server::restart()`：连 `\\.\pipe\cloudime` 发一条 `ClientMessage::Indicator { RestartServer }`（设置程序不常驻连接，开一次用完即走），与托盘那条路完全一样（这条消息 Server 不回包，所以发完不等；连不上就把原因写在页面状态里）。
 「调试」页在 `pages/debugging.rs`：**原「统计」页整页搬来的输入统计面板**（末尾是「数据与组件」说明）与紧随其后的 `[debugging]` 自动隐藏开关、
 原来「高级」页的数据 / 日志入口（打开数据目录 / 打开日志目录 / 打包日志到桌面 / 清空输入日志四个按钮一行）与项目 GitHub 页面 / 帮助手册两个按钮一行、详细日志、学习输入习惯、记录输入日志。
 「帮助手册」（`Message::OpenTutorial`）用系统默认程序打开随包的 `tutorial.md`（`component.rs::tutorial_path` = `bundled_root()/tutorial.md`，走 `controls::open_document`；
@@ -765,6 +871,55 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 异步编辑会话补报的组句矩形）不打断正在跑的动画；翻页 / 新查询 / 隐藏直接画或取消。窗口过程按 16 ms 的 `WM_TIMER` 算进度原地重贴，
 约 150 ms 的 cubic ease-out 后收尾。
 窗口过程按 HWND 从 UI 线程的表里找回窗口（`attach`）。纯展示，不改窗口位置大小、不涉及协议。
+
+**两个模板**（都是从 `general_window` 那一个拆出来的；模板只给「某一类窗口」共用，本身不是窗口）：
+
+- **独立窗口模板**（`server/src/ui/independent_window_template/`，`IndependentWindowTemplate`）：注册窗口类 + 建一块
+  **分层、置顶、不抢焦点**的弹出窗（`WS_EX_LAYERED | TOOLWINDOW | TOPMOST | NOACTIVATE`，纯展示的再加 `TRANSPARENT`），
+  并且**管名下的资产**（`Assets`）：宿主建好自己那块窗之后 `assets_mut().add(...)`，`Drop` 里**先** `assets.retire()`
+  **再** `DestroyWindow` 自己 —— 资产的寿命就落在这段区间里。候选窗口先用了它（悬浮工具栏 / 状态切换提示可以照抄；
+  候选窗口自己那份 `Drop` 也就不用写了）。
+- **辅助窗口模板**（`server/src/ui/auxiliary_window_template/`，`AuxiliaryWindowTemplate`）：给资产用的那块**分层面板** ——
+  主题背景 + 圆角（与候选窗口同源、都是 `theme.corner_radius`）+ 阴影。三个属性 **宽 / 高 / 间隙**
+  （`AuxiliaryWindowSpec`，物理像素）由 `set_spec` 设；没设过时：有内容（键位映射参考）就按内容的版面算
+  （`cloudime_render::key_map_size` 给点，模板按 DPI 折成像素），没内容才按宿主（候选窗口）的形状算默认
+  （竖排量「装 9 个候选项」的高度、宽取它的 √2 倍；横排量「装 6 个两字候选」的宽、高取它的 √5 倍；间隙 16 逻辑像素）；
+  `set_key_map` 换面板里要画的**版面**（平台那边的 `input_schemes::KeyMapLayout`，模板转成渲染器那份）；
+  `show(宿主内容区矩形, 排布方向)` 按宿主摆位（`place_in`：候选窗中心在屏幕右半边贴左侧、在下半边贴上方，都不看放不放得下）。
+  面板的画法在 `cloudime-render` 的 `renderer/key_map.rs`：四周留白 8 点、格线 1 点（**相邻两格共用一条**：
+  摆位步距 = 边长 − 线宽），第二排比第一排右移半格、第三排再右移半格；零声母表在键盘**下方**隔 `TABLE_GAP`（8 点）、
+  **固定 6 列 × 2 行**（格子与键盘格子一样大）；每格：**左上角**那颗键（浅灰）、**右上角**声母
+  （`zh` / `ch` / `sh`，棕 `#880015`）、中间几行韵母（换行符分开，`ü` 由平台那边换好）——
+  韵母每行**第一颗字母**按 `head_color` 上色（a 红 `#F42020` / o 橙 `#FF8040` / e 绿 `#00A869` /
+  i 蓝 `#48ABF8` / u 紫 `#8D3CE8` / ü 棕 `#880015`），其余字母用普通文字色；每行放不下就截尾。
+  格子边长由**目标高度**定（`key_map_cell`：三排键盘 + 表两行 + 间距 + 两边留白 = 目标高度）—— 目标就是
+  「候选窗口装 9 个候选项」那个高度（`Painter::key_map_cell` 拿 `candidate_size(Vertical, 9)` 折成点），
+  竖排 / 横排都用它：窗口**高度恒定**，宽度取「键盘（含错位）」与「零声母表 6 格」里宽的那个。
+  格子里的字号与内边距都按格子**等比**（基准 46 点格子：那颗键 7 点、声母 7 点、韵母 11 点、内边距 3 点）。
+
+**窗口的两类**（`server/src/ui/`）—— **规则见 [`docs/design/windows.md`](../design/windows.md)**（两类窗口、
+所有者唯一且不转移、桥接 bridging、资产克隆与资产窃取）。这里只记实现落点：
+
+- **独立窗口**（`independent window`）：候选窗口（`candidates/`）、悬浮工具栏（`status/`）、状态切换提示
+  （`status_tip/`）—— 各有一块自己的分层窗与**自己的生命周期**。
+- **辅助窗口**（`auxiliary window`）：挂在某块独立窗口上的辅助信息 / 提示窗口，是宿主的**资产**；
+  这一层在 `auxiliary/`（`Asset` 资产 trait、`Assets` 宿主名下的资产表、`Bridge` 桥、`Host` 宿主形状）。
+  宿主先建好自己那块窗再 `Assets::add`；`Drop` 里先 `Assets::retire` 再 `DestroyWindow` 自己
+  （这段顺序由独立窗口模板保证）；显示 / 隐藏由宿主驱动（`Asset::sync` 里经 `Bridge` 向宿主要几何与开关）。
+
+**辅助窗口**（`server/src/ui/auxiliary/`）：眼下只一件资产 —— 候选窗口的**键位映射参考**
+（`key_map/`，`KeyMapWindow`）：用**辅助窗口模板**搭的实窗，把当前方案的键位映射画成一张**键盘**给新手对着敲
+（版面由 `input_schemes::key_map_layout()` 按当前方案生成 —— 三排格子 + 零声母表，经 `CandidateSink::set_auxiliary`
+送到候选窗口、再落到资产上）。宿主是**候选窗口**（它实现 `Bridge`）：`CandidateWindow` 里 `assets_on` + `template.assets()`，
+`show` 里 `sync_assets`（经桥驱动资产）、`hide` 里收起资产并把开关归零；窗口与资产的销毁都交给独立窗口模板。
+`Ctrl+F1` 那条路由 UI 线程递给候选窗口（`toggle_assets`）。
+⚠️ `auxiliary_toggle` / `set_auxiliary` 必须写在 `impl CandidateSink for UiHandle` 里：Router 拿的是
+`Box<dyn CandidateSink>`，写成固有方法会落到 trait 的**空默认体**上（真机踩过，有回归测试盯着）。
+显示方式与组合键在 `use_input_scheme.cfg` 的 `key_map_reference`（`off` / `hotkey` / `always`）与 `key_map_hotkey`
+（`RouterConfig::from` 从方案目录读，热加载跟着刷新；`always` 经 `CandidateSink::set_auxiliary_mode` 告诉候选窗口，
+它每次 `show` 就把资产带上）。`hotkey` 那种方式下组句里按配置的那套组合键切（`Router::key_map_reference`，
+**精确匹配**修饰键位图 + 虚拟键码）；`Ctrl+Alt` / `Alt+Shift` 那两套平时 DLL 不往 Server 送，所以 Server 把当前这套
+随 `InputSettings::key_map_modifiers` / `key_map_key` 下发，DLL 在组句里专程送这一个键（见 `eats_key`）。
 
 「更多候选项」（`Router::show_more`，组句里 `Tab` 切、只活在一次组句里，`recompose` 收组句时清）：展开后一页从
 `candidate_count`（5–9）变成**一整屏** `5 × candidate_count`（`Router::page_size`），`CandidateLayout::set_page_size`

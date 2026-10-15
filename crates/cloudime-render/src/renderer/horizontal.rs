@@ -5,7 +5,7 @@ use super::{HIGHLIGHT_INSET, INDEX_GAP, Metrics, Renderer, highlight_rect};
 use crate::canvas::Canvas;
 use crate::frame::{Frame, HighlightRect, Row};
 
-/// 一项的内容宽度：序号 + 候选词 +（有角标时）间隔 + 角标。
+/// 一项的内容宽度：序号 + 候选词 +（有辅助码时）一个空格 + 码 +（有角标时）间隔 + 角标。
 /// `badge_gap` 是候选词与角标之间的间隔（横排用两个候选字宽，见 `Renderer::horizontal_badge_gap`）。
 fn item_width(item: &Item, m: &Metrics, badge_gap: f32) -> f32 {
     let badge = if item.badge_width > 0.0 {
@@ -13,7 +13,7 @@ fn item_width(item: &Item, m: &Metrics, badge_gap: f32) -> f32 {
     } else {
         0.0
     };
-    item.index_width + m.px(INDEX_GAP) + item.text_width + badge
+    item.index_width + m.px(INDEX_GAP) + item.text_width + item.auxiliary_width + badge
 }
 
 impl Renderer {
@@ -68,11 +68,13 @@ impl Renderer {
                 let index = self.measure(&row.index, &index_style);
                 let text = self.measure(&row.text, &text_style);
                 let badge = self.badge_width(row.badge.as_deref(), m);
+                let auxiliary = self.auxiliary_width(row.auxiliary.as_deref(), m);
                 row_height = row_height.max(text.height + m.row_padding() * 2.0);
                 Item {
                     index_width: index.width,
                     text_width: text.width,
                     badge_width: badge,
+                    auxiliary_width: auxiliary,
                 }
             })
             .collect();
@@ -135,6 +137,10 @@ impl Renderer {
                 top,
                 frame.highlighted == Some(i),
             );
+            // 辅助码紧跟候选词、中间隔一个空格（宽度已经算进 `item.auxiliary_width` 里）
+            let auxiliary_x = x + item.index_width + m.px(INDEX_GAP) + item.text_width;
+            let auxiliary_x = auxiliary_x + self.space_width(m);
+            self.draw_auxiliary(canvas, m, row.auxiliary.as_deref(), auxiliary_x, top);
             // 角标紧跟在候选文字后面，中间留 `badge_gap`（两个候选字宽）。
             // 它离格右边缘的距离 = 上面 `item_width` 里那一段减去角标宽度，画在这里正好对上。
             self.draw_badge(

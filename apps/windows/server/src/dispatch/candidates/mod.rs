@@ -228,6 +228,7 @@ mod tests {
             kind,
             syllables: Vec::new(),
             reading: None,
+            auxiliary: None,
         }
     }
 

@@ -207,11 +207,15 @@ impl TextService_Impl {
         if wants_script_key(event, wanted) {
             return true;
         }
+        // 「键位映射参考」那套组合键（`InputSettings::key_map_modifiers` / `key_map_key`）：
+        // `Ctrl+Alt` / `Alt+Shift` 那几套不在 `eats_key` 的 `ctrl_combo` 里，靠这一条在组句里送到 Server。
+        let hotkey = input.map_or((0, 0), |input| (input.key_map_modifiers, input.key_map_key));
         eats_key(
             event,
             self.shared.composing(),
             shift_letter_compose,
             full_width_chars,
+            hotkey,
         )
     }
 
@@ -405,13 +409,10 @@ fn ctrl_combo(event: &KeyEvent) -> bool {
 }
 
 /// 事件修饰键的位图：bit0 ctrl / bit1 alt / bit2 shift / bit3 win（没有修饰键时是 `0`）。
-/// 与清单 `combination_modifiers` / `InputSettings.script_key_modifiers` 用同一套位数。
+/// 位数在 `KeyModifiers::mask` 那边（跨进程约定：清单 `combination_modifiers`、
+/// `InputSettings` 的两处组合键、键位映射参考那套都用它）。
 fn modifier_mask(event: &KeyEvent) -> u8 {
-    let modifiers = event.modifiers;
-    u8::from(modifiers.ctrl)
-        | (u8::from(modifiers.alt) << 1)
-        | (u8::from(modifiers.shift) << 2)
-        | (u8::from(modifiers.win) << 3)
+    event.modifiers.mask() as u8
 }
 
 /// 这个键是不是脚本声明要的（`InputSettings.script_keys` 位图，见清单的 `keys`）：
@@ -478,12 +479,24 @@ fn eats_key(
     composing: bool,
     shift_letter_compose: bool,
     full_width_chars: bool,
+    key_map_hotkey: (u16, u32),
 ) -> bool {
     // 修饰键本身一律不吃（见 [`is_modifier_key`]）：吃了 Ctrl，后面的 `Ctrl+A` 就变成打出一个 `a`。
     if is_modifier_key(event.virtual_key) {
         return false;
     }
     let modifiers = event.modifiers;
+    // 「键位映射参考」那套组合键（`InputSettings::key_map_modifiers` / `key_map_key`，`(0, 0)` = 没配）：
+    // **只在组句里**、且这一拍正是那一套修饰键（精确匹配）+ 那一个功能键时专程送上来问一趟 ——
+    // Server 不吃就回 Passthrough、按键重放回应用。`Ctrl+Alt` / `Alt+Shift` 那两套不在下面
+    // `ctrl_combo` 里，没有这一条它们到不了 Server；`Ctrl` / `Ctrl+Shift` 本来就会走下面那条。
+    if composing
+        && key_map_hotkey.0 != 0
+        && event.virtual_key == key_map_hotkey.1
+        && modifiers.mask() == key_map_hotkey.0
+    {
+        return true;
+    }
     // 带 Ctrl（不带 Alt / Win）的组合：**只在组句里**（候选窗口显示着）才问一趟 Server ——
     // 脚本能在打字过程中接管组合键；不在组句时一律归应用，否则记事本里的 `Ctrl+A` / `Ctrl+C`
     // 这类快捷键会被输入法吃掉（`OnTestKeyDown` 那边一旦答「吃」，应用就再也拿不到这个键）。
@@ -516,8 +529,7 @@ mod tests {
     use cloudime_platform::protocol::{KeyEvent, KeyModifiers};
 
     use super::{
-        eats_key, eats_without_server, is_modifier_key, is_replay, wants_declared_key,
-        wants_script_key,
+        eats_without_server, is_modifier_key, is_replay, wants_declared_key, wants_script_key,
     };
     use crate::com::key::event::to_key_event;
 
@@ -540,6 +552,84 @@ mod tests {
         let mut event = KeyEvent::new(vk, Some(character), modifiers);
         event.modifiers = modifiers;
         event
+    }
+
+    /// 绝大多数用例不关心「键位映射参考组合键」：`(0, 0)` = 没配，按键路径与以前一致。
+    fn eats(
+        event: &KeyEvent,
+        composing: bool,
+        shift_letter_compose: bool,
+        full_width: bool,
+    ) -> bool {
+        super::eats_key(event, composing, shift_letter_compose, full_width, (0, 0))
+    }
+
+    /// 「键位映射参考」那套组合键（`InputSettings::key_map_modifiers` / `key_map_key`）：**只在组句里**、
+    /// 修饰键**精确匹配**时才送上来。`Ctrl` / `Ctrl+Shift` 本来就走在 `ctrl_combo` 那条里，
+    /// 这条规则真正管的是 `Ctrl+Alt` / `Alt+Shift`（它们不在 `ctrl_combo` 里，没有这条到不了 Server）。
+    #[test]
+    fn the_key_map_hotkey_is_sent_while_composing() {
+        let alt_shift = KeyModifiers {
+            alt: true,
+            shift: true,
+            ..KeyModifiers::default()
+        };
+        // Alt+Shift 的位图 = bit1 | bit2 = 0b0110；`VK_F1` = 0x70
+        let hotkey = ((1u16 << 1) | (1u16 << 2), 0x70);
+        assert!(
+            super::eats_key(
+                &with_modifiers(0x70, '\u{1}', alt_shift),
+                true,
+                false,
+                false,
+                hotkey
+            ),
+            "组句里按中配置的组合键 → 送来"
+        );
+        assert!(
+            !super::eats_key(
+                &with_modifiers(0x70, '\u{1}', alt_shift),
+                false,
+                false,
+                false,
+                hotkey
+            ),
+            "没组句时不送（应用的 F1 照旧）"
+        );
+        assert!(
+            !super::eats_key(
+                &with_modifiers(0x71, '\u{1}', alt_shift),
+                true,
+                false,
+                false,
+                hotkey
+            ),
+            "别的功能键不送"
+        );
+        let alt = KeyModifiers {
+            alt: true,
+            ..KeyModifiers::default()
+        };
+        assert!(
+            !super::eats_key(
+                &with_modifiers(0x70, '\u{1}', alt),
+                true,
+                false,
+                false,
+                hotkey
+            ),
+            "修饰键对不上（只有 Alt）不送"
+        );
+        assert!(
+            !super::eats_key(
+                &with_modifiers(0x70, '\u{1}', alt_shift),
+                true,
+                false,
+                false,
+                (0, 0)
+            ),
+            "没配组合键时这条不生效（Alt+Shift 一律归应用）"
+        );
     }
 
     /// 脚本声明的键（`keys` → `InputSettings.script_keys` 位图）：命中的才在没组句时也送来问一趟。
@@ -647,7 +737,7 @@ mod tests {
         ] {
             assert!(is_modifier_key(vk), "vk={vk} 是修饰键");
             assert!(
-                !eats_key(&KeyEvent::new(vk, None, ctrl), true, false, false),
+                !eats(&KeyEvent::new(vk, None, ctrl), true, false, false),
                 "组句里也不吃 vk={vk}"
             );
         }
@@ -726,39 +816,24 @@ mod tests {
         };
         // 组句中：Ctrl+数字 / 小键盘 / 回车 / 反引号 —— 内置那几个照旧先测吃
         for vk in [0x31, 0x61, 0x0D, 0xC0] {
-            assert!(eats_key(
-                &with_modifiers(vk, '\u{1}', ctrl),
-                true,
-                false,
-                false
-            ));
+            assert!(eats(&with_modifiers(vk, '\u{1}', ctrl), true, false, false));
         }
         // 以前白名单外的（Ctrl+A / Ctrl+Z / Ctrl+F…）现在也吃：脚本能绑任意 Ctrl 组合
-        assert!(eats_key(
-            &with_modifiers(0x41, 'a', ctrl),
-            true,
-            false,
-            false
-        ));
-        assert!(eats_key(
+        assert!(eats(&with_modifiers(0x41, 'a', ctrl), true, false, false));
+        assert!(eats(
             &with_modifiers(0x5A, '\u{1a}', ctrl),
             true,
             false,
             false
         ));
         // 不带 Ctrl 时的老规矩不变
-        assert!(eats_key(
-            &with_modifiers(0x31, '1', ctrl),
-            true,
-            false,
-            false
-        ));
+        assert!(eats(&with_modifiers(0x31, '1', ctrl), true, false, false));
         // 带 Shift 的 Ctrl 组合同样问（脚本里看 event.shift 区分；这里在组句里）
         let ctrl_shift = KeyModifiers {
             shift: true,
             ..ctrl
         };
-        assert!(eats_key(
+        assert!(eats(
             &with_modifiers(0x54, '\u{14}', ctrl_shift),
             true,
             false,
@@ -766,13 +841,8 @@ mod tests {
         ));
         // **没在组句时不问**（`Ctrl+A` / `Ctrl+C` 这类快捷键必须原样归应用）：
         // 一旦在 `OnTestKeyDown` 答「吃」，应用就再拿不到这个键了。
-        assert!(!eats_key(
-            &with_modifiers(0x41, 'a', ctrl),
-            false,
-            false,
-            false
-        ));
-        assert!(!eats_key(
+        assert!(!eats(&with_modifiers(0x41, 'a', ctrl), false, false, false));
+        assert!(!eats(
             &with_modifiers(0x0D, '\r', ctrl),
             false,
             false,
@@ -781,31 +851,26 @@ mod tests {
 
         // Alt / Win / Ctrl+Alt（AltGr）一律不碰：它们在系统 / 外壳那一层，输入法不该拦
         let alt = KeyModifiers { alt: true, ..ctrl };
-        assert!(!eats_key(
+        assert!(!eats(
             &with_modifiers(0x31, '\u{1}', alt),
             true,
             false,
             false
         ));
-        assert!(!eats_key(
+        assert!(!eats(
             &with_modifiers(0x54, '\u{14}', alt),
             false,
             false,
             false
         ));
         let win = KeyModifiers { win: true, ..ctrl };
-        assert!(!eats_key(
-            &with_modifiers(0x41, 'a', win),
-            true,
-            false,
-            false
-        ));
+        assert!(!eats(&with_modifiers(0x41, 'a', win), true, false, false));
         // 只有 Win（Win+Space 切输入法那类）：也不碰 —— 这是脚本把自己玩坏时的逃生门
         let win_only = KeyModifiers {
             win: true,
             ..KeyModifiers::default()
         };
-        assert!(!eats_key(
+        assert!(!eats(
             &with_modifiers(0x20, ' ', win_only),
             true,
             false,
@@ -820,28 +885,28 @@ mod tests {
             shift: true,
             ..KeyModifiers::default()
         };
-        assert!(!eats_key(
+        assert!(!eats(
             &with_modifiers(0x41, 'A', shifted),
             false,
             false,
             false
         ));
         // Shift+字母固定收进组句：没在组句也吃，送去起一段组句（⇧C 接 pan 出 C盘）
-        assert!(eats_key(
+        assert!(eats(
             &with_modifiers(0x41, 'A', shifted),
             false,
             true,
             false
         ));
         // 组句一开始，后面的 Shift 字母就被 `composing` 兜住，一律吃
-        assert!(eats_key(
+        assert!(eats(
             &with_modifiers(0x41, 'A', shifted),
             true,
             false,
             false
         ));
         // 不带 Shift 的字母本来就吃
-        assert!(eats_key(
+        assert!(eats(
             &with_modifiers(0x41, 'a', KeyModifiers::default()),
             false,
             false,
@@ -852,24 +917,19 @@ mod tests {
             caps: true,
             ..KeyModifiers::default()
         };
-        assert!(!eats_key(
-            &with_modifiers(0x41, 'A', caps),
-            false,
-            false,
-            false
-        ));
+        assert!(!eats(&with_modifiers(0x41, 'A', caps), false, false, false));
         // 英文模式纯直通，字母也归应用；只有组句中才吃（先把拼音原样上屏）
         let english = KeyModifiers {
             english_mode: true,
             ..KeyModifiers::default()
         };
-        assert!(!eats_key(
+        assert!(!eats(
             &with_modifiers(0x41, 'a', english),
             false,
             false,
             false
         ));
-        assert!(eats_key(
+        assert!(eats(
             &with_modifiers(0x41, 'a', english),
             true,
             false,
@@ -880,7 +940,7 @@ mod tests {
             ctrl: true,
             ..KeyModifiers::default()
         };
-        assert!(!eats_key(
+        assert!(!eats(
             &with_modifiers(0x43, 'c', ctrl_c),
             false,
             false,
@@ -895,7 +955,7 @@ mod tests {
             english_mode: true,
             ..KeyModifiers::default()
         };
-        assert!(eats_key(
+        assert!(eats(
             &with_modifiers(0x41, 'a', english),
             false,
             false,
@@ -905,17 +965,12 @@ mod tests {
             caps: true,
             ..KeyModifiers::default()
         };
-        assert!(eats_key(
-            &with_modifiers(0x41, 'A', caps),
-            false,
-            false,
-            true
-        ));
+        assert!(eats(&with_modifiers(0x41, 'A', caps), false, false, true));
         let shifted = KeyModifiers {
             shift: true,
             ..KeyModifiers::default()
         };
-        assert!(eats_key(
+        assert!(eats(
             &with_modifiers(0x41, 'A', shifted),
             false,
             false,
@@ -926,7 +981,7 @@ mod tests {
             ctrl: true,
             ..KeyModifiers::default()
         };
-        assert!(!eats_key(
+        assert!(!eats(
             &with_modifiers(0x43, 'c', ctrl_c),
             false,
             false,

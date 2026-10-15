@@ -15,6 +15,56 @@ pub(super) use snapshot::QuerySnapshot;
 
 use std::collections::{HashMap, HashSet};
 
+/// 候选右侧要显示的辅助码：`related` 是**光标前那个音节**在候选里的字下标，取那个字的码。
+/// 单字表里没有（表里只有整词码）时按「一格一位」切开取那一位 —— 与 [`crate::shuangpin::keeps`]
+/// 的「先找词」一致。表里没有就是 `None`（角标位置空着）。
+fn candidate_auxiliary(
+    candidate: &Candidate,
+    related: usize,
+    codes: &dyn crate::shuangpin::AuxiliaryTable,
+) -> Option<String> {
+    let chars: Vec<char> = candidate.display_text().chars().collect();
+    // 候选比那个位置短（`开` 配两个音节）：这个位置上没有字，不显示
+    if related >= chars.len() {
+        return None;
+    }
+    if let Some(code) = chars
+        .get(related)
+        .and_then(|character| codes.codes(&character.to_string()))
+        .and_then(|codes| codes.first())
+    {
+        return Some(code.clone());
+    }
+    let letters: Vec<char> = codes
+        .codes(candidate.display_text())?
+        .first()?
+        .chars()
+        .collect();
+    (letters.len() == chars.len()).then(|| letters[related].to_string())
+}
+
+/// 辅助码筛选：候选整体当一个**词**（先找词），没词再按字查（见 [`crate::shuangpin::keeps`]）——
+/// **逐字对应**：候选的字跟敲的辅助码按顺序对齐（候选总是从这一串的开头算）。
+fn keeps_candidate(
+    candidate: &Candidate,
+    typed: &[String],
+    table: &dyn crate::shuangpin::AuxiliaryTable,
+) -> bool {
+    let chars = candidate.text.chars().count();
+    let codes: Vec<String> = typed[..chars.min(typed.len())].to_vec();
+    crate::shuangpin::keeps(&[(candidate.text.clone(), codes)], table)
+}
+
+/// 一段**给定**的读法：双键拼音把方案解出的音节直接交进来，[`Engine::query_reading`] 不再自己切。
+struct Reading {
+    /// 这一段按键的几种切法。同一个位置有几种可能时（尾巴上那半个音节）就列几份，候选按**并集**出。
+    segmentations: Vec<Segmentation>,
+
+    /// `spans[n]` = 前 n 个音节在按键串里占几个键（`spans[0]` 恒为 0）—— 打分时的「覆盖多少」用它，
+    /// 不用读法里的字母数，见 [`crate::shuangpin::Table::typed_covered`]。
+    spans: Vec<usize>,
+}
+
 impl Engine {
     /// 解析当前缓冲区并生成排好序的候选。**不带译文**，译文由 [`Self::annotate`] 补。
     ///
@@ -89,68 +139,210 @@ impl Engine {
         if self.english_mode {
             return Ok(self.query_english(keys, rest, start));
         }
+        // 双键拼音：先按方案的键位表把按键还原成完整拼音，再走后面的拼音查询。
+        // 同键多义（`t` = ve/ue）会有几种解法，逐个试、取第一个能出候选的 —— 非法那一支自然落选。
+        // 放在 `is_raw` **之前**：双拼的按键（含大写辅助码）就是这套方案的输入，别被「直通段」截走；
+        // 也放在表达式 **之前**：`v` / `u` / `i` 那三种面板（表达式、区位、符号）仅全键拼音可用。
+        // 喂给解码器的是**大小写原样**的那一份（`typed_scope`）：大写字母进缓冲区时被压成小写
+        // 只记了 shifted 标记，辅助码全靠大小写区分。
+        if let Some(table) = &self.shuangpin {
+            return self.query_shuangpin(table, &self.composition.typed_scope(), &rest, start);
+        }
         if keys.starts_with(EXPRESSION_PREFIX) {
             return Ok(self.query_expression(keys, rest, start));
         }
         if is_raw(keys) {
             return Ok(self.query_raw(keys, rest, start));
         }
-        self.query_phonetic(keys, rest, start)
+        self.query_phonetic(keys, rest, start, true)
+    }
+
+    /// 双键拼音的查询：每种解法都按方案的切分跑一遍拼音侧的候选生成。
+    ///
+    /// **按键只按方案解释**：解法解出的音节序列直接当切分用（[`crate::shuangpin::Table::segmentations`]），
+    /// 不再交给全键那套切分器自由切 —— 不认简拼、不再改刀、末尾音节也不放宽，否则按键会被读出方案
+    /// 没解出来的音节（见 `docs/design/input-schemes.md` §6）。
+    /// 同键多义会有几种解法，逐个试、取第一个能出候选的 —— 非法那一支自然落选。
+    ///
+    /// **英文**：`allow_extras=false`（快捷候选与英文尾段都不掺）；`english` = `.cfg` 的「中英混合输入」
+    /// （`use_input_scheme.cfg` 的 `mixture_input`，缺省开），开着才**按敲的原始按键**匹配英文词
+    /// （整段英文词 + 前缀补全，**不纠错**）；关着一律不匹配（见 [`Self::push_english`]）。
+    ///
+    /// 开了辅助码时**第一个键敲了大写**（Caps Lock / Shift 卡着）→ 只把那个键压成小写，**后面照旧**：
+    /// 大写只能当辅助码，开头一个大写本来整段都切不出来；后面的辅助码（`YpdoYP`）照样认。
+    /// 候选窗里也跟着显示小写那一份。
+    fn query_shuangpin(
+        &self,
+        table: &crate::shuangpin::Table,
+        keys: &str,
+        rest: &str,
+        start: Instant,
+    ) -> Result<Query, ParseError> {
+        let english = self.shuangpin_mixture_input;
+        let lowered = table.lowered_leading_key(keys);
+        let keys = lowered.as_ref();
+        let mut last: Option<Result<Query, ParseError>> = None;
+        let mut found: Option<(Query, Vec<String>)> = None;
+        for expansion in table.expand(keys) {
+            let pinyin = expansion.to_pinyin();
+            let segmentations = table.segmentations(&expansion);
+            // 这个解法连一个音节都不出来（按键当不了首键）：没有读法，看下一个解法
+            let Some(count) = segmentations
+                .first()
+                .map(|segmentation| segmentation.syllables.len())
+            else {
+                continue;
+            };
+            let reading = Reading {
+                // 覆盖多少按**按键数**算：同一段按键的几种切法用同一把尺子（见 `Table::typed_covered`）
+                spans: (0..=count)
+                    .map(|syllables| table.typed_covered(keys, syllables))
+                    .collect(),
+                segmentations,
+            };
+            let typed_auxiliary: Vec<String> = expansion
+                .syllables
+                .iter()
+                .map(|syllable| syllable.auxiliary.clone())
+                .collect();
+            match self.query_reading(
+                &pinyin,
+                Some(reading),
+                rest.to_owned(),
+                start,
+                false,
+                english,
+            ) {
+                Ok(query) if !query.candidates.items.is_empty() => {
+                    found = Some((query, typed_auxiliary));
+                    break;
+                }
+                other => last = Some(other),
+            }
+        }
+        // 一种解法都出不了候选（或一种解法都没有）：**不再按全拼读一遍** ——
+        // 双键拼音下的按键不是拼音字母，按全拼读就是「另一种解释」，正是要挡掉的那种混进候选。
+        let (mut query, typed_auxiliary) = match found {
+            Some(found) => found,
+            None => match last {
+                Some(last) => (last?, Vec::new()),
+                None => {
+                    // 按键根本不是这套方案的键：拼音这边没戏，但开着「中英混合输入」时
+                    // **原始按键照样查英文词**（`hello` 在双拼表里解不出来，英文词表里有）
+                    if !english {
+                        return Err(ParseError::NoSegmentation);
+                    }
+                    let query = self.english_only_query(keys, rest.to_owned(), start, false);
+                    if query.candidates.items.is_empty() {
+                        return Err(ParseError::NoSegmentation);
+                    }
+                    (query, Vec::new())
+                }
+            },
+        };
+        // 配置要求显示原始按键：候选照旧按展开后的拼音出，拼音行按敲的显示（大小写按敲的来），
+        // 音节之间补上半角 `'` —— 光给一串按键看不出打了几段
+        if self.show_raw_input {
+            query.typed_display = Some(table.typed_marked(keys));
+        } else {
+            // 关掉时拼音行显示**展开后的完整拼音**（`es` → `shou`）：显示串的字母跟敲的按键对不上，
+            // 光标得按「作用域那一整段显示完」算（`expanded_pinyin`）；也不能让 Shift 那套显示串顶上来 ——
+            // 它按展开后的拼音长度去切按键串，切出来是乱的。
+            query.typed_display = None;
+            query.expanded_pinyin = true;
+        }
+        // 辅助码：只筛选（不排序）——「先找词、没词再拼字」**逐字对应**，不过关的候选直接丢掉
+        if let Some(codes) = self.auxiliary_codes.as_deref()
+            && table.auxiliary
+        {
+            query
+                .candidates
+                .items
+                .retain(|candidate| keeps_candidate(candidate, &typed_auxiliary, codes));
+        }
+        // 候选右侧要显示的辅助码：作用域里**光标前那个音节**对应的那个字（`ai|qg` 显示「爱」的码、
+        // `aiqg|` 显示「情」的码）。填不填与显示设置无关 —— 画不画由平台层看设置决定。
+        if table.auxiliary
+            && let Some(codes) = self.auxiliary_codes.as_deref()
+            && let Some(related) = query
+                .segmentations
+                .first()
+                .map(|segmentation| segmentation.syllables.len())
+                .and_then(|count| count.checked_sub(1))
+        {
+            for candidate in &mut query.candidates.items {
+                candidate.auxiliary = candidate_auxiliary(candidate, related, codes);
+            }
+        }
+        Ok(query)
     }
 
     /// 拼音侧的候选生成：整段作用域是一串读音。
+    ///
+    /// `allow_extras` 决定要不要上「外挂」：中英混输的英文尾段（`woxiangxuehaorust`）与按原始按键认的
+    /// 快捷候选（表达式 `v1+2`、日期 `rq`）—— 这两样只在全键拼音下有效。整段英文词与英文补全另看
+    /// 「中英文混合输入」（全键拼音读 `[input] mixture_input`，双键拼音读 `use_input_scheme.cfg`）。
     fn query_phonetic(
         &self,
         keys: &str,
         rest: String,
         start: Instant,
+        allow_extras: bool,
     ) -> Result<Query, ParseError> {
+        self.query_reading(keys, None, rest, start, allow_extras, self.mixture_input)
+    }
+
+    /// 同 [`Self::query_phonetic`]，但 `reading` 给定时**不再自己切**：它就是这一段读音的切分
+    /// （双键拼音把方案解出的音节直接交进来）。同一段按键的几种切法放在一起按**并集**查
+    /// （尾巴上那半个音节的几种可能各算一份切分）。
+    ///
+    /// 这时候简拼、末尾音节的放宽、一处编辑的纠错读法都不参与 —— 它们都会从同一串字母里凑出
+    /// **方案没解出来的读法**。模糊音照旧（那是用户自己配的读音习惯）。
+    ///
+    /// `english` 为真时**按敲的原始按键匹配英文词**（整段英文词 + 前缀补全，不纠错）：
+    /// 全键拼音传配置里的「中英文混合输入」、双键拼音传 `.cfg` 里那一份（见 [`Self::push_english`]）。
+    /// 它只放行「整段英文词 + 英文补全」，不放英文尾段与快捷候选（那两样看 `allow_extras`）。
+    fn query_reading(
+        &self,
+        keys: &str,
+        reading: Option<Reading>,
+        rest: String,
+        start: Instant,
+        allow_extras: bool,
+        english: bool,
+    ) -> Result<Query, ParseError> {
+        let strict = reading.is_some();
         let scope: &str = keys;
         // 末尾是英文词（`woxiangxuehaorust`）：拼音候选与整句只按头段算，尾段整个跟在整句后面。
         // 整段也能读成拼音时（`database`、`…rust` 当简拼）两种读法比分，英文赢了才按头段算，
         // 输了整段按拼音读、英文读法排在拼音整句后面
-        let english_tail = self.split_english_tail(keys);
+        let english_tail = allow_extras
+            .then(|| self.split_english_tail(keys))
+            .flatten();
         let head_wins = english_tail
             .as_ref()
             .is_some_and(|t| !t.competes || self.mixed_beats_plain(keys, t));
-        let parsed = match &english_tail {
-            Some(tail) if head_wins => {
-                parser::segment_with(&keys[..tail.head_len], self.use_jian_pin).map(|s| (s, ""))
-            }
-            _ => segment_longest_prefix(keys, self.use_jian_pin),
+        let parsed = match &reading {
+            Some(reading) => Ok((reading.segmentations.clone(), "")),
+            None => match &english_tail {
+                Some(tail) if head_wins => {
+                    parser::segment_with(&keys[..tail.head_len], self.use_jian_pin).map(|s| (s, ""))
+                }
+                _ => segment_longest_prefix(keys, self.use_jian_pin),
+            },
         };
         // 连第一个字母都切不动（`impor`）：拼音这边没戏，但英文词 / 补全、快捷候选还可以有
         let (segmentations, tail) = match parsed {
             Ok(parsed) => parsed,
             Err(error) => {
-                let mut pool: Vec<(Candidate, PoolRank)> = Vec::new();
-                let full = keys.chars().filter(|c| *c != '\'').count();
-                self.push_english(&mut pool, true, full, 0, false);
-                let ranked = rank_pool(pool);
-                let weights = pool_weights(&ranked);
-                let mut items: Vec<Candidate> =
-                    ranked.into_iter().map(|(candidate, _)| candidate).collect();
-                self.insert_shortcuts(&mut items, keys);
-                if items.is_empty() {
+                if !english {
                     return Err(error);
                 }
-                return Ok(Query {
-                    segmentations: Vec::new(),
-                    candidates: CandidateList { items },
-                    weights,
-                    tail: keys.to_owned(),
-                    text: self.composition.typed_text(),
-                    cursor: self.composition.cursor(),
-                    rest,
-                    typed_display: None,
-                    selected: String::new(),
-                    correction: None,
-                    timings: Timings {
-                        parse: start.elapsed(),
-                        lookup: Duration::ZERO,
-                        rank: Duration::ZERO,
-                    },
-                });
+                let query = self.english_only_query(keys, rest, start, allow_extras);
+                if query.candidates.items.is_empty() {
+                    return Err(error);
+                }
+                return Ok(query);
             }
         };
         let unlikely = correction::unlikely_pinyin(segmentations.first(), tail)
@@ -170,10 +362,17 @@ impl Engine {
             let mut patterns = segmentation.patterns();
             let count = patterns.len();
             let last = &segmentation.syllables[count - 1];
-            // 最后一个音节即使打完了也可能还没打完（`xia` 可能是 `xiang` 的前缀），按前缀查
-            if last.complete && parser::is_syllable_prefix(&last.text) {
+            // 最后一个音节即使打完了也可能还没打完（`xia` 可能是 `xiang` 的前缀），按前缀查。
+            // 交进来的读法不放宽：音节是方案解出来的，按键不会让它再长。
+            if !strict && last.complete && parser::is_syllable_prefix(&last.text) {
                 patterns[count - 1].complete = false;
             }
+            // 覆盖多少：交进来的读法按**按键数**（同一段按键的几种切法得用同一把尺子），
+            // 自己切的那种按读法里的字母数
+            let coverage = match &reading {
+                Some(reading) => reading.spans.last().copied().unwrap_or(0),
+                None => segmentation.letters(),
+            };
             // 词级候选只按敲的原样与模糊音查；一处编辑的纠错读法由 [`Self::correction_readings`] 另加
             let expanded = self.fuzzy.expand(&patterns);
             let positions = expanded.positions();
@@ -186,7 +385,7 @@ impl Engine {
                 }
                 let penalty = expanded.penalty(hit.syllables());
                 scored.push(Scored {
-                    coverage: segmentation.letters(),
+                    coverage,
                     full_last: last.complete
                         && hit.syllables().nth(count - 1) == Some(patterns[count - 1].text),
                     abbreviated,
@@ -203,6 +402,14 @@ impl Engine {
             for prefix_len in (1..count).rev() {
                 let prefix = &patterns[..prefix_len];
                 let prefix_letters: usize = prefix.iter().map(|p| p.text.len()).sum();
+                let coverage = match &reading {
+                    Some(reading) => reading
+                        .spans
+                        .get(prefix_len)
+                        .copied()
+                        .unwrap_or(prefix_letters),
+                    None => prefix_letters,
+                };
                 let hits = memo
                     .entry(pattern_key(prefix))
                     .or_insert_with(|| self.lookup_exact_all(&positions[..prefix_len]));
@@ -215,7 +422,7 @@ impl Engine {
                             exact: false,
                             ..hit
                         },
-                        coverage: prefix_letters,
+                        coverage,
                         // 前缀词的读法在覆盖到的那一段里是完整的，末音节自然对得上
                         full_last: true,
                         abbreviated,
@@ -233,7 +440,8 @@ impl Engine {
         // 拼音「不像话」时把一处编辑的纠错读法作为额外读法加进同一个候选池，按权重打折。
         // 原样输入本身就能整段拼出一个词时（`Cpan` 的 C盘）不再纠：那多半是简拼 / 字母混输，
         // 一处编辑只会用一个补出来的字母凑出别的词，凭更多覆盖字母把原样的词挤下去。
-        if unlikely && !original_matches {
+        // 交进来的读法不纠：那串字母不是用户敲的（按键才对），「敲错一个字母」无从谈起。
+        if !strict && unlikely && !original_matches {
             for (correction, factor) in self.correction_hits(scope, original_matches, substitutes) {
                 let patterns = reading_positions(&correction.segmentation);
                 let positions: Vec<Vec<cloudime_dictionary::SyllablePattern<'_>>> =
@@ -324,20 +532,26 @@ impl Engine {
                     .is_some_and(|last| last.complete),
             )
         });
-        self.push_english(
-            &mut pool,
-            unlikely,
-            scope_letters,
-            reading_structure.0,
-            reading_structure.1,
-        );
+        if english {
+            // 英文候选按**敲的按键**算结构键：双拼下 `scope` 是展开后的拼音，不是用户敲的
+            let (full, abbreviated, full_last) = if allow_extras {
+                (scope_letters, reading_structure.0, reading_structure.1)
+            } else {
+                let keys = self.composition.scope();
+                let full = keys.chars().filter(|key| *key != '\'').count();
+                (full, 0, true)
+            };
+            self.push_english(&mut pool, unlikely, full, abbreviated, full_last);
+        }
         let ranked = rank_pool(pool);
         let weights = pool_weights(&ranked);
         let mut items: Vec<Candidate> =
             ranked.into_iter().map(|(candidate, _)| candidate).collect();
         let rank = start.elapsed();
         // 快捷候选按敲的键认（`rq` 日期），插在本地首选之后
-        self.insert_shortcuts(&mut items, keys);
+        if allow_extras {
+            self.insert_shortcuts(&mut items, keys);
+        }
 
         // 按头段算时英文尾段不参与拼音候选，显示上跟在切分后面：`wo'xiang'xue'hao'rust`
         let tail = english_tail
@@ -357,6 +571,7 @@ impl Engine {
             cursor: self.composition.cursor(),
             rest,
             typed_display,
+            expanded_pinyin: false,
             selected: String::new(),
             correction: None,
             timings: Timings {
@@ -389,6 +604,7 @@ impl Engine {
                 cursor: self.composition.cursor().saturating_sub(1),
                 rest,
                 typed_display: Some(body.to_owned()),
+                expanded_pinyin: false,
                 selected: String::new(),
                 correction: None,
                 timings: Timings {
@@ -406,6 +622,7 @@ impl Engine {
                 kind: CandidateKind::English,
                 syllables: Vec::new(),
                 reading: None,
+                auxiliary: None,
             });
         }
         Query {
@@ -417,6 +634,7 @@ impl Engine {
             cursor: self.composition.cursor(),
             rest,
             typed_display: None,
+            expanded_pinyin: false,
             selected: String::new(),
             correction: None,
             timings: Timings {
@@ -435,6 +653,7 @@ impl Engine {
             kind: CandidateKind::English,
             syllables: Vec::new(),
             reading: None,
+            auxiliary: None,
         }];
         Query {
             segmentations: Vec::new(),
@@ -445,6 +664,7 @@ impl Engine {
             cursor: self.composition.cursor(),
             rest,
             typed_display: None,
+            expanded_pinyin: false,
             selected: String::new(),
             correction: None,
             timings: Timings {
@@ -455,7 +675,7 @@ impl Engine {
         }
     }
 
-    /// 英文模式：敲的字母原样显示，候选是英文词表的精确词、前缀补全与拼错纠正（见 [`english::suggest`]），
+    /// 英文模式：敲的字母原样显示，候选是英文词表的精确词与前缀补全（见 [`english::suggest`]，**不做拼错纠正**），
     /// 词表没装就没有候选。
     pub(super) fn query_english(&self, scope: &str, rest: String, start: Instant) -> Query {
         let items: Vec<Candidate> = english::suggest(
@@ -471,6 +691,7 @@ impl Engine {
             kind: CandidateKind::English,
             syllables: Vec::new(),
             reading: None,
+            auxiliary: None,
         })
         .collect();
         Query {
@@ -482,6 +703,7 @@ impl Engine {
             cursor: self.composition.cursor(),
             rest,
             typed_display: None,
+            expanded_pinyin: false,
             selected: String::new(),
             correction: None,
             timings: Timings {
@@ -575,6 +797,7 @@ impl Engine {
                 kind,
                 syllables: conversion.syllables,
                 reading: None,
+                auxiliary: None,
             },
             weight,
         ))
@@ -709,6 +932,10 @@ impl Engine {
 
     /// 中英混输：整段输入是英文词就加进候选池，拼音不像话时顺带给出前缀补全。
     /// 权重是英文词频 ×(1+用户选择次数)，没有词频的按 1.0。
+    ///
+    /// **不做拼错纠正**（`hallo` 不会出 hello）—— 只在词表里找整段那个词与它的前缀补全；
+    /// 要不要调用由调用方定（`query_reading` 的 `english`：全键拼音读 `[input] mixture_input`、
+    /// 双键拼音读 `use_input_scheme.cfg` 的 `mixture_input`）。
     pub(super) fn push_english(
         &self,
         pool: &mut Vec<(Candidate, PoolRank)>,
@@ -717,10 +944,6 @@ impl Engine {
         abbreviated: usize,
         full_last: bool,
     ) {
-        // 关掉中英混输：中文模式下不再掺英文词与英文补全
-        if !self.mixture_input {
-            return;
-        }
         let lists = self.english_lists();
         if lists.is_empty() {
             return;
@@ -744,6 +967,7 @@ impl Engine {
                         kind: CandidateKind::English,
                         syllables: Vec::new(),
                         reading: None,
+                        auxiliary: None,
                     },
                     // 结构键借用整段读法；`exact` 为真时整段就是这个词，补全比输入长视作不精确
                     (full, abbreviated, full_last, exact, 0, weight),
@@ -777,6 +1001,46 @@ impl Engine {
                     break;
                 }
             }
+        }
+    }
+
+    /// 「拼音这边一个候选都出不来」时的兜底查询：只按**整段英文词 + 前缀补全**出候选（不纠错），
+    /// 拼音行留原样的按键（`tail`），没有切分。`shortcuts` 为真时顺带插按原始按键认的快捷候选
+    /// （`rq` 这类，只有全键拼音传真）。候选为空由调用方决定报不报错。
+    pub(super) fn english_only_query(
+        &self,
+        keys: &str,
+        rest: String,
+        start: Instant,
+        shortcuts: bool,
+    ) -> Query {
+        let mut pool: Vec<(Candidate, PoolRank)> = Vec::new();
+        let full = keys.chars().filter(|c| *c != '\'').count();
+        self.push_english(&mut pool, true, full, 0, false);
+        let ranked = rank_pool(pool);
+        let weights = pool_weights(&ranked);
+        let mut items: Vec<Candidate> =
+            ranked.into_iter().map(|(candidate, _)| candidate).collect();
+        if shortcuts {
+            self.insert_shortcuts(&mut items, keys);
+        }
+        Query {
+            segmentations: Vec::new(),
+            candidates: CandidateList { items },
+            weights,
+            tail: keys.to_owned(),
+            text: self.composition.typed_text(),
+            cursor: self.composition.cursor(),
+            rest,
+            typed_display: None,
+            expanded_pinyin: false,
+            selected: String::new(),
+            correction: None,
+            timings: Timings {
+                parse: start.elapsed(),
+                lookup: Duration::ZERO,
+                rank: Duration::ZERO,
+            },
         }
     }
 }
@@ -862,5 +1126,6 @@ fn chinese_candidate(item: &Scored<'_>) -> Candidate {
         kind: CandidateKind::Chinese,
         syllables: item.hit.syllables().map(str::to_owned).collect(),
         reading: None,
+        auxiliary: None,
     }
 }

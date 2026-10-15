@@ -139,6 +139,7 @@ mod tests {
                 kind: CandidateKind::Chinese,
                 syllables: vec!["a".into()],
                 reading: None,
+                auxiliary: None,
             })
             .collect();
         CandidateLayout::new(candidates, page_size)
@@ -205,6 +206,7 @@ mod tests {
                 kind: CandidateKind::Chinese,
                 syllables: vec!["a".into()],
                 reading: None,
+                auxiliary: None,
             })
             .collect();
         // 第二行第一列有个三字词：哪怕不在视口里，第一列也按它留宽

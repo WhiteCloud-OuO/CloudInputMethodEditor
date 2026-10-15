@@ -2,6 +2,7 @@
 
 use cloudime_core::{CandidateKind, char_width, shortcut};
 use cloudime_platform::LayoutMode;
+use cloudime_platform::input_schemes::KeyMapReference;
 use cloudime_platform::pairwise_completion;
 use cloudime_platform::protocol::KeyEvent;
 
@@ -101,6 +102,9 @@ impl Router {
         if let Some(effect) = self.ctrl_translate(event) {
             return effect;
         }
+        if let Some(effect) = self.key_map_reference(event) {
+            return effect;
+        }
         if let Some(effect) = self.shift_backquote(event) {
             return effect;
         }
@@ -191,6 +195,28 @@ impl Router {
             TranslateAction::Commit(text) => Effect::Changed(text),
             TranslateAction::Choosing | TranslateAction::Nothing => Effect::Navigated,
         })
+    }
+
+    /// 「键位映射参考」的组合键（`use_input_scheme.cfg` 的 `key_map_hotkey`，设置页选）：
+    /// 只在**显示方式选了「按下组合键时」**、**在组句里**、且这一拍按的正是那套修饰键 + 那个功能键时有效 ——
+    /// 精确匹配（多按一个 Ctrl / Alt / Shift 都不算），见 `KeyModifiers::mask`。
+    /// 带 Ctrl 的组合键只有组句时才会由 DLL 送上来（见 tsf 的 `would_eat`）；`Ctrl+Alt` / `Alt+Shift`
+    /// 那两套则由 DLL 按 `InputSettings::key_map_modifiers` 专程送这一个键。
+    fn key_map_reference(&mut self, event: &KeyEvent) -> Option<Effect> {
+        let hotkey = self.config.key_map_hotkey;
+        if self.config.key_map_reference != KeyMapReference::Hotkey
+            || !self.composing()
+            || event.virtual_key != hotkey.key.virtual_key()
+            || event.modifiers.mask() != hotkey.modifiers.mask()
+        {
+            return None;
+        }
+        self.candidates.auxiliary_toggle();
+        tracing::info!(
+            hotkey = %hotkey.value(),
+            "组合键：开关「键位映射参考」（辅助窗口）"
+        );
+        Some(Effect::Changed(None))
     }
 
     /// `Shift + 反引号`：念高亮候选的译文（系统语音，异步）。只有**一条**释义就念它；
@@ -569,13 +595,23 @@ impl Router {
         // 组句里敲标点：先把高亮候选选上、剩余拼音补完整体上屏，再按「没在组句」处理这一键
         // （走符号映射 / 全角标点 / 成对补全）。`-` / `=` 是翻页键（上面已处理），`_` / `+` 与 `'`
         // 由 [`is_commit_punctuation`] 排除，仍进缓冲区。
-        if is_commit_punctuation(c) {
+        // 当前方案把 `;` 当拼音键（微软 / 搜狗的 `ing`）时不吃成标点 —— 落下去进组句
+        if is_commit_punctuation(c) && !self.semicolon_is_a_key(c) {
             let committed = self.finish_composition();
             let effect = self.apply_punctuation(c, event);
             return with_prefix(committed, effect, c);
         }
         self.engine.push(c);
         Effect::Changed(None)
+    }
+
+    /// 这一键是不是「当前双键拼音方案拿它当拼音键」的 `;`（`Remapping` 里写了 `;` 才算）。
+    fn semicolon_is_a_key(&self, c: char) -> bool {
+        c == ';'
+            && self
+                .engine
+                .shuangpin()
+                .is_some_and(cloudime_core::shuangpin::Table::uses_semicolon)
     }
 
     /// 数字键在当前页对应的格子下标；这一页没有这一格（`gpt6` 只有三个候选）返回 `None`，数字当内容进缓冲区。

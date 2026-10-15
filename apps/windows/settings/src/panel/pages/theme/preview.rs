@@ -112,7 +112,7 @@ fn image(pixmap: &cloudime_render::Pixmap) -> View {
     }
 }
 
-/// 预览用的一帧：拼音行 + 两条候选（角标「句」/「造」）+ 高亮 + 页码 + 译文 Tip + 在线那一行。
+/// 预览用的一帧：拼音行 + 两条候选（角标「句」/「造」，第二条带辅助码）+ 高亮 + 页码 + 译文 Tip + 在线那一行。
 fn frame() -> Frame {
     Frame {
         preedit: Some(Preedit::plain(PINYIN, PINYIN.chars().count())),
@@ -122,12 +122,14 @@ fn frame() -> Frame {
                 text: "云朵输入法".to_owned(),
                 annotation: Vec::new(),
                 badge: Some("句".to_owned()),
+                auxiliary: None,
             },
             Row {
                 index: "2".to_owned(),
                 text: "云朵".to_owned(),
                 annotation: Vec::new(),
                 badge: Some("造".to_owned()),
+                auxiliary: Some("[XH]".to_owned()),
             },
         ],
         highlighted: Some(0),

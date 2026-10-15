@@ -45,6 +45,7 @@ impl Engine {
                     kind: CandidateKind::Custom,
                     syllables: Vec::new(),
                     reading: None,
+                    auxiliary: None,
                 },
             );
             last = Some((phrase.position, index));

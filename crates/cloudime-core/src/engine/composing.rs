@@ -279,8 +279,13 @@ impl Engine {
     }
 
     /// 是否处在表达式模式（缓冲区以固定前缀 `v` 开头）。此时壳应把数字和运算符也交给 [`Self::push`]，而不是当选词键。
+    ///
+    /// **`v` / `u` / `i` 三种模式仅全键拼音可用**：挂着双键拼音表时 `v` 只是一个普通方案键，
+    /// 不当表达式（否则 `vhgo` 会被当成表达式、左下角还会冒出「输入数字或表达式」）。
     pub fn expression_mode(&self) -> bool {
-        !self.has_custom_phrase() && self.composition.text().starts_with(EXPRESSION_PREFIX)
+        self.shuangpin.is_none()
+            && !self.has_custom_phrase()
+            && self.composition.text().starts_with(EXPRESSION_PREFIX)
     }
 
     /// 英文直输段：缓冲区里有拼音以外的字符（`no-way`），整段原样上屏、不解析拼音。
@@ -305,11 +310,30 @@ impl Engine {
         (!text.is_empty()).then_some(text)
     }
 
+    /// 原样上屏时那串文本。双键拼音下看配置的 `[input] show_raw_input`：
+    /// 开（缺省）= 敲的原始按键（`ypdo`）；关 = 展开后的完整拼音（`ypdo` → `yunduo`，`'` 不上屏）。
+    fn raw_commit_text(&self) -> String {
+        let typed = strip_apostrophes(&self.composition.typed_text());
+        let Some(table) = &self.shuangpin else {
+            return typed;
+        };
+        // 开了辅助码、第一个键敲了大写：把它压成小写（与候选窗里显示的那份一致）
+        let typed = table.lowered_leading_key(&typed).into_owned();
+        if self.show_raw_input {
+            return typed;
+        }
+        match table.expand(&typed).first() {
+            Some(expansion) => expansion.to_pinyin().replace('\'', ""),
+            None => typed,
+        }
+    }
+
     /// 放弃当前组句，原样返回给壳（通常是用户按回车要上屏字母本身）：
     /// 已选文本 + 剩余拼音原样（Shift 还原、去掉手敲的分隔符 `'`）。
+    /// 双键拼音下上屏什么看方案的 `RawInput`（见 [`Self::raw_commit_text`]）。
     pub fn take_raw(&mut self) -> String {
         let selected = self.composition.selected_text();
-        let keys = strip_apostrophes(&self.composition.typed_text());
+        let keys = self.raw_commit_text();
         let mut raw = selected;
         raw.push_str(&keys);
         if raw.is_empty() {

@@ -7,4 +7,7 @@ pub(super) struct Item {
 
     /// 该项的来源角标宽度，没有为 0。
     pub badge_width: f32,
+
+    /// 该项的辅助码那一段宽度（**一个空格 + 码本身**），没有为 0。
+    pub auxiliary_width: f32,
 }

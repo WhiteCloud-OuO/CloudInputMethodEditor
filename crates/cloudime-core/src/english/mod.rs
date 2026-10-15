@@ -1,19 +1,15 @@
-//! 英文模式（Caps Lock 亮着）的候选：敲的字母不当拼音，按英文词表给精确词、前缀补全和拼错一个字母的纠正。
+//! 英文模式（Caps Lock 亮着）的候选：敲的字母不当拼音，按英文词表给精确词与前缀补全。
 //!
-//! 空格与标点仍原样上屏敲的字母，候选只在按 Tab 或方向键选中时才用上，所以候选再多也不碍事。
-
-mod edit;
+//! **不做拼错纠正**（`hallo` 不出 hello）：纠错会把「差一个字母」的猜测混进候选，
+//! 而英文模式下往往是在打标识符或缩写。空格与标点仍原样上屏敲的字母，
+//! 候选只在按 Tab 或方向键选中时才用上，所以候选再多也不碍事。
 
 use cloudime_dictionary::WordList;
-pub use edit::within_one_edit;
 
-/// 拼错纠正至少要几个字母：三个字母以内一处编辑能变出太多词，只补全不纠正。
-pub const MIN_CORRECTION_LETTERS: usize = 4;
-
-/// 按敲的字母给英文候选：精确词（按词表里的大小写）第一，然后是前缀补全、再是差一处编辑的词，
-/// 后两组各自按用户选过的次数、词频排序。大小写跟着敲的走：`Compa` 出 Company，`COMPA` 出 COMPANY。
+/// 按敲的字母给英文候选：精确词（按词表里的大小写）第一，然后是前缀补全，
+/// 补全按用户选过的次数、词频排序。大小写跟着敲的走：`Compa` 出 Company，`COMPA` 出 COMPANY。
 ///
-/// `lists` 是若干词表，前面的优先（用户自己打过的词在前、随包词表在后）：精确词取第一个有的，补全与纠正合在一起排。
+/// `lists` 是若干词表，前面的优先（用户自己打过的词在前、随包词表在后）：精确词取第一个有的，补全合在一起排。
 pub fn suggest(
     lists: &[&WordList],
     typed: &str,
@@ -45,25 +41,13 @@ pub fn suggest(
             }
         }
     };
-    let entries = || lists.iter().flat_map(|words| words.entries());
-    let completions: Vec<(&str, u32)> = entries()
+    let completions: Vec<(&str, u32)> = lists
+        .iter()
+        .flat_map(|words| words.entries())
         .filter(|(entry_code, _, _)| entry_code.len() > code.len() && entry_code.starts_with(&code))
         .map(|(_, word, frequency)| (word, frequency))
         .collect();
     ranked(completions, &mut result);
-    // 带数字或符号的（`foo1`、`x_y`）是标识符不是拼错的词，不去猜
-    let letters_only = code.bytes().all(|b| b.is_ascii_lowercase());
-    if letters_only && code.len() >= MIN_CORRECTION_LETTERS && result.len() < limit {
-        let corrections: Vec<(&str, u32)> = entries()
-            .filter(|(entry_code, _, _)| {
-                entry_code.len().abs_diff(code.len()) <= 1
-                    && !entry_code.starts_with(&code)
-                    && within_one_edit(entry_code, &code)
-            })
-            .map(|(_, word, frequency)| (word, frequency))
-            .collect();
-        ranked(corrections, &mut result);
-    }
     result
 }
 
@@ -100,7 +84,7 @@ mod tests {
     }
 
     #[test]
-    fn exact_then_completions_then_corrections() {
+    fn exact_then_completions_only() {
         let list = words();
         assert_eq!(
             suggest(&[&list], "comp", |_| 0, 9),
@@ -108,11 +92,9 @@ mod tests {
         );
         // 精确词第一，词表写法优先
         assert_eq!(suggest(&[&list], "iphone", |_| 0, 9), ["iPhone"]);
-        // 拼错一个字母：helo → hello / help（差一处），hollow 差两处不算
-        assert_eq!(suggest(&[&list], "helo", |_| 0, 9), ["hello", "help"]);
-        // 三个字母以内不纠正；带数字的是标识符，也不纠正
+        // 不做拼错纠正：`helo` 只补全以它开头的词，`hello` / `help` 不冒出来
+        assert!(suggest(&[&list], "helo", |_| 0, 9).is_empty());
         assert!(suggest(&[&list], "hlo", |_| 0, 9).is_empty());
-        assert!(suggest(&[&list], "hel1", |_| 0, 9).is_empty());
         assert!(suggest(&[&list], "", |_| 0, 9).is_empty());
     }
 
@@ -141,8 +123,9 @@ mod tests {
             suggest(&[&user, &main], "gi", |_| 0, 9),
             ["giant", "gift", "gist"]
         );
-        // 精确词后面跟着差一处编辑的 gift
-        assert_eq!(suggest(&[&user, &main], "gist", |_| 0, 9), ["gist", "gift"]);
+        // 精确命中就只出它（`gift` 差一处编辑，不纠错）
+        assert_eq!(suggest(&[&user, &main], "gist", |_| 0, 9), ["gist"]);
+        // `gis` 不是精确词，走补全：`gist` 以它开头
         assert_eq!(suggest(&[&main], "gis", |_| 0, 9), ["gist"]);
     }
 }

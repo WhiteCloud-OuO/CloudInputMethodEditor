@@ -1,6 +1,7 @@
 //! 候选窗口的输出端。
 
 use cloudime_platform::ItemNumberStyle;
+use cloudime_platform::input_schemes::{KeyMapLayout, KeyMapReference};
 use cloudime_platform::protocol::{Frame, ScreenRect};
 
 /// 候选窗口 / 状态条的渲染设置。
@@ -32,6 +33,10 @@ pub struct RenderSettings {
     /// 超过就截尾加「…」，格子不再跟着候选词变长。
     pub max_cell_width: f32,
 
+    /// 在候选项显示辅助码（`use_input_scheme.cfg` 的 `candidate_auxiliary`，缺省关）：
+    /// 候选词右边隔一个空格画上那个候选的辅助码（Core 已经把码填在候选里，见 `Candidate::auxiliary`）。
+    pub candidate_auxiliary: bool,
+
     /// 当前主题（`Themes\` 里那份的三个窗口配色）；读不到就是缺省主题。
     pub theme: cloudime_platform::ThemeFile,
 }
@@ -53,6 +58,19 @@ pub trait CandidateSink: Send {
     fn viewport(&self) -> Option<(f32, f32)> {
         None
     }
+
+    /// 开关「辅助窗口」（`auxiliary_window`，眼下是键位映射参考）：挂在配置的组合键上。
+    /// 不画的实现（[`NoopSink`]）默认什么都不做。
+    fn auxiliary_toggle(&self) {}
+
+    /// 换「辅助窗口」的显示方式（`use_input_scheme.cfg` 的 `key_map_reference`）：
+    /// 「始终跟随候选窗口」那种方式下，候选窗一显示就把资产带上。
+    /// 不画的实现（[`NoopSink`]）默认什么都不做。
+    fn set_auxiliary_mode(&self, _mode: KeyMapReference) {}
+
+    /// 换「辅助窗口」显示的内容（键位映射参考的键盘版面，按当前方案准备好）；方案变了重送一次。
+    /// 不画的实现（[`NoopSink`]）默认什么都不做。
+    fn set_auxiliary(&self, _layout: KeyMapLayout) {}
 }
 
 /// 不画候选窗口的空实现。

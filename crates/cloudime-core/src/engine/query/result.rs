@@ -80,6 +80,10 @@ pub struct Query {
     /// Shift 敲的大写字母的显示字串（`Cpan`）：匹配按小写算，显示仍按敲的样子。有此值时 preedit 优先显示它。
     pub typed_display: Option<String>,
 
+    /// 拼音行显示的是**展开后的完整拼音**（双键拼音关掉「显示原始输入按键」）而不是敲的按键：
+    /// 显示串里的字母跟按键对不上，光标得按「作用域那一整段显示完」算（见 [`Self::segments_cursor`]）。
+    pub expanded_pinyin: bool,
+
     /// 组句里已选定的文本（`云朵`），显示在未选拼音之前，也是 `Typed` 段。
     /// 拆成单独字段而非 `text` 的一部分：`text` 仍是未选拼音，候选与光标只对它算。
     pub selected: String,
@@ -154,6 +158,20 @@ impl Query {
     /// 光标在 [`Self::marked_segments`] 拼接文本里的字符下标（候选窗口顶部拼音行使用）。
     pub fn segments_cursor(&self) -> usize {
         let selected = self.selected.chars().count();
+        // 显示的是**展开后的拼音**（双键拼音关掉「显示原始输入按键」）时，显示串的字母跟敲的按键不是一回事：
+        // 作用域就是光标前那一段，它的显示整段都在光标前面 —— 光标落在那一段的末尾（`es` → `shou|`，
+        // 而不是拿两个按键去数展开串的前两个字）。光标后面那段（`Rest`）不数。
+        if self.expanded_pinyin {
+            let skip = usize::from(!self.selected.is_empty());
+            return selected
+                + self
+                    .marked_segments()
+                    .iter()
+                    .skip(skip)
+                    .take_while(|segment| segment.kind != MarkedKind::Rest)
+                    .map(|segment| segment.text.chars().count())
+                    .sum::<usize>();
+        }
         // 纠错生效时显示串与敲的不一样长，作用域又总在光标前：光标就在敲的部分末尾
         // （光标在开头时作用域是整段，光标仍在开头）
         if self.correction.is_some() {

@@ -80,6 +80,26 @@ fn wait_for_process_exit(_pid: u32) {}
 /// 正式词库装配失败回落样例词库，连样例都装不起来才报错。
 /// 语言模型坏掉在 [`assembly::assemble`] 里就地降级、不走这里——数据坏了只该掉效果，不该让 Server 起不来
 ///（装完打不出候选、按键没反应就是这么来的）。
+/// 双键拼音方案里 `WordBank` 指的词库（相对方案目录）；没配 / 文件不在 → `None`（照旧用随包主词库）。
+fn scheme_word_bank(config: &Config) -> Option<PathBuf> {
+    if config.input.input_schemes != cloudime_platform::InputScheme::DualKeyPinyin {
+        return None;
+    }
+    let dir = cloudime_platform::input_schemes::double_keys_dir()?;
+    let entries = cloudime_platform::input_schemes::list(&dir);
+    let current = cloudime_platform::input_schemes::resolve_current(&dir, &entries)?;
+    let entry = entries
+        .iter()
+        .find(|entry| entry.id.eq_ignore_ascii_case(&current))?;
+    let scheme = entry.scheme.as_ref().ok()?;
+    let path = dir.join(scheme.word_bank.as_ref()?);
+    if !path.is_file() {
+        tracing::warn!(path = %path.display(), "方案指定的词库不在，仍用随包主词库");
+        return None;
+    }
+    Some(path)
+}
+
 fn assemble_with_fallback(mut spec: AssemblySpec, root: &Path) -> Result<Engine, ServerError> {
     assembly::assemble(&spec).or_else(|error| {
         tracing::error!(%error, dict = %spec.dict.display(), "正式词库装配失败，回落样例词库");
@@ -159,10 +179,14 @@ fn main() {
     }
     // 词库在随包根的 WordBank\ 下（主词库 Dict.db），用户导入的附加词库也一起加载；一个都没有时回落样例
     let word_bank = WordBank::locate(&root);
-    let dict = std::env::var_os("CLOUDIME_DICT")
+    let mut dict = std::env::var_os("CLOUDIME_DICT")
         .map(PathBuf::from)
         .or_else(|| word_bank.main().map(|(_, path)| path))
         .unwrap_or_else(|| sample_dict(&root));
+    // 双键拼音方案里 `WordBank` 指了词库：用它顶掉随包主词库（第三方词库与用户自造词库照旧）
+    if let Some(path) = scheme_word_bank(&config) {
+        dict = path;
+    }
     // 用户自造词库按 [word_bank] user_file 定位（相对安装目录，也可绝对路径）
     let user_word_bank = word_bank.user_file(&config.word_bank);
     let spec = AssemblySpec {
@@ -182,6 +206,23 @@ fn main() {
     };
     engine.set_fuzzy(config.input.fuzzy_rules());
     engine.set_use_jian_pin(config.input.use_jian_pin);
+    // 双键拼音：配置里选了它就把当前方案（`use_input_scheme.cfg` 指的那份）的键位表挂上；
+    // 方案目录空 / 方案读不出来 → `None`，这一轮退回全键拼音
+    engine.set_shuangpin(
+        (config.input.input_schemes == cloudime_platform::InputScheme::DualKeyPinyin)
+            .then(cloudime_platform::input_schemes::current_table)
+            .flatten(),
+    );
+    // 辅助码：方案开着才挂（只筛选候选，不排序）
+    engine.set_auxiliary_codes(
+        (config.input.input_schemes == cloudime_platform::InputScheme::DualKeyPinyin)
+            .then(cloudime_platform::input_schemes::current_auxiliary_boxed)
+            .flatten(),
+    );
+    // 双键拼音下显示原始输入按键（配置项，与方案文件无关）
+    engine.set_show_raw_input(config.input.show_raw_input);
+    // 双键拼音自己的「中英混合输入」（`use_input_scheme.cfg` 的 `mixture_input`，不进 `config.toml`）
+    engine.set_shuangpin_mixture_input(cloudime_platform::input_schemes::mixture_input());
     engine.set_mixture_input(config.input.mixture_input);
     engine.set_punctuation_mapping(config.input.punctuation_mapping());
     engine.set_half_wide_after_digit(config.input.use_half_wide_punctuation_marks_after_digital);

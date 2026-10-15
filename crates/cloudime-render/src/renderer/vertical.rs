@@ -37,6 +37,8 @@ impl Renderer {
         for row in rows {
             let index = self.measure(&row.index, &index_style);
             let text = self.measure(&row.text, &text_style);
+            // 辅助码紧跟候选词（中间一个空格），所以它占的宽度算进**候选词那一列**
+            let auxiliary = self.auxiliary_width(row.auxiliary.as_deref(), m);
             let annotation: f32 = row
                 .annotation
                 .iter()
@@ -44,7 +46,7 @@ impl Renderer {
                 .sum();
             let badge = self.badge_width(row.badge.as_deref(), m);
             columns.index_width = columns.index_width.max(index.width);
-            columns.text_width = columns.text_width.max(text.width);
+            columns.text_width = columns.text_width.max(text.width + auxiliary);
             columns.annotation_width = columns.annotation_width.max(annotation);
             columns.badge_width = columns.badge_width.max(badge);
             columns.row_height = columns.row_height.max(text.height + m.row_padding() * 2.0);
@@ -94,6 +96,10 @@ impl Renderer {
                 top + m.index_offset(text_height),
             );
             self.draw_word(canvas, m, row, text_x, top, frame.highlighted == Some(i));
+            // 辅助码紧跟候选词，中间隔一个空格（那一列已经把宽度留出来了）
+            let text_width = self.measure(&row.text, &m.text_style()).width;
+            let auxiliary_x = text_x + text_width + self.space_width(m);
+            self.draw_auxiliary(canvas, m, row.auxiliary.as_deref(), auxiliary_x, top);
             let mut x = annotation_x;
             for (segment, tone) in &row.annotation {
                 let style = m.annotation_style(m.tone_color(*tone));

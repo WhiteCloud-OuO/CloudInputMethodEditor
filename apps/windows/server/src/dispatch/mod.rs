@@ -24,6 +24,7 @@ use std::time::{Duration, Instant};
 
 use cloudime_core::Engine;
 use cloudime_platform::SwitchKeys;
+use cloudime_platform::input_schemes::KeyMapReference;
 use cloudime_platform::protocol::{
     ClientMessage, Frame, IndicatorState, InputMode, InputSettings, ScreenRect, ServerMessage,
     SessionId,
@@ -63,7 +64,7 @@ pub struct Router {
     /// 当前组句的展示状态；没在组句时为 `None`。
     composed: Option<Composed>,
 
-    /// 屏幕提示（当前只有脚本会写，见 `script`），随下一帧下发、下一次按键清。
+    /// 屏幕提示（脚本可以写；双键拼音辅助码筛空候选时 Server 也写一行），随下一帧下发、下一次按键清。
     notice: Option<String>,
 
     /// 聚焦会话最近送来的光标前文（应用里已经输入、不在候选窗口里的那段文本）；组句结束就清。
@@ -321,6 +322,18 @@ impl Router {
             script_keys: config::script_key_bits(&self.scripts.wanted_keys()),
             // 有 `key` 触发脚本时让 DLL 每个按键前现读一份光标前文送上来（`cloudime.text.*`）。
             script_wants_text: self.scripts.wants_surrounding_text(),
+            // 键位映射参考那套组合键（只有「按下组合键时」那种方式要）：DLL 据此在组句里专程送这一个键，
+            // 别的组合键（`Ctrl+Alt` 之类）在按键路径上与以前逐字节一致。
+            key_map_modifiers: if self.config.key_map_reference == KeyMapReference::Hotkey {
+                self.config.key_map_hotkey.modifiers.mask()
+            } else {
+                0
+            },
+            key_map_key: if self.config.key_map_reference == KeyMapReference::Hotkey {
+                self.config.key_map_hotkey.key.virtual_key()
+            } else {
+                0
+            },
         }
     }
 
@@ -346,6 +359,9 @@ impl Router {
 
     pub fn set_candidate_sink(&mut self, sink: Box<dyn CandidateSink>) {
         sink.configure(self.config.render_settings());
+        // 「辅助窗口」的内容与显示方式（键位映射参考）：先送一份，方案换了在热加载里再送
+        sink.set_auxiliary(cloudime_platform::input_schemes::key_map_layout());
+        sink.set_auxiliary_mode(self.config.key_map_reference);
         self.candidates = sink;
     }
 

@@ -8,7 +8,7 @@ use cloudime_core::custom_phrase::{DEFAULT_POSITION, MAX_POSITION, MIN_POSITION}
 use cloudime_platform::PhraseStore;
 use windows_reactor::*;
 
-use crate::panel::controls::{field, grid_row, note, page, text_cell};
+use crate::panel::controls::{field, grid_row, header_row, note, page, table, text_cell};
 use crate::panel::{Message, Settings};
 
 /// 短语内容输入框（表单里）的宽度；列表里这一列改成吃剩余宽度，不再用固定值。
@@ -147,7 +147,7 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
     let store = store(settings);
     let mut rows: Vec<KeyedView> = vec![KeyedView::new(
         "header",
-        grid_row(
+        header_row(
             COLUMNS,
             [
                 text_cell("header-content", "短语内容", 0, true, false),
@@ -232,7 +232,7 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             "短语库固定在 {}。输入码敲全时短语出现在你指定的候选位置（1 第一位、2 第二位……），同一位置的多条按保存顺序排；保存后输入法自动更新。",
             store.path.display()
         )),
-        StackPanel::new().spacing(4.0).keyed_children(rows),
+        table(rows),
         field(
             "短语内容",
             "原样上屏的文本，可以有多行。",

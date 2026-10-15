@@ -66,7 +66,8 @@ pub struct Frame {
     #[serde(default)]
     pub hide_index: bool,
 
-    /// 屏幕提示：画在 preedit 行下方，显示到下一次按键。当前没有来源写入，字段保留。无则 `None`。
+    /// 屏幕提示：画在 preedit 行下方，显示到下一次按键。脚本可以写（`cloudime.notice`），
+    /// 双键拼音的辅助码筛到一个候选都不剩时 Server 也会写一行。无则 `None`。
     /// 不参与 [`is_empty`](Self::is_empty)：单有提示不算在组句，否则空组句也会撑开候选窗口。
     #[serde(default)]
     pub notice: Option<String>,

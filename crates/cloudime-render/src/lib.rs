@@ -29,7 +29,10 @@ pub use frame::{
     TipSegment, Tone,
 };
 pub use layout::Layout;
-pub use renderer::{Rendered, RenderedStatus, Renderer, StatusCell};
+pub use renderer::{
+    KeyCap, KeyMapLayout, Rendered, RenderedStatus, Renderer, StatusCell, key_map_cell,
+    key_map_size,
+};
 pub use shadow::Shadow;
 pub use theme::{FontSpec, Palette, Theme};
 

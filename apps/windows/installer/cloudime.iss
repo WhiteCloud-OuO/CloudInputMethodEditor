@@ -140,6 +140,12 @@ Source: "{#Repo}\apps\windows\server\src\ui\status\icons\*.svg";           DestD
 ; —— Server 放最后：它一落地，旧版 DLL 就能把它拉起来并占住数据文件（见文件头）——
 Source: "{#Repo}\target\release\cloudime-server.exe";   DestDir: "{app}"; Flags: ignoreversion
 
+[Dirs]
+; 双键拼音方案目录：**安装目录**下的 `InputSchemes\`（里面是各方案的 .toml / .ini 与 AuxiliaryCodes\ 辅助码表）。
+; 用户在设置页要能改方案文件、程序要能写 use_input_scheme.cfg 与首次运行样例，所以 [Run] ①.8 会给它授
+; 「普通用户可写」。目录先建出来；随包不放方案文件（样例由程序首次运行写出）。
+Name: "{app}\InputSchemes"
+
 [Icons]
 Name: "{group}\云朵输入法 设置"; Filename: "{app}\cloudime-settings.exe"; IconFilename: "{app}\cloudime.ico"
 Name: "{group}\云朵输入法 卸载"; Filename: "{uninstallexe}"
@@ -163,6 +169,10 @@ Filename: "{sys}\icacls.exe"; Parameters: """{app}\Phrases"" /grant *S-1-5-32-54
 ; ①.7 脚本目录对普通用户可写：「设置 → 脚本」页的新建 / 编辑 / 删除都要写 Scripts\（同样在 Program Files 下）。
 Filename: "{sys}\icacls.exe"; Parameters: """{app}\Scripts"" /grant *S-1-5-32-545:(OI)(CI)M /T /C /Q"; \
   Flags: runhidden waituntilterminated; StatusMsg: "配置脚本目录权限…"
+; ①.8 双键拼音方案目录对普通用户可写：设置页要在这里改方案文件、写 use_input_scheme.cfg、
+;     首次运行还要写出内置样例、放辅助码表（同样在 Program Files 下）。
+Filename: "{sys}\icacls.exe"; Parameters: """{app}\InputSchemes"" /grant *S-1-5-32-545:(OI)(CI)M /T /C /Q"; \
+  Flags: runhidden waituntilterminated; StatusMsg: "配置方案目录权限…"
 ; ② 注册文本服务（写 HKCR + 图标到 %ProgramData%\CloudIME\cloudime.ico）。注册的是本版本的 DLL，
 ;    InprocServer32 指向新文件；旧版本的 DLL **不能** regsvr32 /u（那会把整个 CLSID 注销掉）。
 Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\{#TsfDll}"""; \

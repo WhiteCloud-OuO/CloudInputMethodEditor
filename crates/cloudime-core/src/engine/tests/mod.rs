@@ -9,6 +9,7 @@ mod lookup;
 mod privacy;
 mod raw;
 mod segmented;
+mod shuangpin;
 
 use std::collections::HashMap;
 

@@ -1,7 +1,7 @@
 //! 「候选」页：`[candidate]` 分节（排布、个数、三个字体、序号样式、最小宽度、按程序隐藏）。
 
 use cloudime_platform::{
-    CandidateConfig, FontChoice, ItemNumberStyle, LayoutMode, MAX_ASSOCIATION_COUNTS,
+    CandidateConfig, FontChoice, InputScheme, ItemNumberStyle, LayoutMode, MAX_ASSOCIATION_COUNTS,
     MAX_CANDIDATE_COUNT, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MouseWordSelection,
     PreeditMode,
 };
@@ -180,6 +180,9 @@ fn program_list(settings: &Settings, context: &mut ViewContext<Settings>) -> Vie
 
 pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> View {
     let c = &settings.config.candidate;
+    // 「展示更多候选项」与它下面两行（使用鼠标选词、展开后每个候选项的最大宽度）只对全键拼音有意义：
+    // 其他方案下三项一起置灰（U / I / V 三种模式也只在全键拼音下有效，见那一行的说明）。
+    let full_pinyin = settings.config.input.input_schemes == InputScheme::FullPinyin;
     let rows = [
         model_field(settings, context),
         field(
@@ -249,9 +252,11 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
         ),
         field(
             "展示更多候选项",
-            "在打字时按下 Tab 键启用。常规：显示更多的候选项；U 模式：显示符号输入面板；I 模式：显示高级编辑面板；V 模式：显示表达式计算器面板（拼音里敲 v 再按 Tab 进入，再按 Tab / Esc 退出）。（U / I 模式暂未实现）",
+            "在打字时按下 Tab 键启用。常规：显示更多的候选项；U 模式：显示符号输入面板；I 模式：显示高级编辑面板；V 模式：显示表达式计算器面板（拼音里敲 v 再按 Tab 进入，再按 Tab / Esc 退出）。\n\
+             这一项只对「全键拼音」方案有意义（U / I / V 三种模式里目前只实现了 V 模式）；其他方案下它和下面「使用鼠标选词」「展开后每个候选项的最大宽度」两行都会置灰。",
             ToggleSwitch::new()
                 .is_on(c.show_more_candidate_items)
+                .is_enabled(full_pinyin)
                 .on_toggled(context.callback(Message::ShowMoreCandidates)),
         ),
         field(
@@ -262,7 +267,8 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
                 c.mouse_word_selection,
                 MouseWordSelection::label,
                 context.callback(Message::MouseWordSelection),
-            ),
+            )
+            .is_enabled(full_pinyin),
         ),
         field(
             "展开后每个候选项的最大宽度",
@@ -271,6 +277,7 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
                 .minimum(0.0)
                 .maximum(2000.0)
                 .value(c.candidate_item_maximum_width as f64)
+                .is_enabled(full_pinyin)
                 .on_value_changed(context.callback(Message::CandidateItemMaximumWidth)),
         ),
         field_top(

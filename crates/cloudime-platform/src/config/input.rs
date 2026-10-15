@@ -164,10 +164,58 @@ impl FullHalfPunctuation {
     }
 }
 
+/// 输入方案。
+///
+/// **目前只落配置**：双键拼音与形码输入还没实现，选它们暂时与全拼一样（见
+/// `docs/notes/crate-notes.md` 的「输入方案」）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum InputScheme {
+    /// 全拼：一个音节按字母一个个敲（`yunduo` → 云朵）—— 缺省。
+    #[default]
+    FullPinyin,
+
+    /// 双键拼音：每个音节固定两键。
+    DualKeyPinyin,
+
+    /// 形码输入：按字形拆分的编码。
+    ShapeCode,
+}
+
+impl InputScheme {
+    /// 界面上按这个顺序排（顺序与配置里的取值无关）。
+    pub const ALL: [Self; 3] = [Self::FullPinyin, Self::DualKeyPinyin, Self::ShapeCode];
+
+    /// 配置文件里的写法。
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::FullPinyin => "full_pinyin",
+            Self::DualKeyPinyin => "dual_key_pinyin",
+            Self::ShapeCode => "shape_code",
+        }
+    }
+
+    /// 界面上的名字。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::FullPinyin => "全键拼音",
+            Self::DualKeyPinyin => "双键拼音",
+            Self::ShapeCode => "形码输入",
+        }
+    }
+}
+
 /// `[input]` 分节。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct InputConfig {
+    /// 输入方案：全拼 / 双键拼音 / 形码输入。
+    pub input_schemes: InputScheme,
+
+    /// 双键拼音下**显示原始输入按键**（缺省开）：拼音行显示敲的按键（`ypdo`）、
+    /// 未选候选回车也上屏原始按键；关掉则显示 / 上屏展开后的完整拼音（`yun'duo`）。
+    pub show_raw_input: bool,
+
     /// 使用简拼：`yd` 也能出「云朵」，不必打全 `yunduo`。关掉只认完整音节。
     pub use_jian_pin: bool,
 
@@ -203,6 +251,8 @@ pub struct InputConfig {
 impl Default for InputConfig {
     fn default() -> Self {
         Self {
+            input_schemes: InputScheme::FullPinyin,
+            show_raw_input: true,
             use_jian_pin: true,
             mo_hu_yin_list: 0,
             simp_trad_chinese_chars_toggle: SimpTrad::Simplified,
@@ -283,6 +333,30 @@ impl InputConfig {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn input_schemes_round_trip_through_their_keys() {
+        for scheme in InputScheme::ALL {
+            let text = format!("input_schemes = \"{}\"\n", scheme.key());
+            let config: InputConfig = toml::from_str(&text).unwrap();
+            assert_eq!(config.input_schemes, scheme);
+        }
+        // 缺省是全拼（新用户，以及配置里没这一项的老文件）
+        assert_eq!(
+            InputConfig::default().input_schemes,
+            InputScheme::FullPinyin
+        );
+        assert_eq!(InputScheme::FullPinyin.key(), "full_pinyin");
+    }
+
+    #[test]
+    fn show_raw_input_defaults_to_on() {
+        assert!(InputConfig::default().show_raw_input, "缺省开");
+        let config: InputConfig = toml::from_str("show_raw_input = false\n").unwrap();
+        assert!(!config.show_raw_input);
+        let config: InputConfig = toml::from_str("").unwrap();
+        assert!(config.show_raw_input, "配置里没这一项也按缺省");
+    }
 
     #[test]
     fn bitmaps_map_to_fuzzy_rules() {

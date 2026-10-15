@@ -64,7 +64,13 @@ mod session;
 /// v18 给 [`InputSettings`] 加了 `script_key_modifiers`（组合键脚本声明的那几套修饰键的并集，
 /// 见清单的 `combination_modifiers`）：老 DLL 不带这个字段、读成 `0`，表现成「组合键脚本不生效」——
 /// 静默少一个功能，+1 并重装 DLL。
-pub const PROTOCOL_VERSION: u32 = 18;
+///
+/// v19 给 [`InputSettings`] 加了 `key_map_modifiers` 与 `key_map_key`（双键拼音「键位映射参考」那套组合键，
+/// 由 DLL 在**组句里**专程送来 —— `Ctrl+Alt` / `Alt+Shift` 那两套平时它不会往上送）：
+/// 老 DLL 不带这两个字段、读成 `0`，表现成「设成组合键那种方式时按不出来」——静默少一个功能，+1 并重装 DLL。
+/// 同一版里给 [`cloudime_core::Candidate`] 加了 `auxiliary`（候选右侧要显示的辅助码）：与 `display` 同理，
+/// 带 `serde(default)` 两边仍能对话、老 DLL 不读候选内容，不单独影响版本。
+pub const PROTOCOL_VERSION: u32 = 19;
 
 /// 从哪个协议版本起 DLL 会在 `OpenSession` 后阻塞读一条 [`ServerMessage::SessionOpened`]。
 /// 门槛是固定值而不是当前版本：以后版本再升，没重启的应用里那些旧 DLL 仍在等这条回包，

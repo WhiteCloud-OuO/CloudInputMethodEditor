@@ -32,4 +32,17 @@ impl KeyModifiers {
     pub fn has_command_key(self) -> bool {
         self.ctrl || self.alt || self.win
     }
+
+    /// 物理修饰键的位图：bit0 ctrl / bit1 alt / bit2 shift / bit3 win（一个都没按是 `0`）。
+    ///
+    /// 这一套位数是**跨进程约定**：清单里脚本写的 `combination_modifiers`、Server 下发给 DLL 的
+    /// `InputSettings::script_key_modifiers`、DLL 判「这套组合键要不要送上来」都用它，
+    /// 键位映射参考那套组合键（`InputSettings::key_map_modifiers` 与 `input_schemes::KeyMapModifiers`）
+    /// 也按它算 —— 精确匹配，多按一个键就不算命中。`caps` / `english_mode` 不是物理修饰键，不进来。
+    pub fn mask(self) -> u16 {
+        u16::from(self.ctrl)
+            | (u16::from(self.alt) << 1)
+            | (u16::from(self.shift) << 2)
+            | (u16::from(self.win) << 3)
+    }
 }

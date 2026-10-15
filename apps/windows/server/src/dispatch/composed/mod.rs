@@ -106,6 +106,25 @@ impl Router {
         if self.scripts.has_handlers("candidates") {
             self.let_scripts_reorder_candidates();
         }
+        // 双键拼音开着辅助码、又敲了大写辅助码却一个候选都没剩下：给一行提示。
+        // 脚本这一拍给过 `notice` 就以脚本的为准。
+        if self.notice.is_none() {
+            self.notice = self.auxiliary_filter_notice();
+        }
+    }
+
+    /// 双键拼音带辅助码时，敲了大写辅助码却筛到一个候选都不剩 → 「辅助码对不上」。
+    /// 没开双拼 / 没开辅助码 / 没敲大写 / 还有候选 → `None`。
+    fn auxiliary_filter_notice(&self) -> Option<String> {
+        let table = self.engine.shuangpin()?;
+        if !table.auxiliary {
+            return None;
+        }
+        self.engine.auxiliary_codes()?;
+        if !self.engine.composition().has_shifted() {
+            return None;
+        }
+        (self.candidate_count() == 0).then(|| "辅助码对不上，没有候选".to_owned())
     }
 
     /// 高亮移动 `delta`，夹在 `[0, 末尾]`，到页边自然换页。收起态的方向键用它。

@@ -6,8 +6,8 @@ use std::rc::Rc;
 
 use cloudime_platform::LayoutMode;
 use cloudime_render::{
-    Color, FontLibrary, Frame, Layout, Rendered, RenderedStatus, Renderer, Shadow, StatusCell,
-    Theme, UiFont, system_fonts,
+    Color, FontLibrary, Frame, Layout, Preedit, Rendered, RenderedStatus, Renderer, Row, Shadow,
+    StatusCell, Theme, UiFont, system_fonts,
 };
 
 use crate::dispatch::RenderSettings;
@@ -167,6 +167,64 @@ impl Painter {
             "候选窗位图已画"
         );
         Some(rendered)
+    }
+
+    /// 画一块空面板（内容区尺寸给死）：给「窗口模板」用。
+    pub(super) fn render_panel(&mut self, content: (i32, i32), dpi: u32) -> Option<Rendered> {
+        self.renderer
+            .render_panel(
+                content.0 as f32,
+                content.1 as f32,
+                &self.theme,
+                scale(dpi),
+                Some(&self.candidate_shadow),
+            )
+            .inspect_err(|error| tracing::warn!(%error, "窗口模板渲染失败"))
+            .ok()
+    }
+
+    /// 画一块「键位映射参考」面板（键位映射参考的版面给进来，内容区尺寸由版面自己定）：
+    /// 给「窗口模板 / 辅助窗口」用。
+    pub(super) fn render_key_map(
+        &mut self,
+        layout: &cloudime_render::KeyMapLayout,
+        cell: f32,
+        dpi: u32,
+    ) -> Option<Rendered> {
+        self.renderer
+            .render_key_map(
+                layout,
+                cell,
+                &self.theme,
+                scale(dpi),
+                Some(&self.candidate_shadow),
+            )
+            .inspect_err(|error| tracing::warn!(%error, "辅助窗口渲染失败"))
+            .ok()
+    }
+
+    /// 键位映射参考的格子边长（点）：让它的内容高度正好等于「候选窗口装 9 个候选项」那个高度
+    /// —— 竖排 / 横排都用它，两种排布下辅助窗口一样大。
+    pub(super) fn key_map_cell(&mut self, dpi: u32) -> f32 {
+        const ROWS: usize = 9;
+        let (_, height) = self.candidate_size(Layout::Vertical, ROWS, dpi);
+        cloudime_render::key_map_cell(height as f32 / scale(dpi))
+    }
+
+    /// 按「候选窗口装 `rows` 个候选、每个两个字」的形状量内容区尺寸（像素，不含阴影边）。
+    ///
+    /// 给「窗口模板」算默认大小用：竖排量 9 个候选的高度、横排量 6 个两字候选的宽度。
+    pub(super) fn candidate_size(&mut self, layout: Layout, rows: usize, dpi: u32) -> (i32, i32) {
+        let frame = Frame {
+            preedit: Some(Preedit::plain("shu'ru'fa", 0)),
+            rows: (0..rows).map(|index| Row::plain(index, "国国")).collect(),
+            footer: Some("1/1".to_owned()),
+            ..Frame::default()
+        };
+        let (width, height) = self
+            .renderer
+            .measure_frame(&frame, layout, &self.theme, scale(dpi));
+        (width as i32, height as i32)
     }
 
     /// 画状态条或状态切换提示：`kind` 决定用哪一套背景 / 图标 / 阴影色。

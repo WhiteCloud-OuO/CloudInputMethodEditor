@@ -2,10 +2,27 @@
 //! 这些高 z-band 宿主盖住，只有本进程配合 uiAccess 签名才能盖过）。
 //!
 //! HWND 线程亲和：Router 在工人线程上产出内容，经通道 + `PostThreadMessageW` 唤醒交给 UI 线程应用。
-//! 线程句柄是 [`UiHandle`]，命令在 [`command`]，候选窗口在 [`candidates`]，状态条在 [`status`]，分层窗口合成在 [`layered`]。
+//! 线程句柄是 [`UiHandle`]，命令在 [`command`]，分层窗口合成在 [`layered`]，两块窗口共用的渲染器在 [`painter`]。
+//! 两类窗口各有一个**模板**：独立窗口用 [`independent_window_template`]（自己那块窗 + 名下资产），
+//! 辅助窗口（资产）用 [`auxiliary_window_template`]（分层面板 + 贴宿主摆位）。
+//!
+//! **窗口分两类**（规则见 `docs/design/windows.md`）：
+//!
+//! - **独立窗口（independent window）**：各有一块自己的分层窗与**自己的生命周期**（UI 线程建、按需显示 / 隐藏、
+//!   随进程销毁）—— 候选窗口在 [`candidates`]、悬浮工具栏在 [`status`]、状态切换提示在 [`status_tip`]；
+//! - **辅助窗口（auxiliary window）**：挂在某块独立窗口上的辅助信息 / 提示窗口，是那块独立窗口的**资产**（asset），
+//!   在 [`auxiliary`]。**所有者唯一且不转移**（每个辅助窗口有且只有一个所有者，就是它的宿主；所有权不移交、
+//!   也不被直接借用），而且**只能经桥接**（bridging）跟所有者通讯 —— 它不能直接找别的辅助窗口或别的独立窗口，
+//!   要什么都得委托所有者（[`auxiliary::Bridge`]，宿主实现）。生命周期**始终绑定**到宿主：宿主先建好自己那块窗
+//!   再建资产（`Assets::add`），销毁时 `Drop` 的第一件事就是把资产放掉（`Assets::retire`）；显示 / 隐藏也由宿主
+//!   驱动（`Asset::sync` 里经 `owner.host()` / `owner.asset_on()` 要）。眼下只有候选窗口的
+//!   「键位映射参考」（[`auxiliary::key_map`]）一件。
 
+mod auxiliary;
+mod auxiliary_window_template;
 mod candidates;
 mod command;
+mod independent_window_template;
 mod layered;
 mod measure;
 mod monitor;
@@ -36,6 +53,8 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{Error, Result};
 
+use cloudime_platform::input_schemes::KeyMapLayout;
+use cloudime_platform::input_schemes::KeyMapReference;
 use cloudime_platform::protocol::{Frame, ScreenRect};
 
 use self::candidates::CandidateWindow;
@@ -125,6 +144,22 @@ impl CandidateSink for UiHandle {
 
     fn viewport(&self) -> Option<(f32, f32)> {
         self.viewport.get()
+    }
+
+    /// 开关「辅助窗口」（`auxiliary_window`，眼下是键位映射参考）：挂在配置的组合键上。
+    /// **必须在这个 impl 里覆盖** —— Router 拿的是 `Box<dyn CandidateSink>`，trait 上的默认体是空的。
+    fn auxiliary_toggle(&self) {
+        self.post(UiCommand::AuxiliaryToggle);
+    }
+
+    /// 换「辅助窗口」的显示方式（「始终跟随候选窗口」那种方式下，候选窗一显示就带上它）。
+    fn set_auxiliary_mode(&self, mode: KeyMapReference) {
+        self.post(UiCommand::AuxiliaryMode(mode));
+    }
+
+    /// 换「辅助窗口」的内容（键位映射参考的键盘版面）。
+    fn set_auxiliary(&self, layout: KeyMapLayout) {
+        self.post(UiCommand::AuxiliaryKeyMap(layout));
     }
 }
 
@@ -260,9 +295,32 @@ fn apply(
         UiCommand::Show(payload) => {
             let (frame, badges, rect) = *payload;
             window.set_content(&frame, &badges);
+            // 宿主换了一帧：名下资产由它自己在 `show` 里摆好（见 `super::auxiliary`）
             window.show(to_win_rect(rect));
         }
         UiCommand::Hide => window.hide(),
+        UiCommand::AuxiliaryToggle => {
+            // 名下的资产由宿主（候选窗口）自己管：这里只把开关递过去
+            let on = window.toggle_assets();
+            tracing::info!(
+                on,
+                expanded = window.expanded(),
+                layout = ?window.layout(),
+                "辅助窗口：开关（键位映射参考）"
+            );
+        }
+        UiCommand::AuxiliaryMode(mode) => {
+            tracing::info!(?mode, "辅助窗口：换显示方式（键位映射参考）");
+            window.set_asset_mode(mode);
+        }
+        UiCommand::AuxiliaryKeyMap(layout) => {
+            tracing::debug!(
+                rows = layout.rows.len(),
+                zero = layout.zero_initials.len(),
+                "辅助窗口：换内容（键位映射参考）"
+            );
+            window.set_asset_key_map(layout);
+        }
         UiCommand::StatusShow(view) => {
             if let Some(status) = status {
                 status.update(*view);
@@ -292,5 +350,28 @@ fn to_win_rect(rect: ScreenRect) -> RECT {
         top: rect.top,
         right: rect.right,
         bottom: rect.bottom,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// `auxiliary_toggle` 必须写成 `impl CandidateSink for UiHandle` 里的方法：Router 拿的是
+    /// `Box<dyn CandidateSink>`，写成 `UiHandle` 的固有方法就会落到 trait 上那个**空默认体**上 ——
+    /// `Ctrl+F1` 被吃掉却什么也不发生（真机踩过）。
+    #[test]
+    fn auxiliary_toggle_reaches_the_ui_thread_through_the_trait_object() {
+        let (sender, receiver) = mpsc::channel();
+        let sink: Box<dyn CandidateSink> = Box::new(UiHandle {
+            sender,
+            thread_id: 0,
+            viewport: Arc::new(Viewport::default()),
+        });
+        sink.auxiliary_toggle();
+        assert!(
+            matches!(receiver.try_recv(), Ok(UiCommand::AuxiliaryToggle)),
+            "开关命令该投进命令通道"
+        );
     }
 }

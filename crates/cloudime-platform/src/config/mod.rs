@@ -29,7 +29,7 @@ pub use candidate::{
 pub use debugging::DebuggingConfig;
 pub use general::{GeneralConfig, MAX_PAGE_SIZE};
 pub use input::{
-    DEFAULT_PUNCTUATION_MAPPING, FullHalfPunctuation, InputConfig, MO_HU_YIN_BITS,
+    DEFAULT_PUNCTUATION_MAPPING, FullHalfPunctuation, InputConfig, InputScheme, MO_HU_YIN_BITS,
     PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, SimpTrad, fuzzy_bits, pair_bit, pair_open,
     pairwise_completion,
 };
@@ -89,6 +89,12 @@ pub struct Config {
 pub const TEMPLATE: &str = r#"# 云朵输入法配置。保存后自动生效；也可以在「云朵输入法 设置」里改。
 
 [input]
+# 输入方案：full_pinyin 全键拼音（缺省）/ dual_key_pinyin 双键拼音 / shape_code 形码输入
+# （界面上的名字：「全键拼音」就是原来的全拼；双键拼音与形码输入还没实现，选了暂时一样）
+input_schemes = "full_pinyin"
+# 双键拼音下显示原始输入按键：拼音行显示敲的按键（ypdo）、没选候选回车也上屏原始按键；
+# 关掉则显示 / 上屏展开后的完整拼音（yunduo）
+show_raw_input = true
 # 使用简拼：中文模式下打出 YD 就能得到「云朵」，不必打全 YUNDUO。关掉只认完整音节（末尾没打完的照样算）
 use_jian_pin = true
 # 模糊音列表：勾选项的数值相加 —— zh/z·ch/c·sh/s 1、r/l·n/l 2、ng/n 4、ü/u 8、f/h 16；0 为全关
@@ -407,6 +413,8 @@ mod tests {
         assert_eq!(config.candidate.candidate_item_maximum_width, 420);
         assert_eq!(config.input.punctuation_marks_mapping, 0);
         assert!(config.input.punctuation_mapping().is_empty());
+        // 输入方案缺省是全拼
+        assert_eq!(config.input.input_schemes, InputScheme::FullPinyin);
         // 字体：候选 13pt、序号 11pt
         assert_eq!(config.candidate.candidate_font.size, 13.0);
         assert_eq!(config.candidate.item_number_font.size, 11.0);

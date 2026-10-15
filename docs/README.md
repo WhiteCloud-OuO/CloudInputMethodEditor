@@ -19,6 +19,8 @@ README.md 只介绍项目，所有技术内容放在这里，分四类：前三�
 | [design/theme.md](design/theme.md) | 主题（2026-10-09）：三个窗口的 21 个颜色收进一份 JSON，两个目录的优先级、从改色到热加载这条链、设置页「主题」页，以及还没做的（字体 / 布局 / 注解色） |
 | [design/script.md](design/script.md) | 用户脚本（2026-10-07）：脚本清单（manifest）与硬规则、没脚本就走老路、有脚本在固定四处跑、调用链路（一次按键走一遍）、能给脚本看到什么 / 改什么，以及出错、稳定性闸门与风险怎么兜 |
 | [design/online-translate.md](design/online-translate.md) | 在线翻译（2026-10-07）：输入法里**没有**这个功能 —— 它只给 `http_get` / `http_post` 与候选窗底部那一行（`online` 动作），翻什么、按哪个键、怎么签名全由脚本自己实现；随包一份小牛翻译的完整示例 |
+| [design/input-schemes.md](design/input-schemes.md) | 输入方案（2026-10-10）：三种方案单选、**永不混输**；双键拼音的方案文件格式（INI/TOML 双格式与「同名认 toml」、目录与 `use_input_scheme.cfg`、Info / Auxiliary / Shengmu / Exchange / Remapping 五节、零声母写死在 `[Shengmu]` 里、按键变换流水线、校验与报错）与内置样例（首道 / 小鹤 / 自然码） |
+| [design/windows.md](design/windows.md) | Server 侧自绘窗口的模型（2026-10-14）：两类窗口（独立窗口 / 辅助窗口）、所有者唯一且不转移、桥接（bridging）、资产克隆与资产窃取（暂不用，先定规则）、两个模板与实现落点 |
 | [plan/roadmap.md](plan/roadmap.md) | 分阶段路线图、各阶段的依赖关系与已完成项 |
 | [plan/todo.md](plan/todo.md) | 待办清单，按「从自用到能给别人用」排 |
 | [notes/crate-notes.md](notes/crate-notes.md) | 各 crate / app / tool 的实现要点：入口类型、数据文件、常数、生成命令 |

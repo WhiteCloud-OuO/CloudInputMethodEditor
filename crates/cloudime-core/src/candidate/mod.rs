@@ -28,6 +28,12 @@ pub struct Candidate {
 
     /// 候选的辅助读音 / 标注；中文词库候选不使用。
     pub reading: Option<String>,
+
+    /// 候选右侧要显示的**辅助码**（`XH` 这样；没有为 `None`，画不画由平台层看设置决定）。
+    /// 作用域里**光标前那个音节**对应候选的那个字的码：`ai|qg` 显示「爱」的码、`aiqg|` 显示「情」的码。
+    /// 只有双键拼音开着辅助码、而且挂着辅助码表时才填（见 `Engine::query_shuangpin`）。
+    #[serde(default)]
+    pub auxiliary: Option<String>,
 }
 
 impl Candidate {

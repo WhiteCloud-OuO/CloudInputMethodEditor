@@ -29,6 +29,8 @@ C:\Program Files\CloudIME\
                               template.lua（「新建脚本」的模板，加载器按文件名跳过、不执行；升级会覆盖它，用户脚本不动）
     data\icons-arrangement.cfg 悬浮状态条的按钮排布（哪个按钮、位置、图标）
     data\icons\*.svg          那些按钮的图标（20×20）
+    InputSchemes\             双键拼音方案文件（DoubleKeysPinyin\*.toml / .ini 与 AuxiliaryCodes\ 辅助码表；
+                              本目录对普通用户可写，设置页「输入 → 双键拼音」页走它；随包只建目录，方案由程序首次运行写出）
     assets\                   sample\
 ```
 
@@ -70,6 +72,8 @@ Server 与设置程序按 **exe 相对**定位随包资源（`cloudime_platform:
 1. **结束旧进程**：`PrepareToInstall` 里 `taskkill` Server 与设置程序（只有这两个 exe 要覆盖）。
 2. **应用容器权限**：`icacls` 给安装目录加 `ALL APPLICATION PACKAGES`（SID `*S-1-15-2-1`）读+执行。
    不加的话 UWP/AppContainer 应用（任务栏搜索、设置）读不到 DLL，切不到云朵输入法。
+   另外给 `WordBank\` / `Phrases\` / `Scripts\` / `InputSchemes\` 四棵目录授 `BUILTIN\Users`（SID `*S-1-5-32-545`）
+   改（M）权限：它们都在 Program Files 下，而用户要在设置页里改词库、短语、脚本与双键拼音方案。
 3. **注册文本服务**：64 位 DLL 用 `regsvr32`、32 位 DLL 用 `SysWOW64\regsvr32`，各注册一次（各自写进自己视图的 HKCR，`CTF\TIP` 两边共用；要管理员——安装程序本就提权）。
 4. **清旧 DLL**：装完删历次版本留下的 `cloudime_tsf*.dll`，仍被应用占用的登记成重启后删（`RestartReplace`）。
 5. **登录自启**：「启动」文件夹放 Server 快捷方式（Explorer 走 ShellExecute 拉起才拿到 uiAccess；计划任务拿不到）。

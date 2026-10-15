@@ -53,6 +53,7 @@ pub fn candidates(input: &str, now: &Zoned) -> Vec<Candidate> {
             kind: CandidateKind::Shortcut,
             syllables: Vec::new(),
             reading: None,
+            auxiliary: None,
         })
         .collect()
 }
@@ -74,6 +75,7 @@ pub fn result_candidates(body: &str) -> Vec<Candidate> {
         kind: CandidateKind::Shortcut,
         syllables: Vec::new(),
         reading: None,
+        auxiliary: None,
     }]
 }
 

@@ -48,7 +48,7 @@ pub struct Args {
     #[arg(long, value_delimiter = ',')]
     pub fuzzy: Vec<String>,
 
-    /// 英文模式（Engine 层）：字母不当拼音，候选只来自英文词表的补全与拼错纠正。产品里的英文模式
+    /// 英文模式（Engine 层）：字母不当拼音，候选只来自英文词表的精确词与前缀补全。产品里的英文模式
     /// 不给候选、字母直接交应用，这个开关只为评测词表查询路径
     #[arg(long)]
     pub english_mode: bool,

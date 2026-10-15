@@ -7,8 +7,8 @@ use std::time::Instant;
 
 use clap::Parser;
 use cloudime_render::{
-    FontLibrary, Frame, Layout, Preedit, PreeditSegment, PreeditStyle, Renderer, Row, Shadow,
-    StatusCell, Theme, TipSegment, Tone,
+    FontLibrary, Frame, KeyCap, KeyMapLayout, Layout, Preedit, PreeditSegment, PreeditStyle,
+    Renderer, Row, Shadow, StatusCell, Theme, TipSegment, Tone, key_map_cell,
 };
 
 #[derive(Parser)]
@@ -78,11 +78,17 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
     let shadow = (!args.no_shadow).then_some(Shadow::panel());
 
-    let scenes: [(&str, Frame, Layout); 9] = [
+    let scenes: [(&str, Frame, Layout); 11] = [
         ("matrix-horizontal", matrix(), Layout::Horizontal),
         ("matrix-vertical", matrix(), Layout::Vertical),
         ("nihao-vertical", nihao(), Layout::Vertical),
         ("nihao-horizontal", nihao(), Layout::Horizontal),
+        ("auxiliary-vertical", auxiliary_codes(), Layout::Vertical),
+        (
+            "auxiliary-horizontal",
+            auxiliary_codes(),
+            Layout::Horizontal,
+        ),
         ("online-vertical", online_translate(), Layout::Vertical),
         ("online-horizontal", online_translate(), Layout::Horizontal),
         ("corrected-vertical", corrected_japanese(), Layout::Vertical),
@@ -150,7 +156,110 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             renderer.trace_families(probe, &Theme::new()).join(" → ")
         );
     }
+
+    // 键位映射参考（辅助窗口）：三排键盘格子 + 右侧零声母表。格子边长按「候选窗口装 9 个候选项」
+    // 那个高度算 —— 与服务端一致（`Painter::key_map_cell`）。
+    let nine = Frame {
+        preedit: Some(Preedit::plain("shu'ru'fa", 0)),
+        rows: (0..9).map(|index| Row::plain(index, "国国")).collect(),
+        ..Default::default()
+    };
+    let target = {
+        let (_, height) = renderer.measure_frame(&nine, Layout::Vertical, &theme, args.scale);
+        height as f32 / args.scale
+    };
+    let cell = key_map_cell(target);
+    let key_map = key_map_layout();
+    let started = Instant::now();
+    let rendered = renderer.render_key_map(&key_map, cell, &theme, args.scale, shadow.as_ref())?;
+    let elapsed = started.elapsed();
+    let path = args.out.join("key-map.png");
+    rendered.pixmap.save_png(&path)?;
+    let (w, h) = rendered.content_size_points();
+    println!(
+        "{:<28} {:>4.0}×{:<4.0}pt  格子 {:.1}pt（目标高 {:.0}pt）  {:>8.2?}  {}",
+        "key-map",
+        w,
+        h,
+        cell,
+        target,
+        elapsed,
+        path.display()
+    );
     Ok(())
+}
+
+/// 键位映射参考的样例版面：首道双拼（`docs/design/input-schemes.md` §7 那份），零声母取全部 12 项。
+/// 键位映射参考的样例版面：首道双拼（`docs/design/input-schemes.md` §7 那份），零声母取全部 12 项。
+///
+/// 每格：左上角那颗键、右上角的声母（zh / ch / sh）、中间几行韵母（`v` 写成 `ü`）。
+fn key_map_layout() -> KeyMapLayout {
+    const ROWS: [&[(&str, &str, &str)]; 3] = [
+        &[
+            ("Q", "", "iu"),
+            ("W", "", "ua"),
+            ("E", "sh", "e"),
+            ("R", "", "ie"),
+            ("T", "", "uan\nüan"),
+            ("Y", "", "ang"),
+            ("U", "", "u"),
+            ("I", "ch", "i"),
+            ("O", "", "uo\no"),
+            ("P", "", "iao"),
+        ],
+        &[
+            ("A", "", "a"),
+            ("S", "", "ou"),
+            ("D", "", "ao"),
+            ("F", "", "eng"),
+            ("G", "", "uai\ning"),
+            ("H", "", "ong\niong"),
+            ("J", "", "an"),
+            ("K", "", "en\nia"),
+            ("L", "", "ai\nue"),
+            (";", "", ""),
+        ],
+        &[
+            ("Z", "", "un\nün"),
+            ("X", "", "iang\nuang"),
+            ("C", "", "in"),
+            ("V", "zh", "ui\nü"),
+            ("B", "", "üe"),
+            ("N", "", "ian"),
+            ("M", "", "ei"),
+        ],
+    ];
+    const ZERO: [(&str, &str); 12] = [
+        ("AA", "a"),
+        ("UE", "e"),
+        ("OO", "o"),
+        ("AI", "ai"),
+        ("UI", "ei"),
+        ("OU", "ou"),
+        ("AN", "an"),
+        ("EN", "en"),
+        ("AY", "ang"),
+        ("ER", "er"),
+        ("AO", "ao"),
+        ("UF", "eng"),
+    ];
+    let cap = |(key, initial, mapping): (&str, &str, &str)| KeyCap {
+        key: key.to_owned(),
+        initial: initial.to_owned(),
+        mapping: mapping.to_owned(),
+    };
+    let zero = |(key, mapping): (&str, &str)| KeyCap {
+        key: key.to_owned(),
+        initial: String::new(),
+        mapping: mapping.to_owned(),
+    };
+    KeyMapLayout {
+        rows: ROWS
+            .iter()
+            .map(|row| row.iter().copied().map(cap).collect())
+            .collect(),
+        zero_initials: ZERO.iter().copied().map(zero).collect(),
+    }
 }
 
 /// 悬浮状态条的图标源：直接读 Server 那边的 `icons\`（同一仓库，不另存一份）。
@@ -265,6 +374,10 @@ fn matrix() -> Frame {
     // 给一格挂个来源角标：预览里能同时看到横排的「角标与候选词最小间隔 2 个字宽」与
     // 「每格最小宽度 6 个字宽 + 角标」。
     rows[0].badge = Some("造".into());
+    // 辅助码：紧跟候选词（中间一个空格）；展开态截断上限跟着让出来。第 12 行还带译文，三者一起看。
+    rows[0].auxiliary = Some("[XH]".into());
+    rows[1].auxiliary = Some("[XH]".into());
+    rows[12].auxiliary = Some("[XH]".into());
     Frame {
         preedit: Some(Preedit {
             segments: vec![PreeditSegment {
@@ -281,6 +394,46 @@ fn matrix() -> Frame {
         tip: None,
         online: None,
         footer: Some("2/12".into()),
+        status: None,
+    }
+}
+
+/// 双键拼音 + 辅助码：候选词右侧紧跟**一个空格 + 码**（`[XH]`），字体与颜色跟角标一致。
+/// 拼音串是 `ai'qg`（光标在末尾），按「光标前那个音节」的规则显示的是**「情」**的码 ——
+/// 所以单字的「爱」没有码可显示（那种候选对不上位置就不显示）。
+fn auxiliary_codes() -> Frame {
+    let items = [
+        ("爱情", Some("XH")),
+        ("爱情故事", Some("XH")),
+        ("爱", None),
+        ("艾青", Some("XH")),
+        ("爱卿", Some("XH")),
+        ("碍情", Some("XH")),
+        ("爱琴", Some("XH")),
+        ("爱请", Some("XH")),
+        ("爱清", Some("XH")),
+    ];
+    let mut rows: Vec<Row> = items
+        .iter()
+        .enumerate()
+        .map(|(i, (text, code))| {
+            let mut row = Row::plain(i, *text);
+            row.auxiliary = code.map(|code| format!("[{code}]"));
+            row
+        })
+        .collect();
+    // 角标与辅助码同时在：角标贴格右边缘、辅助码紧跟候选词
+    rows[1].badge = Some("造".into());
+    Frame {
+        preedit: Some(Preedit::plain("ai'qg", 5)),
+        rows,
+        highlighted: Some(0),
+        highlight_animation: None,
+        columns: 0,
+        min_cell_width: 0.0,
+        tip: None,
+        online: None,
+        footer: Some("1/3".into()),
         status: None,
     }
 }
@@ -441,5 +594,6 @@ fn annotated(index: usize, text: &str, annotation: &[(&str, Tone)], _cloud: bool
             .map(|(s, tone)| ((*s).to_owned(), *tone))
             .collect(),
         badge: None,
+        auxiliary: None,
     }
 }

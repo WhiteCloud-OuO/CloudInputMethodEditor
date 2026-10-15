@@ -20,19 +20,22 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_CONTROL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, IDC_ARROW, KillTimer, LoadCursorW,
-    MA_NOACTIVATE, SW_HIDE, SW_SHOWNA, SetTimer, ShowWindow, WM_CONTEXTMENU, WM_LBUTTONDOWN,
-    WM_MBUTTONDOWN, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_POPUP,
+    DefWindowProcW, IDC_ARROW, KillTimer, LoadCursorW, MA_NOACTIVATE, SW_HIDE, SW_SHOWNA, SetTimer,
+    ShowWindow, WM_CONTEXTMENU, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
+    WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER,
 };
 use windows::core::{PCWSTR, Result, w};
 
 use cloudime_platform::ItemNumberStyle;
+use cloudime_platform::LayoutMode;
+use cloudime_platform::input_schemes::{KeyMapLayout, KeyMapReference};
 use cloudime_platform::protocol::Frame;
 use cloudime_render::{HighlightAnimation, HighlightRect, Pixmap, clip_pixmap};
 
 pub(crate) use self::render_data::RenderData;
+use super::auxiliary::key_map::KeyMapWindow;
+use super::auxiliary::{Bridge, Host};
+use super::independent_window_template::IndependentWindowTemplate;
 use super::layered;
 use super::monitor;
 use super::painter::SharedPainter;
@@ -159,8 +162,12 @@ struct Transition {
 }
 
 /// 候选窗口。内容经 `UpdateLayeredWindow` 一次贴上，窗口过程只额外处理滑动定时器。
+///
+/// 它是一块**独立窗口**（见 [`super::independent_window_template`]）：自己那块窗与**名下的资产**
+/// （辅助窗口，眼下是键位映射参考）都交给 [`IndependentWindowTemplate`] 管。
 pub(crate) struct CandidateWindow {
-    hwnd: HWND,
+    /// 独立窗口模板：自己那块分层窗 + 名下资产（销毁时先放资产、再销毁窗）。
+    template: IndependentWindowTemplate,
 
     /// 绘制内容。
     data: RefCell<RenderData>,
@@ -185,6 +192,9 @@ pub(crate) struct CandidateWindow {
 
     /// 序号写法（配置变了重设）。
     index_style: Cell<ItemNumberStyle>,
+
+    /// 在候选项显示辅助码（`use_input_scheme.cfg` 的 `candidate_auxiliary`，配置变了重设）。
+    candidate_auxiliary: Cell<bool>,
 
     /// 上次绘制时内容区左上角在位图里的位置（阴影留白）：客户区坐标换内容区坐标用。
     margin: Cell<(i32, i32)>,
@@ -219,6 +229,17 @@ pub(crate) struct CandidateWindow {
 
     /// 最近画出来的内容区尺寸（点）对外公布的地方：脚本的 `cloudime.candidate.width()` 读它。
     viewport: Arc<Viewport>,
+
+    /// 上次贴出去的**内容区**屏幕矩形（物理像素）；没显示时为 `None`。
+    /// 辅助窗口模板按它（宿主内容区矩形）把自己摆在候选窗旁边。
+    content_rect: Cell<Option<RECT>>,
+
+    /// 名下资产（辅助窗口）的开关：组句里按配置的组合键切，候选窗一收就归零。
+    assets_on: Cell<bool>,
+
+    /// 名下资产的显示方式（`use_input_scheme.cfg` 的 `key_map_reference`）：
+    /// 「始终跟随候选窗口」时每次 `show` 都把开关打开（不用按键）。
+    assets_mode: Cell<KeyMapReference>,
 }
 
 impl CandidateWindow {
@@ -228,34 +249,24 @@ impl CandidateWindow {
         events: CandidateEvents,
         viewport: Arc<Viewport>,
     ) -> Result<Self> {
-        CLASS.ensure(|| WNDCLASSEXW {
-            lpfnWndProc: Some(wndproc),
-            hInstance: super::module_handle(),
-            hCursor: unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default(),
-            lpszClassName: CLASS_NAME,
-            ..Default::default()
-        })?;
+        // 独立窗口模板：注册窗口类 + 建一块分层、置顶、不抢焦点的弹出窗（要接鼠标，给个箭头）
+        let mut template = IndependentWindowTemplate::new(
+            &CLASS,
+            CLASS_NAME,
+            w!("云朵候选"),
+            wndproc,
+            false,
+            Some(unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default()),
+        )?;
         let dpi = unsafe { GetDpiForSystem() }.max(96);
         let data = RefCell::new(RenderData::empty());
-        // NOACTIVATE：显示时不抢应用焦点。
-        let hwnd = unsafe {
-            CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
-                CLASS_NAME,
-                w!("云朵候选"),
-                WS_POPUP,
-                0,
-                0,
-                0,
-                0,
-                None,
-                None,
-                Some(super::module_handle()),
-                None,
-            )?
-        };
+        // 资产的寿命在宿主这块窗建好**之后**开始：先有自己，再建名下资产（见 `super::auxiliary`）
+        match KeyMapWindow::new(painter.clone()) {
+            Ok(asset) => template.assets_mut().add(Box::new(asset)),
+            Err(error) => tracing::error!(%error, "建键位映射参考窗口失败，将不显示它"),
+        }
         Ok(Self {
-            hwnd,
+            template,
             data,
             slide: RefCell::new(None),
             last_rects: RefCell::new(Vec::new()),
@@ -264,6 +275,7 @@ impl CandidateWindow {
             logged_dpi: Cell::new(None),
             painter,
             index_style: Cell::new(ItemNumberStyle::default()),
+            candidate_auxiliary: Cell::new(false),
             margin: Cell::new((0, 0)),
             hover: Cell::new(None),
             collapsed_width: Cell::new(0.0),
@@ -274,12 +286,18 @@ impl CandidateWindow {
             zoom_step: Cell::new(0),
             script_scale: Cell::new(None),
             viewport,
+            content_rect: Cell::new(None),
+            assets_on: Cell::new(false),
+            assets_mode: Cell::new(KeyMapReference::Off),
         })
     }
 
     /// 把窗口登记进本线程的表，窗口过程按 HWND 找回它。
     pub(crate) fn attach(self: &Rc<Self>) {
-        WINDOWS.with(|map| map.borrow_mut().insert(self.hwnd.0 as isize, self.clone()));
+        WINDOWS.with(|map| {
+            map.borrow_mut()
+                .insert(self.template.hwnd().0 as isize, self.clone())
+        });
     }
 
     /// 刷新内容（不定位、不显示）；`badges` 是每个候选的来源角标。
@@ -290,7 +308,12 @@ impl CandidateWindow {
     /// - 翻页 / 新查询 / 重新弹出：内容换了不续滑，直接画新高亮。
     pub(crate) fn set_content(&self, frame: &Frame, badges: &[Option<char>]) {
         let mut next = self.data.borrow().clone();
-        next.set(frame, badges, self.index_style.get());
+        next.set(
+            frame,
+            badges,
+            self.index_style.get(),
+            self.candidate_auxiliary.get(),
+        );
         let (from, to) = (self.data.borrow().highlight, next.highlight);
         let (plan, transition_from, rect_count, row_count) = {
             let previous = self.data.borrow();
@@ -352,24 +375,74 @@ impl CandidateWindow {
         }
     }
 
-    /// 配置变了：换序号写法与脚本要的缩放（三项字体与最小宽度在 painter 那边）。
+    /// 配置变了：换序号写法、辅助码显示开关与脚本要的缩放（三项字体与最小宽度在 painter 那边）。
     pub(crate) fn configure(&self, settings: &RenderSettings) {
         self.index_style.set(settings.item_number_style);
+        self.candidate_auxiliary.set(settings.candidate_auxiliary);
         // 脚本要的缩放（`cloudime.candidate.set_scale`）：配置一变就跟着刷新
         self.script_scale.set(settings.scale);
+    }
+
+    /// 当前排布方向：窗口模板按它决定贴候选窗右侧（竖排）还是下方（横排）。
+    pub(crate) fn layout(&self) -> LayoutMode {
+        self.data.borrow().layout
+    }
+
+    /// 是不是展开着（Tab 的「更多候选项」）：展开时名下的资产要让位（见 [`super::auxiliary::Asset`]）。
+    pub(crate) fn expanded(&self) -> bool {
+        self.data.borrow().columns > 0
+    }
+
+    /// 把名下资产驱动一遍（贴出一帧、或开关变了之后调）。
+    ///
+    /// 桥接：把自己（所有者）借给它们用一下 —— 资产要什么经 [`Bridge`] 回来要，够不着别的窗口。
+    fn sync_assets(&self) {
+        self.template.assets().sync(self);
+    }
+
+    /// 组句里按配置的组合键：开关名下的资产（眼下是键位映射参考），返回新的开关状态。
+    pub(crate) fn toggle_assets(&self) -> bool {
+        let on = !self.assets_on.get();
+        self.assets_on.set(on);
+        self.sync_assets();
+        on
+    }
+
+    /// 换显示方式（`use_input_scheme.cfg` 的 `key_map_reference`）。
+    /// 「始终跟随候选窗口」时立刻把开关打开并摆一遍（设置页改完不用等下一次组句）；
+    /// 换成别的两种时把开关归零（下一次组句按新的方式走）。
+    pub(crate) fn set_asset_mode(&self, mode: KeyMapReference) {
+        self.assets_mode.set(mode);
+        self.assets_on.set(mode == KeyMapReference::Always);
+        self.sync_assets();
+    }
+
+    /// 换名下资产的内容（键位映射参考的键盘版面；方案换了就重送一份）。
+    pub(crate) fn set_asset_key_map(&self, layout: KeyMapLayout) {
+        self.template.assets().set_key_map(layout);
     }
 
     /// 按光标矩形定位并显示：贴光标下方（放不下放上方），四周留出阴影。
     pub(crate) fn show(&self, anchor: RECT) {
         self.anchor.set(Some(anchor));
         self.sync_dpi(anchor);
+        // 「始终跟随候选窗口」：候选窗一出现就把资产带上（不用按键；收起时照旧归零）
+        if self.assets_mode.get() == KeyMapReference::Always {
+            self.assets_on.set(true);
+        }
         self.redraw();
         self.sync_timer();
+        // 宿主换了一帧：名下资产按新形状摆一遍（关着时 sync 会自己收起它们）
+        self.sync_assets();
     }
 
     pub(crate) fn hide(&self) {
         // 忘掉 anchor 与上一帧的位置：下次重新弹出时即使内容碰巧一样，也不该跟上次的高亮位置做滑动。
         self.anchor.set(None);
+        self.content_rect.set(None);
+        // 这一轮组句结束：名下的资产一起收起，开关也回到「关」（下次弹出要看得再按一次 `Ctrl+F1`）
+        self.assets_on.set(false);
+        self.template.assets().hide();
         self.last_rects.borrow_mut().clear();
         // 收起态的宽度也跟着作废：换了个应用（窗口宽度不同）不该拿上一段组句的宽度当最小宽度。
         self.collapsed_width.set(0.0);
@@ -379,7 +452,7 @@ impl CandidateWindow {
         // 窗口不在了：脚本问宽度就该得到「没有」。
         self.viewport.clear();
         self.stop_animation();
-        let _ = unsafe { ShowWindow(self.hwnd, SW_HIDE) };
+        let _ = unsafe { ShowWindow(self.template.hwnd(), SW_HIDE) };
     }
 
     /// 定时器到点：按经过时间重画一帧，并决定还继不继续。
@@ -455,8 +528,15 @@ impl CandidateWindow {
             None => content,
         });
         let (content_x, content_y) = place(anchor, (content.0 as i32, content.1 as i32));
+        // 给窗口模板摆位用：把这次贴出去的**内容区**屏幕矩形记下来
+        self.content_rect.set(Some(RECT {
+            left: content_x,
+            top: content_y,
+            right: content_x + content.0 as i32,
+            bottom: content_y + content.1 as i32,
+        }));
         let updated = layered::present(
-            self.hwnd,
+            self.template.hwnd(),
             pixmap,
             (
                 content_x - rendered.content_x as i32,
@@ -465,7 +545,7 @@ impl CandidateWindow {
             alpha,
         );
         if updated.is_ok() {
-            let _ = unsafe { ShowWindow(self.hwnd, SW_SHOWNA) };
+            let _ = unsafe { ShowWindow(self.template.hwnd(), SW_SHOWNA) };
         } else {
             self.hide();
         }
@@ -511,7 +591,14 @@ impl CandidateWindow {
             transition.started.elapsed() < Duration::from_millis(TRANSITION_MS)
         });
         if sliding || transitioning {
-            let _ = unsafe { SetTimer(Some(self.hwnd), SLIDE_TIMER_ID, SLIDE_FRAME_MS, None) };
+            let _ = unsafe {
+                SetTimer(
+                    Some(self.template.hwnd()),
+                    SLIDE_TIMER_ID,
+                    SLIDE_FRAME_MS,
+                    None,
+                )
+            };
         } else {
             self.stop_animation();
         }
@@ -521,7 +608,7 @@ impl CandidateWindow {
     fn stop_slide(&self) {
         self.slide.replace(None);
         if self.transition.borrow().is_none() {
-            let _ = unsafe { KillTimer(Some(self.hwnd), SLIDE_TIMER_ID) };
+            let _ = unsafe { KillTimer(Some(self.template.hwnd()), SLIDE_TIMER_ID) };
         }
     }
 
@@ -529,7 +616,7 @@ impl CandidateWindow {
     fn stop_animation(&self) {
         self.slide.replace(None);
         self.transition.replace(None);
-        let _ = unsafe { KillTimer(Some(self.hwnd), SLIDE_TIMER_ID) };
+        let _ = unsafe { KillTimer(Some(self.template.hwnd()), SLIDE_TIMER_ID) };
     }
 
     /// 客户区坐标落在第几格候选上。收起态也有各行的矩形（竖排一行一个、横排一个一行），
@@ -628,7 +715,7 @@ impl CandidateWindow {
         let mut track = TRACKMOUSEEVENT {
             cbSize: std::mem::size_of::<TRACKMOUSEEVENT>() as u32,
             dwFlags: TME_LEAVE,
-            hwndTrack: self.hwnd,
+            hwndTrack: self.template.hwnd(),
             dwHoverTime: 0,
         };
         let _ = unsafe { TrackMouseEvent(&mut track) };
@@ -644,7 +731,7 @@ impl CandidateWindow {
             y: anchor.top,
         };
         let monitor_dpi = monitor::dpi_near(caret);
-        let window_dpi = unsafe { GetDpiForWindow(self.hwnd) };
+        let window_dpi = unsafe { GetDpiForWindow(self.template.hwnd()) };
         let dpi = match (monitor_dpi, window_dpi) {
             (Some(dpi), _) => dpi,
             (None, 0) => self.dpi.get(),
@@ -673,9 +760,19 @@ impl CandidateWindow {
     }
 }
 
-impl Drop for CandidateWindow {
-    fn drop(&mut self) {
-        let _ = unsafe { DestroyWindow(self.hwnd) };
+/// 候选窗口是名下资产（辅助窗口）的**所有者**：资产要什么只能经这条**桥接**路跟它要
+/// （见 [`super::auxiliary`]）—— 它们够不着别的辅助窗口，也够不着别的独立窗口。
+impl Bridge for CandidateWindow {
+    fn host(&self) -> Host {
+        Host {
+            rect: self.content_rect.get(),
+            layout: self.layout(),
+            expanded: self.expanded(),
+        }
+    }
+
+    fn asset_on(&self) -> bool {
+        self.assets_on.get()
     }
 }
 

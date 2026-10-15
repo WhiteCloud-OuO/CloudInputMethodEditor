@@ -150,6 +150,16 @@ pub(super) fn note(text: &str) -> View {
         .into()
 }
 
+/// 红色小字（失败原因）。配色与 [`feedback`] 里那条错误一致。
+pub(super) fn error_note(text: &str) -> View {
+    TextBlock::new()
+        .text(text)
+        .text_wrapping(TextWrapping::Wrap)
+        .font_size(12.0)
+        .foreground(ThemeBrush::SystemCritical)
+        .into()
+}
+
 /// 一整项：「标签 + 控件」一行，下接说明（`hint` 为空则不加）；标签与控件垂直居中。
 pub(super) fn field(label: &str, hint: &str, control: impl Into<View>) -> View {
     with_hint(labeled(label, control), hint)
@@ -180,7 +190,7 @@ pub(super) fn entry_title(name: &str, entries: usize, license: &str, broken: boo
     text
 }
 
-/// 表格的一行：`Grid` + 列宽 + 列间距；列宽与表头用同一份（各页自己的常量），免得两行错位。
+/// 表格的一行：`Grid` + 列宽 + 列间距，行下面压一条 1 DIP 的分隔线（见 [`separator`]）。
 ///
 /// 单元格靠 `grid_column(i)` 定位（见 [`text_cell`]）。**最后一列别用 `Auto`**：表头那行往往
 /// 没有按钮，`Auto` 会塌成 0，表头与数据行就对不上了，钉死一个宽度。
@@ -188,10 +198,44 @@ pub(super) fn grid_row(
     columns: impl IntoIterator<Item = GridLength>,
     cells: impl IntoIterator<Item = KeyedView>,
 ) -> View {
-    Grid::new()
+    let grid = Grid::new()
         .columns(columns)
         .column_spacing(12.0)
-        .keyed_children(cells)
+        .keyed_children(cells);
+    // 线与文字之间留一点空：贴着画太挤（行高由内容定，这里只给线与格子之间让出空）
+    StackPanel::new().spacing(6.0).children([grid, separator()])
+}
+
+/// 表头那一行：同 [`grid_row`]，整行（连它下面那条分隔线）铺一层卡片底色，跟数据行分开。
+pub(super) fn header_row(
+    columns: impl IntoIterator<Item = GridLength>,
+    cells: impl IntoIterator<Item = KeyedView>,
+) -> View {
+    Border::new()
+        .background(ThemeBrush::CardBackground)
+        .content(grid_row(columns, cells))
+}
+
+/// 一张表格：外面一圈 1 DIP 的卡片色边框 + 圆角；行与行之间那条线由 [`grid_row`] 自己画。
+///
+/// 整张表留 12 DIP 内边距：表头那行的底色与各行的单元格都从这一边起算，列才对得齐。
+/// 表格里除了 [`grid_row`] / [`header_row`] 之外还能放别的行（空表提示、列表错误），它们不画线。
+pub(super) fn table(rows: impl IntoIterator<Item = KeyedView>) -> View {
+    Border::new()
+        .border_brush(ThemeBrush::CardStroke)
+        .border_thickness(Thickness::uniform(1.0))
+        .corner_radius(CornerRadius::uniform(6.0))
+        .padding(Thickness::uniform(12.0))
+        .content(StackPanel::new().keyed_children(rows))
+}
+
+/// 行与行之间那条线：1 DIP 的卡片色压淡一半（比表格外框轻）。
+fn separator() -> View {
+    Border::new()
+        .background(ThemeBrush::CardStroke)
+        .opacity(0.5)
+        .height(1.0)
+        .into()
 }
 
 /// 表格单元格的文本：`column` 是第几列，`bold` 加粗、`wrap` 换行（最多 3 行，超出打省略号）。
@@ -348,6 +392,9 @@ pub(super) fn slider_field(
 /// 勾选 / 名单列表的通用外壳：`ListView` 装给定的项，不要选中行为，最多同时显示 5 行。
 /// windows-reactor 没有 XAML 那种 `DataTemplate` / `ItemsSource`，所谓「项目模板」就是在 Rust 里
 /// 给每一项建好一份视图（`ListViewItem` 之类）再用 `collection_slot` 交给列表。
+///
+/// 整个列表**没有** `is_enabled`（框架的 `ListView` 不走 `Control` 那套属性）：要让一组勾选变灰、
+/// 不可点，得逐项禁掉里面的 `CheckBox`（滚轮 / 滚动条不受影响，但没有可交互的项）。
 pub(super) fn scroll_list(items: impl IntoIterator<Item = KeyedView>) -> View {
     ListView::new()
         // 列表只用来摆项，不要选中高亮与单/多选行为。

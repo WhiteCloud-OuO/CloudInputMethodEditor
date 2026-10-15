@@ -18,6 +18,8 @@ use crate::speech;
 #[derive(Default)]
 struct Recorded {
     shows: Mutex<Vec<(Frame, ScreenRect)>>,
+    /// 「辅助窗口」被开关了几次（`CandidateSink::auxiliary_toggle`）。
+    auxiliary_toggles: Mutex<u32>,
 }
 
 struct RecordingSink(Arc<Recorded>);
@@ -30,6 +32,10 @@ impl CandidateSink for RecordingSink {
     fn hide(&self) {}
 
     fn configure(&self, _settings: RenderSettings) {}
+
+    fn auxiliary_toggle(&self) {
+        *self.0.auxiliary_toggles.lock().unwrap() += 1;
+    }
 }
 
 fn router(size: usize) -> Router {
@@ -1256,4 +1262,160 @@ fn a_later_candidate_rect_resends_an_identical_frame() {
     assert_eq!(shows.len(), 3);
     assert_eq!(shows[1].0, shows[2].0);
     assert_ne!(shows[1].1, shows[2].1);
+}
+
+/// 双键拼音 + 辅助码的 Router：`l` = ai、`a` = a，开发 = K + F。
+fn shuangpin_router() -> Router {
+    use std::collections::BTreeMap;
+
+    use cloudime_core::shuangpin::{AuxiliaryTable, KeyMapping, Table};
+
+    let mut remapping: BTreeMap<char, KeyMapping> = BTreeMap::new();
+    for (key, final_) in [('l', "ai"), ('a', "a")] {
+        remapping.insert(
+            key,
+            KeyMapping {
+                initials: Vec::new(),
+                finals: vec![final_.to_owned()],
+            },
+        );
+    }
+    let table = Table {
+        zero_initials: BTreeMap::new(),
+        remapping,
+        exchange: Vec::new(),
+        auxiliary: true,
+    };
+
+    struct Codes(BTreeMap<String, Vec<String>>);
+    impl AuxiliaryTable for Codes {
+        fn codes(&self, word: &str) -> Option<&[String]> {
+            self.0.get(word).map(Vec::as_slice)
+        }
+    }
+    let codes = Codes(BTreeMap::from([("开发".to_owned(), vec!["KF".to_owned()])]));
+
+    let mut engine = Engine::new(Dictionary::parse("开发\tkai fa\t9000\n").unwrap());
+    engine.set_shuangpin(Some(table));
+    engine.set_auxiliary_codes(Some(Box::new(codes)));
+    let mut router = Router::new(
+        engine,
+        RouterConfig {
+            page_size: 9,
+            ..Default::default()
+        },
+    );
+    router.handle(ClientMessage::OpenSession {
+        session: SessionId(1),
+        app: None,
+        protocol: PROTOCOL_VERSION,
+    });
+    router
+}
+
+/// 双键拼音开着辅助码、敲了大写辅助码却一个候选都没剩：候选窗里给一行提示。
+#[test]
+fn auxiliary_filter_without_hits_shows_a_notice() {
+    let normal = KeyModifiers::default();
+
+    // `klfa` 展开成 kai'fa → 开发；再敲 X 当辅助码（开发是 KF）→ 筛空
+    let mut r = shuangpin_router();
+    compose(&mut r, "klfa", normal);
+    let (_, _, frame) = key(&mut r, 'X' as u32, Some('X'), normal);
+    assert!(frame.candidates.items.is_empty(), "辅助码对不上：没有候选");
+    assert_eq!(frame.notice.as_deref(), Some("辅助码对不上，没有候选"));
+
+    // 敲对了（F）→ 有候选、没有提示
+    let mut r = shuangpin_router();
+    compose(&mut r, "klfa", normal);
+    let (_, _, frame) = key(&mut r, 'F' as u32, Some('F'), normal);
+    assert!(
+        frame
+            .candidates
+            .items
+            .iter()
+            .any(|candidate| candidate.text == "开发"),
+        "{:?}",
+        frame.candidates.items
+    );
+    assert!(frame.notice.is_none());
+}
+
+/// 「键位映射参考」组合键的路由：只有显示方式选了「按下组合键时」、**在组句里**、且**精确**按中
+/// 配置的那套修饰键 + 那个功能键时才开关辅助窗口；别的键、别的修饰键、别的显示方式都不动它。
+#[test]
+fn the_key_map_hotkey_toggles_the_auxiliary_window() {
+    use cloudime_platform::input_schemes::{
+        KeyMapHotkey, KeyMapKey, KeyMapModifiers, KeyMapReference,
+    };
+
+    let normal = KeyModifiers::default();
+    let hotkey = KeyMapHotkey {
+        modifiers: KeyMapModifiers::AltShift,
+        key: KeyMapKey::F7,
+    };
+    let alt_shift = KeyModifiers {
+        alt: true,
+        shift: true,
+        ..normal
+    };
+    let hotkey_router = |mode: KeyMapReference| {
+        let recorded = Arc::new(Recorded::default());
+        let mut router = Router::new(
+            Engine::new(Dictionary::parse("你\tni\t100\n").unwrap()),
+            RouterConfig {
+                page_size: 9,
+                key_map_reference: mode,
+                key_map_hotkey: hotkey,
+                ..Default::default()
+            },
+        );
+        router.set_candidate_sink(Box::new(RecordingSink(recorded.clone())));
+        router.handle(ClientMessage::OpenSession {
+            session: SessionId(1),
+            app: None,
+            protocol: PROTOCOL_VERSION,
+        });
+        (router, recorded)
+    };
+    let toggles = |recorded: &Arc<Recorded>| *recorded.auxiliary_toggles.lock().unwrap();
+
+    // 「按下组合键时」+ 组句里 + 正好是那套组合键 → 开关一次
+    let (mut router, recorded) = hotkey_router(KeyMapReference::Hotkey);
+    compose(&mut router, "ni", normal);
+    key(&mut router, 0x76, Some('\u{1}'), alt_shift); // VK_F7
+    assert_eq!(toggles(&recorded), 1, "精确命中 → 开关辅助窗口");
+    // 修饰键多按一个（Alt+Shift+Ctrl）不算
+    let ctrl_alt_shift = KeyModifiers {
+        ctrl: true,
+        ..alt_shift
+    };
+    key(&mut router, 0x76, Some('\u{1}'), ctrl_alt_shift);
+    assert_eq!(toggles(&recorded), 1, "修饰键对不上 → 不动");
+    // 别的功能键不算
+    key(&mut router, 0x70, Some('\u{1}'), alt_shift);
+    assert_eq!(toggles(&recorded), 1, "别的键 → 不动");
+
+    // 显示方式不是「按下组合键时」：同一个组合键不动它
+    for mode in [KeyMapReference::Off, KeyMapReference::Always] {
+        let (mut router, recorded) = hotkey_router(mode);
+        compose(&mut router, "ni", normal);
+        key(&mut router, 0x76, Some('\u{1}'), alt_shift);
+        assert_eq!(toggles(&recorded), 0, "{mode:?} 下组合键不该动它");
+    }
+
+    // 没在组句里：也不动（组合键是打字过程中用的）
+    let (mut router, recorded) = hotkey_router(KeyMapReference::Hotkey);
+    key(&mut router, 0x76, Some('\u{1}'), alt_shift);
+    assert_eq!(toggles(&recorded), 0, "没组句 → 不动");
+}
+
+/// 双拼下 `v` 只是普通方案键：候选窗左下角（翻译 Tip 那行）不该出现「输入数字或表达式」。
+#[test]
+fn shuangpin_does_not_show_the_expression_hint() {
+    let normal = KeyModifiers::default();
+    let mut r = shuangpin_router();
+    compose(&mut r, "vh", normal);
+    let (_, _, frame) = key(&mut r, 'g' as u32, Some('g'), normal);
+    assert!(frame.tip.is_none(), "{:?}", frame.tip);
 }
