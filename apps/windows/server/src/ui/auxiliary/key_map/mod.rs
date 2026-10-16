@@ -56,18 +56,24 @@ impl Asset for KeyMapWindow {
         self.template.set_key_map(layout);
     }
 
+    /// 这件资产的名字：同一所有者名下唯一（宿主的 `Assets::add` 盯着），跨资产指认与日志用它。
+    fn name(&self) -> &'static str {
+        "key_map"
+    }
+
     /// 创建时声明过才有（见 [`Self::new`]）：取的是模板上那一份，两处不会各说各的。
     fn able_to_get_focus(&self) -> bool {
         self.template.focusable()
     }
 
-    /// 焦点指定给它了：这块面板开始接鼠标（鼠标穿透关掉）。
-    fn took_focus(&self) {
+    /// **聚焦**：焦点指定给它了 —— 这块面板开始接鼠标（鼠标穿透关掉）。
+    fn focusing(&self) {
         self.template.set_focused(true);
     }
 
-    /// 焦点走了（归还给宿主、收起、或生命周期末的自动归还）：回到鼠标穿透。
-    fn lost_focus(&self) {
+    /// **失焦**：把焦点交出去了（归还给宿主、转给同一所有者名下的别的资产，或收起 / 生命周期末的
+    /// 自动归还）—— 回到鼠标穿透。
+    fn unfocusing(&self) {
         self.template.set_focused(false);
     }
 }

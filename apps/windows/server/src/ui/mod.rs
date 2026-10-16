@@ -17,13 +17,15 @@
 //!   再建资产（`Assets::add`），销毁时 `Drop` 的第一件事就是把资产放掉（`Assets::retire`）；显示 / 隐藏也由宿主
 //!   驱动（`Asset::sync` 里经 `owner.host()` / `owner.asset_on()` 要）。眼下只有候选窗口的
 //!   「键位映射参考」（[`auxiliary::key_map`]）一件。
-//! - **焦点（focus）**（[`auxiliary::Focus`]）：一组窗口（独立窗口 + 它名下的资产）里同时只有**一个**持有者。
+//! - **焦点（focus）**（[`auxiliary::Focus`]）：一组窗口（独立窗口 + 它名下的资产）里**任何时刻恰好一个**持有者。
 //!   缺省在独立窗口身上（创建并显示后总是具备焦点），每块独立窗口**都**能**指定**资产获取焦点
 //!   （[`auxiliary::DesignatedAssetToGetFocus`]，由独立窗口模板统一实现）—— 接手的资产响应鼠标 / 键盘，
 //!   原所有者不再接受。**所有辅助窗口默认不具备焦点**（鼠标穿透、点不着），除非创建时声明
 //!   [`auxiliary::Asset::able_to_get_focus`]；归还三条路（所有者收回 / 资产收起 / 资产生命周期末），
-//!   后两条**自动**走。这是**逻辑焦点**：谁都不去抢系统的 `SetFocus`（窗口全是 `WS_EX_NOACTIVATE`，
-//!   抢了会把用户正在打字的应用弄丢）。
+//!   后两条**自动**走。**同一所有者**的两件辅助窗口之间转手也**经桥接**（[`auxiliary::Bridge::designate_focus`]，
+//!   资产之间不直接通讯）；把自己的焦点转出去叫**失焦**（unfocusing）、获得焦点叫**聚焦**（focusing）。
+//!   这是**逻辑焦点**：谁都不去抢系统的 `SetFocus`（窗口全是 `WS_EX_NOACTIVATE`，抢了会把用户正在打字的
+//!   应用弄丢）。
 
 mod auxiliary;
 mod auxiliary_window_template;

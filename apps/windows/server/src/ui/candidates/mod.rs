@@ -783,6 +783,11 @@ impl Bridge for CandidateWindow {
         self.assets_on.get()
     }
 
+    /// 资产经桥请所有者**把焦点交给别件资产**（同一所有者的辅助窗口之间转移焦点走这条，§4 规则 2）。
+    fn designate_focus(&self, name: &str) -> bool {
+        self.template.designate_focus(name)
+    }
+
     /// 资产经桥请所有者**把焦点收回来**（收起与生命周期末那两条由资产表自动走，这条是资产自己要求的）。
     fn return_focus_to_owner(&self) {
         self.template.return_focus_to_owner();

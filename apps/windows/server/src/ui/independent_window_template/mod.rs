@@ -111,7 +111,7 @@ impl IndependentWindowTemplate {
     /// 也跟着回位 —— 否则会留下一块「看不见的窗还占着鼠标穿透」的状态。
     pub(super) fn hide_assets(&self) {
         self.assets.hide();
-        self.sync_input();
+        self.focusing();
     }
 
     /// 自己那块窗的**鼠标开关**跟当前焦点对齐：焦点不在自己身上时整块让开（鼠标穿透到下面的窗口）。
@@ -124,10 +124,11 @@ impl IndependentWindowTemplate {
 /// **独立窗口都具备**「指定资产获取焦点」（`designated_asset_to_get_focus`）这个特性 —— 由模板实现，
 /// 所以每块独立窗口都有：焦点从自己身上**指定**给名下某件资产，或者**收回来**（见 [`Focus`]）。
 impl DesignatedAssetToGetFocus for IndependentWindowTemplate {
-    fn designate_focus(&self, index: usize) -> bool {
-        let moved = self.assets.designate_focus(index);
+    fn designate_focus(&self, name: &str) -> bool {
+        let moved = self.assets.designate_focus(name);
         if moved {
-            self.sync_input();
+            // 焦点交给了名下的资产：自己**失焦**
+            self.unfocusing();
         }
         moved
     }
@@ -135,13 +136,24 @@ impl DesignatedAssetToGetFocus for IndependentWindowTemplate {
     fn return_focus_to_owner(&self) -> bool {
         let moved = self.assets.return_focus_to_owner();
         if moved {
-            self.sync_input();
+            // 焦点回到自己身上：**聚焦**
+            self.focusing();
         }
         moved
     }
 
     fn focus(&self) -> Focus {
         self.assets.focus()
+    }
+
+    /// **聚焦**：焦点在自己身上，接鼠标。独立窗口创建并显示后就是这个状态。
+    fn focusing(&self) {
+        self.sync_input();
+    }
+
+    /// **失焦**：把焦点交给了名下某件资产 —— 自己那块窗整块让开（鼠标穿透）。
+    fn unfocusing(&self) {
+        self.sync_input();
     }
 }
 

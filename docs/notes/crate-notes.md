@@ -906,8 +906,10 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   并且**管名下的资产**（`Assets`）：宿主建好自己那块窗之后 `assets_mut().add(...)`，`Drop` 里**先** `assets.retire()`
   **再** `DestroyWindow` 自己 —— 资产的寿命就落在这段区间里。候选窗口先用了它（悬浮工具栏 / 状态切换提示可以照抄；
   候选窗口自己那份 `Drop` 也就不用写了）。**焦点**（`focused()`）也在这层：焦点缺省在自己身上，被指定给名下的资产后
-  窗口过程里接鼠标的地方要按它让位；模板实现 `DesignatedAssetToGetFocus`（`designate_focus` / `return_focus_to_owner`
-  / `focus`），所以**每块独立窗口都有**这个特性（见下「辅助窗口」那条）。
+  窗口过程里接鼠标的地方要按它让位；模板实现 `DesignatedAssetToGetFocus`（`designate_focus(name)` /
+  `return_focus_to_owner` / `focus`，指定时自己**失焦** `unfocusing`、收回时**聚焦** `focusing`，两边都落到
+  `sync_input()` 上：`ui::set_mouse_transparent` + 命中测试），所以**每块独立窗口都有**这个特性
+  （见下「辅助窗口」那条）。
 - **辅助窗口模板**（`server/src/ui/auxiliary_window_template/`，`AuxiliaryWindowTemplate`）：给资产用的那块**分层面板** ——
   主题背景 + 圆角（与候选窗口同源、都是 `theme.corner_radius`）+ 阴影。**焦点**：`new(painter, able_to_get_focus)`
   里收下这件资产创建时声明的「允许获取焦点」（`false` = 永远不接输入，缺省），`focusable()` 读回去给资产声明用；
@@ -952,15 +954,20 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   宿主先建好自己那块窗再 `Assets::add`；`Drop` 里先 `Assets::retire` 再 `DestroyWindow` 自己
   （这段顺序由独立窗口模板保证）；显示 / 隐藏由宿主驱动（`Asset::sync` 里经 `Bridge` 向宿主要几何与开关）。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
-  名下资产）里同时只有一个持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
-  `Asset::able_to_get_focus`（缺省 `false`）是**创建时**声明的「允许获取焦点」；`Assets::designate_focus(index)`
-  只认声明过的（越界 / 没声明的返回 `false`），`return_focus_to_owner()` 收回。换人时老的收 `lost_focus()`、
-  新的收 `took_focus()` —— 资产靠这两条通知开关自己的鼠标穿透（辅助窗口模板里只动 `WS_EX_TRANSPARENT` 一个位，
-  命中测试读同一个位）。**自动归还**两条：`Assets::hide`（收起）与 `Assets::retire`（生命周期末），都是
+  名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
+  `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——
+  `Assets::designate_focus(name)` 按它认目标、`Assets::index_of` 也是它。`Asset::able_to_get_focus`（缺省
+  `false`）是**创建时**声明的「允许获取焦点」，没声明的 / 没这个名字的都返回 `false`；`return_focus_to_owner()`
+  收回。换人时老的收 `unfocusing()`（**失焦**）、新的收 `focusing()`（**聚焦**），`move_focus` 里记一条
+  `debug` 日志（`describe` 把持有者说成「所有者」或名字）—— 资产靠这两条通知开关自己的鼠标穿透（辅助窗口模板
+  里只动 `WS_EX_TRANSPARENT` 一个位，命中测试读同一个位）。**同一所有者的两件资产之间转手经桥接**：
+  `Bridge::designate_focus(name)` 由资产委托所有者去办（A1 → 桥 → A → A2），`Bridge::return_focus_to_owner()`
+  是把焦点交还给所有者。**自动归还**两条：`Assets::hide`（收起）与 `Assets::retire`（生命周期末），都是
   「先归还再收起 / 放掉」；`Assets::sync` 里有一句 `debug_assert` 复核「焦点只可能落在所有者、或一件声明过的
   资产上」。⚠️ 这是**逻辑焦点**，谁都不去抢系统的 `SetFocus`（窗口全是 `WS_EX_NOACTIVATE`，抢了会把用户正在
-  打字的应用弄丢）。第一轮只落机制：`Assets::designate_focus` / `Bridge::return_focus_to_owner` /
-  `DesignatedAssetToGetFocus` 还没有生产调用方，照 `set_spec` 那套先挂 `#[allow(dead_code)]` 注明留给后续部分。
+  打字的应用弄丢）。第一轮只落机制：`Assets::designate_focus` / `Bridge::designate_focus` /
+  `Bridge::return_focus_to_owner` / `DesignatedAssetToGetFocus` 还没有生产调用方，照 `set_spec` 那套先挂
+  `#[allow(dead_code)]` 注明留给后续部分。
 
 **辅助窗口**（`server/src/ui/auxiliary/`）：眼下只一件资产 —— 候选窗口的**键位映射参考**
 （`key_map/`，`KeyMapWindow`）：用**辅助窗口模板**搭的实窗，把当前方案的键位映射画成一张**键盘**给新手对着敲
