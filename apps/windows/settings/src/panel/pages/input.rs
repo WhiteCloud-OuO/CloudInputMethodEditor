@@ -2,7 +2,9 @@
 //! 使用简拼 / 模糊音 / 中英文混合输入都放在「全键拼音」那块面板里（别的方案下压根不生成，不用置灰）；
 //! 其余各项与方案无关，直接排在后面。
 
-use cloudime_platform::input_schemes::{KeyMapKey, KeyMapModifiers, KeyMapReference, SchemeEntry};
+use cloudime_platform::input_schemes::{
+    KeyMapKey, KeyMapModifiers, KeyMapReference, MODES, SchemeEntry,
+};
 use cloudime_platform::{
     FullHalfPunctuation, InputScheme, MO_HU_YIN_BITS, PAIRWISE_COMPLETION_BITS,
     PUNCTUATION_MAPPING_BITS, SimpTrad,
@@ -221,7 +223,10 @@ fn dual_key_panel(settings: &Settings, context: &mut ViewContext<Settings>) -> V
             .map_or(0, |index| index + 1);
         let mut auxiliary_hint = String::from(
             "辅助码表统一放 AuxiliaryCodes\\ 下（.tsv / .txt，一行一个「字 + 制表符 + 码」，码里的字母大小写都行，\
-             读进来按大写算）；选中的会记进 use_input_scheme.cfg。",
+             读进来按大写算）；选中的会记进 use_input_scheme.cfg。右边那个下拉选**辅助码怎么对**：\
+             逐字 = 每个字的码跟在自己的音节后面（`aiPDqgXH`）；半字（双前 / 双后 / 首尾）= 单字用本身的码，\
+             多字词取首字与尾字的码各一位拼两位（「云朵输入法」→ 双前 `HU`、双后 `DT`、首尾 `HT`），\
+             而且只认**整段末尾**那串大写。",
         );
         if let Some(selected) = settings
             .auxiliary_selected
@@ -232,20 +237,41 @@ fn dual_key_panel(settings: &Settings, context: &mut ViewContext<Settings>) -> V
                 "（现在找不到「{selected}」—— 把文件放进 AuxiliaryCodes\\，或在这里重选一个。）"
             ));
         }
+        // 辅助码真要起作用：「使用辅助码」开着、而且选到的那份表读得出来
+        let auxiliary_effective = scheme.using_auxiliary_codes && auxiliary_selected > 0;
+        // 「辅助码怎么对」那四种（写 `use_input_scheme.cfg` 的 `auxiliary_mode`）
+        let mode_items: Vec<&str> = MODES
+            .iter()
+            .map(|mode| cloudime_platform::input_schemes::mode_label(*mode))
+            .collect();
+        let mode_selected = MODES
+            .iter()
+            .position(|mode| *mode == settings.auxiliary_mode)
+            .unwrap_or(0);
         rows.push(KeyedView::new(
             "scheme-auxiliary-file",
             field(
                 "辅助码方案",
                 &auxiliary_hint,
-                ComboBox::new()
-                    .items_source(auxiliary_items)
-                    .selected_index(Some(auxiliary_selected))
-                    .on_selection_changed(context.callback(Message::AuxiliaryScheme)),
+                StackPanel::new()
+                    .orientation(Orientation::Horizontal)
+                    .spacing(8.0)
+                    .children([
+                        ComboBox::new()
+                            .items_source(auxiliary_items)
+                            .selected_index(Some(auxiliary_selected))
+                            .is_enabled(auxiliary_effective)
+                            .on_selection_changed(context.callback(Message::AuxiliaryScheme)),
+                        ComboBox::new()
+                            .items_source(mode_items)
+                            .selected_index(Some(mode_selected))
+                            .is_enabled(auxiliary_effective)
+                            .on_selection_changed(context.callback(Message::AuxiliaryMode)),
+                    ]),
             ),
         ));
         // 「在候选项显示辅助码」：用户级设置（写 `use_input_scheme.cfg` 的 `candidate_auxiliary`，缺省关）；
         // 只在「使用辅助码」开着、而且选到的那份表读得出来时才生效 —— 否则置灰。
-        let auxiliary_effective = scheme.using_auxiliary_codes && auxiliary_selected > 0;
         rows.push(KeyedView::new(
             "scheme-candidate-auxiliary",
             field(

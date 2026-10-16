@@ -104,6 +104,10 @@ pub struct Engine {
     /// 同样由 `cloudime-platform` 读文件后注入（Core 只认 trait）。
     auxiliary_codes: Option<Box<dyn crate::shuangpin::AuxiliaryTable>>,
 
+    /// 辅助码的匹配方式（`use_input_scheme.cfg` 的 `auxiliary_mode`，缺省逐字）：
+    /// 半字那三种只认**整段末尾**那串大写当码、按首尾字推两位，见 [`crate::auxiliary`]。
+    auxiliary_mode: crate::auxiliary::AuxiliaryMode,
+
     /// 双键拼音下「显示原始输入按键」（配置 `[input] show_raw_input`，缺省开）：
     /// 拼音行显示敲的按键、未选候选回车也上屏原始按键；关掉则显示 / 上屏展开后的完整拼音。
     show_raw_input: bool,
@@ -319,6 +323,7 @@ impl Engine {
             use_jian_pin: true,
             shuangpin: None,
             auxiliary_codes: None,
+            auxiliary_mode: crate::auxiliary::AuxiliaryMode::PerChar,
             show_raw_input: true,
             mixture_input: true,
             shuangpin_mixture_input: true,

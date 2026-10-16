@@ -7,7 +7,7 @@ mod auxiliary;
 mod double_keys;
 mod key_map;
 
-pub use auxiliary::AuxiliaryCodes;
+pub use auxiliary::{AuxiliaryCodes, MODES, mode_key, mode_label, mode_of};
 pub use double_keys::{
     DoubleKeysScheme, KeyMapping, SAMPLE_SHOUDAO, SAMPLE_XIAOHE, SAMPLE_ZIRANMA, SAMPLES,
     SchemeError, load, scheme_id, set_using_auxiliary_codes,
@@ -18,6 +18,8 @@ pub use key_map::{
 
 use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
+
+use cloudime_core::auxiliary::AuxiliaryMode;
 
 /// 当前使用的方案与辅助码方案记在这个文件里（`键 = 值` 几行）。
 pub const CURRENT_FILE: &str = "use_input_scheme.cfg";
@@ -35,6 +37,7 @@ const KEY_SCHEME: &str = "scheme";
 const KEY_AUXILIARY: &str = "auxiliary";
 const KEY_MIXTURE_INPUT: &str = "mixture_input";
 const KEY_CANDIDATE_AUXILIARY: &str = "candidate_auxiliary";
+const KEY_AUXILIARY_MODE: &str = "auxiliary_mode";
 const KEY_MAP_REFERENCE: &str = "key_map_reference";
 const KEY_MAP_HOTKEY: &str = "key_map_hotkey";
 
@@ -256,16 +259,35 @@ pub fn key_map_hotkey() -> KeyMapHotkey {
     double_keys_dir().map_or_else(KeyMapHotkey::default, |dir| read_key_map_hotkey(&dir))
 }
 
-/// 把六项一起写进 `use_input_scheme.cfg`。
-fn write_config(
-    dir: &Path,
-    scheme: Option<&str>,
-    auxiliary: Option<&str>,
+/// `use_input_scheme.cfg` 那七项的值（写的时候**整份**写一遍，改一项也走这里）。
+#[derive(Debug, Clone, Default)]
+struct CfgValues {
+    scheme: Option<String>,
+    auxiliary: Option<String>,
     mixture_input: bool,
     candidate_auxiliary: bool,
+    auxiliary_mode: AuxiliaryMode,
     key_map_reference: KeyMapReference,
     key_map_hotkey: KeyMapHotkey,
-) -> std::io::Result<()> {
+}
+
+impl CfgValues {
+    /// 从已读出来的键值表取（各项的缺省见各自的 `*_of`）。
+    fn from_config(config: &BTreeMap<String, String>) -> Self {
+        Self {
+            scheme: config.get(KEY_SCHEME).cloned(),
+            auxiliary: config.get(KEY_AUXILIARY).cloned(),
+            mixture_input: mixture_input_of(config),
+            candidate_auxiliary: candidate_auxiliary_of(config),
+            auxiliary_mode: auxiliary_mode_of(config),
+            key_map_reference: key_map_reference_of(config),
+            key_map_hotkey: key_map_hotkey_of(config),
+        }
+    }
+}
+
+/// 把这七项一起写进 `use_input_scheme.cfg`（注释块一并刷成最新的）。
+fn write_config(dir: &Path, values: &CfgValues) -> std::io::Result<()> {
     std::fs::create_dir_all(dir)?;
     let body = format!(
         "# 当前使用的双键拼音方案：scheme = 方案文件名（不含后缀），改这一行即可换方案。\n\
@@ -273,6 +295,9 @@ fn write_config(
          # mixture_input = on / off：双键拼音下要不要按敲的按键匹配英文词（中英混合输入）；缺省 on。\n\
          # candidate_auxiliary = on / off：候选项里要不要显示辅助码（候选词右边一个空格加 [码]）；缺省 off，\n\
          #   只在「使用辅助码」开着、而且选的那份辅助码表读得出来时才有效。\n\
+         # auxiliary_mode = 辅助码怎么对：per_char 逐字（每个字的码跟在自己音节后面，缺省）/ double_head 半字双前\n\
+         #   （单字用本身的码、多字词用「首字码第一位 + 尾字码第一位」）/ double_tail 半字双后（首字码末位 + 尾字码末位）/ \n\
+         #   first_last 半字首尾（首字码第一位 + 尾字码末位）—— 半字那三种只认**整段末尾**那串大写。\n\
          # key_map_reference = off / hotkey / always：什么时候显示「键位映射参考」（新手对着敲用）——\n\
          #   off 关闭；hotkey 组句里按下面那套组合键弹出 / 收起；always 候选窗口一出现就跟着显示。\n\
          # key_map_hotkey = 上面那种方式用的组合键：修饰键 ctrl / ctrl+alt / ctrl+shift / alt+shift，\n\
@@ -282,98 +307,124 @@ fn write_config(
          {KEY_MIXTURE_INPUT} = {}\n\
          {KEY_CANDIDATE_AUXILIARY} = {}\n\
          {KEY_MAP_REFERENCE} = {}\n\
-         {KEY_MAP_HOTKEY} = {}\n",
-        scheme.unwrap_or_default(),
-        auxiliary.unwrap_or_default(),
-        flag_key(mixture_input),
-        flag_key(candidate_auxiliary),
-        key_map_reference.key(),
-        key_map_hotkey.value()
+         {KEY_MAP_HOTKEY} = {}\n\
+         {KEY_AUXILIARY_MODE} = {}\n",
+        values.scheme.as_deref().unwrap_or_default(),
+        values.auxiliary.as_deref().unwrap_or_default(),
+        flag_key(values.mixture_input),
+        flag_key(values.candidate_auxiliary),
+        values.key_map_reference.key(),
+        values.key_map_hotkey.value(),
+        auxiliary::mode_key(values.auxiliary_mode)
     );
     cloudime_core::storage::write_atomic_str(&dir.join(CURRENT_FILE), &body)
 }
 
 /// 换当前方案（另外几行原样留着）。
+/// 换当前方案（另外几行原样留着）。
 pub fn set_current(dir: &Path, id: &str) -> std::io::Result<()> {
     let config = read_config(dir);
     write_config(
         dir,
-        Some(id),
-        config.get(KEY_AUXILIARY).map(String::as_str),
-        mixture_input_of(&config),
-        candidate_auxiliary_of(&config),
-        key_map_reference_of(&config),
-        key_map_hotkey_of(&config),
+        &CfgValues {
+            scheme: Some(id.to_owned()),
+            ..CfgValues::from_config(&config)
+        },
     )
 }
 
+/// 换辅助码方案（另外几行原样留着）；`None` = 留空（不用辅助码）。
 /// 换辅助码方案（另外几行原样留着）；`None` = 留空（不用辅助码）。
 pub fn set_auxiliary(dir: &Path, file: Option<&str>) -> std::io::Result<()> {
     let config = read_config(dir);
     write_config(
         dir,
-        config.get(KEY_SCHEME).map(String::as_str),
-        file,
-        mixture_input_of(&config),
-        candidate_auxiliary_of(&config),
-        key_map_reference_of(&config),
-        key_map_hotkey_of(&config),
+        &CfgValues {
+            auxiliary: file.map(str::to_owned),
+            ..CfgValues::from_config(&config)
+        },
     )
 }
 
+/// 开关双键拼音的「中英混合输入」（另外几行原样留着）。
 /// 开关双键拼音的「中英混合输入」（另外几行原样留着）。
 pub fn set_mixture_input(dir: &Path, on: bool) -> std::io::Result<()> {
     let config = read_config(dir);
     write_config(
         dir,
-        config.get(KEY_SCHEME).map(String::as_str),
-        config.get(KEY_AUXILIARY).map(String::as_str),
-        on,
-        candidate_auxiliary_of(&config),
-        key_map_reference_of(&config),
-        key_map_hotkey_of(&config),
+        &CfgValues {
+            mixture_input: on,
+            ..CfgValues::from_config(&config)
+        },
     )
 }
 
+/// 开关「在候选项显示辅助码」（另外几行原样留着）。
 /// 开关「在候选项显示辅助码」（另外几行原样留着）。
 pub fn set_candidate_auxiliary(dir: &Path, on: bool) -> std::io::Result<()> {
     let config = read_config(dir);
     write_config(
         dir,
-        config.get(KEY_SCHEME).map(String::as_str),
-        config.get(KEY_AUXILIARY).map(String::as_str),
-        mixture_input_of(&config),
-        on,
-        key_map_reference_of(&config),
-        key_map_hotkey_of(&config),
+        &CfgValues {
+            candidate_auxiliary: on,
+            ..CfgValues::from_config(&config)
+        },
     )
 }
 
+/// 改「什么时候显示键位映射参考」（另外几行原样留着）。
 /// 改「什么时候显示键位映射参考」（另外几行原样留着）。
 pub fn set_key_map_reference(dir: &Path, mode: KeyMapReference) -> std::io::Result<()> {
     let config = read_config(dir);
     write_config(
         dir,
-        config.get(KEY_SCHEME).map(String::as_str),
-        config.get(KEY_AUXILIARY).map(String::as_str),
-        mixture_input_of(&config),
-        candidate_auxiliary_of(&config),
-        mode,
-        key_map_hotkey_of(&config),
+        &CfgValues {
+            key_map_reference: mode,
+            ..CfgValues::from_config(&config)
+        },
     )
 }
 
+/// 读 `use_input_scheme.cfg` 的 `auxiliary_mode`（辅助码怎么对）；没写过就是逐字。
+pub fn read_auxiliary_mode(dir: &Path) -> AuxiliaryMode {
+    auxiliary_mode_of(&read_config(dir))
+}
+
+/// 从已读出来的键值表里取 `auxiliary_mode`。
+fn auxiliary_mode_of(config: &BTreeMap<String, String>) -> AuxiliaryMode {
+    config
+        .get(KEY_AUXILIARY_MODE)
+        .map_or(AuxiliaryMode::PerChar, |value| auxiliary::mode_of(value))
+}
+
+/// 当前方案的辅助码匹配方式（拿不到方案目录就是逐字）。
+pub fn current_auxiliary_mode() -> AuxiliaryMode {
+    double_keys_dir().map_or(AuxiliaryMode::PerChar, |dir| read_auxiliary_mode(&dir))
+}
+
+/// 改「辅助码怎么对」（另外几行原样留着）。
+/// 改「辅助码怎么对」（另外几行原样留着）。
+pub fn set_auxiliary_mode(dir: &Path, mode: AuxiliaryMode) -> std::io::Result<()> {
+    let config = read_config(dir);
+    write_config(
+        dir,
+        &CfgValues {
+            auxiliary_mode: mode,
+            ..CfgValues::from_config(&config)
+        },
+    )
+}
+
+/// 改「键位映射参考组合键」（另外几行原样留着）。
 /// 改「键位映射参考组合键」（另外几行原样留着）。
 pub fn set_key_map_hotkey(dir: &Path, hotkey: KeyMapHotkey) -> std::io::Result<()> {
     let config = read_config(dir);
     write_config(
         dir,
-        config.get(KEY_SCHEME).map(String::as_str),
-        config.get(KEY_AUXILIARY).map(String::as_str),
-        mixture_input_of(&config),
-        candidate_auxiliary_of(&config),
-        key_map_reference_of(&config),
-        hotkey,
+        &CfgValues {
+            key_map_hotkey: hotkey,
+            ..CfgValues::from_config(&config)
+        },
     )
 }
 
@@ -430,12 +481,11 @@ pub fn resolve_current(dir: &Path, entries: &[SchemeEntry]) -> Option<String> {
                 .or(Some(DEFAULT_AUXILIARY));
             let _ = write_config(
                 dir,
-                Some(&first.id),
-                auxiliary,
-                mixture_input_of(&config),
-                candidate_auxiliary_of(&config),
-                key_map_reference_of(&config),
-                key_map_hotkey_of(&config),
+                &CfgValues {
+                    scheme: Some(first.id.clone()),
+                    auxiliary: auxiliary.map(str::to_owned),
+                    ..CfgValues::from_config(&config)
+                },
             );
             Some(first.id.clone())
         }
@@ -845,6 +895,42 @@ mod tests {
         // 随包目录不在（开发布局没同步过来）就什么都不做
         assert_eq!(seed_auxiliary(&dir.join("没有这个目录"), &to).unwrap(), 0);
         let _ = std::fs::remove_dir_all(&from);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 「辅助码怎么对」：写 / 读，且换方案 / 改别的开关时都不该把它弄丢；认不出来的值退回缺省的逐字。
+    #[test]
+    fn auxiliary_mode_round_trips_and_survives_other_writes() {
+        let dir = temp_dir("aux-mode");
+        std::fs::create_dir_all(&dir).unwrap();
+        assert_eq!(
+            read_auxiliary_mode(&dir),
+            AuxiliaryMode::PerChar,
+            "没写过 = 逐字"
+        );
+
+        set_current(&dir, "shoudao").unwrap();
+        for mode in MODES {
+            set_auxiliary_mode(&dir, mode).unwrap();
+            assert_eq!(read_auxiliary_mode(&dir), mode, "{}", mode_key(mode));
+        }
+
+        // 改别的几项（方案 / 辅助码方案 / 两个开关 / 键位映射）都不该把它弄丢
+        set_auxiliary_mode(&dir, AuxiliaryMode::FirstLast).unwrap();
+        set_current(&dir, "xiaohe").unwrap();
+        set_auxiliary(&dir, Some("首右辅助码2.0.tsv")).unwrap();
+        set_mixture_input(&dir, false).unwrap();
+        set_candidate_auxiliary(&dir, true).unwrap();
+        set_key_map_reference(&dir, KeyMapReference::Always).unwrap();
+        assert_eq!(read_auxiliary_mode(&dir), AuxiliaryMode::FirstLast);
+
+        // 认不出来的写法退回逐字（不因为一行写错就整份配置失效）
+        std::fs::write(
+            dir.join(CURRENT_FILE),
+            format!("{KEY_SCHEME} = shoudao\n{KEY_AUXILIARY_MODE} = 没有这个\n"),
+        )
+        .unwrap();
+        assert_eq!(read_auxiliary_mode(&dir), AuxiliaryMode::PerChar);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

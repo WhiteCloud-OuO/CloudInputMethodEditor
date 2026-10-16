@@ -21,6 +21,8 @@ pub(crate) enum Message {
     AuxiliaryCodes(bool),
     /// 用哪个辅助码方案（`AuxiliaryCodes\` 文件列表的下标，第 0 项是「（不使用）」；写 `use_input_scheme.cfg`）。
     AuxiliaryScheme(Option<usize>),
+    /// 辅助码怎么对（`use_input_scheme.cfg` 的 `auxiliary_mode`；下标对应 `input_schemes::MODES`）。
+    AuxiliaryMode(Option<usize>),
     /// 双键拼音的「中英文混合输入」（写 `use_input_scheme.cfg` 的 `mixture_input`，不进 `config.toml`）。
     DualKeyMixtureInput(bool),
     /// 双键拼音的「在候选项显示辅助码」（写 `use_input_scheme.cfg` 的 `candidate_auxiliary`）。

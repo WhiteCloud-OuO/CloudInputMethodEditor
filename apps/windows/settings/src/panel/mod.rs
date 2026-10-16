@@ -108,6 +108,9 @@ pub(crate) struct Settings {
     /// 「输入」页：当前选的辅助码方案（`use_input_scheme.cfg` 的 `auxiliary` 行）；`None` = 不用。
     auxiliary_selected: Option<String>,
 
+    /// 「输入」页：辅助码怎么对（`use_input_scheme.cfg` 的 `auxiliary_mode`，缺省逐字）。
+    auxiliary_mode: cloudime_core::auxiliary::AuxiliaryMode,
+
     /// 「输入」页：双键拼音的「中英文混合输入」（`use_input_scheme.cfg` 的 `mixture_input`，缺省开）。
     scheme_mixture_input: bool,
 
@@ -223,6 +226,7 @@ impl Settings {
             self.scheme_current = None;
             self.auxiliary_files.clear();
             self.auxiliary_selected = None;
+            self.auxiliary_mode = cloudime_core::auxiliary::AuxiliaryMode::PerChar;
             self.scheme_mixture_input = true;
             self.candidate_auxiliary = false;
             self.key_map_reference = cloudime_platform::input_schemes::KeyMapReference::Off;
@@ -237,6 +241,7 @@ impl Settings {
             cloudime_platform::input_schemes::resolve_current(&dir, &self.scheme_entries);
         self.auxiliary_files = cloudime_platform::input_schemes::list_auxiliary(&dir);
         self.auxiliary_selected = cloudime_platform::input_schemes::read_auxiliary(&dir);
+        self.auxiliary_mode = cloudime_platform::input_schemes::read_auxiliary_mode(&dir);
         self.scheme_mixture_input = cloudime_platform::input_schemes::read_mixture_input(&dir);
         self.candidate_auxiliary = cloudime_platform::input_schemes::read_candidate_auxiliary(&dir);
         self.key_map_reference = cloudime_platform::input_schemes::read_key_map_reference(&dir);
@@ -345,6 +350,28 @@ impl Settings {
                 let label = name.clone().unwrap_or_else(|| "（不使用）".to_owned());
                 self.auxiliary_selected = name;
                 self.reload_scheme_for_server(&format!("辅助码方案已记下「{label}」；"));
+            }
+            Err(error) => {
+                self.notice.error = Some(format!("写 use_input_scheme.cfg 失败：{error}"));
+            }
+        }
+    }
+
+    /// 「辅助码怎么对」下拉：写 `use_input_scheme.cfg` 的 `auxiliary_mode` 行，再让 Server 重读。
+    fn pick_auxiliary_mode(&mut self, index: usize) {
+        let mode = cloudime_platform::input_schemes::MODES
+            .get(index)
+            .copied()
+            .unwrap_or_default();
+        let Some(dir) = cloudime_platform::input_schemes::double_keys_dir() else {
+            self.notice.error = Some("找不到安装目录，换不了辅助码的匹配方式。".to_owned());
+            return;
+        };
+        match cloudime_platform::input_schemes::set_auxiliary_mode(&dir, mode) {
+            Ok(()) => {
+                self.auxiliary_mode = mode;
+                let label = cloudime_platform::input_schemes::mode_label(mode);
+                self.reload_scheme_for_server(&format!("辅助码匹配方式已记下「{label}」；"));
             }
             Err(error) => {
                 self.notice.error = Some(format!("写 use_input_scheme.cfg 失败：{error}"));

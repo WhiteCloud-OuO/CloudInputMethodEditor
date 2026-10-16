@@ -490,7 +490,7 @@ pub trait AuxiliaryTable {
 }
 
 /// 敲的这几位是不是表里那条码的**前缀**（大小写不敏感）。空串不算（那是「没敲码」）。
-fn is_prefix(typed: &str, code: &str) -> bool {
+pub(crate) fn is_prefix(typed: &str, code: &str) -> bool {
     !typed.is_empty()
         && code
             .get(..typed.len())

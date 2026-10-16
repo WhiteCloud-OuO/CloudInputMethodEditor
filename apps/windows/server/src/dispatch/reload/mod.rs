@@ -133,6 +133,8 @@ impl Router {
                 .then(cloudime_platform::input_schemes::current_auxiliary_boxed)
                 .flatten(),
         );
+        self.engine
+            .set_auxiliary_mode(cloudime_platform::input_schemes::current_auxiliary_mode());
         self.engine.set_show_raw_input(config.input.show_raw_input);
         // 双键拼音单独一份「中英混合输入」（`use_input_scheme.cfg`，不进 `config.toml`）
         self.engine

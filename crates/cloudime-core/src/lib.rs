@@ -4,6 +4,7 @@
 //! 平台层（TSF）只负责把按键喂给 [`Engine`]、把候选画出来。
 //! 判断标准：换掉平台壳，不应该需要改这里的任何一行。
 
+pub mod auxiliary;
 pub mod candidate;
 pub mod char_width;
 pub mod composition;

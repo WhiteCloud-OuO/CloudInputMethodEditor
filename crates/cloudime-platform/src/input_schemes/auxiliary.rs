@@ -9,7 +9,46 @@
 use std::collections::BTreeMap;
 use std::path::Path;
 
+use cloudime_core::auxiliary::AuxiliaryMode;
 use cloudime_core::shuangpin::MAX_AUXILIARY;
+
+/// 「辅助码怎么对」这四种方式（设置页下拉的顺序就是它）。
+pub const MODES: [AuxiliaryMode; 4] = [
+    AuxiliaryMode::PerChar,
+    AuxiliaryMode::DoubleHead,
+    AuxiliaryMode::DoubleTail,
+    AuxiliaryMode::FirstLast,
+];
+
+/// `use_input_scheme.cfg` 里 `auxiliary_mode` 的写法。
+pub fn mode_key(mode: AuxiliaryMode) -> &'static str {
+    match mode {
+        AuxiliaryMode::PerChar => "per_char",
+        AuxiliaryMode::DoubleHead => "double_head",
+        AuxiliaryMode::DoubleTail => "double_tail",
+        AuxiliaryMode::FirstLast => "first_last",
+    }
+}
+
+/// 从配置里读；认不出来就是缺省的逐字（不因为一行写错就让整份配置失效）。
+pub fn mode_of(value: &str) -> AuxiliaryMode {
+    match value.trim().to_ascii_lowercase().as_str() {
+        "double_head" => AuxiliaryMode::DoubleHead,
+        "double_tail" => AuxiliaryMode::DoubleTail,
+        "first_last" => AuxiliaryMode::FirstLast,
+        _ => AuxiliaryMode::PerChar,
+    }
+}
+
+/// 界面上的名字。
+pub fn mode_label(mode: AuxiliaryMode) -> &'static str {
+    match mode {
+        AuxiliaryMode::PerChar => "逐字辅助码",
+        AuxiliaryMode::DoubleHead => "半字辅助码（双前）",
+        AuxiliaryMode::DoubleTail => "半字辅助码（双后）",
+        AuxiliaryMode::FirstLast => "半字辅助码（首尾）",
+    }
+}
 
 /// 一张辅助码表：`词 → 若干个码`（都按大写存）。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]

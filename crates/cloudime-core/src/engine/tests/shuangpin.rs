@@ -1,6 +1,7 @@
 //! 双键拼音：按键先按方案还原成完整拼音，再走原来的查询。
 
 use super::*;
+use crate::auxiliary::AuxiliaryMode;
 use crate::shuangpin;
 
 /// 一份只够测试用的自然码片段：`l` = ai、`a` = a、`t` = ve/ue、`x` = ie；
@@ -318,6 +319,61 @@ fn uppercase_is_an_auxiliary_code_not_a_pinyin_key() {
     );
 
     let texts = candidates(&mut engine, "klfaF");
+    assert!(texts.iter().any(|text| text == "开发"), "{texts:?}");
+}
+
+/// **半字辅助码（双前 / 双后 / 首尾）**：单字用它本身的码；多字词用「首字一位 + 尾字一位」推出来的
+/// 两位；只认**整段末尾**那串大写，中间那些大写直接丢掉（不当音节、也不当码）。规则见 `crate::auxiliary`。
+#[test]
+fn derived_auxiliary_modes_match_the_tail_code() {
+    let (mut app, mut aux) = (engine(), table());
+    aux.auxiliary = true;
+    app.set_shuangpin(Some(aux));
+    app.set_auxiliary_codes(Some(Box::new(Codes::new(&[("开", "HD"), ("发", "UT")]))));
+
+    // 双前：开（H…）+ 发（U…）= `HU`
+    app.set_auxiliary_mode(AuxiliaryMode::DoubleHead);
+    let texts = candidates(&mut app, "klfaHU");
+    assert!(texts.iter().any(|text| text == "开发"), "{texts:?}");
+    // 敲一半也算（`H`）
+    let texts = candidates(&mut app, "klfaH");
+    assert!(texts.iter().any(|text| text == "开发"), "{texts:?}");
+    // 敲错不认
+    let texts = candidates(&mut app, "klfaXX");
+    assert!(!texts.iter().any(|text| text == "开发"), "{texts:?}");
+    // 单字用本身的码（`开` = HD）
+    let texts = candidates(&mut app, "klHD");
+    assert!(texts.iter().any(|text| text == "开"), "{texts:?}");
+    // 中间那些大写直接丢掉：`klXXfaHU` 照样出「开发」
+    let texts = candidates(&mut app, "klXXfaHU");
+    assert!(
+        texts.iter().any(|text| text == "开发"),
+        "中间大写丢掉：{texts:?}"
+    );
+
+    // 显示：半字方式下每个候选显示**它自己**推出来的码（跟光标位置无关）
+    app.set_input("klfaH");
+    let query = app.query().expect("查询本身不报错");
+    let hit = query
+        .candidates
+        .items
+        .iter()
+        .find(|candidate| candidate.text == "开发")
+        .expect("开发在候选里");
+    assert_eq!(hit.auxiliary.as_deref(), Some("HU"));
+    assert_eq!(hit.auxiliary_typed.as_deref(), Some("H"));
+
+    // 双后 / 首尾：开（…D）+ 发（…T）→ `DT` / `HT`
+    app.set_auxiliary_mode(AuxiliaryMode::DoubleTail);
+    let texts = candidates(&mut app, "klfaDT");
+    assert!(texts.iter().any(|text| text == "开发"), "{texts:?}");
+    app.set_auxiliary_mode(AuxiliaryMode::FirstLast);
+    let texts = candidates(&mut app, "klfaHT");
+    assert!(texts.iter().any(|text| text == "开发"), "{texts:?}");
+
+    // 换回逐字：`klHDfaUT`（每字一段码）照旧出「开发」
+    app.set_auxiliary_mode(AuxiliaryMode::PerChar);
+    let texts = candidates(&mut app, "klHDfaUT");
     assert!(texts.iter().any(|text| text == "开发"), "{texts:?}");
 }
 

@@ -219,6 +219,8 @@ fn main() {
             .then(cloudime_platform::input_schemes::current_auxiliary_boxed)
             .flatten(),
     );
+    // 辅助码怎么对（`use_input_scheme.cfg` 的 `auxiliary_mode`，缺省逐字）
+    engine.set_auxiliary_mode(cloudime_platform::input_schemes::current_auxiliary_mode());
     // 双键拼音下显示原始输入按键（配置项，与方案文件无关）
     engine.set_show_raw_input(config.input.show_raw_input);
     // 双键拼音自己的「中英混合输入」（`use_input_scheme.cfg` 的 `mixture_input`，不进 `config.toml`）

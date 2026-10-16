@@ -192,9 +192,13 @@ impl Engine {
         let english = self.shuangpin_mixture_input;
         let lowered = table.lowered_leading_key(keys);
         let keys = lowered.as_ref();
+        // 半字辅助码（双前 / 双后 / 首尾）：断句只看**末尾**那串大写，中间那些大写直接丢掉
+        // （`keys` 仍是原始按键：拼音行的原始显示与「中英混合输入」照旧读它）
+        let reading_keys = crate::auxiliary::keys_for_reading(keys, self.auxiliary_mode);
+        let reading_keys = reading_keys.as_ref();
         let mut last: Option<Result<Query, ParseError>> = None;
         let mut found: Option<(Query, Vec<String>)> = None;
-        for expansion in table.expand(keys) {
+        for expansion in table.expand(reading_keys) {
             let pinyin = expansion.to_pinyin();
             let segmentations = table.segmentations(&expansion);
             // 这个解法连一个音节都不出来（按键当不了首键）：没有读法，看下一个解法
@@ -268,32 +272,63 @@ impl Engine {
             query.typed_display = None;
             query.expanded_pinyin = true;
         }
-        // 辅助码：只筛选（不排序）——「先找词、没词再拼字」**逐字对应**，不过关的候选直接丢掉
+        // 辅助码：只筛选（不排序）——「先找词、没词再拼字」**逐字对应**，不过关的候选直接丢掉。
+        // 半字那三种方式改用**末尾那串大写**，跟候选自己推出来的码比（见 `crate::auxiliary`）。
+        let derived_code = crate::auxiliary::trailing_code(keys);
         if let Some(codes) = self.auxiliary_codes.as_deref()
             && table.auxiliary
         {
-            query
-                .candidates
-                .items
-                .retain(|candidate| keeps_candidate(candidate, &typed_auxiliary, codes));
+            if self.auxiliary_mode.is_derived() {
+                let typed = derived_code.as_deref().unwrap_or_default();
+                query.candidates.items.retain(|candidate| {
+                    crate::auxiliary::keeps_derived(
+                        &candidate.text,
+                        typed,
+                        codes,
+                        self.auxiliary_mode,
+                    )
+                });
+            } else {
+                query
+                    .candidates
+                    .items
+                    .retain(|candidate| keeps_candidate(candidate, &typed_auxiliary, codes));
+            }
         }
-        // 候选右侧要显示的辅助码：作用域里**光标前那个音节**对应的那个字（`ai|qg` 显示「爱」的码、
-        // `aiqg|` 显示「情」的码），外加那条码里**已经敲上**的前几位（候选窗口画下划线）。
-        // 填不填与显示设置无关 —— 画不画由平台层看设置决定。
+        // 候选右侧要显示的辅助码：
+        // - 逐字方式：作用域里**光标前那个音节**对应的那个字（`ai|qg` 显示「爱」的码、`aiqg|` 显示「情」的码）；
+        // - 半字方式：**每个候选自己**推出来的那条码（跟光标位置无关）。
+        // 两种情况都带上「已经敲上」的前几位（候选窗口画下划线）；填不填与显示设置无关 ——
+        // 画不画由平台层看设置决定。
         if table.auxiliary
             && let Some(codes) = self.auxiliary_codes.as_deref()
-            && let Some(related) = query
+        {
+            if self.auxiliary_mode.is_derived() {
+                let typed = derived_code.as_deref().unwrap_or_default();
+                for candidate in &mut query.candidates.items {
+                    if let Some((code, typed)) = crate::auxiliary::derived_auxiliary(
+                        &candidate.text,
+                        typed,
+                        codes,
+                        self.auxiliary_mode,
+                    ) {
+                        candidate.auxiliary = Some(code);
+                        candidate.auxiliary_typed = typed;
+                    }
+                }
+            } else if let Some(related) = query
                 .segmentations
                 .first()
                 .map(|segmentation| segmentation.syllables.len())
                 .and_then(|count| count.checked_sub(1))
-        {
-            for candidate in &mut query.candidates.items {
-                if let Some((code, typed)) =
-                    candidate_auxiliary(candidate, related, &typed_auxiliary, codes)
-                {
-                    candidate.auxiliary = Some(code);
-                    candidate.auxiliary_typed = typed;
+            {
+                for candidate in &mut query.candidates.items {
+                    if let Some((code, typed)) =
+                        candidate_auxiliary(candidate, related, &typed_auxiliary, codes)
+                    {
+                        candidate.auxiliary = Some(code);
+                        candidate.auxiliary_typed = typed;
+                    }
                 }
             }
         }

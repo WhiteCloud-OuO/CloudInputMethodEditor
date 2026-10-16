@@ -50,6 +50,20 @@ impl Engine {
         self.auxiliary_codes.as_deref()
     }
 
+    /// 辅助码的匹配方式（`use_input_scheme.cfg` 的 `auxiliary_mode`，缺省逐字）：
+    /// 半字那三种只认整段末尾那串大写、按首尾字推两位（见 [`crate::auxiliary`]）。
+    pub fn set_auxiliary_mode(&mut self, mode: crate::auxiliary::AuxiliaryMode) {
+        if self.auxiliary_mode != mode {
+            self.forget_span_cache();
+        }
+        self.auxiliary_mode = mode;
+    }
+
+    /// 当前的辅助码匹配方式。
+    pub fn auxiliary_mode(&self) -> crate::auxiliary::AuxiliaryMode {
+        self.auxiliary_mode
+    }
+
     /// 双键拼音下「显示原始输入按键」（缺省 `true`）：拼音行显示敲的按键（`ypdo`）、
     /// 未选候选回车也上屏原始按键；`false` 时显示 / 上屏展开后的完整拼音（`yun'duo`）。
     pub fn set_show_raw_input(&mut self, on: bool) {
