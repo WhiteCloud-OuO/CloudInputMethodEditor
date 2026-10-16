@@ -5,8 +5,8 @@
 //!   按**字**对齐 —— 匹配逻辑在 [`crate::shuangpin::keeps`]（这里不管）。
 //! - [`AuxiliaryMode::DoubleHead`] / [`AuxiliaryMode::DoubleTail`] / [`AuxiliaryMode::FirstLast`]
 //!   （半字：双前 / 双后 / 首尾）：**单字**用它本身的码；**多字词**用「首字的码取一位 + 尾字的码取
-//!   一位」推出来的**两位**码（取第一位还是最后一位由方式决定）。敲的码只认**整段输入末尾**那串大写
-//!   （见 [`keys_for_reading`] / [`trailing_code`]），是推出来的那位码的**前缀**就算命中。
+//!   一位」推出来的**两位**码（取第一位还是最后一位由方式决定）。敲的码只认**整段输入末尾**那串大写的
+//!   **最后两位**（多敲的丢掉，见 [`trailing_pair`]），是推出来的那位码的**前缀**就算命中。
 //!
 //! 中间位置出现的大写字母在 1–3 里**直接丢掉**：不参与断句、也不当码（但原始按键照旧整串参与
 //! 「中英混合输入」的英文候选匹配 —— 那条路读的是没动过的按键）。
@@ -49,25 +49,28 @@ impl AuxiliaryMode {
     }
 }
 
-/// 断句用的按键：**半字**三种方式下把中间那些大写字母丢掉，只留**末尾**那串大写
-/// （`aiPqgXH` → `aiqgXH`）；逐字方式原样返回。没动过就借用原串。
+/// 断句用的按键：**半字**三种方式下把中间那些大写字母丢掉，末尾那串大写**只留最后两位**
+/// （多敲的丢掉；`aiPqgXXH` → `aiqgXH`、`aiqgABCDHU` → `aiqgHU`）；逐字方式原样返回。
+/// 没动过就借用原串。
 pub fn keys_for_reading<'a>(keys: &'a str, mode: AuxiliaryMode) -> Cow<'a, str> {
     if !mode.is_derived() {
         return Cow::Borrowed(keys);
     }
     let chars: Vec<char> = keys.chars().collect();
-    // 末尾那串大写的起点（后面那串是辅助码，留着）
+    // 末尾那串大写的起点（后面那串是辅助码）；再往前只留两位
     let mut start = chars.len();
     while start > 0 && chars[start - 1].is_ascii_uppercase() {
         start -= 1;
     }
-    // 前面没有大写就不用动
-    if !chars[..start].iter().any(char::is_ascii_uppercase) {
+    let keep = (chars.len() - start).min(2);
+    let tail_start = chars.len() - keep;
+    // 前面没有大写、末尾也不超过两位就不用动
+    if keep == chars.len() - start && !chars[..start].iter().any(char::is_ascii_uppercase) {
         return Cow::Borrowed(keys);
     }
     let mut out = String::with_capacity(keys.len());
     out.extend(chars[..start].iter().filter(|c| !c.is_ascii_uppercase()));
-    out.extend(chars[start..].iter());
+    out.extend(chars[tail_start..].iter());
     Cow::Owned(out)
 }
 
@@ -83,6 +86,16 @@ pub fn trailing_code(keys: &str) -> Option<String> {
         return None;
     }
     Some(tail.chars().rev().collect())
+}
+
+/// 半字方式用的码：末尾那串大写里的**最后两位**（推出来的码就两位 —— 前面多敲的丢掉）。
+///
+/// 例：`yunHU` → `HU`；`yunXXHU` → `HU`（`XX` 丢掉）；`yunH` → `H`。
+pub fn trailing_pair(keys: &str) -> Option<String> {
+    let code = trailing_code(keys)?;
+    let letters: Vec<char> = code.chars().collect();
+    let start = letters.len().saturating_sub(2);
+    Some(letters[start..].iter().collect())
 }
 
 /// 这个候选在这种方式下要对的那条（几条）码：
@@ -219,6 +232,16 @@ mod tests {
             keys_for_reading("aipdqgxh", AuxiliaryMode::DoubleHead),
             "aipdqgxh"
         );
+        assert_eq!(
+            keys_for_reading("aiqgXXH", AuxiliaryMode::DoubleHead),
+            "aiqgXH",
+            "末尾多敲的丢掉"
+        );
+        assert_eq!(
+            keys_for_reading("aiqgABCDHU", AuxiliaryMode::DoubleHead),
+            "aiqgHU",
+            "末尾那串超四位也只留最后两位"
+        );
         // 逐字方式不动
         assert_eq!(
             keys_for_reading("aiPDqgXH", AuxiliaryMode::PerChar),
@@ -229,6 +252,20 @@ mod tests {
             keys_for_reading("yun'duo", AuxiliaryMode::FirstLast),
             Cow::Borrowed("yun'duo")
         ));
+    }
+
+    /// 敲的码：末尾那串大写的**最后两位**（多敲的丢掉）；一位都没敲就是 `None`。
+    #[test]
+    fn the_trailing_pair_keeps_only_the_last_two() {
+        assert_eq!(trailing_pair("aiPDqgXH").as_deref(), Some("XH"));
+        assert_eq!(
+            trailing_pair("yunXXHU").as_deref(),
+            Some("HU"),
+            "前面多敲的丢掉"
+        );
+        assert_eq!(trailing_pair("yunABCD").as_deref(), Some("CD"));
+        assert_eq!(trailing_pair("yunH").as_deref(), Some("H"));
+        assert_eq!(trailing_pair("yunduo").as_deref(), None);
     }
 
     /// 敲的码：末尾那串大写，最多 4 位。

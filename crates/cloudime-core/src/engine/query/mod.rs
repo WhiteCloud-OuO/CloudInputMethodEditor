@@ -273,8 +273,8 @@ impl Engine {
             query.expanded_pinyin = true;
         }
         // 辅助码：只筛选（不排序）——「先找词、没词再拼字」**逐字对应**，不过关的候选直接丢掉。
-        // 半字那三种方式改用**末尾那串大写**，跟候选自己推出来的码比（见 `crate::auxiliary`）。
-        let derived_code = crate::auxiliary::trailing_code(keys);
+        // 半字那三种方式改用**末尾那串大写的最后两位**，跟候选自己推出来的码比（见 `crate::auxiliary`）。
+        let derived_code = crate::auxiliary::trailing_pair(keys);
         if let Some(codes) = self.auxiliary_codes.as_deref()
             && table.auxiliary
         {

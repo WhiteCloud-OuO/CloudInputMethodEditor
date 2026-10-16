@@ -86,7 +86,7 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 候选比那个位置短就是 `None`；只有 `table.auxiliary` + 挂着辅助码表时才填。`auxiliary_typed` 给候选窗画下划线用（敲了一半的那几位）。
 **辅助码的四种匹配方式**（`crate::auxiliary`，2026-10-16，`.cfg` 的 `auxiliary_mode`）：`AuxiliaryMode`（`PerChar` 逐字（缺省）/
 `DoubleHead` 双前 / `DoubleTail` 双后 / `FirstLast` 首尾）+ `keys_for_reading`（半字三种把**中间那些大写**从拼音读法里丢掉、
-只留末尾那串 —— 原始按键照旧给英文匹配与拼音行用）+ `trailing_code`（末尾那串唯一码，最多 4 位）+
+只留末尾那串 —— 原始按键照旧给英文匹配与拼音行用）+ `trailing_pair`（半字方式用的码：末尾那串大写的**最后两位**，多敲的丢掉）+
 `wanted_code`（候选要对的码：单字取本身的码、多字词取首字与尾字各一位拼两位，多个码两两组合）+
 `keeps_derived` / `derived_auxiliary`（筛选与显示，前缀匹配、单字不看首尾）。
 `Engine::query_shuangpin` 里按方式分流：断句用 `keys_for_reading` 后的按键，筛选 / 显示各走 `keeps_derived` / `derived_auxiliary`

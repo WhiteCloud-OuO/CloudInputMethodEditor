@@ -350,6 +350,12 @@ fn derived_auxiliary_modes_match_the_tail_code() {
         texts.iter().any(|text| text == "开发"),
         "中间大写丢掉：{texts:?}"
     );
+    // 末尾那串只认**最后两位**：`klfaXXHU` 的码就是 `HU`（前面的 `XX` 丢掉）
+    let texts = candidates(&mut app, "klfaXXHU");
+    assert!(
+        texts.iter().any(|text| text == "开发"),
+        "末尾多敲的丢掉：{texts:?}"
+    );
 
     // 显示：半字方式下每个候选显示**它自己**推出来的码（跟光标位置无关）
     app.set_input("klfaH");
