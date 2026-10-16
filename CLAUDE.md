@@ -5,7 +5,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 ## 仓库现状
 
 Windows 输入法（只做 Windows，上游的 macOS / Linux 壳已删除）。Core 平台无关，壳只做接入：`apps/windows/{server,tsf,settings,installer}`。
-本仓库从青简 fork、版本号独立，从 `0.0.1` 起，唯一来源是根目录 `version.txt`（当前就是 `0.1.1`，`CHANGELOG.md` 顶上就是它那一节）。
+本仓库从青简 fork、版本号独立，从 `0.0.1` 起，唯一来源是根目录 `version.txt`（发版之间带 `-dev`，`CHANGELOG.md` 顶上那一节就是它）。
 阶段与已完成项见 `docs/plan/roadmap.md`，待办见 `docs/plan/todo.md`。
 
 ## 目录地图
