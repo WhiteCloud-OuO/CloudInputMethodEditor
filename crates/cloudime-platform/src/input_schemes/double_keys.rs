@@ -748,7 +748,7 @@ Author = "云朵输入法"
 WordBank = ""
 
 [Auxiliary]
-UsingAuxiliaryCodes = false
+UsingAuxiliaryCodes = true
 
 # 零声母：左边是韵母，右边是依次要按的两个键（`ang = AY` 就是打 A、Y）
 [Shengmu]
@@ -1039,6 +1039,19 @@ mod tests {
         assert_eq!(scheme.remapping[&'d'].finals, ["iang", "uang"]);
         // 没写的键就是没有
         assert!(scheme.remapping[&'f'].finals == ["en"]);
+    }
+
+    /// 首道（内置缺省的方案）**缺省就打开辅助码**：随包带了那两张首右辅助码，新用户装上就能用。
+    #[test]
+    fn the_shoudao_sample_opens_auxiliary_codes() {
+        let scheme = validate(
+            "shoudao".to_owned(),
+            Format::Toml,
+            flatten_toml(SAMPLE_SHOUDAO).expect("样例是合法 TOML"),
+        )
+        .expect("样例能过校验");
+        assert!(scheme.using_auxiliary_codes, "首道缺省开辅助码");
+        assert!(scheme.table().auxiliary);
     }
 
     /// 内置样例转成 Core 的解码器表后，直接就能解 `ypdo` → `yun'duo`。
