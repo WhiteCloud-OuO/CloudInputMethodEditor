@@ -46,6 +46,7 @@ impl Engine {
                     syllables: Vec::new(),
                     reading: None,
                     auxiliary: None,
+                    auxiliary_typed: None,
                 },
             );
             last = Some((phrase.position, index));

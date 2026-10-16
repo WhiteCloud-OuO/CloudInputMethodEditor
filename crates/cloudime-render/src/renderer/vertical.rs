@@ -38,7 +38,7 @@ impl Renderer {
             let index = self.measure(&row.index, &index_style);
             let text = self.measure(&row.text, &text_style);
             // 辅助码紧跟候选词（中间一个空格），所以它占的宽度算进**候选词那一列**
-            let auxiliary = self.auxiliary_width(row.auxiliary.as_deref(), m);
+            let auxiliary = self.auxiliary_width(row.auxiliary.as_ref(), m);
             let annotation: f32 = row
                 .annotation
                 .iter()
@@ -99,7 +99,7 @@ impl Renderer {
             // 辅助码紧跟候选词，中间隔一个空格（那一列已经把宽度留出来了）
             let text_width = self.measure(&row.text, &m.text_style()).width;
             let auxiliary_x = text_x + text_width + self.space_width(m);
-            self.draw_auxiliary(canvas, m, row.auxiliary.as_deref(), auxiliary_x, top);
+            self.draw_auxiliary(canvas, m, row.auxiliary.as_ref(), auxiliary_x, top);
             let mut x = annotation_x;
             for (segment, tone) in &row.annotation {
                 let style = m.annotation_style(m.tone_color(*tone));

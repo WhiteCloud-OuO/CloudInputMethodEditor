@@ -8,7 +8,7 @@ mod tone;
 
 pub use highlight::{HighlightAnimation, HighlightRect};
 pub use preedit::{Preedit, PreeditSegment, PreeditStyle};
-pub use row::Row;
+pub use row::{Auxiliary, Row};
 pub use tip::TipSegment;
 pub use tone::Tone;
 

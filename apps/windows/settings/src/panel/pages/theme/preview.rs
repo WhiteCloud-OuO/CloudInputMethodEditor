@@ -6,8 +6,8 @@
 
 use cloudime_platform::{CandidateConfig, ThemeColor, ThemeFile};
 use cloudime_render::{
-    Color, FontLibrary, Frame, Layout, Preedit, Renderer, Row, Shadow, StatusCell, Theme,
-    TipSegment, Tone, UiFont, system_fonts,
+    Auxiliary, Color, FontLibrary, Frame, Layout, Preedit, Renderer, Row, Shadow, StatusCell,
+    Theme, TipSegment, Tone, UiFont, system_fonts,
 };
 use windows_reactor::*;
 
@@ -129,7 +129,7 @@ fn frame() -> Frame {
                 text: "云朵".to_owned(),
                 annotation: Vec::new(),
                 badge: Some("造".to_owned()),
-                auxiliary: Some("[XH]".to_owned()),
+                auxiliary: Some(Auxiliary::split("XH", "X")),
             },
         ],
         highlighted: Some(0),

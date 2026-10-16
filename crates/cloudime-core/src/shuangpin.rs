@@ -391,18 +391,29 @@ pub trait AuxiliaryTable {
     /// 这个词的码（都按大写）；没有这个词就是 `None`。
     fn codes(&self, word: &str) -> Option<&[String]>;
 
-    /// 这个字有没有这个码（大小写不敏感；一个词多个码时任一个相同就算有）。
-    fn matches(&self, word: &str, code: &str) -> bool {
-        let code = code.to_uppercase();
-        self.codes(word).is_some_and(|codes| codes.contains(&code))
+    /// 这个字有没有**以敲的这几位开头**的码（大小写不敏感；一个词多个码时任一个以它开头就算有）。
+    ///
+    /// 是**前缀**不是全等：`侧` 的码是 `RS`，只敲了 `R` 也算命中（那一位还没敲完，候选照旧在里面，
+    /// 候选右侧那段码会把已经敲上的 `R` 画下划线）。
+    fn matches(&self, word: &str, typed: &str) -> bool {
+        self.codes(word)
+            .is_some_and(|codes| codes.iter().any(|code| is_prefix(typed, code)))
     }
 }
 
-/// 这个候选能不能过辅助码这关：**逐字对应**。
+/// 敲的这几位是不是表里那条码的**前缀**（大小写不敏感）。空串不算（那是「没敲码」）。
+fn is_prefix(typed: &str, code: &str) -> bool {
+    !typed.is_empty()
+        && code
+            .get(..typed.len())
+            .is_some_and(|head| head.eq_ignore_ascii_case(typed))
+}
+
+/// 这个候选能不能过辅助码这关：**逐字对应**，敲的码是表里那条码的**前缀**就算命中。
 ///
 /// `words` 是候选的词：词文本 + **这个词每个字敲的辅助码**（空串 = 那个字没敲码；长度 = 词的字数）。
-/// 判定顺序：**先找词**（把敲的码按字连起来，跟词表里那条整码对上就算命中）；**对不上再逐字查表**
-/// （敲了码的那个字，码必须对上；没敲码的字不参与）。一个字都没敲码的词不参与筛选；
+/// 判定顺序：**先找词**（把敲的码按字连起来，是词表里那条整码的前缀就算命中）；**对不上再逐字查表**
+/// （敲了码的那个字，它的码得以敲的码开头；没敲码的字不参与）。一个字都没敲码的词不参与筛选；
 /// 敲了码、对不上 → 这个候选丢掉（辅助码**只筛选**，不排序）。
 pub fn keeps(words: &[(String, Vec<String>)], table: &dyn AuxiliaryTable) -> bool {
     words
@@ -424,8 +435,8 @@ fn keeps_word(text: &str, typed: &[String], table: &dyn AuxiliaryTable) -> bool 
     let joined: String = typed.concat();
     if let Some(codes) = table.codes(text) {
         for code in codes {
-            // 整条对上：把敲的码按字连起来比（`PD` + `XH` 对「爱情」的 `PDXH`）
-            if code.eq_ignore_ascii_case(&joined) {
+            // 整条码：把敲的码按字连起来，是它的**前缀**就算命中（`PD` 对「爱情」的 `PDXH`，敲一半也算）
+            if is_prefix(&joined, code) {
                 return true;
             }
             // 或者一格一位切开比（传统单字母码：`K` + `F` 对「开发」的 `KF`）
@@ -433,7 +444,7 @@ fn keeps_word(text: &str, typed: &[String], table: &dyn AuxiliaryTable) -> bool 
             if letters.len() == count
                 && (0..count).all(|index| {
                     typed.get(index).is_none_or(|typed| {
-                        typed.is_empty() || typed.eq_ignore_ascii_case(&letters[index].to_string())
+                        typed.is_empty() || is_prefix(typed, &letters[index].to_string())
                     })
                 })
             {
@@ -441,7 +452,7 @@ fn keeps_word(text: &str, typed: &[String], table: &dyn AuxiliaryTable) -> bool 
             }
         }
     }
-    // 再逐字查表：敲了码的那个字，码必须对上；没敲码的字不参与
+    // 再逐字查表：敲了码的那个字，它的码得以敲的码开头；没敲码的字不参与
     (0..count).all(|index| {
         typed
             .get(index)
@@ -927,15 +938,17 @@ mod auxiliary_tests {
         assert!(keeps(&[word("爱情", &["PD", "XH"])], &table));
     }
 
-    /// 词表里的整条码：把敲的码按字连起来对上就过（表里没有这个词就逐字查）。
+    /// 词表里的整条码：敲的码按字连起来是它的**前缀**就过（表里没有这个词就逐字查）。
     #[test]
     fn the_whole_word_code_is_checked_first() {
         let table = Table::new(&[("爱情", "PDXH")]);
         assert!(keeps(&[word("爱情", &["PD", "XH"])], &table), "整条码对上");
+        // **敲了一半也算**：`PD` 是 `PDXH` 的前缀，那一位还没敲完，候选照旧在
+        assert!(keeps(&[word("爱情", &["PD", ""])], &table), "前半个字的码");
+        assert!(keeps(&[word("爱情", &["P", ""])], &table), "只敲了一位");
         // 连起来对不上 → 落到逐字查表；字表里没有这两个字 → 丢
         assert!(!keeps(&[word("爱情", &["PD", "QQ"])], &table));
-        // 只敲了前半个字的码：整条对不上，逐字查表也不认（表里只有「爱情」整条）→ 丢
-        assert!(!keeps(&[word("爱情", &["PD", ""])], &table));
+        assert!(!keeps(&[word("爱情", &["PX", ""])], &table), "敲错的码不认");
     }
 
     /// 词表里没这个词（或者只写了单字）就逐字查表。

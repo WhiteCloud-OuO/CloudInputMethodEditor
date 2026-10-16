@@ -7,8 +7,8 @@ use std::time::Instant;
 
 use clap::Parser;
 use cloudime_render::{
-    FontLibrary, Frame, KeyCap, KeyMapLayout, Layout, Preedit, PreeditSegment, PreeditStyle,
-    Renderer, Row, Shadow, StatusCell, Theme, TipSegment, Tone, key_map_cell,
+    Auxiliary, FontLibrary, Frame, KeyCap, KeyMapLayout, Layout, Preedit, PreeditSegment,
+    PreeditStyle, Renderer, Row, Shadow, StatusCell, Theme, TipSegment, Tone, key_map_cell,
 };
 
 #[derive(Parser)]
@@ -375,9 +375,10 @@ fn matrix() -> Frame {
     // 「每格最小宽度 6 个字宽 + 角标」。
     rows[0].badge = Some("造".into());
     // 辅助码：紧跟候选词（中间一个空格）；展开态截断上限跟着让出来。第 12 行还带译文，三者一起看。
-    rows[0].auxiliary = Some("[XH]".into());
-    rows[1].auxiliary = Some("[XH]".into());
-    rows[12].auxiliary = Some("[XH]".into());
+    // 第 0 行敲上了一位（`X` 画下划线）、第 1 行没敲，两种样子各看一个。
+    rows[0].auxiliary = Some(Auxiliary::split("XH", "X"));
+    rows[1].auxiliary = Some(Auxiliary::split("XH", ""));
+    rows[12].auxiliary = Some(Auxiliary::split("XH", ""));
     Frame {
         preedit: Some(Preedit {
             segments: vec![PreeditSegment {
@@ -398,34 +399,37 @@ fn matrix() -> Frame {
     }
 }
 
-/// 双键拼音 + 辅助码：候选词右侧紧跟**一个空格 + 码**（`[XH]`），字体与颜色跟角标一致。
-/// 拼音串是 `ai'qg`（光标在末尾），按「光标前那个音节」的规则显示的是**「情」**的码 ——
-/// 所以单字的「爱」没有码可显示（那种候选对不上位置就不显示）。
+/// 双键拼音 + 辅助码：候选词右边紧跟**一个空格 + `[码]`**，字体与颜色跟角标一致；
+/// **已经敲上的那几位画下划线** —— 拼音串 `ceR`（`R` 是辅助码的第一位）时，
+/// 「侧」的码 `RS` 显示成 `[RS]`（敲上的 `R` 带下划线，还差的 `S` 照旧）。
 fn auxiliary_codes() -> Frame {
-    let items = [
-        ("爱情", Some("XH")),
-        ("爱情故事", Some("XH")),
-        ("爱", None),
-        ("艾青", Some("XH")),
-        ("爱卿", Some("XH")),
-        ("碍情", Some("XH")),
-        ("爱琴", Some("XH")),
-        ("爱请", Some("XH")),
-        ("爱清", Some("XH")),
+    let items: [(&str, Option<(&str, &str)>); 9] = [
+        ("侧", Some(("R", "S"))),
+        ("册", Some(("", "RS"))),
+        ("测", Some(("R", "S"))),
+        ("策", Some(("", "RS"))),
+        ("厕", Some(("", "RS"))),
+        ("恻", Some(("", "RS"))),
+        ("侧记", Some(("R", "S"))),
+        ("侧耳", Some(("", "RS"))),
+        ("侧身", Some(("", "RS"))),
     ];
     let mut rows: Vec<Row> = items
         .iter()
         .enumerate()
         .map(|(i, (text, code))| {
             let mut row = Row::plain(i, *text);
-            row.auxiliary = code.map(|code| format!("[{code}]"));
+            row.auxiliary = code.map(|(typed, rest)| Auxiliary {
+                typed: typed.to_owned(),
+                rest: rest.to_owned(),
+            });
             row
         })
         .collect();
     // 角标与辅助码同时在：角标贴格右边缘、辅助码紧跟候选词
     rows[1].badge = Some("造".into());
     Frame {
-        preedit: Some(Preedit::plain("ai'qg", 5)),
+        preedit: Some(Preedit::plain("ce'R", 4)),
         rows,
         highlighted: Some(0),
         highlight_animation: None,

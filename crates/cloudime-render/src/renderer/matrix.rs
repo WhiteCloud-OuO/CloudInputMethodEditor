@@ -119,7 +119,7 @@ impl Renderer {
             // 辅助码紧跟候选词（截断过的那份）、中间隔一个空格
             let shown_width = self.measure(&shown.text, &m.text_style()).width;
             let auxiliary_x = text_x + shown_width + self.space_width(m);
-            self.draw_auxiliary(canvas, m, row.auxiliary.as_deref(), auxiliary_x, top);
+            self.draw_auxiliary(canvas, m, row.auxiliary.as_ref(), auxiliary_x, top);
             // 展开态：角标贴在**格右边缘**（往里让 `BADGE_GAP`）——与收起横排的
             // 「文字后面跟 2 个字宽」不同，展开是格子对齐，角标各自靠右。
             let badge_width = self.badge_width(row.badge.as_deref(), m);
@@ -175,7 +175,7 @@ impl Renderer {
         let auxiliary_space = frame
             .rows
             .iter()
-            .map(|row| self.auxiliary_width(row.auxiliary.as_deref(), m))
+            .map(|row| self.auxiliary_width(row.auxiliary.as_ref(), m))
             .fold(0.0_f32, f32::max);
         // 格子里除候选词以外的宽度（展开态就只剩间距、辅助码与角标）
         let chrome = index_width + m.px(INDEX_GAP) + auxiliary_space + badge_space;

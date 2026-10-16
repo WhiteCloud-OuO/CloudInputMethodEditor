@@ -25,8 +25,8 @@ pub use error::RenderError;
 pub use fonts::directwrite as system_fonts;
 pub use fonts::{FontLibrary, UiFont};
 pub use frame::{
-    Frame, HighlightAnimation, HighlightRect, Preedit, PreeditSegment, PreeditStyle, Row,
-    TipSegment, Tone,
+    Auxiliary, Frame, HighlightAnimation, HighlightRect, Preedit, PreeditSegment, PreeditStyle,
+    Row, TipSegment, Tone,
 };
 pub use layout::Layout;
 pub use renderer::{

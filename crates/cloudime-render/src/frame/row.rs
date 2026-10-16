@@ -17,7 +17,35 @@ pub struct Row {
 
     /// 紧跟候选词的辅助码（`[XH]` 这样），与候选词**隔一个空格**；字体与颜色跟角标一致。
     /// 没有为 `None`（见 `docs/design/input-schemes.md` §4）。
-    pub auxiliary: Option<String>,
+    pub auxiliary: Option<Auxiliary>,
+}
+
+/// 候选右侧那一段辅助码：`typed` 是**已经敲上**的那几位（画下划线），`rest` 是还差的那几位。
+/// 渲染器在两头补上 `[` `]`（不参与下划线）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Auxiliary {
+    /// 已经敲上的那几位（前缀）；一位都没敲就是空串。
+    pub typed: String,
+
+    /// 还差的那些。
+    pub rest: String,
+}
+
+impl Auxiliary {
+    /// 按「完整的码 + 已经敲上的那几位」拆：`typed` 不是 `code` 的前缀时（理论上不该发生）
+    /// 整条都算没敲，画出来是 `[XH]`。
+    pub fn split(code: &str, typed: &str) -> Self {
+        match code.get(..typed.len()) {
+            Some(head) if head.eq_ignore_ascii_case(typed) => Self {
+                typed: head.to_owned(),
+                rest: code[head.len()..].to_owned(),
+            },
+            _ => Self {
+                typed: String::new(),
+                rest: code.to_owned(),
+            },
+        }
+    }
 }
 
 impl Row {

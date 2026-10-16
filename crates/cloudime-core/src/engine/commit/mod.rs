@@ -222,6 +222,7 @@ impl Engine {
             syllables,
             reading: None,
             auxiliary: None,
+            auxiliary_typed: None,
         };
         if !self.knows_word(&candidate)
             && self.learner.choice_weight(&key, &candidate.text) >= AUTO_WORD_THRESHOLD_SAME_BUFFER
@@ -573,6 +574,7 @@ impl Engine {
             syllables: joined_syllables,
             reading: None,
             auxiliary: None,
+            auxiliary_typed: None,
         };
         if self.knows_word(&candidate) {
             return;

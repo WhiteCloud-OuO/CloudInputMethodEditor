@@ -1,4 +1,4 @@
-//! 一段文字怎么画：字号、行高（像素）、颜色、删除线。
+//! 一段文字怎么画：字号、行高（像素）、颜色、删除线 / 下划线。
 
 use crate::color::Color;
 use crate::theme::FontSpec;
@@ -22,6 +22,9 @@ pub(crate) struct TextStyle {
     /// 画删除线（纠错改掉的拼音）。
     pub strike: bool,
 
+    /// 画下划线（候选右侧辅助码里已经敲上的那几位）。
+    pub underline: bool,
+
     /// 斜体（翻译 Tip 的词性）。
     pub italic: bool,
 
@@ -39,6 +42,7 @@ impl TextStyle {
             family: None,
             color,
             strike: false,
+            underline: false,
             italic: false,
             gamma,
         }
@@ -58,6 +62,12 @@ impl TextStyle {
 
     pub(crate) fn struck(mut self) -> Self {
         self.strike = true;
+        self
+    }
+
+    /// 下划线（辅助码里已经敲上的那几位）。
+    pub(crate) fn underlined(mut self) -> Self {
+        self.underline = true;
         self
     }
 }

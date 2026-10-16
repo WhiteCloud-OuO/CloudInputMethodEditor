@@ -69,6 +69,7 @@ mod tests {
             syllables: vec!["zhang".into(), "tao".into()],
             reading: None,
             auxiliary: None,
+            auxiliary_typed: None,
         }
     }
 

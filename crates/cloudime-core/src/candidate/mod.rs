@@ -34,6 +34,11 @@ pub struct Candidate {
     /// 只有双键拼音开着辅助码、而且挂着辅助码表时才填（见 `Engine::query_shuangpin`）。
     #[serde(default)]
     pub auxiliary: Option<String>,
+
+    /// 上面那条码里**已经敲上**的前几位（`XH` 敲了 `X` 时是 `X`；一位都没敲就是 `None`）：
+    /// 候选窗口把那几位画下划线，表示辅助码已经打上去了（见 `docs/design/input-schemes.md` §4）。
+    #[serde(default)]
+    pub auxiliary_typed: Option<String>,
 }
 
 impl Candidate {

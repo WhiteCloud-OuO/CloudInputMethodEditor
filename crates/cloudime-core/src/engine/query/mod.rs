@@ -18,29 +18,40 @@ use std::collections::{HashMap, HashSet};
 /// 候选右侧要显示的辅助码：`related` 是**光标前那个音节**在候选里的字下标，取那个字的码。
 /// 单字表里没有（表里只有整词码）时按「一格一位」切开取那一位 —— 与 [`crate::shuangpin::keeps`]
 /// 的「先找词」一致。表里没有就是 `None`（角标位置空着）。
+///
+/// 返回 `(完整码, 已经敲上的那几位)`：`typed` 是这个词每个字敲的辅助码（与 `keeps` 同一份），
+/// 已经敲上的那几位填进 `Candidate::auxiliary_typed`，候选窗口画下划线用。
 fn candidate_auxiliary(
     candidate: &Candidate,
     related: usize,
+    typed: &[String],
     codes: &dyn crate::shuangpin::AuxiliaryTable,
-) -> Option<String> {
+) -> Option<(String, Option<String>)> {
     let chars: Vec<char> = candidate.display_text().chars().collect();
     // 候选比那个位置短（`开` 配两个音节）：这个位置上没有字，不显示
     if related >= chars.len() {
         return None;
     }
-    if let Some(code) = chars
+    let code = chars
         .get(related)
         .and_then(|character| codes.codes(&character.to_string()))
         .and_then(|codes| codes.first())
-    {
-        return Some(code.clone());
-    }
-    let letters: Vec<char> = codes
-        .codes(candidate.display_text())?
-        .first()?
-        .chars()
-        .collect();
-    (letters.len() == chars.len()).then(|| letters[related].to_string())
+        .cloned()
+        .or_else(|| {
+            // 表里只有整词码：按「一格一位」切开取那一位
+            let letters: Vec<char> = codes
+                .codes(candidate.display_text())?
+                .first()?
+                .chars()
+                .collect();
+            (letters.len() == chars.len()).then(|| letters[related].to_string())
+        })?;
+    // 那个字敲了几位：空串 / 没这一项就是一位都没敲（不画下划线）
+    let typed = typed
+        .get(related)
+        .filter(|typed| !typed.is_empty())
+        .cloned();
+    Some((code, typed))
 }
 
 /// 辅助码筛选：候选整体当一个**词**（先找词），没词再按字查（见 [`crate::shuangpin::keeps`]）——
@@ -261,7 +272,8 @@ impl Engine {
                 .retain(|candidate| keeps_candidate(candidate, &typed_auxiliary, codes));
         }
         // 候选右侧要显示的辅助码：作用域里**光标前那个音节**对应的那个字（`ai|qg` 显示「爱」的码、
-        // `aiqg|` 显示「情」的码）。填不填与显示设置无关 —— 画不画由平台层看设置决定。
+        // `aiqg|` 显示「情」的码），外加那条码里**已经敲上**的前几位（候选窗口画下划线）。
+        // 填不填与显示设置无关 —— 画不画由平台层看设置决定。
         if table.auxiliary
             && let Some(codes) = self.auxiliary_codes.as_deref()
             && let Some(related) = query
@@ -271,7 +283,12 @@ impl Engine {
                 .and_then(|count| count.checked_sub(1))
         {
             for candidate in &mut query.candidates.items {
-                candidate.auxiliary = candidate_auxiliary(candidate, related, codes);
+                if let Some((code, typed)) =
+                    candidate_auxiliary(candidate, related, &typed_auxiliary, codes)
+                {
+                    candidate.auxiliary = Some(code);
+                    candidate.auxiliary_typed = typed;
+                }
             }
         }
         Ok(query)
@@ -623,6 +640,7 @@ impl Engine {
                 syllables: Vec::new(),
                 reading: None,
                 auxiliary: None,
+                auxiliary_typed: None,
             });
         }
         Query {
@@ -654,6 +672,7 @@ impl Engine {
             syllables: Vec::new(),
             reading: None,
             auxiliary: None,
+            auxiliary_typed: None,
         }];
         Query {
             segmentations: Vec::new(),
@@ -692,6 +711,7 @@ impl Engine {
             syllables: Vec::new(),
             reading: None,
             auxiliary: None,
+            auxiliary_typed: None,
         })
         .collect();
         Query {
@@ -798,6 +818,7 @@ impl Engine {
                 syllables: conversion.syllables,
                 reading: None,
                 auxiliary: None,
+                auxiliary_typed: None,
             },
             weight,
         ))
@@ -968,6 +989,7 @@ impl Engine {
                         syllables: Vec::new(),
                         reading: None,
                         auxiliary: None,
+                        auxiliary_typed: None,
                     },
                     // 结构键借用整段读法；`exact` 为真时整段就是这个词，补全比输入长视作不精确
                     (full, abbreviated, full_last, exact, 0, weight),
@@ -1127,5 +1149,6 @@ fn chinese_candidate(item: &Scored<'_>) -> Candidate {
         syllables: item.hit.syllables().map(str::to_owned).collect(),
         reading: None,
         auxiliary: None,
+        auxiliary_typed: None,
     }
 }

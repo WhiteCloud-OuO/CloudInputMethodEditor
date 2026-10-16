@@ -54,6 +54,7 @@ pub fn candidates(input: &str, now: &Zoned) -> Vec<Candidate> {
             syllables: Vec::new(),
             reading: None,
             auxiliary: None,
+            auxiliary_typed: None,
         })
         .collect()
 }
@@ -76,6 +77,7 @@ pub fn result_candidates(body: &str) -> Vec<Candidate> {
         syllables: Vec::new(),
         reading: None,
         auxiliary: None,
+        auxiliary_typed: None,
     }]
 }
 

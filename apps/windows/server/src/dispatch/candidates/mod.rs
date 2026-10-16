@@ -229,6 +229,7 @@ mod tests {
             syllables: Vec::new(),
             reading: None,
             auxiliary: None,
+            auxiliary_typed: None,
         }
     }
 

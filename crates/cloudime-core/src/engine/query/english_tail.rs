@@ -143,6 +143,7 @@ impl Engine {
                 syllables,
                 reading: None,
                 auxiliary: None,
+                auxiliary_typed: None,
             },
             weight,
         ))

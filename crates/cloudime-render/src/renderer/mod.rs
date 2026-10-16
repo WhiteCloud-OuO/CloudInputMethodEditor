@@ -16,7 +16,7 @@ use crate::canvas::Canvas;
 use crate::color::Color;
 use crate::error::RenderError;
 use crate::fonts::FontLibrary;
-use crate::frame::{Frame, HighlightRect, Row, TipSegment, Tone};
+use crate::frame::{Auxiliary, Frame, HighlightRect, Row, TipSegment, Tone};
 use crate::layout::Layout;
 use crate::shadow::Shadow;
 use crate::text::{TextPainter, TextSize, TextStyle};
@@ -47,6 +47,11 @@ const SINGLE_CHAR: &str = "国";
 
 /// 量「一个角标字有多宽」用的样字（角标都是「短 / 句 / 造」这类单个汉字）。
 const BADGE_CHAR: &str = "造";
+
+/// 辅助码两头的方括号：紧跟候选词那一段画成 `[XH]`（见 `Renderer::draw_auxiliary`），
+/// 括号自己不带下划线（只有已经敲上的那几位带）。
+const AUXILIARY_OPEN: &str = "[";
+const AUXILIARY_CLOSE: &str = "]";
 
 /// 横排里候选词与来源角标之间的最小间隔（字宽数）。
 const HORIZONTAL_BADGE_GAP_EMS: f32 = 2.0;
@@ -420,11 +425,19 @@ impl Renderer {
         self.measure(" ", &m.text_style()).width
     }
 
-    /// 辅助码那一段的宽度（点）：**一个空格 + 码本身**；没有为 0。
-    pub(super) fn auxiliary_width(&mut self, auxiliary: Option<&str>, m: &Metrics) -> f32 {
-        auxiliary.map_or(0.0, |text| {
-            self.space_width(m) + self.measure(text, &m.badge_style()).width
-        })
+    /// 辅助码那一段的宽度（点）：**一个空格 + `[` + 已敲的几位 + 还差的几位 + `]`**；没有为 0。
+    pub(super) fn auxiliary_width(&mut self, auxiliary: Option<&Auxiliary>, m: &Metrics) -> f32 {
+        let Some(auxiliary) = auxiliary else {
+            return 0.0;
+        };
+        let style = m.badge_style();
+        let bracket = |this: &mut Self| {
+            this.measure(AUXILIARY_OPEN, &style).width + this.measure(AUXILIARY_CLOSE, &style).width
+        };
+        self.space_width(m)
+            + bracket(self)
+            + self.measure(&auxiliary.typed, &style).width
+            + self.measure(&auxiliary.rest, &style).width
     }
 
     /// 一个候选字的宽度（点）。用来按「字宽」定间距 / 最小宽度：取一个汉字量，
@@ -473,28 +486,36 @@ impl Renderer {
         );
     }
 
-    /// 把辅助码（`[XH]`）画在 `left` 处 —— 调用方给的是「候选词右边再加一个空格」那个位置
+    /// 把辅助码画在 `left` 处 —— 调用方给的是「候选词右边再加一个空格」那个位置
     /// （即 `text_x + 候选词宽度 + `[`Self::space_width`]），字体与颜色跟来源角标一致。
+    /// 两头补 `[` `]`（不参与下划线），**已经敲上的那几位画下划线**（表示这段码已经打上去了）。
     pub(super) fn draw_auxiliary(
         &mut self,
         canvas: &mut Canvas,
         m: &Metrics,
-        auxiliary: Option<&str>,
+        auxiliary: Option<&Auxiliary>,
         left: f32,
         top: f32,
     ) {
-        let Some(text) = auxiliary else {
+        let Some(auxiliary) = auxiliary else {
             return;
         };
         let style = m.badge_style();
+        let typed_style = style.clone().underlined();
         let text_height = m.px(m.theme.text_font.line_height);
-        self.draw_text(
-            canvas,
-            text,
-            &style,
-            left,
-            top + m.index_offset(text_height),
-        );
+        let top = top + m.index_offset(text_height);
+        let mut x = left;
+        for (segment, style) in [
+            (AUXILIARY_OPEN, &style),
+            (auxiliary.typed.as_str(), &typed_style),
+            (auxiliary.rest.as_str(), &style),
+            (AUXILIARY_CLOSE, &style),
+        ] {
+            if segment.is_empty() {
+                continue;
+            }
+            x += self.draw_text(canvas, segment, style, x, top);
+        }
     }
 
     /// 画高亮条。`rect` 用内容区坐标；`origin` 是内容区左上角在画布里的像素坐标，画前搬过去。
@@ -660,7 +681,9 @@ fn highlight_rect(frame: &Frame, rects: &[HighlightRect]) -> Option<HighlightRec
 mod tests {
     use super::highlight_rect;
     use crate::fonts::FontLibrary;
-    use crate::frame::{Frame, HighlightAnimation, HighlightRect, Preedit, Row, TipSegment, Tone};
+    use crate::frame::{
+        Auxiliary, Frame, HighlightAnimation, HighlightRect, Preedit, Row, TipSegment, Tone,
+    };
     use crate::layout::Layout;
     use crate::renderer::Renderer;
     use crate::theme::Theme;
@@ -705,6 +728,46 @@ mod tests {
     fn no_highlight_row_draws_nothing() {
         let frame = Frame::default();
         assert_eq!(highlight_rect(&frame, &rects()), None);
+    }
+
+    /// 辅助码里「已经敲上」的那几位画下划线：同一段 `[RS]`，敲了一位（`R` 带下划线）与一位没敲
+    /// 画出来的像素必须**有差别**（那条线真的画出来了），而且差别只该是那条线本身。
+    #[test]
+    fn the_typed_part_of_the_auxiliary_code_is_underlined() {
+        let Some(mut renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let theme = Theme::new();
+        let frame = |typed: &str| Frame {
+            rows: vec![Row {
+                index: "1".to_owned(),
+                text: "侧".to_owned(),
+                annotation: Vec::new(),
+                badge: None,
+                auxiliary: Some(Auxiliary::split("RS", typed)),
+            }],
+            ..Frame::default()
+        };
+        let render = |renderer: &mut Renderer, typed: &str| {
+            renderer
+                .render(&frame(typed), Layout::Vertical, &theme, 1.0, None)
+                .unwrap()
+                .pixmap
+        };
+        let underlined = render(&mut renderer, "R");
+        let plain = render(&mut renderer, "");
+        assert_eq!(
+            (underlined.width(), underlined.height()),
+            (plain.width(), plain.height())
+        );
+        let differing = underlined
+            .pixels()
+            .iter()
+            .zip(plain.pixels())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert!(differing > 0, "敲了一位，`R` 下该有一条下划线");
+        assert!(differing < 100, "差别只该是那条线：{differing} 个像素");
     }
 
     /// 窗口模板要的**空面板**：内容区尺寸就是要的那个（不跟内容走），且尺寸与位图一致。

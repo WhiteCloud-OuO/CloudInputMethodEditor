@@ -71,12 +71,13 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 `Engine::query_reading` 拿到的 `Reading`（`segmentations` + `spans`）里 `spans[n]` 由 `Table::typed_covered` 算 —— 双拼的「覆盖多少」用**按键数**，
 不用读法里的字母数：同一段按键的几种切法得用同一把尺子，不然半个音节的几种猜法会互相压（`a` 的 `ang` 比 `a` 长，候选就全被 `ang` 那一族占了）。全键拼音照旧按字母数。
 `raw_input` 决定拼音行与回车原样上屏用哪一份。`AuxiliaryTable` trait + `keeps` 做「只筛选不排序」的辅助码判定：
-**逐字对应**（`Table::auxiliary` 只是个 bool，没有「位置」），敲了码的那个字必须对上、没敲码的字不参与；
+**逐字对应 + 前缀匹配**（`Table::auxiliary` 只是个 bool，没有「位置」）：敲了码的那个字要**以敲的那几位开头**
+（`is_prefix`；**敲一半也算命中** —— 「侧」的 `RS` 敲了 `R` 时候选照旧在）、没敲码的字不参与；
 先按**整条词码**比（敲的码按字连起来，或传统一格一位地切），对不上再逐字查单字表。
-`Candidate::auxiliary` 是**「在候选项显示辅助码」**要画的那颗码（平台层看设置决定画不画）：
+`Candidate::auxiliary` 与 `Candidate::auxiliary_typed` 是**「在候选项显示辅助码」**要画的那颗码与其中已经敲上的那几位（平台层看设置决定画不画）：
 `candidate_auxiliary()` 取**光标前那个音节**对应候选的那个字的码（作用域的 `segmentations[0].syllables.len()` - 1 那一位；
 `ai|qg` 显示「爱」的码、`aiqg|` 显示「情」的码），单字表里没有就按整词码「一格一位」切开取那一位，
-候选比那个位置短就是 `None`；只有 `table.auxiliary` + 挂着辅助码表时才填。
+候选比那个位置短就是 `None`；只有 `table.auxiliary` + 挂着辅助码表时才填。`auxiliary_typed` 给候选窗画下划线用（敲了一半的那几位）。
 `Engine::set_shuangpin` / `set_auxiliary_codes` 挂表；`query_inner` 里双拼分支排在 `is_raw` **与表达式之前**（`v` / `u` / `i` 三种面板仅全键拼音）；
 `query_shuangpin` 每种解法按它那几份切分跑一遍 `query_reading`（`query_phonetic` 多了个 `reading` 参数：给定就**不再自己切**，
 同一段按键的几份切分按**并集**查，简拼 / 末尾放宽 / 纠错读法都不参与）、
@@ -365,7 +366,9 @@ DLL 据此在**组句里**把这一个键送来问一趟（`eats_key` 里那条�
 网格下固定留一行信息（被截断的高亮候选全文、译文、页码）。
 （早期那套「列宽由帧给 `column_ems`、滚动时不跳宽」的设计已随 `Frame::column_ems` 一起删掉——没有壳在用它。）
 
-**候选词右侧的辅助码**（`Row::auxiliary`，双键拼音「在候选项显示辅助码」用）：紧跟候选词、中间隔**一个空格**
+**候选词右侧的辅助码**（`Row::auxiliary: Option<Auxiliary>`，双键拼音「在候选项显示辅助码」用）：`Auxiliary { typed, rest }` 两段 ——
+**已经敲上的那几位画下划线**（`Auxiliary::split` 按 `Candidate::auxiliary_typed` 拆，`[` `]` 两头由渲染器补、不参与下划线；`TextStyle::underline`）；
+紧跟候选词、中间隔**一个空格**
 （`Renderer::space_width` 量那个空格），字体与颜色跟来源角标同一套（`badge_style` = `index_font` + `colors.badge`）；
 宽度 = `Renderer::auxiliary_width`（一个空格 + 码本身），横排算进 `Item::auxiliary_width`、竖排算进候选词那一列
 （`Columns::text_width` 按 `text + auxiliary` 取最大）、展开态算进 `chrome`；三套排布各在 `draw_horizontal` /
