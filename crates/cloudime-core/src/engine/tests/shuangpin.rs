@@ -224,7 +224,8 @@ fn a_partly_typed_auxiliary_code_keeps_the_candidate() {
 }
 
 /// **半音节后面直接跟辅助码**：`k` 是「开」的第一键，第二键跳过、直接敲辅助码 `H` ——
-/// 「开」照样在候选里（敲一半的码也算命中），右侧那段码记成已敲一位。
+/// 「开」照样在候选里（敲一半的码也算命中），右侧那段码记成已敲一位；**敲完还能接着打**：
+/// `kHf` 是「开」带码 `H` 接下一段 `f`（半个音节），「开发」照样出得来。
 #[test]
 fn an_auxiliary_code_can_follow_a_half_syllable() {
     let (mut app, mut aux) = (engine(), table());
@@ -249,14 +250,21 @@ fn an_auxiliary_code_can_follow_a_half_syllable() {
     assert_eq!(kai.auxiliary.as_deref(), Some("HB"));
     assert_eq!(kai.auxiliary_typed.as_deref(), Some("H"));
 
+    // 敲完还能接着打下一段：`kHf`（`k` 带码 `H` + 下一段的第一个键 `f`）
+    let texts = candidates(&mut app, "kHf");
+    assert!(
+        texts.iter().any(|text| text == "开发"),
+        "半音节带码之后接着打：{texts:?}"
+    );
+
     // 敲错：筛掉
     app.set_input("kX");
     assert!(find(&mut app).is_none(), "敲错的码不认");
 }
 
-/// 开了辅助码：**小写是拼音键、大写是辅助码** —— 大写只能跟在完整音节后面（`klfaF`）；
-/// **第一个键**敲大写（Caps Lock / Shift 卡着）就把它压成小写，照旧当正常双拼打（后面的辅助码照旧）；
-/// 第二个键起敲大写还是切不出来。
+/// 开了辅助码：**小写是拼音键、大写是辅助码** —— 大写跟在完整音节后面（`klfaF`）或半音节后面
+/// （`kK` = 「开」只按了 `k` 就敲 `K`，第二键跳过）；**第一个键**敲大写（Caps Lock / Shift 卡着）
+/// 就把它压成小写，照旧当正常双拼打（后面的辅助码照旧）。
 #[test]
 fn uppercase_is_an_auxiliary_code_not_a_pinyin_key() {
     let mut table = table();
@@ -295,9 +303,13 @@ fn uppercase_is_an_auxiliary_code_not_a_pinyin_key() {
         "第一个键压成小写、辅助码照旧：{texts:?}"
     );
 
-    // 第二个键起敲大写：音节位上出现大写 → 切不出来
-    engine.set_input("kLfa");
-    assert!(engine.query().is_err(), "音节位上有大写 → 不当拼音");
+    // 半音节后面紧跟辅助码：`kK` = 「开」只按了 `k` 就敲 `K`（第二键跳过），而且敲完还能接着打 ——
+    // `kKfa` 就是「开」带码 `K` 接下一段 `fa`（码 `KF` 是前缀匹配，`K` 也算）
+    let texts = candidates(&mut engine, "kKfa");
+    assert!(
+        texts.iter().any(|text| text == "开发"),
+        "半音节带码之后接着打下一段：{texts:?}"
+    );
 
     let texts = candidates(&mut engine, "klfa");
     assert!(

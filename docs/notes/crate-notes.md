@@ -58,9 +58,10 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 
 **双键拼音**（`shuangpin.rs`，2026-10-10；方案文件与规范见 `docs/design/input-schemes.md`）：`Table`（`zero_initials` / `remapping` / `exchange` / `auxiliary` / `raw_input`）把按键还原成完整拼音。
 `expand(keys)` 两键一个音节、`'` 强制分词（不上屏）、开了辅助码时**小写是拼音键、大写是辅助码**
-（跟在**完整音节**后面，或者跟在**末尾那半个音节**后面 —— 第二键跳过、直接敲，`yH` = 「要」只按了 `y` 就敲 `H`，
-那串大写还要一直吃到末尾才算；别的位置出现大写、落单的大写都切不出来；最多 4 位）；
-`Expansion::trailing_auxiliary` 就是那半个音节带的码；同键多义两端都匹配（封顶 9 种解法）、
+（跟在**完整音节**后面，或者跟在**半音节**后面 —— 第二键跳过、直接敲，`yH` = 「要」只按了 `y` 就敲 `H`，
+这种按「声母 + 码」当**简拼**记进 `syllables`，所以**敲完还能接着打下一段**（`yHd`）；没有声母的键
+（`a` / `o` / `u`）凑不出简拼、只能当末尾那半个音节，码记在 `Expansion::trailing_auxiliary` 上，
+读法由 `segmentations` 从 `trailing` 凑；别的位置出现大写、落单的大写都切不出来；最多 4 位）；同键多义两端都匹配（封顶 9 种解法）、
 零声母**完全按 `zero_initials` 表查**（`(两键) → 韵母`，没有内置引导、也没有通则兜底）；
 `syllable()` 拼出来的组合只留 `parser::is_syllable` 认的**合法音节**（`sh` + `iang` 直接丢，否则它会先被挑走、挡住同键另一义的 `shuang`）；
 拼接走 `spelled()`：`j` / `q` / `x` / `y` 后面的 `v`（ü）归一成 `u`（方案写 `b = "ve"` 时 `j` + `b` = `jve` → `jue`，「觉」才出得来；`l` / `n` 后面的 `lve` / `nve` 本来就是标准写法，不动）；

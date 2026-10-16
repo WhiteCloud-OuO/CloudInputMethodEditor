@@ -212,7 +212,8 @@ impl Engine {
                 segmentations,
             };
             // `auxiliary` 是**这个词每个字敲的辅助码**（不是 `segmentations` 里的那个字形 ——
-            // 候选匹配用不到它）；尾巴上那半个音节敲的码接在最后一个（`yH` = 「要」的码 `H`）。
+            // 候选匹配用不到它）；半音节后面紧跟的码也在它那个音节上（`yH` = 「要」的码 `H`），
+            // 没声母的那些键凑不出简拼、码记在尾巴上，接在最后一个。
             let mut typed_auxiliary: Vec<String> = expansion
                 .syllables
                 .iter()

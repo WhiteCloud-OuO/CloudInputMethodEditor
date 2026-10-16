@@ -77,8 +77,9 @@ pub struct Expansion {
     /// 尾巴上没解完的按键（还在打的那半个音节），原样带着。
     pub trailing: String,
 
-    /// 尾巴上那半个音节后面紧跟的辅助码（大写，可能空着）。
-    /// 例：`yH`（`y` 是「要」的第一键、第二键还没打直接敲辅助码）→ `trailing = "y"`、`trailing_auxiliary = "H"`。
+    /// 尾巴上那半个音节后面紧跟的辅助码（大写，可能空着）：键上没有声母的（`a` / `o` / `u` 这些
+    /// 零声母韵母的键）凑不出简拼，第一键又定不下读法，就只能这么记。
+    /// 例：`aH` → `trailing = "a"`、`trailing_auxiliary = "H"`（读法由 [`Table::segmentations`] 凑）。
     pub trailing_auxiliary: String,
 }
 
@@ -100,8 +101,9 @@ impl Expansion {
 
 impl Table {
     /// 按下这些键能解出哪些串：`'` 强制分词；**开了辅助码时大小写有意义** —— 小写字母是拼音键、
-    /// 大写字母是辅助码（跟在**完整音节**或**末尾那半个音节**后面，最多 [`MAX_AUXILIARY`] 位）；
-    /// 别的位置出现大写就解不出来。
+    /// 大写字母是辅助码（最多 [`MAX_AUXILIARY`] 位）：跟在**完整音节**后面，或者跟在**半音节**后面 ——
+    /// 后者按简拼记下来、敲完还能接着打下一段，键上没有声母（`a` / `o` 这类零声母韵母的键）时只能
+    /// 当末尾那半个音节；没有音节可挂的落单大写、码超过 4 位解不出来。
     /// 解不出来（半截音节、键位表里没有的键、大小写混用）就是空表 —— 调用方按原样放行。
     ///
     /// 开了辅助码、且**第一个键是大写**（Caps Lock / Shift 卡着）时先过 [`Self::lowered_leading_key`]，
@@ -140,6 +142,8 @@ impl Table {
     /// （调用方按并集查）：声母那一族收成一条前缀（`g` → `g…`），零声母那几族一个音节一份 ——
     /// 首道 `u` 那几族是 `e` / `ei` / `eng`，它们互不为前缀，收成公共前缀 `e…` 会把同前缀的 `en` / `er`
     /// 也放进来。一个都接不出来时尾巴不参与，只按已经完整的音节读；连一个完整音节都没有就是空表。
+    /// （半音节后面紧跟辅助码、而且那个键有**声母**的（`yH`）在 `walk` 里已经按 `partial` 音节记进
+    /// `syllables` 了，不走这里；这里管的是没声母的那些键（`aH` 这种）与不带码的半个音节。）
     pub fn segmentations(&self, expansion: &Expansion) -> Vec<Segmentation> {
         let head: Vec<crate::parser::Syllable> = expansion
             .syllables
@@ -348,24 +352,42 @@ impl Table {
         }
         let (first, second) = (keys[index], keys[index + 1]);
         // 开了辅助码：**半音节后面直接跟辅助码**（`yH` = 「要」只按了第一键 `y` 就敲 `H`，第二键跳过）——
-        // 第二键位置上是**大写**就是这种写法；那串大写必须**一直吃到末尾**才算半个音节（后面还有键
-        // 就说明这不是尾巴，交给下面「音节位上有大写」那一支按打错处理）。
+        // 第二键位置上是**大写**就是这种写法。这个键有**声母**时按「声母 + 码」当**简拼**记下来，
+        // 后面还能接着打（`yHd`：`y` 带码 `H`，`d` 起下一段）。
+        // 没有声母的键（`a` / `o` / `u` 这些零声母韵母的键）第一键定不下读法，只能当**末尾**那半个
+        // 音节 —— 读法由 [`Self::segmentations`] 从 `trailing` 凑，几种可能的韵母都留着。
+        // 码已经跑到上限、后面还是大写（`yHDSAB`）说明是打错的码，这一支什么都不出。
         if self.auxiliary && second.is_ascii_uppercase() {
-            let auxiliary = self.auxiliary_run(keys, index + 1);
-            if index + 1 + auxiliary.chars().count() >= keys.len()
-                && first.is_ascii_alphabetic()
-                && !first.is_ascii_uppercase()
-            {
-                out.push(Expansion {
-                    syllables: done,
-                    trailing: first.to_string(),
-                    trailing_auxiliary: auxiliary,
-                });
+            if !first.is_ascii_uppercase() {
+                let auxiliary = self.auxiliary_run(keys, index + 1);
+                let end = index + 1 + auxiliary.chars().count();
+                let truncated = auxiliary.chars().count() >= MAX_AUXILIARY
+                    && keys.get(end).is_some_and(char::is_ascii_uppercase);
+                if !truncated {
+                    match self.initial(first) {
+                        Some(initial) => {
+                            let mut next = done.clone();
+                            next.push(Syllable {
+                                pinyin: initial,
+                                auxiliary,
+                                partial: true,
+                            });
+                            self.walk(keys, end, next, out);
+                        }
+                        None if end >= keys.len() && first.is_ascii_alphabetic() => {
+                            out.push(Expansion {
+                                syllables: done,
+                                trailing: first.to_string(),
+                                trailing_auxiliary: auxiliary,
+                            });
+                        }
+                        None => {}
+                    }
+                }
             }
             return;
         }
-        // 开了辅助码：**小写才是拼音键**（大写是辅助码，只能跟在完整音节 / 末尾那半个音节后面 ——
-        // 上面两步已经收过）
+        // 开了辅助码：**小写才是拼音键**（大写是辅助码，只能跟在完整音节或半音节后面 —— 上面两步已经收过）
         // —— 音节位上出现大写就说明打错了，这一支解不出东西（`RFvf` 这种混用不合法）
         if self.auxiliary && first.is_ascii_uppercase() {
             return;
@@ -818,22 +840,35 @@ mod tests {
 
     /// 开了辅助码：**小写才是拼音键，大写是辅助码**。
     ///
-    /// 大写只能跟在**完整音节**后面（当那个音节的辅助码），或者跟在**末尾那半个音节**后面
-    /// （第二键跳过、直接敲辅助码，`vI` 这种）；别的位置出现大写、以及落单的大写，这一支
-    /// 什么都解不出来（`RFvf` 这种大小写混用不合法）。**没开辅助码时大写仍当拼音**
+    /// 大写只能跟在**完整音节**后面（当那个音节的辅助码），或者跟在**半音节**后面（第二键跳过、
+    /// 直接敲辅助码，`vI` 这种；敲完还能接着打下一段）；第一个键大写、**落单的大写**、
+    /// 码超过 4 位都解不出来（`RFvf` 这种大小写混用不合法）。**没开辅助码时大写仍当拼音**
     /// （Shift 打字照旧，大小写不敏感）。
     #[test]
     fn uppercase_is_only_an_auxiliary_code() {
         let mut table = natural();
         table.auxiliary = true;
         assert!(table.expand("Vi").is_empty(), "第一个键大写 → 解不出来");
-        assert!(table.expand("uCu").is_empty(), "中间出现大写 → 解不出来");
+        assert!(
+            table.expand("RFvf").is_empty(),
+            "第一个键大写、后面又混大写 → 解不出来"
+        );
         assert!(table.expand("V").is_empty(), "落单的大写没有音节可挂");
-        // 第二键位置是大写、而且一直吃到末尾：那是「半音节 + 辅助码」（`vI` = 只按了 `v` 就敲 `I`）
+        // 半音节 + 辅助码：`vI` = 只按了 `v`（zh）就敲 `I`
         let expansions = table.expand("vI");
         assert_eq!(expansions.len(), 1, "{expansions:?}");
-        assert_eq!(expansions[0].trailing, "v");
-        assert_eq!(expansions[0].trailing_auxiliary, "I");
+        assert!(expansions[0].syllables[0].partial);
+        assert_eq!(expansions[0].syllables[0].pinyin, "zh");
+        assert_eq!(expansions[0].syllables[0].auxiliary, "I");
+        assert!(
+            expansions[0].trailing.is_empty(),
+            "第二键还没打，但这一段已经收完"
+        );
+        // 半音节带码之后还能接着打：`vIf` = `v`（zh）带码 `I` + 下一段的第一个键
+        let expansions = table.expand("vIf");
+        assert_eq!(expansions.len(), 1, "{expansions:?}");
+        assert_eq!(expansions[0].syllables[0].auxiliary, "I");
+        assert_eq!(expansions[0].trailing, "f");
 
         // 跟在完整音节后面才是辅助码
         let expansions = table.expand("uuC");
@@ -901,23 +936,45 @@ mod tests {
     }
 
     /// 尾巴上那**半个音节**（只按了第一键）后面也能直接跟辅助码（`yH` = 「要」只按了 `y` 就敲 `H`），
-    /// 最多 4 位；只有大写、没有半音节时什么都不出。
+    /// 最多 4 位；**敲完还能接着打下一段**（`yHd`：`y` 带码 `H`、`d` 起下一段）；键上没有声母
+    /// （`a` / `o` 这类零声母韵母的键）时第一键定不下读法，只能当末尾那半个音节（读法由
+    /// `segmentations` 从 `trailing` 凑）；只有大写、没有半音节时什么都不出。
     #[test]
     fn a_half_syllable_can_carry_an_auxiliary_code() {
         let mut table = natural();
         table.auxiliary = true;
         let expansions = table.expand("yH");
         assert_eq!(expansions.len(), 1, "{expansions:?}");
-        assert!(expansions[0].syllables.is_empty(), "第二键还没打");
-        assert_eq!(expansions[0].trailing, "y");
+        let syllable = &expansions[0].syllables[0];
+        assert_eq!(syllable.pinyin, "y");
+        assert!(syllable.partial, "按简拼记：第二键还没打，按前缀查");
+        assert_eq!(syllable.auxiliary, "H");
+        assert!(expansions[0].trailing.is_empty(), "这一段已经收完");
+
+        // 敲完还能接着打：`yHd` = `y` 带码 `H` + 尾巴上那半个音节 `d`
+        let expansions = table.expand("yHd");
+        assert_eq!(expansions.len(), 1, "{expansions:?}");
+        assert_eq!(expansions[0].syllables.len(), 1);
+        assert_eq!(expansions[0].syllables[0].auxiliary, "H");
+        assert!(expansions[0].syllables[0].partial);
+        assert_eq!(expansions[0].trailing, "d");
+
+        // 没声母的键（`a`）：凑不出简拼，只能当末尾那半个音节，码记在尾巴上
+        let expansions = table.expand("aH");
+        assert_eq!(expansions.len(), 1, "{expansions:?}");
+        assert!(expansions[0].syllables.is_empty(), "第一键定不下读法");
+        assert_eq!(expansions[0].trailing, "a");
         assert_eq!(expansions[0].trailing_auxiliary, "H");
-        // 最多 4 位；第 5 位大写接不上（那半个音节后面没有别的键了）→ 整段解不出来
-        assert_eq!(table.expand("yHDSA")[0].trailing_auxiliary, "HDSA");
+
+        // 最多 4 位；码跑到上限、后面还是大写 → 打错的码，整段解不出来
+        assert_eq!(table.expand("yHDSA")[0].syllables[0].auxiliary, "HDSA");
         assert!(table.expand("yHDSAB").is_empty());
         // 落单的大写没有音节可挂 → 什么都不出
         assert!(table.expand("H").is_empty());
-        // 没开辅助码时大写仍按拼音键解（半音节 + 一个键）
-        assert!(natural().expand("yH")[0].trailing_auxiliary.is_empty());
+        // 没开辅助码时大写仍按拼音键解（两个键一个音节，没有尾巴）
+        let plain = natural().expand("yH");
+        assert!(!plain.is_empty(), "没开辅助码时大写按拼音键解");
+        assert!(plain.iter().all(|expansion| expansion.trailing.is_empty()));
     }
 
     /// **手动分词时能用简拼**：`'` 分段以后一段**一个键**就够，这个键按它的声母算 ——
