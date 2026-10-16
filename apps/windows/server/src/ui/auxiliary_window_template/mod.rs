@@ -8,8 +8,9 @@
 //! 三个属性：**宽 / 高 / 间隙**（[`AuxiliaryWindowSpec`]，物理像素）。没设过就按内容与宿主的形状来：
 //!
 //! - **有内容**（眼下只有「键位映射参考」）：格子边长按**目标高度**反推 —— 竖排用宿主（候选窗口）
-//!   **现在的高度**（两个窗口一样高；候选窗底下多一行译文 / 多一页页码时它也跟着高），
-//!   横排宿主又扁又宽、按不了，用「候选窗口装 9 个候选项」量出来的高度；
+//!   **现在的高度**（两个窗口一样高；候选窗底下多一行译文 / 多一页页码时它也跟着高），但**不小于**
+//!   「候选窗口装 9 个候选项」那档（候选只有一两项时格子会小到字看不清，宁可让它比候选窗高一点）；
+//!   横排宿主又扁又宽、按不了，直接按那档算；
 //! - **没内容**（版面还没生成）：竖排高度对齐「候选窗口装 9 个候选项」的高度，宽度取它的 **√2 倍**（向下取整）；
 //!   横排宽度对齐「候选窗口装 6 个候选项（每个两个字）」的宽度，高度取它的 **√5 倍**（向下取整）；
 //! - 间隙固定 16 逻辑像素（按 DPI 折成物理像素）。
@@ -165,10 +166,7 @@ impl AuxiliaryWindowTemplate {
             .borrow_mut()
             .as_mut()
             .filter(|_| !render_layout.rows.is_empty())
-            .map(|painter| match target {
-                Some(points) => key_map_cell(points),
-                None => painter.key_map_cell(dpi),
-            });
+            .map(|painter| key_map_cell_for(target, painter.key_map_cell(dpi)));
         let (default_width, default_height) = match cell {
             Some(cell) => {
                 let (width, height) = key_map_size(&render_layout, cell);
@@ -285,6 +283,16 @@ fn key_map_target(host: RECT, layout: LayoutMode, dpi: u32) -> Option<f32> {
     }
 }
 
+/// 键位映射参考的格子边长（点）：有目标（竖排：宿主现在的高度）就按它反推，但**不小于**
+/// 「装 9 个候选项」那档（`nine_rows`）—— 候选只有一两项时格子会小到字看不清，宁可让它比候选窗
+/// 高一点。没目标（横排 / 宿主没显示）就用那档。
+fn key_map_cell_for(target: Option<f32>, nine_rows: f32) -> f32 {
+    match target {
+        Some(points) => key_map_cell(points).max(nine_rows),
+        None => nine_rows,
+    }
+}
+
 /// 平台那边的版面（Server 按当前方案准备）→ 渲染器要的版面（画什么）。
 ///
 /// 两侧的 `KeyMapLayout` / `KeyCap` 各有一份：平台那份是「方案里有什么」，渲染器那份是「画什么」，
@@ -363,7 +371,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 #[cfg(test)]
 mod tests {
-    use super::{key_map_target, place_in};
+    use super::{key_map_cell_for, key_map_target, place_in};
     use cloudime_platform::LayoutMode;
     use windows::Win32::Foundation::RECT;
 
@@ -390,6 +398,19 @@ mod tests {
             None,
             "宿主没显示（高度 0）→ 用「装 9 个候选项」的缺省"
         );
+    }
+
+    /// 格子边长：跟宿主走，但**不小于「装 9 个候选项」那档** —— 候选只有一两项时别缩到字看不清。
+    #[test]
+    fn the_key_map_cell_never_goes_below_the_nine_row_size() {
+        let nine = 79.6_f32; // 「装 9 个候选项」量出来的格子（96 dpi、16pt 候选）
+        // 宿主比那档高（9 行 + 页码行 = 313px）→ 跟宿主
+        let taller = key_map_cell_for(Some(313.0), nine);
+        assert!(taller > nine, "{taller}");
+        // 宿主很矮（1 行 = 69px）→ 停在 9 行那档，不再往下缩
+        assert_eq!(key_map_cell_for(Some(69.0), nine), nine);
+        // 横排 / 宿主没显示 → 就是那档
+        assert_eq!(key_map_cell_for(None, nine), nine);
     }
 
     /// 竖排：候选窗中心在屏幕**左半边**贴右侧、在**右半边**贴左侧 —— 总往屏幕里侧靠。
