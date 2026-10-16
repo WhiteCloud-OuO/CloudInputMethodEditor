@@ -20,14 +20,20 @@
 //! **上方**（否则贴下方）；最后整体夹进所在显示器的工作区。
 //!
 //! **只管画与摆**：什么时候显示 / 收起由用它的那件资产自己定（拿 [`super::auxiliary::Asset`] 实现它）。
+//!
+//! **焦点**：这块面板**默认不具备焦点** —— 鼠标一律穿透到下面的窗口，键也轮不到它（窗口建出来就带
+//! `WS_EX_TRANSPARENT`，命中测试也回 `HTTRANSPARENT`）。创建时声明了允许获取焦点
+//! （[`Self::new`] 的 `able_to_get_focus`）也只是「能」：真拿到要所有者**指定**（`ui::auxiliary`
+//! 那套 [`super::auxiliary::Focus`]）；拿到之后才接鼠标（[`Self::set_focused`]），
+//! 同时所有者那侧让位（见 [`super::independent_window_template`]）。
 
 use std::cell::{Cell, RefCell};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, HTTRANSPARENT, MA_NOACTIVATE, SW_HIDE,
-    SW_SHOWNA, ShowWindow, WM_MOUSEACTIVATE, WM_NCHITTEST, WNDCLASSEXW, WS_EX_LAYERED,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE,
+    SW_HIDE, SW_SHOWNA, ShowWindow, WM_MOUSEACTIVATE, WM_NCHITTEST, WNDCLASSEXW, WS_EX_LAYERED,
     WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, Result, w};
@@ -73,6 +79,12 @@ pub(super) struct AuxiliaryWindowSpec {
 pub(super) struct AuxiliaryWindowTemplate {
     hwnd: HWND,
 
+    /// 创建时声明的「允许获取焦点」（`able_to_get_focus`）：`false`（缺省）时**永远**不接输入。
+    focusable: bool,
+
+    /// 这会儿焦点在不在它身上（所有者经 [`Self::set_focused`] 指定）。
+    focused: Cell<bool>,
+
     /// 云朵渲染器；`None` 不绘制（字体库加载失败）。
     painter: SharedPainter,
 
@@ -90,8 +102,11 @@ pub(super) struct AuxiliaryWindowTemplate {
 }
 
 impl AuxiliaryWindowTemplate {
-    /// 建一个隐藏的模板窗口。失败返回 `Err`，调用方降级为不显示。
-    pub(super) fn new(painter: SharedPainter) -> Result<Self> {
+    /// 建一个隐藏的模板窗口。`able_to_get_focus` = 这件资产创建时**声明**自己允不允许获取焦点
+    /// （见 [`super::auxiliary::Asset::able_to_get_focus`]）；`false`（缺省）时永远不接输入。
+    /// 声明了也只是「能」—— 创建之后的焦点仍在所有者手上，直到所有者**指定**给它。失败返回 `Err`，
+    /// 调用方降级为不显示。
+    pub(super) fn new(painter: SharedPainter, able_to_get_focus: bool) -> Result<Self> {
         CLASS.ensure(|| WNDCLASSEXW {
             lpfnWndProc: Some(wndproc),
             hInstance: super::module_handle(),
@@ -121,6 +136,8 @@ impl AuxiliaryWindowTemplate {
         };
         Ok(Self {
             hwnd,
+            focusable: able_to_get_focus,
+            focused: Cell::new(false),
             painter,
             dpi: Cell::new(unsafe { GetDpiForSystem() }.max(96)),
             spec: Cell::new(AuxiliaryWindowSpec::default()),
@@ -140,6 +157,29 @@ impl AuxiliaryWindowTemplate {
     /// 换面板里要画的键位映射参考版面（当前方案变了一整份重送）；空版面就是一块空面板。
     pub(super) fn set_key_map(&self, layout: input_schemes::KeyMapLayout) {
         *self.key_map.borrow_mut() = layout;
+    }
+
+    /// 创建时声明的 `able_to_get_focus`。
+    pub(super) fn focusable(&self) -> bool {
+        self.focusable
+    }
+
+    /// 焦点**指定**给它 / 从它手上收回（由所有者驱动，见 [`super::auxiliary::Focus`]）：
+    /// 有焦点才接鼠标（那会儿去掉鼠标穿透），没有就一律穿透到下面的窗口。
+    ///
+    /// 没声明 `able_to_get_focus` 的面板不会被打开输入（只记一条日志 —— 那说明调用方写错了，
+    /// 或者所有者没照 [`super::auxiliary::Assets::designate_focus`] 的规矩来）。
+    pub(super) fn set_focused(&self, focused: bool) {
+        if focused && !self.focusable {
+            tracing::warn!("窗口模板：这件资产创建时没声明 able_to_get_focus，不接输入");
+            return;
+        }
+        if self.focused.replace(focused) == focused {
+            return;
+        }
+        // 鼠标穿透就靠那一个位：窗口过程那边的命中测试也读它（两边同一个来源）
+        super::set_mouse_transparent(self.hwnd, !focused);
+        tracing::debug!(focused, "窗口模板：鼠标输入开关");
     }
 
     /// 贴在候选窗口的内容矩形旁边显示：`layout` 决定贴右侧（竖排）还是下方（横排）。
@@ -369,8 +409,16 @@ fn place_in(
 /// 分层窗口无需 `WM_PAINT`；内容由 `ui::mod` 那边推。
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
-        // 现在还只是一块空面板：鼠标一律穿透到下面的窗口。
-        WM_NCHITTEST => LRESULT(HTTRANSPARENT as isize),
+        // 没焦点（缺省）时窗口带着 `WS_EX_TRANSPARENT`：鼠标一律穿透到下面的窗口。
+        // 命中测试照那个位回答 —— 与 `set_focused` 同一个来源，两边不会打架。
+        WM_NCHITTEST => {
+            let transparent = super::mouse_transparent(hwnd);
+            LRESULT(if transparent {
+                HTTRANSPARENT as isize
+            } else {
+                HTCLIENT as isize
+            })
+        }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
     }

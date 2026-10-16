@@ -36,11 +36,54 @@
   资产经桥向宿主要东西（`host()` / `asset_on()`）。
 - 进程级的共用件（共享渲染器、显示器查询那套）不是窗口，不算「通讯对象」。
 
-## 4. 资产克隆与资产窃取
+## 4. 焦点（focus，2026-10-17）
+
+**焦点**是「让窗口具备响应键盘 / 鼠标的功能」的那个特性。它属于**一组**（一个独立窗口 + 它名下的资产），
+一组里同时只有**一个**持有者：
+
+- **缺省在所有者身上**：独立窗口创建并显示后**总是具备焦点**；辅助窗口**默认不具备焦点**（不响应鼠标 / 键盘）。
+- **允许获取焦点**（`able_to_get_focus`，**创建时**声明）：辅助窗口想让焦点能落到自己身上，得在建它的时候
+  声明；没声明的**永远**接不住。声明了也只是「能」—— 创建之后的焦点仍在所有者手上。
+- **指定资产获取焦点**（`designated_asset_to_get_focus`）：**独立窗口都具备**这个特性 —— 它能把焦点从自己
+  身上**指定**给名下某件声明过的资产，也能**收回来**。只有所有者能指定，资产自己说了不算。
+- **指定的后果**：焦点**转移**到那件资产上 —— 此后由它响应鼠标 / 键盘，**原先的所有者不再接受**。
+- **归还给所有者**（`return_focus_to_owner`）有三条路：所有者主动收回、那件资产**收起**、它走到**生命周期末**
+  —— 后两条**自动**触发（收起时先归还再收起，销毁时先归还再放掉）：焦点不会落在一件看不见、或者马上就要
+  没了的窗口上。
+
+⚠️ 这是**逻辑焦点**，不是 Win32 的 `SetFocus`：咱们的窗口全是 `WS_EX_NOACTIVATE`，真去抢系统焦点会把用户
+正在打字的那个应用弄丢。落地上「具备焦点」= 这一组里**由谁接受输入**：没有焦点的一方鼠标一律**穿透**
+（点不着），键也轮不到它。
+
+形状上大致是这样（**机制已实现**，触发留给后面几部分）：
+
+```rust
+/// 焦点在谁身上：所有者自己，还是名下的第几件资产（`Assets` 里的下标）。
+pub(super) enum Focus {
+    Owner,
+    Asset(usize),
+}
+
+/// 资产创建时声明「允许获取焦点」（缺省 `false` = 不具备焦点），并收焦点来去的通知。
+pub(super) trait Asset {
+    fn able_to_get_focus(&self) -> bool { false }
+    fn took_focus(&self) {}
+    fn lost_focus(&self) {}
+}
+
+/// 独立窗口都实现它：把焦点指定给名下某件资产，或者收回来。
+pub(super) trait DesignatedAssetToGetFocus {
+    fn designate_focus(&self, index: usize) -> bool;
+    fn return_focus_to_owner(&self) -> bool;
+    fn focus(&self) -> Focus;
+}
+```
+
+## 5. 资产克隆与资产窃取
 
 > 本输入法暂时用不上这两条，但先把规则定下来（写死了才好照着实现）。
 
-### 4.1 资产克隆（asset cloning）
+### 5.1 资产克隆（asset cloning）
 
 独立窗口 **A** 想拿到另一个独立窗口 **B** 的资产 **B1**，要**同时**满足三条：
 
@@ -65,21 +108,27 @@ pub(super) trait Clonable: Asset {
 }
 ```
 
-### 4.2 资产窃取（asset stealing）
+### 5.2 资产窃取（asset stealing）
 
 **A 从 B 克隆 B1 成 A1，且 B1 在克隆之后被立即销毁** —— 这整个过程叫**资产窃取**。
 
 - 之后 A 名下的资产是 **A1**，**不再是 B1**；**B1 已经被抹去**；
 - 克隆件是**新的**资产（不是引用、也不是句柄），所以 B1 被销毁不影响 A1，反过来也一样。
 
-## 5. 实现落点
+## 6. 实现落点
 
 - **独立窗口模板**（`ui/independent_window_template/`）：注册窗口类 + 建一块**分层、置顶、不抢焦点**的弹出窗
   （纯展示的再加 `TRANSPARENT` 让鼠标穿透），并**管名下的资产** —— `Assets` 的 `add` / `sync` / `hide` /
   `set_lines` / `retire`，`Drop` 里**先 `retire` 再 `DestroyWindow` 自己**（§1 的寿命规矩由模板保证）。
+  **焦点**也由它兜着（§4）：焦点状态在资产表里，模板实现 `DesignatedAssetToGetFocus`，并给窗口过程一个
+  `focused()` —— 焦点不在自己身上时整块让开：自己那块窗鼠标穿透（`WS_EX_TRANSPARENT`，`ui::set_mouse_transparent`），
+  窗口过程的 `WM_NCHITTEST` 也按 `focused()` 回 `HTTRANSPARENT`。
 - **辅助窗口模板**（`ui/auxiliary_window_template/`）：资产用的那块**分层面板**（主题背景 + 圆角 + 阴影；
   宽 / 高 / 间隙三个属性，没设过按宿主形状算默认；`set_lines` 填几行文字；`show(宿主内容区矩形, 排布方向)`
-  贴宿主摆位 —— 宿主右边 / 下边放不下就换左边 / 上边）。
-- **资产这层**（`ui/auxiliary/`）：`Asset`（资产）、`Assets`（宿主名下的资产表）、`Bridge`（桥）、
-  `Host`（宿主喂给资产的形状：内容区矩形 / 排布方向 / 是不是展开着）。
-- 现在只有一件资产：候选窗口的**键位映射参考**（`ui/auxiliary/key_map/`）。
+  贴宿主摆位 —— 宿主右边 / 下边放不下就换左边 / 上边）。**焦点**：`new` 收一个 `able_to_get_focus`，
+  `set_focused` 开关鼠标穿透（`WS_EX_TRANSPARENT` 与命中测试读同一个位，两边不会打架）。
+- **资产这层**（`ui/auxiliary/`）：`Asset`（资产，声明 `able_to_get_focus`、收 `took_focus` / `lost_focus`）、
+  `Assets`（宿主名下的资产表 + 这一组的**焦点**）、`Bridge`（桥）、`Host`（宿主喂给资产的形状：内容区矩形 /
+  排布方向 / 是不是展开着）、`Focus`（焦点在谁身上，§4）、`DesignatedAssetToGetFocus`（指定资产获取焦点）。
+- 现在只有一件资产：候选窗口的**键位映射参考**（`ui/auxiliary/key_map/`）—— 它**没**声明
+  `able_to_get_focus`，所以眼下整组一直由候选窗口持有焦点。

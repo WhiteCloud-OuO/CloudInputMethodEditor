@@ -17,6 +17,13 @@
 //!   再建资产（`Assets::add`），销毁时 `Drop` 的第一件事就是把资产放掉（`Assets::retire`）；显示 / 隐藏也由宿主
 //!   驱动（`Asset::sync` 里经 `owner.host()` / `owner.asset_on()` 要）。眼下只有候选窗口的
 //!   「键位映射参考」（[`auxiliary::key_map`]）一件。
+//! - **焦点（focus）**（[`auxiliary::Focus`]）：一组窗口（独立窗口 + 它名下的资产）里同时只有**一个**持有者。
+//!   缺省在独立窗口身上（创建并显示后总是具备焦点），每块独立窗口**都**能**指定**资产获取焦点
+//!   （[`auxiliary::DesignatedAssetToGetFocus`]，由独立窗口模板统一实现）—— 接手的资产响应鼠标 / 键盘，
+//!   原所有者不再接受。**所有辅助窗口默认不具备焦点**（鼠标穿透、点不着），除非创建时声明
+//!   [`auxiliary::Asset::able_to_get_focus`]；归还三条路（所有者收回 / 资产收起 / 资产生命周期末），
+//!   后两条**自动**走。这是**逻辑焦点**：谁都不去抢系统的 `SetFocus`（窗口全是 `WS_EX_NOACTIVATE`，
+//!   抢了会把用户正在打字的应用弄丢）。
 
 mod auxiliary;
 mod auxiliary_window_template;
@@ -41,15 +48,16 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use windows::Win32::Foundation::{E_FAIL, HINSTANCE, LPARAM, RECT, WPARAM};
+use windows::Win32::Foundation::{E_FAIL, HINSTANCE, HWND, LPARAM, RECT, WPARAM};
 use windows::Win32::System::LibraryLoader::GetModuleHandleW;
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    ASFW_ANY, AllowSetForegroundWindow, DispatchMessageW, GetMessageW, MSG, PostThreadMessageW,
-    TranslateMessage, WM_APP,
+    ASFW_ANY, AllowSetForegroundWindow, DispatchMessageW, GWL_EXSTYLE, GetMessageW,
+    GetWindowLongPtrW, MSG, PostThreadMessageW, SetWindowLongPtrW, TranslateMessage, WM_APP,
+    WS_EX_TRANSPARENT,
 };
 use windows::core::{Error, Result};
 
@@ -215,6 +223,27 @@ pub(crate) fn open_spec_chars() {
 pub(super) fn module_handle() -> HINSTANCE {
     let module = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
     HINSTANCE(module.0)
+}
+
+/// 给窗口开 / 关**鼠标穿透**（`WS_EX_TRANSPARENT` 那一个位）：开着鼠标落到下面的窗口（点不着）。
+///
+/// 窗口之间「谁接受鼠标」都动这一个位（见 `ui::auxiliary` 的焦点）：焦点不在自己身上的一方开着它。
+/// 光靠窗口过程回 `HTTRANSPARENT` 不够 —— 那玩意儿只把消息转给**同线程**的下层窗口，而咱底下
+/// 通常是别的进程的应用。
+pub(super) fn set_mouse_transparent(hwnd: HWND, transparent: bool) {
+    let current = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+    let style = if transparent {
+        current | WS_EX_TRANSPARENT.0
+    } else {
+        current & !WS_EX_TRANSPARENT.0
+    };
+    unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style as isize) };
+}
+
+/// 这个窗口这会儿是不是鼠标穿透（窗口过程的 `WM_NCHITTEST` 照它回答，与 [`set_mouse_transparent`] 同一个位）。
+pub(super) fn mouse_transparent(hwnd: HWND) -> bool {
+    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
+    style & WS_EX_TRANSPARENT.0 != 0
 }
 
 /// UI 线程主体：建窗口、报回线程 id、跑消息循环。

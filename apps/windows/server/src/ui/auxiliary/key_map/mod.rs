@@ -22,9 +22,13 @@ pub(crate) struct KeyMapWindow {
 
 impl KeyMapWindow {
     /// 建一个隐藏的键位映射参考窗口（宿主独立窗口建好自己那块窗之后调）。
+    ///
+    /// 它是块**纯参考面板**：`able_to_get_focus` 按缺省（`false`）—— 不具备焦点，鼠标一律穿透、点不着。
+    /// 将来要它接输入时，把这里的 `false` 改成 `true`，再在宿主那边**指定**焦点给它
+    /// （[`super::DesignatedAssetToGetFocus`]）。
     pub(crate) fn new(painter: SharedPainter) -> Result<Self> {
         Ok(Self {
-            template: AuxiliaryWindowTemplate::new(painter)?,
+            template: AuxiliaryWindowTemplate::new(painter, false)?,
         })
     }
 }
@@ -50,5 +54,20 @@ impl Asset for KeyMapWindow {
 
     fn set_key_map(&self, layout: KeyMapLayout) {
         self.template.set_key_map(layout);
+    }
+
+    /// 创建时声明过才有（见 [`Self::new`]）：取的是模板上那一份，两处不会各说各的。
+    fn able_to_get_focus(&self) -> bool {
+        self.template.focusable()
+    }
+
+    /// 焦点指定给它了：这块面板开始接鼠标（鼠标穿透关掉）。
+    fn took_focus(&self) {
+        self.template.set_focused(true);
+    }
+
+    /// 焦点走了（归还给宿主、收起、或生命周期末的自动归还）：回到鼠标穿透。
+    fn lost_focus(&self) {
+        self.template.set_focused(false);
     }
 }

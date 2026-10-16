@@ -11,14 +11,21 @@
 //! - **生命周期始终绑定**到宿主：宿主创建**之后**才有它，宿主销毁**之前**先放掉它
 //!   （所以宿主 `Drop` 的第一件事是 [`Assets::retire`]，之后才 `DestroyWindow` 自己那块窗）；
 //! - 内容也由宿主转达（Server 送来的东西经宿主落到资产上，[`Asset::set_key_map`]）。
+//! - **焦点**（[`Focus`]）属于**一组**（所有者 + 它名下的资产），一组里同时只有**一个**持有者：
+//!   缺省在所有者身上（独立窗口创建并显示后总是具备焦点）；所有者可以把它**指定**给某件声明了
+//!   [`Asset::able_to_get_focus`] 的资产（[`DesignatedAssetToGetFocus`]）—— 那之后由那件资产
+//!   响应鼠标 / 键盘，所有者不再接受。**所有辅助窗口默认不具备焦点**（鼠标一律穿透、点不着）。
 //!
-//! 现在名下只有一份资产：候选窗口的「键位映射参考」（[`key_map`]）。
+//! 现在名下只有一份资产：候选窗口的「键位映射参考」（[`key_map`]）—— 它**没**声明
+//! `able_to_get_focus`，所以眼下整组一直由候选窗口持有焦点。
 //!
 //! ⚠️ 「**资产克隆**」与「**资产窃取**」（别的独立窗口来克隆本窗口的资产、克隆完把原件销毁）也写在
-//! `docs/design/windows.md` §4 —— **本输入法暂时用不上**，先把规则定下来（将来要加的是一个
+//! `docs/design/windows.md` §5 —— **本输入法暂时用不上**，先把规则定下来（将来要加的是一个
 //! 「可克隆」trait，比如 `Clonable: Asset`）。
 
 pub(super) mod key_map;
+
+use std::cell::Cell;
 
 use windows::Win32::Foundation::RECT;
 
@@ -38,6 +45,51 @@ pub(super) struct Host {
     pub expanded: bool,
 }
 
+/// **焦点**（focus）在谁身上 —— 「让窗口具备响应键盘 / 鼠标的功能」的那个特性。
+///
+/// 焦点属于**一组**（一个独立窗口 + 它名下的资产），一组里同时只有**一个**持有者：
+///
+/// - 缺省在**所有者**（独立窗口）身上 —— 独立窗口创建并显示后总是具备焦点；
+/// - 所有者可以把它**指定**给某件资产（[`Assets::designate_focus`]）；那件资产必须先在创建时
+///   声明 [`Asset::able_to_get_focus`]，否则接不住；
+/// - 指定之后由那件资产响应鼠标 / 键盘，**原所有者不再接受**；
+/// - 归还三条路（[`Assets::return_focus_to_owner`]）：所有者主动收回、那件资产**收起**（[`Assets::hide`]）、
+///   它走到**生命周期末**（[`Assets::retire`]）—— 后两条都**自动**触发。
+///
+/// ⚠️ 这是**逻辑焦点**，不是 Win32 的 `SetFocus`：咱们的窗口全是 `WS_EX_NOACTIVATE`，
+/// 真去抢系统焦点会把用户正在打字的那个应用弄丢。落地上「具备焦点」= 这一组里**由谁接受输入**：
+/// 没有焦点的一方鼠标一律**穿透**（点不着），键也轮不到它。
+// 第一轮只落机制：还没有谁来**指定**焦点，所以 `Focus::Asset` 这个变体眼下没被生产代码构造（测试里有）。
+#[allow(dead_code)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub(super) enum Focus {
+    /// 在所有者（独立窗口）身上。
+    #[default]
+    Owner,
+
+    /// 已经指定给名下的第几件资产（[`Assets`] 里的下标）。
+    Asset(usize),
+}
+
+/// **指定资产获取焦点**（`designated_asset_to_get_focus`）：**独立窗口都实现它**（由
+/// [`super::independent_window_template::IndependentWindowTemplate`] 统一实现，所以每块独立窗口都有）。
+///
+/// 这是**所有者**那一侧的特权：把焦点从自己身上指定给名下某件资产，或者把它收回来。
+/// 资产自己说了不算 —— 声明了 [`Asset::able_to_get_focus`] 也只是「能」接，真拿到要所有者指定。
+// 第一轮只落机制：还没有谁来调它（后续部分接入「谁在什么时候指定焦点」时会用上）。
+#[allow(dead_code)]
+pub(super) trait DesignatedAssetToGetFocus {
+    /// 把焦点**指定**给名下的第几件资产。`false` = 没动 —— 下标越界、那件没声明
+    /// [`Asset::able_to_get_focus`]、或者焦点本来就在它手上。
+    fn designate_focus(&self, index: usize) -> bool;
+
+    /// 让焦点**归还给所有者**。`false` = 没动（焦点本来就在所有者手上）。
+    fn return_focus_to_owner(&self) -> bool;
+
+    /// 这一组的焦点这会儿在谁身上。
+    fn focus(&self) -> Focus;
+}
+
 /// **桥接**（bridging）：辅助窗口**委托它的所有者**去办事的那条路。
 ///
 /// 规矩：辅助窗口**不能**直接跟别的辅助窗口、也不能跟不是它所有者的独立窗口通讯 ——
@@ -49,6 +101,12 @@ pub(super) trait Bridge {
 
     /// 这件资产这会儿开着没有（用户按 `Ctrl+F1` 之类切的）。
     fn asset_on(&self) -> bool;
+
+    /// 焦点**交还给所有者**：辅助窗口自己要把焦点放回去时走这条。
+    /// 收起与生命周期末那两条由资产表**自动**走（[`Assets::hide`] / [`Assets::retire`]），资产不用操心。
+    // 第一轮只落机制：还没有哪件资产自己要求归还（自动归还那条已经在走）。
+    #[allow(dead_code)]
+    fn return_focus_to_owner(&self);
 }
 
 /// 一份「辅助窗口」资产：由宿主独立窗口创建与销毁。
@@ -66,9 +124,23 @@ pub(super) trait Asset {
 
     /// 换「文字 / 版面类资产」的内容（键位映射参考的键盘版面）。
     fn set_key_map(&self, _layout: KeyMapLayout) {}
+
+    /// 创建时声明自己**允不允许获取焦点**（`able_to_get_focus`）：`false`（缺省）= **不具备焦点** ——
+    /// 鼠标 / 键盘一律不响应（所有辅助窗口默认如此）。允许也只是「能」，真拿到还要所有者**指定**
+    /// （[`DesignatedAssetToGetFocus`]）。
+    fn able_to_get_focus(&self) -> bool {
+        false
+    }
+
+    /// 所有者把焦点**指定**给它了：从此由它响应鼠标 / 键盘（原所有者不再接受）。
+    fn took_focus(&self) {}
+
+    /// 焦点从它手上走了（所有者收回、转给别的资产、或收起 / 生命周期末的**自动归还**）：
+    /// 把响应输入的那些开关关掉。
+    fn lost_focus(&self) {}
 }
 
-/// 一个独立窗口名下的全部资产。
+/// 一个独立窗口名下的全部资产 + 这一组的**焦点**。
 ///
 /// **所有权**：资产由宿主创建、存这里，**不移交也不借出去** —— 这个类型只有「收进来」（[`Self::add`]）
 /// 与「放掉」（[`Self::retire`]），没有「取出来」的口子；宿主跟资产之间只有 [`Self::sync`] /
@@ -76,40 +148,113 @@ pub(super) trait Asset {
 ///
 /// **顺序**：宿主先建好自己那块窗，再 [`Self::add`]；销毁时 `Drop` 的第一件事是
 /// [`Self::retire`]（在 `DestroyWindow` 自己之前）—— 资产的寿命就落在这段区间里。
+///
+/// **焦点**（[`Focus`]）：这一组的成员里同时只有**一个**持有者，缺省是**所有者**自己；所有者可以把焦点
+/// **指定**给某件声明了 [`Asset::able_to_get_focus`] 的资产（[`Self::designate_focus`]）。归还三条路：
+/// 所有者主动收回（[`Self::return_focus_to_owner`]）、那件资产**收起**（[`Self::hide`]）、它走到
+/// **生命周期末**（[`Self::retire`]）—— 后两条**自动**走一遍归还，焦点不会落在一件看不见、或者马上就
+/// 没了的东西上。
 #[derive(Default)]
-pub(super) struct Assets(Vec<Box<dyn Asset>>);
+pub(super) struct Assets {
+    /// 名下的资产（下标就是 [`Focus::Asset`] 里的那个）。
+    items: Vec<Box<dyn Asset>>,
+
+    /// 这一组的焦点在谁身上（缺省在所有者身上）。
+    focus: Cell<Focus>,
+}
 
 impl Assets {
     /// 收下一份资产（所有权就落在这儿了）。**必须**在宿主自己那块窗建好之后调。
     pub(super) fn add(&mut self, asset: Box<dyn Asset>) {
-        self.0.push(asset);
+        self.items.push(asset);
+    }
+
+    /// 这一组的焦点在谁身上。
+    pub(super) fn focus(&self) -> Focus {
+        self.focus.get()
+    }
+
+    /// 把焦点**指定**给名下第 `index` 件资产（`designated_asset_to_get_focus`）。
+    /// `false` = 没动 —— 下标越界、那件没声明 [`Asset::able_to_get_focus`]、或者焦点本来就在它手上。
+    // 第一轮只落机制：还没有谁来指定（后续部分接入触发时会用上；归还那条已经在走）。
+    #[allow(dead_code)]
+    pub(super) fn designate_focus(&self, index: usize) -> bool {
+        let target = Focus::Asset(index);
+        self.allows(target) && self.move_focus(target)
+    }
+
+    /// 让焦点**归还给所有者**（`return_focus_to_owner`）。`false` = 没动（本来就在所有者手上）。
+    pub(super) fn return_focus_to_owner(&self) -> bool {
+        self.move_focus(Focus::Owner)
     }
 
     /// 宿主贴出一帧 / 开关变了：把全部资产驱动一遍 —— 手上把自己（作为 [`Bridge`]）借给它们，
     /// 它们要什么经桥接回来要。
     pub(super) fn sync(&self, owner: &dyn Bridge) {
-        for asset in &self.0 {
+        // 焦点只可能落在**所有者**、或一件**声明过** `able_to_get_focus` 的资产上（指定时查过一遍）。
+        // 在驱动这一拍上复核：将来谁改了指定的路，这里第一时间叫出来。
+        debug_assert!(
+            self.allows(self.focus.get()),
+            "焦点落在接不住的窗口上：{:?}",
+            self.focus.get()
+        );
+        for asset in &self.items {
             asset.sync(owner);
         }
     }
 
-    /// 全部收起（宿主收起时）。
+    /// 全部收起（宿主收起时）。**带着焦点的那件一收起就先自动归还焦点** —— 否则它看不见了、
+    /// 所有者又不接输入，这一组没人响应鼠标 / 键盘。
     pub(super) fn hide(&self) {
-        for asset in &self.0 {
+        self.return_focus_to_owner();
+        for asset in &self.items {
             asset.hide();
         }
     }
 
     /// 换全部资产的版面内容。
     pub(super) fn set_key_map(&self, layout: KeyMapLayout) {
-        for asset in &self.0 {
+        for asset in &self.items {
             asset.set_key_map(layout.clone());
         }
     }
 
-    /// 放掉全部资产（宿主销毁**之前**的第一件事）。
+    /// 放掉全部资产（宿主销毁**之前**的第一件事）：**销毁前一刻先自动归还焦点** ——
+    /// 焦点不能落在一件马上就要没了的资产上。
     pub(super) fn retire(&mut self) {
-        self.0.clear();
+        self.return_focus_to_owner();
+        self.items.clear();
+    }
+
+    /// 焦点换人：老持有者放掉、新持有者接手。返回是否真换了人（本来就在 `target` 手上就是 `false`）。
+    fn move_focus(&self, target: Focus) -> bool {
+        let previous = self.focus.get();
+        if previous == target {
+            return false;
+        }
+        self.focus.set(target);
+        if let Focus::Asset(index) = previous
+            && let Some(asset) = self.items.get(index)
+        {
+            asset.lost_focus();
+        }
+        if let Focus::Asset(index) = target
+            && let Some(asset) = self.items.get(index)
+        {
+            asset.took_focus();
+        }
+        true
+    }
+
+    /// `target` 这会儿接不接得住焦点：所有者永远接得住；资产得声明过 [`Asset::able_to_get_focus`]。
+    fn allows(&self, target: Focus) -> bool {
+        match target {
+            Focus::Owner => true,
+            Focus::Asset(index) => self
+                .items
+                .get(index)
+                .is_some_and(|asset| asset.able_to_get_focus()),
+        }
     }
 }
 
@@ -138,6 +283,50 @@ mod tests {
 
         fn asset_on(&self) -> bool {
             self.on
+        }
+
+        fn return_focus_to_owner(&self) {}
+    }
+
+    /// 测试用资产：声明自己允不允许获取焦点，并把「拿到 / 放掉焦点」「收起」「放掉」记成一串事件。
+    struct Tracked {
+        focusable: bool,
+        events: Rc<RefCell<Vec<&'static str>>>,
+    }
+
+    impl Tracked {
+        fn new(focusable: bool, events: Rc<RefCell<Vec<&'static str>>>) -> Self {
+            Self { focusable, events }
+        }
+
+        fn record(&self, what: &'static str) {
+            self.events.borrow_mut().push(what);
+        }
+    }
+
+    impl Asset for Tracked {
+        fn sync(&self, _owner: &dyn Bridge) {}
+
+        fn hide(&self) {
+            self.record("hide");
+        }
+
+        fn able_to_get_focus(&self) -> bool {
+            self.focusable
+        }
+
+        fn took_focus(&self) {
+            self.record("took");
+        }
+
+        fn lost_focus(&self) {
+            self.record("lost");
+        }
+    }
+
+    impl Drop for Tracked {
+        fn drop(&mut self) {
+            self.record("drop");
         }
     }
 
@@ -198,5 +387,104 @@ mod tests {
             expanded: true,
         });
         assert_eq!(*seen.borrow(), Some((true, true)));
+    }
+
+    /// 焦点缺省在所有者身上；只有**声明过** `able_to_get_focus` 的资产接得住（越界的也不行）。
+    #[test]
+    fn focus_starts_on_the_owner_and_only_declared_assets_can_take_it() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut assets = Assets::default();
+        assets.add(Box::new(Tracked::new(true, events.clone())));
+        assets.add(Box::new(Tracked::new(false, events.clone())));
+        assert_eq!(assets.focus(), Focus::Owner, "缺省在所有者身上");
+
+        assert!(
+            !assets.designate_focus(1),
+            "没声明 able_to_get_focus → 接不住"
+        );
+        assert!(!assets.designate_focus(9), "越界");
+        assert_eq!(assets.focus(), Focus::Owner);
+        assert!(events.borrow().is_empty(), "没人拿到过焦点");
+
+        assert!(assets.designate_focus(0));
+        assert_eq!(assets.focus(), Focus::Asset(0));
+        assert_eq!(*events.borrow(), ["took"], "接手的拿到焦点");
+        assert!(!assets.designate_focus(0), "已经在它手上，不用再动");
+    }
+
+    /// 焦点在资产之间挪、以及归还给所有者：老的放掉、新的接手。
+    #[test]
+    fn focus_moves_between_assets_and_comes_back_to_the_owner() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut assets = Assets::default();
+        assets.add(Box::new(Tracked::new(true, events.clone())));
+        assets.add(Box::new(Tracked::new(true, events.clone())));
+
+        assert!(assets.designate_focus(0));
+        assert!(assets.designate_focus(1));
+        assert_eq!(assets.focus(), Focus::Asset(1));
+        assert_eq!(*events.borrow(), ["took", "lost", "took"]);
+
+        assert!(assets.return_focus_to_owner());
+        assert_eq!(assets.focus(), Focus::Owner);
+        assert_eq!(*events.borrow(), ["took", "lost", "took", "lost"]);
+        assert!(!assets.return_focus_to_owner(), "本来就在所有者手上");
+    }
+
+    /// 收起与生命周期末都**自动**归还焦点：收起时先归还再收起，销毁时先归还再放掉 ——
+    /// 焦点不会落在一件看不见、或者马上就要没了的资产上。
+    #[test]
+    fn hiding_and_retiring_return_the_focus_before_they_go() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut assets = Assets::default();
+        assets.add(Box::new(Tracked::new(true, events.clone())));
+        assert!(assets.designate_focus(0));
+
+        assets.hide();
+        assert_eq!(assets.focus(), Focus::Owner, "一收起就自动归还");
+        assert_eq!(*events.borrow(), ["took", "lost", "hide"], "先归还再收起");
+
+        events.borrow_mut().clear();
+        assert!(assets.designate_focus(0));
+        assets.retire();
+        assert_eq!(assets.focus(), Focus::Owner, "销毁前一刻自动归还");
+        assert_eq!(*events.borrow(), ["took", "lost", "drop"], "先归还再放掉");
+    }
+
+    /// 桥上也有「把焦点交还给所有者」这条：辅助窗口自己要把焦点放回去时走它
+    /// （收起与生命周期末那两条是资产表自动走的，资产不用操心）。
+    #[test]
+    fn an_asset_can_hand_the_focus_back_through_the_bridge() {
+        struct Asked(Rc<Cell<u32>>);
+
+        impl Bridge for Asked {
+            fn host(&self) -> Host {
+                Host::default()
+            }
+
+            fn asset_on(&self) -> bool {
+                true
+            }
+
+            fn return_focus_to_owner(&self) {
+                self.0.set(self.0.get() + 1);
+            }
+        }
+
+        struct Hands;
+
+        impl Asset for Hands {
+            fn sync(&self, owner: &dyn Bridge) {
+                owner.return_focus_to_owner();
+            }
+
+            fn hide(&self) {}
+        }
+
+        let asked = Rc::new(Cell::new(0));
+        let mut assets = Assets::default();
+        assets.add(Box::new(Hands));
+        assets.sync(&Asked(asked.clone()));
+        assert_eq!(asked.get(), 1, "sync 里经桥请所有者把焦点收回");
     }
 }

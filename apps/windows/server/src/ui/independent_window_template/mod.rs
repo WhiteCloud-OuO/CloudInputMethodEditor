@@ -11,6 +11,12 @@
 //!
 //! 画什么、怎么摆、什么时候显示，仍由各独立窗口自己定（候选窗口见 `ui/candidates`，
 //! 悬浮工具栏见 `ui/status`，状态切换提示见 `ui/status_tip`）。
+//!
+//! **焦点**：每一块独立窗口创建并显示后**总是具备焦点**（这一组的焦点缺省就在它身上），而且它**都**
+//! 实现了「指定资产获取焦点」（[`DesignatedAssetToGetFocus`]）—— 可以把焦点指定给名下某件声明了
+//! `able_to_get_focus` 的资产，或者收回来。焦点不在自己身上时整块让开：自己那块窗鼠标穿透
+//! （`WS_EX_TRANSPARENT`，[`super::set_mouse_transparent`]），窗口过程的 `WM_NCHITTEST` 也按
+//! [`Self::focused`] 回 `HTTRANSPARENT`（点不着、滚轮也不是它的）。
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -19,7 +25,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, Result};
 
-use super::auxiliary::Assets;
+use super::auxiliary::{Assets, DesignatedAssetToGetFocus, Focus};
 use super::module_handle;
 use super::window_class::WindowClass;
 
@@ -93,6 +99,49 @@ impl IndependentWindowTemplate {
     /// 见 [`Self::assets_mut`]。
     pub(super) fn assets(&self) -> &Assets {
         &self.assets
+    }
+
+    /// 这一组的焦点在不在**自己**（独立窗口）身上。窗口过程里接鼠标的那几处（`WM_NCHITTEST`）
+    /// 按它让位：焦点被指定给名下的资产时，所有者整块窗鼠标穿透、不再接受鼠标。
+    pub(super) fn focused(&self) -> bool {
+        self.assets.focus() == Focus::Owner
+    }
+
+    /// 收起名下的资产（宿主收起时调）：资产表会先**自动归还焦点**（§4），之后自己这块窗的鼠标开关
+    /// 也跟着回位 —— 否则会留下一块「看不见的窗还占着鼠标穿透」的状态。
+    pub(super) fn hide_assets(&self) {
+        self.assets.hide();
+        self.sync_input();
+    }
+
+    /// 自己那块窗的**鼠标开关**跟当前焦点对齐：焦点不在自己身上时整块让开（鼠标穿透到下面的窗口）。
+    /// 焦点换人（[`DesignatedAssetToGetFocus`]）与资产收起之后都要调一遍。
+    fn sync_input(&self) {
+        super::set_mouse_transparent(self.hwnd, !self.focused());
+    }
+}
+
+/// **独立窗口都具备**「指定资产获取焦点」（`designated_asset_to_get_focus`）这个特性 —— 由模板实现，
+/// 所以每块独立窗口都有：焦点从自己身上**指定**给名下某件资产，或者**收回来**（见 [`Focus`]）。
+impl DesignatedAssetToGetFocus for IndependentWindowTemplate {
+    fn designate_focus(&self, index: usize) -> bool {
+        let moved = self.assets.designate_focus(index);
+        if moved {
+            self.sync_input();
+        }
+        moved
+    }
+
+    fn return_focus_to_owner(&self) -> bool {
+        let moved = self.assets.return_focus_to_owner();
+        if moved {
+            self.sync_input();
+        }
+        moved
+    }
+
+    fn focus(&self) -> Focus {
+        self.assets.focus()
     }
 }
 

@@ -20,9 +20,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetKeyState, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_CONTROL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, IDC_ARROW, KillTimer, LoadCursorW, MA_NOACTIVATE, SW_HIDE, SW_SHOWNA, SetTimer,
-    ShowWindow, WM_CONTEXTMENU, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEACTIVATE, WM_MOUSEMOVE,
-    WM_MOUSEWHEEL, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_TIMER,
+    DefWindowProcW, HTCLIENT, HTTRANSPARENT, IDC_ARROW, KillTimer, LoadCursorW, MA_NOACTIVATE,
+    SW_HIDE, SW_SHOWNA, SetTimer, ShowWindow, WM_CONTEXTMENU, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_TIMER,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -34,7 +35,7 @@ use cloudime_render::{HighlightAnimation, HighlightRect, Pixmap, clip_pixmap};
 
 pub(crate) use self::render_data::RenderData;
 use super::auxiliary::key_map::KeyMapWindow;
-use super::auxiliary::{Bridge, Host};
+use super::auxiliary::{Bridge, DesignatedAssetToGetFocus, Host};
 use super::independent_window_template::IndependentWindowTemplate;
 use super::layered;
 use super::monitor;
@@ -393,6 +394,12 @@ impl CandidateWindow {
         self.data.borrow().columns > 0
     }
 
+    /// 这一组的焦点在不在**自己**身上（缺省在；被指定给名下资产时不在，见 [`super::auxiliary::Focus`]）。
+    /// 不在时窗口过程让位：整块窗鼠标穿透，点不着、滚轮也不是它的。
+    pub(crate) fn focused(&self) -> bool {
+        self.template.focused()
+    }
+
     /// 把名下资产驱动一遍（贴出一帧、或开关变了之后调）。
     ///
     /// 桥接：把自己（所有者）借给它们用一下 —— 资产要什么经 [`Bridge`] 回来要，够不着别的窗口。
@@ -440,9 +447,10 @@ impl CandidateWindow {
         // 忘掉 anchor 与上一帧的位置：下次重新弹出时即使内容碰巧一样，也不该跟上次的高亮位置做滑动。
         self.anchor.set(None);
         self.content_rect.set(None);
-        // 这一轮组句结束：名下的资产一起收起，开关也回到「关」（下次弹出要看得再按一次 `Ctrl+F1`）
+        // 这一轮组句结束：名下的资产一起收起（带焦点的那件会先把焦点**自动归还**给候选窗），
+        // 开关也回到「关」（下次弹出要看得再按一次 `Ctrl+F1`）
         self.assets_on.set(false);
-        self.template.assets().hide();
+        self.template.hide_assets();
         self.last_rects.borrow_mut().clear();
         // 收起态的宽度也跟着作废：换了个应用（窗口宽度不同）不该拿上一段组句的宽度当最小宽度。
         self.collapsed_width.set(0.0);
@@ -774,6 +782,11 @@ impl Bridge for CandidateWindow {
     fn asset_on(&self) -> bool {
         self.assets_on.get()
     }
+
+    /// 资产经桥请所有者**把焦点收回来**（收起与生命周期末那两条由资产表自动走，这条是资产自己要求的）。
+    fn return_focus_to_owner(&self) {
+        self.template.return_focus_to_owner();
+    }
 }
 
 /// 本线程该 HWND 的候选窗口（窗口过程用）。
@@ -879,6 +892,16 @@ fn place(anchor: RECT, content: (i32, i32)) -> (i32, i32) {
 
 /// 分层窗口无需 `WM_PAINT`；滑动动画的重画在 `WM_TIMER` 里做。
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
+    // 焦点被**指定**给名下资产时，自己这块窗整块让开：鼠标穿透到下面的窗口（点选、滚轮都不再是它的）。
+    // 焦点在自己身上（缺省，独立窗口创建并显示后总是如此）就照常接鼠标。
+    if msg == WM_NCHITTEST {
+        let ours = window_of(hwnd).is_none_or(|window| window.focused());
+        return LRESULT(if ours {
+            HTCLIENT as isize
+        } else {
+            HTTRANSPARENT as isize
+        });
+    }
     if msg == WM_TIMER && wparam.0 == SLIDE_TIMER_ID {
         if let Some(window) = window_of(hwnd) {
             window.on_slide_timer();

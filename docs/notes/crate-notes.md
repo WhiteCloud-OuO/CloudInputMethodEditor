@@ -905,9 +905,15 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   **分层、置顶、不抢焦点**的弹出窗（`WS_EX_LAYERED | TOOLWINDOW | TOPMOST | NOACTIVATE`，纯展示的再加 `TRANSPARENT`），
   并且**管名下的资产**（`Assets`）：宿主建好自己那块窗之后 `assets_mut().add(...)`，`Drop` 里**先** `assets.retire()`
   **再** `DestroyWindow` 自己 —— 资产的寿命就落在这段区间里。候选窗口先用了它（悬浮工具栏 / 状态切换提示可以照抄；
-  候选窗口自己那份 `Drop` 也就不用写了）。
+  候选窗口自己那份 `Drop` 也就不用写了）。**焦点**（`focused()`）也在这层：焦点缺省在自己身上，被指定给名下的资产后
+  窗口过程里接鼠标的地方要按它让位；模板实现 `DesignatedAssetToGetFocus`（`designate_focus` / `return_focus_to_owner`
+  / `focus`），所以**每块独立窗口都有**这个特性（见下「辅助窗口」那条）。
 - **辅助窗口模板**（`server/src/ui/auxiliary_window_template/`，`AuxiliaryWindowTemplate`）：给资产用的那块**分层面板** ——
-  主题背景 + 圆角（与候选窗口同源、都是 `theme.corner_radius`）+ 阴影。三个属性 **宽 / 高 / 间隙**
+  主题背景 + 圆角（与候选窗口同源、都是 `theme.corner_radius`）+ 阴影。**焦点**：`new(painter, able_to_get_focus)`
+  里收下这件资产创建时声明的「允许获取焦点」（`false` = 永远不接输入，缺省），`focusable()` 读回去给资产声明用；
+  `set_focused(bool)` 由所有者驱动、只动一个位 —— `WS_EX_TRANSPARENT`（窗口过程命中测试也读它，两边同一个来源，
+  不会打架），没焦点就鼠标穿透；没声明过 `able_to_get_focus` 的面板不会被打开输入（记一条日志）。
+  三个属性 **宽 / 高 / 间隙**
   （`AuxiliaryWindowSpec`，物理像素）由 `set_spec` 设；没设过时：有内容（键位映射参考）就按内容的版面算
   （`cloudime_render::key_map_size` 给点，模板按 DPI 折成像素；高度按 `key_map_height` 定：
   竖排取宿主现在的内容高度、横排取「装 9 个候选项」那档，两者都不低于 316 物理像素），
@@ -932,20 +938,38 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   格子里的字号与内边距都按格子**等比**（基准 46 点格子：那颗键 7 点、声母 7 点、韵母 11 点、内边距 3 点）。
 
 **窗口的两类**（`server/src/ui/`）—— **规则见 [`docs/design/windows.md`](../design/windows.md)**（两类窗口、
-所有者唯一且不转移、桥接 bridging、资产克隆与资产窃取）。这里只记实现落点：
+所有者唯一且不转移、桥接 bridging、**焦点 focus**、资产克隆与资产窃取）。这里只记实现落点：
 
 - **独立窗口**（`independent window`）：候选窗口（`candidates/`）、悬浮工具栏（`status/`）、状态切换提示
-  （`status_tip/`）—— 各有一块自己的分层窗与**自己的生命周期**。
+  （`status_tip/`）—— 各有一块自己的分层窗与**自己的生命周期**；创建并显示后**总是具备焦点**。焦点不在
+  自己身上时整块让开：自己那块窗鼠标穿透（`ui::set_mouse_transparent` 动 `WS_EX_TRANSPARENT` 一个位），
+  候选窗口的窗口过程在 `WM_NCHITTEST` 里另按 `CandidateWindow::focused()`（= 模板的 `focused()`）回
+  `HTTRANSPARENT`（点不着、滚轮也不是它的），缺省照常 `HTCLIENT`。宿主收起资产走 `template.hide_assets()`
+  （先让资产表自动归还焦点，再把自己那块窗的鼠标开关回位）。
 - **辅助窗口**（`auxiliary window`）：挂在某块独立窗口上的辅助信息 / 提示窗口，是宿主的**资产**；
-  这一层在 `auxiliary/`（`Asset` 资产 trait、`Assets` 宿主名下的资产表、`Bridge` 桥、`Host` 宿主形状）。
+  这一层在 `auxiliary/`（`Asset` 资产 trait、`Assets` 宿主名下的资产表、`Bridge` 桥、`Host` 宿主形状、
+  `Focus` 焦点在谁身上、`DesignatedAssetToGetFocus` 指定资产获取焦点的 trait）。
   宿主先建好自己那块窗再 `Assets::add`；`Drop` 里先 `Assets::retire` 再 `DestroyWindow` 自己
   （这段顺序由独立窗口模板保证）；显示 / 隐藏由宿主驱动（`Asset::sync` 里经 `Bridge` 向宿主要几何与开关）。
+- **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
+  名下资产）里同时只有一个持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
+  `Asset::able_to_get_focus`（缺省 `false`）是**创建时**声明的「允许获取焦点」；`Assets::designate_focus(index)`
+  只认声明过的（越界 / 没声明的返回 `false`），`return_focus_to_owner()` 收回。换人时老的收 `lost_focus()`、
+  新的收 `took_focus()` —— 资产靠这两条通知开关自己的鼠标穿透（辅助窗口模板里只动 `WS_EX_TRANSPARENT` 一个位，
+  命中测试读同一个位）。**自动归还**两条：`Assets::hide`（收起）与 `Assets::retire`（生命周期末），都是
+  「先归还再收起 / 放掉」；`Assets::sync` 里有一句 `debug_assert` 复核「焦点只可能落在所有者、或一件声明过的
+  资产上」。⚠️ 这是**逻辑焦点**，谁都不去抢系统的 `SetFocus`（窗口全是 `WS_EX_NOACTIVATE`，抢了会把用户正在
+  打字的应用弄丢）。第一轮只落机制：`Assets::designate_focus` / `Bridge::return_focus_to_owner` /
+  `DesignatedAssetToGetFocus` 还没有生产调用方，照 `set_spec` 那套先挂 `#[allow(dead_code)]` 注明留给后续部分。
 
 **辅助窗口**（`server/src/ui/auxiliary/`）：眼下只一件资产 —— 候选窗口的**键位映射参考**
 （`key_map/`，`KeyMapWindow`）：用**辅助窗口模板**搭的实窗，把当前方案的键位映射画成一张**键盘**给新手对着敲
 （版面由 `input_schemes::key_map_layout()` 按当前方案生成 —— 三排格子 + 零声母表，经 `CandidateSink::set_auxiliary`
 送到候选窗口、再落到资产上）。宿主是**候选窗口**（它实现 `Bridge`）：`CandidateWindow` 里 `assets_on` + `template.assets()`，
 `show` 里 `sync_assets`（经桥驱动资产）、`hide` 里收起资产并把开关归零；窗口与资产的销毁都交给独立窗口模板。
+它**没**声明 `able_to_get_focus`（建它的时候传的是 `AuxiliaryWindowTemplate::new(painter, false)`，
+`KeyMapWindow::able_to_get_focus` 读的就是模板那份），所以这一组一直由候选窗口持有焦点；
+将来要它接鼠标 / 键盘时把那个 `false` 改成 `true`，再由宿主 `designate_focus` 指定给它。
 `Ctrl+F1` 那条路由 UI 线程递给候选窗口（`toggle_assets`）。
 ⚠️ `auxiliary_toggle` / `set_auxiliary` 必须写在 `impl CandidateSink for UiHandle` 里：Router 拿的是
 `Box<dyn CandidateSink>`，写成固有方法会落到 trait 的**空默认体**上（真机踩过，有回归测试盯着）。
