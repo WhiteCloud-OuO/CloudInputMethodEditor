@@ -5,11 +5,13 @@
 //! 出图用云朵自带的渲染器，`UpdateLayeredWindow` 一次贴上（与独立窗口同一条路）。
 //! `set_lines` 可以往里填几行小字（键位映射参考这类纯文本）。
 //!
-//! 三个属性：**宽 / 高 / 间隙**（[`AuxiliaryWindowSpec`]，物理像素）。没设过就按宿主（候选窗口）
-//! 的形状算默认：
+//! 三个属性：**宽 / 高 / 间隙**（[`AuxiliaryWindowSpec`]，物理像素）。没设过就按内容与宿主的形状来：
 //!
-//! - 竖排：高度对齐「候选窗口装 9 个候选项」的高度，宽度取它的 **√2 倍**（向下取整）；
-//! - 横排：宽度对齐「候选窗口装 6 个候选项（每个两个字）」的宽度，高度取它的 **√5 倍**（向下取整）；
+//! - **有内容**（眼下只有「键位映射参考」）：格子边长按**目标高度**反推 —— 竖排用宿主（候选窗口）
+//!   **现在的高度**（两个窗口一样高；候选窗底下多一行译文 / 多一页页码时它也跟着高），
+//!   横排宿主又扁又宽、按不了，用「候选窗口装 9 个候选项」量出来的高度；
+//! - **没内容**（版面还没生成）：竖排高度对齐「候选窗口装 9 个候选项」的高度，宽度取它的 **√2 倍**（向下取整）；
+//!   横排宽度对齐「候选窗口装 6 个候选项（每个两个字）」的宽度，高度取它的 **√5 倍**（向下取整）；
 //! - 间隙固定 16 逻辑像素（按 DPI 折成物理像素）。
 //!
 //! 摆位（[`AuxiliaryWindowTemplate::show`] 给宿主的内容区矩形与排布方向）：按**候选窗口矩形中心点**
@@ -31,7 +33,7 @@ use windows::core::{PCWSTR, Result, w};
 
 use cloudime_platform::LayoutMode;
 use cloudime_platform::input_schemes;
-use cloudime_render::{Layout, key_map_size};
+use cloudime_render::{Layout, key_map_cell, key_map_size};
 
 use super::layered;
 use super::monitor;
@@ -154,15 +156,19 @@ impl AuxiliaryWindowTemplate {
             .max(1);
         self.dpi.set(dpi);
         let spec = self.spec.get();
-        // 内容尺寸：有键位映射参考就按它算（格子边长由候选窗口「装 9 个候选项」那个高度定，
-        // 竖排 / 横排同一个尺寸），没有内容才按宿主（候选窗口）的形状算默认。
+        // 内容尺寸：有键位映射参考就按它算（格子边长由目标高度反推，见 `key_map_target`），
+        // 没有内容才按宿主（候选窗口）的形状算默认。
         let render_layout = to_render_layout(&self.key_map.borrow());
+        let target = key_map_target(candidate, layout, dpi);
         let cell = self
             .painter
             .borrow_mut()
             .as_mut()
             .filter(|_| !render_layout.rows.is_empty())
-            .map(|painter| painter.key_map_cell(dpi));
+            .map(|painter| match target {
+                Some(points) => key_map_cell(points),
+                None => painter.key_map_cell(dpi),
+            });
         let (default_width, default_height) = match cell {
             Some(cell) => {
                 let (width, height) = key_map_size(&render_layout, cell);
@@ -265,6 +271,20 @@ fn points(value: f32, dpi: u32) -> i32 {
     ((value * dpi as f32) / 96.0).round().max(1.0) as i32
 }
 
+/// 「键位映射参考」画多高（**点**）：竖排取**宿主（候选窗口）现在的内容高度** —— 两个窗口一样高，
+/// 候选窗底下多一行译文 / 多一页页码时它也就跟着高（那两行的有无要看译文与页数，量不出来）。
+/// 横排宿主又扁又宽、按不了，返回 `None`（调用方按「装 9 个候选项」量一个缺省高度）；
+/// 宿主没显示（高度不是正的）也返回 `None`。
+fn key_map_target(host: RECT, layout: LayoutMode, dpi: u32) -> Option<f32> {
+    match layout {
+        LayoutMode::Horizontal => None,
+        LayoutMode::Vertical => {
+            let points = (host.bottom - host.top) as f32 / (dpi.max(1) as f32 / 96.0);
+            (points > 0.0).then_some(points)
+        }
+    }
+}
+
 /// 平台那边的版面（Server 按当前方案准备）→ 渲染器要的版面（画什么）。
 ///
 /// 两侧的 `KeyMapLayout` / `KeyCap` 各有一份：平台那份是「方案里有什么」，渲染器那份是「画什么」，
@@ -343,7 +363,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 #[cfg(test)]
 mod tests {
-    use super::place_in;
+    use super::{key_map_target, place_in};
     use cloudime_platform::LayoutMode;
     use windows::Win32::Foundation::RECT;
 
@@ -354,6 +374,22 @@ mod tests {
             right,
             bottom,
         }
+    }
+
+    /// 「键位映射参考」的目标高度：竖排就是宿主现在的（内容）高度，按 DPI 折回点；横排不按宿主，
+    /// 宿主没显示（高度不是正的）也交给缺省。
+    #[test]
+    fn the_key_map_target_follows_the_host_height_only_when_vertical() {
+        let host = rect(0, 0, 812, 302);
+        assert_eq!(key_map_target(host, LayoutMode::Vertical, 96), Some(302.0));
+        let scaled = key_map_target(host, LayoutMode::Vertical, 144).expect("竖排有目标");
+        assert!((scaled - 302.0 / 1.5).abs() < 0.01, "{scaled}");
+        assert_eq!(key_map_target(host, LayoutMode::Horizontal, 96), None);
+        assert_eq!(
+            key_map_target(rect(0, 0, 812, 0), LayoutMode::Vertical, 96),
+            None,
+            "宿主没显示（高度 0）→ 用「装 9 个候选项」的缺省"
+        );
     }
 
     /// 竖排：候选窗中心在屏幕**左半边**贴右侧、在**右半边**贴左侧 —— 总往屏幕里侧靠。
