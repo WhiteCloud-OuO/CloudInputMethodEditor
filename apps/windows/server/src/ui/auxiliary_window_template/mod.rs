@@ -8,9 +8,9 @@
 //! 三个属性：**宽 / 高 / 间隙**（[`AuxiliaryWindowSpec`]，物理像素）。没设过就按内容与宿主的形状来：
 //!
 //! - **有内容**（眼下只有「键位映射参考」）：格子边长按**目标高度**反推 —— 竖排用宿主（候选窗口）
-//!   **现在的高度**（两个窗口一样高；候选窗底下多一行译文 / 多一页页码时它也跟着高），但**不小于**
-//!   「候选窗口装 9 个候选项」那档（候选只有一两项时格子会小到字看不清，宁可让它比候选窗高一点）；
-//!   横排宿主又扁又宽、按不了，直接按那档算；
+//!   **现在的高度**（两个窗口一样高；候选窗底下多一行译文 / 多一页页码时它也跟着高），
+//!   横排宿主又扁又宽、按不了，直接按「候选窗口装 9 个候选项」那档；两种排布都再夹一道
+//!   [`MIN_KEY_MAP_HEIGHT`]（**316 物理像素**）—— 谁都不比它矮，格子里的字才撑得住；
 //! - **没内容**（版面还没生成）：竖排高度对齐「候选窗口装 9 个候选项」的高度，宽度取它的 **√2 倍**（向下取整）；
 //!   横排宽度对齐「候选窗口装 6 个候选项（每个两个字）」的宽度，高度取它的 **√5 倍**（向下取整）；
 //! - 间隙固定 16 逻辑像素（按 DPI 折成物理像素）。
@@ -166,7 +166,10 @@ impl AuxiliaryWindowTemplate {
             .borrow_mut()
             .as_mut()
             .filter(|_| !render_layout.rows.is_empty())
-            .map(|painter| key_map_cell_for(target, painter.key_map_cell(dpi)));
+            .map(|painter| {
+                let nine_rows = painter.key_map_height_nine(dpi);
+                key_map_cell(key_map_height(target, nine_rows, dpi))
+            });
         let (default_width, default_height) = match cell {
             Some(cell) => {
                 let (width, height) = key_map_size(&render_layout, cell);
@@ -283,14 +286,18 @@ fn key_map_target(host: RECT, layout: LayoutMode, dpi: u32) -> Option<f32> {
     }
 }
 
-/// 键位映射参考的格子边长（点）：有目标（竖排：宿主现在的高度）就按它反推，但**不小于**
-/// 「装 9 个候选项」那档（`nine_rows`）—— 候选只有一两项时格子会小到字看不清，宁可让它比候选窗
-/// 高一点。没目标（横排 / 宿主没显示）就用那档。
-fn key_map_cell_for(target: Option<f32>, nine_rows: f32) -> f32 {
-    match target {
-        Some(points) => key_map_cell(points).max(nine_rows),
-        None => nine_rows,
-    }
+/// 「键位映射参考」窗口的**最低高度**（**物理像素**）：无论竖排还是横排都不比它矮。
+///
+/// 别按逻辑像素理解 —— 这是「看得清」那条线（格子边长由这个高度反推，太矮了格子里那些字号撑不住）。
+const MIN_KEY_MAP_HEIGHT: f32 = 316.0;
+
+/// 「键位映射参考」窗口画多高（**点**）：**竖排**跟宿主（候选窗口）现在的高度一样高，
+/// 候选窗底下多一行译文 / 多一页页码时它也跟着高（那两行的有无要看译文与页数，量不出来）；
+/// **横排**宿主又扁又宽、按不了，用「装 9 个候选项」那档（`nine_rows`）。
+/// 两种排布都再夹一道 [`MIN_KEY_MAP_HEIGHT`]（物理像素折成点）—— 谁都不比它矮。
+fn key_map_height(host: Option<f32>, nine_rows: f32, dpi: u32) -> f32 {
+    let floor = MIN_KEY_MAP_HEIGHT / (dpi.max(1) as f32 / 96.0);
+    host.unwrap_or(nine_rows).max(nine_rows).max(floor)
 }
 
 /// 平台那边的版面（Server 按当前方案准备）→ 渲染器要的版面（画什么）。
@@ -371,7 +378,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 #[cfg(test)]
 mod tests {
-    use super::{key_map_cell_for, key_map_target, place_in};
+    use super::{MIN_KEY_MAP_HEIGHT, key_map_height, key_map_target, place_in};
     use cloudime_platform::LayoutMode;
     use windows::Win32::Foundation::RECT;
 
@@ -400,17 +407,21 @@ mod tests {
         );
     }
 
-    /// 格子边长：跟宿主走，但**不小于「装 9 个候选项」那档** —— 候选只有一两项时别缩到字看不清。
+    /// 高度：竖排跟宿主、横排用「装 9 个候选项」那档，但两种排布都不低于 [`MIN_KEY_MAP_HEIGHT`]
+    /// （物理像素折成点）—— 候选很少、或者屏幕缩放 150% 时都按这条线来。
     #[test]
-    fn the_key_map_cell_never_goes_below_the_nine_row_size() {
-        let nine = 79.6_f32; // 「装 9 个候选项」量出来的格子（96 dpi、16pt 候选）
-        // 宿主比那档高（9 行 + 页码行 = 313px）→ 跟宿主
-        let taller = key_map_cell_for(Some(313.0), nine);
-        assert!(taller > nine, "{taller}");
-        // 宿主很矮（1 行 = 69px）→ 停在 9 行那档，不再往下缩
-        assert_eq!(key_map_cell_for(Some(69.0), nine), nine);
-        // 横排 / 宿主没显示 → 就是那档
-        assert_eq!(key_map_cell_for(None, nine), nine);
+    fn the_key_map_window_never_goes_below_the_minimum_height() {
+        let nine = 313.0_f32; // 「装 9 个候选项」量出来的高度（96 dpi、16pt 候选）
+        // 宿主比那档高 → 跟宿主
+        assert_eq!(key_map_height(Some(469.0), nine, 96), 469.0);
+        // 宿主比那档矮（1 行 = 69px）、或者横排（没有宿主）→ 停在最低高度
+        assert_eq!(key_map_height(Some(69.0), nine, 96), MIN_KEY_MAP_HEIGHT);
+        assert_eq!(key_map_height(None, nine, 96), MIN_KEY_MAP_HEIGHT);
+        // 150% 缩放：最低高度按物理像素算，折成点就是 316 / 1.5；「装 9 个候选项」那档在 144 dpi
+        // 是 469 点（比这条线高），所以只有目标比它矮时才看得出下限
+        assert!((key_map_height(None, 100.0, 144) - MIN_KEY_MAP_HEIGHT / 1.5).abs() < 0.01);
+        assert_eq!(key_map_height(None, 469.0, 144), 469.0);
+        assert_eq!(key_map_height(Some(500.0), 469.0, 144), 500.0);
     }
 
     /// 竖排：候选窗中心在屏幕**左半边**贴右侧、在**右半边**贴左侧 —— 总往屏幕里侧靠。

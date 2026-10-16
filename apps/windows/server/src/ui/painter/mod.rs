@@ -203,12 +203,12 @@ impl Painter {
             .ok()
     }
 
-    /// 键位映射参考的格子边长（点）：让它的内容高度正好等于「候选窗口装 9 个候选项」那个高度
-    /// —— 竖排 / 横排都用它，两种排布下辅助窗口一样大。
-    pub(super) fn key_map_cell(&mut self, dpi: u32) -> f32 {
+    /// 「候选窗口装 9 个候选项」那个内容高度（**点**）：键位映射参考的缺省目标高度
+    /// （竖排 / 横排都用它当底，见窗口模板的 `key_map_height`）。
+    pub(super) fn key_map_height_nine(&mut self, dpi: u32) -> f32 {
         const ROWS: usize = 9;
         let (_, height) = self.candidate_size(Layout::Vertical, ROWS, dpi);
-        cloudime_render::key_map_cell(height as f32 / scale(dpi))
+        height as f32 / scale(dpi)
     }
 
     /// 按「候选窗口装 `rows` 个候选、每个两个字」的形状量内容区尺寸（像素，不含阴影边）。
