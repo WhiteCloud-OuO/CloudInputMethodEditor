@@ -324,7 +324,7 @@ DLL 据此在**组句里**把这一个键送来问一趟（`eats_key` 里那条�
 `use_input_scheme.cfg` 是**键值行**（`scheme = ` / `auxiliary = ` / `mixture_input = ` / `key_map_reference = ` / `key_map_hotkey = `，
 老的单行格式不再认）——`read_config` 解析、`read_current` / `read_auxiliary` / `read_mixture_input` 取值、
 `set_current` / `set_auxiliary` / `set_mixture_input` / `set_key_map_reference` / `set_key_map_hotkey`
-读-改-写（互不覆盖）、`resolve_current` 指不到就回到第一个并重建（`auxiliary` 沿用原值，没写过才给默认的 `yutang.tsv`）；
+读-改-写（互不覆盖）、`resolve_current` 指不到就回到第一个并重建（`auxiliary` 沿用原值，没写过才给默认的 `DEFAULT_AUXILIARY` = `首右辅助码2.0.tsv`，随包那份）；
 `mixture_input` 是双键拼音那份「中英混合输入」（`flag_of` / `flag_key`：写 `on` / `off`，也认 `1` / `0` / `true` / `false`，
 缺省**开**），`input_schemes::mixture_input()` 给 Server / CLI 挂到 `Engine::set_shuangpin_mixture_input`；
 `candidate_auxiliary` 是「在候选项显示辅助码」（同一套 `flag_of` / `flag_key`，缺省**关**），
@@ -334,6 +334,12 @@ DLL 据此在**组句里**把这一个键送来问一趟（`eats_key` 里那条�
 与 `KeyMapHotkey`（`ctrl+f1` 这样读写），以及 `KeyMapLayout` / `KeyCap`（三排键盘格子 `KEYBOARD_ROWS` + 零声母表，
 `DoubleKeysScheme::key_map_layout()` 按当前方案填）；
 `list_auxiliary` 列 `AuxiliaryCodes\` 下的 `.tsv` / `.txt`。
+`auxiliary.rs` 读辅助码表（两列 `词 \t 码`，`AuxiliaryCodes` 那张 `词 → 若干码` 的表）：
+**读进来把码统一 `to_uppercase`**（用户拿到的表常是小写，组句里敲的那一份必须大写），
+一个词多个码就写多行（去重）、码最长 `MAX_AUXILIARY` 位；格式不对的行跳过并记一条 `warn`（数据文件按「坏行跳过」处理）。
+`ensure_sample` 顺手把**随包**的辅助码表（`assets\auxiliary\*.tsv` → `seed_auxiliary`）播种进 `AuxiliaryCodes\`：
+开发布局（仓库根）与装机布局（`{app}`）同一套，**同名已有就不动**（用户改过的 / 自己放的不覆盖，升级也不会冲掉），
+随包目录不存在就什么都不做 —— 装完设置页的下拉里直接有那两张首右辅助码（`cloudime.iss` 把它们装到 `{app}\assets\auxiliary`）。
 `current_table` 转给 Core 解码器；`current_auxiliary[_boxed]` 按 `auxiliary` 行到 `AuxiliaryCodes\` 取表
 （方案没开辅助码 / 没选表就不装）。
 `set_using_auxiliary_codes`（+ 纯文本的 `rewrite_auxiliary_flag`）给设置页那个「使用辅助码」开关用：

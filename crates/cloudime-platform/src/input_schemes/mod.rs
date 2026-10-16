@@ -41,8 +41,11 @@ const KEY_MAP_HOTKEY: &str = "key_map_hotkey";
 /// 内置样例里排第一的那份（文件名升序 = 默认方案）；`use_input_scheme.cfg` 不在时用它。
 pub const DEFAULT_SAMPLE_ID: &str = "shoudao";
 
-/// 辅助码方案的默认选择：雨棠辅助码 `yutang.tsv`（放在 `AuxiliaryCodes\` 下）。
-pub const DEFAULT_AUXILIARY: &str = "yutang.tsv";
+/// 辅助码方案的默认选择：首右辅助码 2.0 `首右辅助码2.0.tsv`（随包发到 `assets\auxiliary\`，
+/// 首次运行时播种进 `AuxiliaryCodes\`，见 [`seed_auxiliary_tables`]）。
+///
+/// 雨棠辅助码还没做完，**先不用它**做默认；用户自己放一份 `yutang.tsv` 进 `AuxiliaryCodes\` 仍可在设置页选它。
+pub const DEFAULT_AUXILIARY: &str = "首右辅助码2.0.tsv";
 
 /// 方案目录：**安装目录**下的 `InputSchemes\DoubleKeysPinyin`（`bundled_root()` 下，不负责创建）。
 ///
@@ -420,7 +423,7 @@ pub fn resolve_current(dir: &Path, entries: &[SchemeEntry]) -> Option<String> {
         Some(entry) => Some(entry.id.clone()),
         None => {
             // `.cfg` 不在 / 是老的单行格式 / 指的方案找不到 → 重建。
-            // `auxiliary` 沿用原值（`auxiliary =` 空着就是空着），从来没写过才给默认的雨棠。
+            // `auxiliary` 沿用原值（`auxiliary =` 空着就是空着），从来没写过才给默认的首右辅助码。
             let auxiliary = config
                 .get(KEY_AUXILIARY)
                 .map(String::as_str)
@@ -443,8 +446,11 @@ pub fn resolve_current(dir: &Path, entries: &[SchemeEntry]) -> Option<String> {
 ///
 /// [`SAMPLES`] 按 id 升序，所以写完之后 [`resolve_current`] 选出来的默认方案就是首道双拼。
 pub fn ensure_sample(dir: &Path) -> std::io::Result<Option<PathBuf>> {
-    // 辅助码目录顺手建出来（设置页的「辅助码方案」下拉要往里看）
+    // 辅助码目录顺手建出来（设置页的「辅助码方案」下拉要往里看），并把随包的辅助码表播种进去
     std::fs::create_dir_all(dir.join(AUXILIARY_DIR))?;
+    if let Err(error) = seed_auxiliary_tables(dir) {
+        tracing::warn!(%error, "播种随包辅助码表失败");
+    }
     if !list(dir).is_empty() {
         return Ok(None);
     }
@@ -455,6 +461,58 @@ pub fn ensure_sample(dir: &Path) -> std::io::Result<Option<PathBuf>> {
         first.get_or_insert(path);
     }
     Ok(first)
+}
+
+/// 随包辅助码表在仓库 / 安装目录里的相对位置（`assets\auxiliary\*.tsv`）。
+pub const BUNDLED_AUXILIARY: &str = "assets/auxiliary";
+
+/// 把**随包**的辅助码表（`assets\auxiliary\*.tsv`，见 `assets/auxiliary/README.md`）播种到方案目录的
+/// `AuxiliaryCodes\`：那里是用户可写的，设置页的下拉只看它。**同名已有就不动**（用户改过的 / 自己放的不覆盖，
+/// 也免得升级把用户的选择冲掉）。随包目录不在（开发布局没同步过来）就什么都不做。
+fn seed_auxiliary_tables(dir: &Path) -> std::io::Result<()> {
+    let Some(root) = crate::resources::bundled_root() else {
+        return Ok(());
+    };
+    let from = root.join(BUNDLED_AUXILIARY);
+    if !from.is_dir() {
+        return Ok(());
+    }
+    seed_auxiliary(&from, &dir.join(AUXILIARY_DIR))?;
+    Ok(())
+}
+
+/// [`seed_auxiliary_tables`] 的干活部分：把 `from` 下的 `.tsv` / `.txt` 抄到 `to`（同名跳过）。
+/// 返回抄了几个。拆出来是为了能拿临时目录测。
+fn seed_auxiliary(from: &Path, to: &Path) -> std::io::Result<usize> {
+    let Ok(entries) = std::fs::read_dir(from) else {
+        return Ok(0);
+    };
+    std::fs::create_dir_all(to)?;
+    let mut copied = 0;
+    for entry in entries.flatten() {
+        let path = entry.path();
+        if !path.is_file() {
+            continue;
+        }
+        let extension = path
+            .extension()
+            .and_then(|value| value.to_str())
+            .map(str::to_ascii_lowercase)
+            .unwrap_or_default();
+        if !AUXILIARY_EXTENSIONS.contains(&extension.as_str()) {
+            continue;
+        }
+        let Some(name) = path.file_name() else {
+            continue;
+        };
+        let target = to.join(name);
+        if target.exists() {
+            continue;
+        }
+        std::fs::copy(&path, &target)?;
+        copied += 1;
+    }
+    Ok(copied)
 }
 
 /// **当前方案**的键位表：读 `use_input_scheme.cfg` 指的那一份，转成 Core 解码器要的表。
@@ -595,7 +653,7 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
     }
 
-    /// 当前方案：没有 `.cfg` → 第一个 + 重建（辅助码给默认的雨棠）；指错了 → 回到第一个并重建；指对了 → 不动。
+    /// 当前方案：没有 `.cfg` → 第一个 + 重建（辅助码给默认的首右辅助码）；指错了 → 回到第一个并重建；指对了 → 不动。
     #[test]
     fn current_falls_back_to_the_first_and_rebuilds_the_file() {
         let dir = temp_dir("current");
@@ -609,7 +667,7 @@ mod tests {
         assert_eq!(
             read_auxiliary(&dir).as_deref(),
             Some(DEFAULT_AUXILIARY),
-            "重建时辅助码给默认的雨棠"
+            "重建时辅助码给默认的首右辅助码"
         );
 
         set_current(&dir, "没有了").unwrap();
@@ -757,6 +815,36 @@ mod tests {
                 "candidate_auxiliary = {written}"
             );
         }
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 随包辅助码表播种进 `AuxiliaryCodes\`：只认 `.tsv` / `.txt`，**同名已有就不动**（用户改过的不覆盖）。
+    #[test]
+    fn bundled_auxiliary_tables_are_seeded_once() {
+        let from = temp_dir("seed-from");
+        let dir = temp_dir("seed-to");
+        std::fs::create_dir_all(&from).unwrap();
+        std::fs::write(from.join("甲.tsv"), "爱\tPD\n").unwrap();
+        std::fs::write(from.join("乙.txt"), "情\tXH\n").unwrap();
+        std::fs::write(from.join("readme.md"), "不收").unwrap();
+
+        let to = dir.join(AUXILIARY_DIR);
+        assert_eq!(seed_auxiliary(&from, &to).unwrap(), 2, "抄两张");
+        assert_eq!(list_auxiliary(&dir), ["乙.txt", "甲.tsv"], "下拉里看得到");
+
+        // 再播一次：都在了就不抄（也不覆盖用户改过的那份）
+        assert_eq!(seed_auxiliary(&from, &to).unwrap(), 0);
+        std::fs::write(to.join("甲.tsv"), "爱\tYY\n").unwrap();
+        assert_eq!(seed_auxiliary(&from, &to).unwrap(), 0);
+        assert_eq!(
+            std::fs::read_to_string(to.join("甲.tsv")).unwrap(),
+            "爱\tYY\n",
+            "用户改过的不覆盖"
+        );
+
+        // 随包目录不在（开发布局没同步过来）就什么都不做
+        assert_eq!(seed_auxiliary(&dir.join("没有这个目录"), &to).unwrap(), 0);
+        let _ = std::fs::remove_dir_all(&from);
         let _ = std::fs::remove_dir_all(&dir);
     }
 

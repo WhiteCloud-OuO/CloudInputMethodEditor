@@ -220,8 +220,8 @@ fn dual_key_panel(settings: &Settings, context: &mut ViewContext<Settings>) -> V
             })
             .map_or(0, |index| index + 1);
         let mut auxiliary_hint = String::from(
-            "辅助码表统一放 AuxiliaryCodes\\ 下（.tsv / .txt，一行一个「字 + 制表符 + 码」）；\
-             选中的会记进 use_input_scheme.cfg。",
+            "辅助码表统一放 AuxiliaryCodes\\ 下（.tsv / .txt，一行一个「字 + 制表符 + 码」，码里的字母大小写都行，\
+             读进来按大写算）；选中的会记进 use_input_scheme.cfg。",
         );
         if let Some(selected) = settings
             .auxiliary_selected

@@ -30,7 +30,7 @@
 
 ```ini
 scheme = shoudao        ; 方案 id（不含后缀）
-auxiliary = yutang.tsv  ; AuxiliaryCodes\ 下的辅助码文件名（含后缀）；留空 = 不用辅助码
+auxiliary = 首右辅助码2.0.tsv ; AuxiliaryCodes\ 下的辅助码文件名（含后缀）；留空 = 不用辅助码
 mixture_input = on      ; on / off：双键拼音下要不要按敲的按键匹配英文词（中英混合输入）；缺省 on
 candidate_auxiliary = off ; on / off：候选项里要不要显示辅助码（`爱情 [XH]`）；缺省 off
 key_map_reference = off ; off / hotkey / always：什么时候显示「键位映射参考」（新手对着敲用）
@@ -41,7 +41,8 @@ key_map_hotkey = ctrl+f1 ; 上面选 hotkey 时用的组合键
 - `scheme` 指不到（文件不在 / 老格式 / 目录里没这份）→ 取**按文件名升序的第一个**可用方案并**重建**该文件。
 - 「找到的第一个」必须确定，所以排序规则写死：**文件名升序**（大小写不敏感）。
   内置样例里排第一的是 `shoudao` —— 所以**缺省方案就是首道双拼**。
-- 重建时 `auxiliary` 沿用原值；从来没写过就给默认的 **`yutang.tsv`**（雨棠辅助码；文件得在 `AuxiliaryCodes\` 里）。
+- 重建时 `auxiliary` 沿用原值；从来没写过就给默认的 **`首右辅助码2.0.tsv`**（随包那两张首右辅助码里行数多的那份，
+  见下面「随包」那条）。雨棠辅助码还没做完，**先不用它**做默认；用户自己放一份进 `AuxiliaryCodes\` 仍能选它。
 - `auxiliary` 是**用户级**的选择（设置页「辅助码方案」下拉写它），**不在方案文件里**。
 - `mixture_input` 也是**用户级**的（设置页双键拼音面板的「中英文混合输入」开关写它，缺省开）：
   这就是全键拼音那份 `[input] mixture_input` 在双键拼音里的分身 —— 全键拼音那份**管不着双键拼音**，
@@ -120,7 +121,7 @@ key_map_hotkey = ctrl+f1 ; 上面选 hotkey 时用的组合键
 - **「使用辅助码」**（ToggleSwitch）：直接改写当前方案文件的 `[Auxiliary] UsingAuxiliaryCodes`
   （其余内容原样不动，TOML 写 `true`/`false`、INI 写 `1`/`0`），改完顺手让 Server 重读方案文件。
 - **「辅助码方案」**（ComboBox）：列 `AuxiliaryCodes\` 下的 `.tsv` / `.txt`（第一项是「（不使用）」）；
-  选中的写进 `use_input_scheme.cfg` 的 `auxiliary` 行（「（不使用）」= 留空）。默认 `yutang.tsv`；
+  选中的写进 `use_input_scheme.cfg` 的 `auxiliary` 行（「（不使用）」= 留空）。缺省选 `首右辅助码2.0.tsv`（随包那份）；
   文件不在时会提示「找不到 …」，把文件放进 `AuxiliaryCodes\` 或重选一个即可。
 
 ### 4.1 「辅助窗口」：键位映射参考

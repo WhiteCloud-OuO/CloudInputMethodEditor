@@ -30,8 +30,9 @@ C:\Program Files\CloudIME\
     data\icons-arrangement.cfg 悬浮状态条的按钮排布（哪个按钮、位置、图标）
     data\icons\*.svg          那些按钮的图标（20×20）
     InputSchemes\             双键拼音方案文件（DoubleKeysPinyin\*.toml / .ini 与 AuxiliaryCodes\ 辅助码表；
-                              本目录对普通用户可写，设置页「输入 → 双键拼音」页走它；随包只建目录，方案由程序首次运行写出）
-    assets\                   sample\
+                              本目录对普通用户可写，设置页「输入 → 双键拼音」页走它；随包只建目录，方案由程序首次运行写出；
+                              AuxiliaryCodes\ 里那两张首右辅助码由程序从 assets\auxiliary\ 播种过来，同名已有就不动）
+    assets\                   sample\（兜底样例词库）、auxiliary\（随包辅助码表，首次运行播种进 InputSchemes\）
 ```
 
 Server 与设置程序按 **exe 相对**定位随包资源（`cloudime_platform::resources`）：装机时资源与 exe 同级，
