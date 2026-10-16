@@ -58,11 +58,14 @@ impl Table {
 /// 解出来的一个音节。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Syllable {
-    /// 完整拼音（如 `yun`）。
+    /// 完整拼音（如 `yun`）；`partial` 为真时这里是**声母**（简拼，如 `y`），按前缀查。
     pub pinyin: String,
 
     /// 辅助码（大写，可能空着）。
     pub auxiliary: String,
+
+    /// 这个音节是**简拼**：只敲了声母（用户在 `'` 分词后一个键就打完了）。查词按前缀匹配。
+    pub partial: bool,
 }
 
 /// 一种解法：整串音节。
@@ -141,7 +144,14 @@ impl Table {
         let head: Vec<crate::parser::Syllable> = expansion
             .syllables
             .iter()
-            .map(|syllable| crate::parser::Syllable::complete(&syllable.pinyin))
+            .map(|syllable| {
+                // 简拼（手动分词后只敲了声母）：按**前缀**查
+                if syllable.partial {
+                    crate::parser::Syllable::partial(&syllable.pinyin)
+                } else {
+                    crate::parser::Syllable::complete(&syllable.pinyin)
+                }
+            })
             .collect();
         let mut out: Vec<Segmentation> = Vec::new();
         if let Some(first) = expansion
@@ -262,10 +272,17 @@ impl Table {
                 index += 1;
                 continue;
             }
-            // 一个音节两键（末尾那半个音节就按剩下的算）
+            // 一个音节两键（末尾那半个音节就按剩下的算）；用户自己敲的 `'` 当场结束这一段 ——
+            // 手动分词后**一个键也算一段**（简拼，`y'd` → `y'` + `d`）
             let end = (index + 2).min(chars.len());
-            let mut group: String = chars[index..end].iter().collect();
-            index = end;
+            let mut group: String = chars[index..end]
+                .iter()
+                .take_while(|key| **key != '\'')
+                .collect();
+            index += group.len().max(1);
+            if index < chars.len() && chars.get(index) == Some(&'\'') {
+                index += 1;
+            }
             // 开了辅助码：紧跟音节的大写字母贴着这个音节
             let mut auxiliary = 0;
             while self.auxiliary
@@ -297,6 +314,23 @@ impl Table {
         if keys[index] == '\'' {
             self.walk(keys, index + 1, done, out);
             return;
+        }
+        // 用户**手动用 `'` 分了词**：这一段**一个键**就够 —— 这个键按它的**声母**当简拼
+        // （`y'd` 匹配「云朵」：`y` 是「云」的声母、`d` 是「朵」的声母；`d` 在末尾，走下面的半音节那支）。
+        // 简拼后面也能跟辅助码（`yH'd`），那段大写照样算这一个音节的。
+        if let Some(initial) = self.initial(keys[index]) {
+            let auxiliary = self.auxiliary_run(keys, index + 1);
+            let end = index + 1 + auxiliary.chars().count();
+            if keys.get(end) == Some(&'\'') {
+                let mut next = done.clone();
+                next.push(Syllable {
+                    pinyin: initial,
+                    auxiliary,
+                    partial: true,
+                });
+                self.walk(keys, end + 1, next, out);
+                return;
+            }
         }
         // 一个音节两键；只剩一个键就是「还在打的那半个音节」，原样带着（不是字母就不管，调用方放行）
         if index + 1 >= keys.len() {
@@ -344,6 +378,7 @@ impl Table {
             next.push(Syllable {
                 pinyin,
                 auxiliary: auxiliary.clone(),
+                partial: false,
             });
             self.walk(keys, index + consumed, next, out);
         }
@@ -863,6 +898,60 @@ mod tests {
         assert_eq!(expansions[0].syllables.len(), 2, "{expansions:?}");
         assert_eq!(expansions[0].syllables[0].auxiliary, "ABCD");
         assert_eq!(expansions[0].syllables[1].auxiliary, "");
+    }
+
+    /// 尾巴上那**半个音节**（只按了第一键）后面也能直接跟辅助码（`yH` = 「要」只按了 `y` 就敲 `H`），
+    /// 最多 4 位；只有大写、没有半音节时什么都不出。
+    #[test]
+    fn a_half_syllable_can_carry_an_auxiliary_code() {
+        let mut table = natural();
+        table.auxiliary = true;
+        let expansions = table.expand("yH");
+        assert_eq!(expansions.len(), 1, "{expansions:?}");
+        assert!(expansions[0].syllables.is_empty(), "第二键还没打");
+        assert_eq!(expansions[0].trailing, "y");
+        assert_eq!(expansions[0].trailing_auxiliary, "H");
+        // 最多 4 位；第 5 位大写接不上（那半个音节后面没有别的键了）→ 整段解不出来
+        assert_eq!(table.expand("yHDSA")[0].trailing_auxiliary, "HDSA");
+        assert!(table.expand("yHDSAB").is_empty());
+        // 落单的大写没有音节可挂 → 什么都不出
+        assert!(table.expand("H").is_empty());
+        // 没开辅助码时大写仍按拼音键解（半音节 + 一个键）
+        assert!(natural().expand("yH")[0].trailing_auxiliary.is_empty());
+    }
+
+    /// **手动分词时能用简拼**：`'` 分段以后一段**一个键**就够，这个键按它的声母算 ——
+    /// `y'd` 匹配「云朵」（`y` 是「云」的声母、`d` 是「朵」的声母；末尾那段照旧按半音节算）。
+    /// 简拼后面也能跟辅助码（`yH'd`）；不分词时仍然是「两键一个音节」，不按简拼读。
+    #[test]
+    fn a_manual_boundary_allows_jian_pin() {
+        let table = natural();
+        let expansions = table.expand("y'd");
+        assert_eq!(expansions.len(), 1, "{expansions:?}");
+        assert_eq!(expansions[0].syllables.len(), 1, "第一段是一个键的简拼");
+        assert_eq!(expansions[0].syllables[0].pinyin, "y");
+        assert!(expansions[0].syllables[0].partial, "简拼按前缀查");
+        assert_eq!(expansions[0].trailing, "d", "末尾那段照旧按半音节算");
+
+        // 简拼也能带辅助码：`yH'd`
+        let mut aux = natural();
+        aux.auxiliary = true;
+        let expansions = aux.expand("yH'd");
+        assert_eq!(expansions[0].syllables[0].pinyin, "y");
+        assert_eq!(expansions[0].syllables[0].auxiliary, "H");
+        assert!(expansions[0].syllables[0].partial);
+
+        // 不分词时还是「两键一个音节」：`ypdo` 两个音节都完整，没有简拼
+        let expansions = table.expand("ypdo");
+        assert!(
+            expansions
+                .iter()
+                .all(|expansion| expansion.syllables.iter().all(|syllable| !syllable.partial)),
+            "{expansions:?}"
+        );
+
+        // 那个键没有声母（`a`）时简拼这一支不成立
+        assert!(table.expand("a'a").is_empty());
     }
 
     /// Exchange 作用在物理键上，且发生在查表之前。
