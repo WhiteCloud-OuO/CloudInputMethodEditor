@@ -187,6 +187,73 @@ fn the_auxiliary_shown_next_to_a_candidate_follows_the_cursor() {
     assert_eq!(kaifa.auxiliary.as_deref(), Some("F"));
 }
 
+/// 辅助码**敲一半也算**：`kl` + `R`（「开」的码 `RS` 的第一位）时，「开」照样在候选里，
+/// 而且那一位记成「已经敲上」—— 候选窗口把它画下划线（见 `docs/design/input-schemes.md` §4）。
+#[test]
+fn a_partly_typed_auxiliary_code_keeps_the_candidate() {
+    let (mut app, mut aux) = (engine(), table());
+    aux.auxiliary = true;
+    app.set_shuangpin(Some(aux));
+    app.set_auxiliary_codes(Some(Box::new(Codes::new(&[("开", "RS")]))));
+
+    let find = |engine: &mut Engine| {
+        engine
+            .query()
+            .expect("查询本身不报错")
+            .candidates
+            .items
+            .iter()
+            .find(|candidate| candidate.text == "开")
+            .cloned()
+    };
+
+    // 敲了一位：候选还在，完整码照旧 `RS`，已经敲上的是 `R`
+    app.set_input("klR");
+    let kai = find(&mut app).expect("敲了一半的辅助码也算命中");
+    assert_eq!(kai.auxiliary.as_deref(), Some("RS"));
+    assert_eq!(kai.auxiliary_typed.as_deref(), Some("R"), "已经敲上 R");
+
+    // 敲满两位：两位都算敲上
+    app.set_input("klRS");
+    let kai = find(&mut app).expect("敲满");
+    assert_eq!(kai.auxiliary_typed.as_deref(), Some("RS"));
+
+    // 敲错一位：这个候选对不上，被筛掉
+    app.set_input("klX");
+    assert!(find(&mut app).is_none(), "敲错的码不认");
+}
+
+/// **半音节后面直接跟辅助码**：`k` 是「开」的第一键，第二键跳过、直接敲辅助码 `H` ——
+/// 「开」照样在候选里（敲一半的码也算命中），右侧那段码记成已敲一位。
+#[test]
+fn an_auxiliary_code_can_follow_a_half_syllable() {
+    let (mut app, mut aux) = (engine(), table());
+    aux.auxiliary = true;
+    app.set_shuangpin(Some(aux));
+    app.set_auxiliary_codes(Some(Box::new(Codes::new(&[("开", "HB")]))));
+
+    let find = |engine: &mut Engine| {
+        engine.query().ok().and_then(|query| {
+            query
+                .candidates
+                .items
+                .iter()
+                .find(|candidate| candidate.text == "开")
+                .cloned()
+        })
+    };
+
+    // `kH`：只按了 `k` 就敲辅助码 `H`（第二键跳过）
+    app.set_input("kH");
+    let kai = find(&mut app).expect("半音节 + 辅助码该出「开」");
+    assert_eq!(kai.auxiliary.as_deref(), Some("HB"));
+    assert_eq!(kai.auxiliary_typed.as_deref(), Some("H"));
+
+    // 敲错：筛掉
+    app.set_input("kX");
+    assert!(find(&mut app).is_none(), "敲错的码不认");
+}
+
 /// 开了辅助码：**小写是拼音键、大写是辅助码** —— 大写只能跟在完整音节后面（`klfaF`）；
 /// **第一个键**敲大写（Caps Lock / Shift 卡着）就把它压成小写，照旧当正常双拼打（后面的辅助码照旧）；
 /// 第二个键起敲大写还是切不出来。

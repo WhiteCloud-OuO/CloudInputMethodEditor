@@ -211,11 +211,16 @@ impl Engine {
                     .collect(),
                 segmentations,
             };
-            let typed_auxiliary: Vec<String> = expansion
+            // `auxiliary` 是**这个词每个字敲的辅助码**（不是 `segmentations` 里的那个字形 ——
+            // 候选匹配用不到它）；尾巴上那半个音节敲的码接在最后一个（`yH` = 「要」的码 `H`）。
+            let mut typed_auxiliary: Vec<String> = expansion
                 .syllables
                 .iter()
                 .map(|syllable| syllable.auxiliary.clone())
                 .collect();
+            if !expansion.trailing.is_empty() {
+                typed_auxiliary.push(expansion.trailing_auxiliary.clone());
+            }
             match self.query_reading(
                 &pinyin,
                 Some(reading),

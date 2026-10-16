@@ -73,6 +73,10 @@ pub struct Expansion {
 
     /// 尾巴上没解完的按键（还在打的那半个音节），原样带着。
     pub trailing: String,
+
+    /// 尾巴上那半个音节后面紧跟的辅助码（大写，可能空着）。
+    /// 例：`yH`（`y` 是「要」的第一键、第二键还没打直接敲辅助码）→ `trailing = "y"`、`trailing_auxiliary = "H"`。
+    pub trailing_auxiliary: String,
 }
 
 impl Expansion {
@@ -93,7 +97,8 @@ impl Expansion {
 
 impl Table {
     /// 按下这些键能解出哪些串：`'` 强制分词；**开了辅助码时大小写有意义** —— 小写字母是拼音键、
-    /// 大写字母是辅助码（只能跟在完整音节后面，最多 [`MAX_AUXILIARY`] 位）；音节位上出现大写就解不出来。
+    /// 大写字母是辅助码（跟在**完整音节**或**末尾那半个音节**后面，最多 [`MAX_AUXILIARY`] 位）；
+    /// 别的位置出现大写就解不出来。
     /// 解不出来（半截音节、键位表里没有的键、大小写混用）就是空表 —— 调用方按原样放行。
     ///
     /// 开了辅助码、且**第一个键是大写**（Caps Lock / Shift 卡着）时先过 [`Self::lowered_leading_key`]，
@@ -284,6 +289,7 @@ impl Table {
             out.push(Expansion {
                 syllables: done,
                 trailing: String::new(),
+                trailing_auxiliary: String::new(),
             });
             return;
         }
@@ -301,28 +307,37 @@ impl Table {
                 out.push(Expansion {
                     syllables: done,
                     trailing: lone.to_string(),
+                    trailing_auxiliary: String::new(),
                 });
             }
             return;
         }
         let (first, second) = (keys[index], keys[index + 1]);
-        // 开了辅助码：**小写才是拼音键**（大写是辅助码，只能跟在完整音节后面、上面那一步已经收过）
+        // 开了辅助码：**半音节后面直接跟辅助码**（`yH` = 「要」只按了第一键 `y` 就敲 `H`，第二键跳过）——
+        // 第二键位置上是**大写**就是这种写法；那串大写必须**一直吃到末尾**才算半个音节（后面还有键
+        // 就说明这不是尾巴，交给下面「音节位上有大写」那一支按打错处理）。
+        if self.auxiliary && second.is_ascii_uppercase() {
+            let auxiliary = self.auxiliary_run(keys, index + 1);
+            if index + 1 + auxiliary.chars().count() >= keys.len()
+                && first.is_ascii_alphabetic()
+                && !first.is_ascii_uppercase()
+            {
+                out.push(Expansion {
+                    syllables: done,
+                    trailing: first.to_string(),
+                    trailing_auxiliary: auxiliary,
+                });
+            }
+            return;
+        }
+        // 开了辅助码：**小写才是拼音键**（大写是辅助码，只能跟在完整音节 / 末尾那半个音节后面 ——
+        // 上面两步已经收过）
         // —— 音节位上出现大写就说明打错了，这一支解不出东西（`RFvf` 这种混用不合法）
-        if self.auxiliary && (first.is_ascii_uppercase() || second.is_ascii_uppercase()) {
+        if self.auxiliary && first.is_ascii_uppercase() {
             return;
         }
         // 开了辅助码：紧跟音节的大写字母（最多 4 位）属于这个音节，不算分词
-        let mut auxiliary = String::new();
-        if self.auxiliary {
-            let mut look = index + 2;
-            while look < keys.len()
-                && auxiliary.chars().count() < MAX_AUXILIARY
-                && keys[look].is_ascii_uppercase()
-            {
-                auxiliary.push(keys[look]);
-                look += 1;
-            }
-        }
+        let auxiliary = self.auxiliary_run(keys, index + 2);
         let consumed = 2 + auxiliary.len();
         for pinyin in self.syllable(first, second) {
             let mut next = done.clone();
@@ -332,6 +347,22 @@ impl Table {
             });
             self.walk(keys, index + consumed, next, out);
         }
+    }
+
+    /// 从 `from` 开始那串辅助码（大写字母，最多 [`MAX_AUXILIARY`] 位）；没开辅助码就是空的。
+    fn auxiliary_run(&self, keys: &[char], from: usize) -> String {
+        let mut run = String::new();
+        if self.auxiliary {
+            let mut look = from;
+            while look < keys.len()
+                && run.chars().count() < MAX_AUXILIARY
+                && keys[look].is_ascii_uppercase()
+            {
+                run.push(keys[look]);
+                look += 1;
+            }
+        }
+        run
     }
 
     /// 两键能拼出哪些音节（可能多个：同键多义，以及「声母 + 韵母」与「零声母」两条路）。
@@ -752,16 +783,22 @@ mod tests {
 
     /// 开了辅助码：**小写才是拼音键，大写是辅助码**。
     ///
-    /// 大写只能跟在完整音节后面（当那个音节的辅助码）；音节位上出现大写、或者落单的大写，
-    /// 这一支什么都解不出来（`RFvf` 这种大小写混用不合法）。**没开辅助码时大写仍当拼音**
+    /// 大写只能跟在**完整音节**后面（当那个音节的辅助码），或者跟在**末尾那半个音节**后面
+    /// （第二键跳过、直接敲辅助码，`vI` 这种）；别的位置出现大写、以及落单的大写，这一支
+    /// 什么都解不出来（`RFvf` 这种大小写混用不合法）。**没开辅助码时大写仍当拼音**
     /// （Shift 打字照旧，大小写不敏感）。
     #[test]
     fn uppercase_is_only_an_auxiliary_code() {
         let mut table = natural();
         table.auxiliary = true;
         assert!(table.expand("Vi").is_empty(), "第一个键大写 → 解不出来");
-        assert!(table.expand("vI").is_empty(), "第二个键大写 → 解不出来");
+        assert!(table.expand("uCu").is_empty(), "中间出现大写 → 解不出来");
         assert!(table.expand("V").is_empty(), "落单的大写没有音节可挂");
+        // 第二键位置是大写、而且一直吃到末尾：那是「半音节 + 辅助码」（`vI` = 只按了 `v` 就敲 `I`）
+        let expansions = table.expand("vI");
+        assert_eq!(expansions.len(), 1, "{expansions:?}");
+        assert_eq!(expansions[0].trailing, "v");
+        assert_eq!(expansions[0].trailing_auxiliary, "I");
 
         // 跟在完整音节后面才是辅助码
         let expansions = table.expand("uuC");
