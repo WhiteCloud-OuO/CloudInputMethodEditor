@@ -309,6 +309,45 @@ fn uppercase_is_an_auxiliary_code_not_a_pinyin_key() {
     assert!(texts.iter().any(|text| text == "开发"), "{texts:?}");
 }
 
+/// **手动分词时能用简拼**：`k'f`（「开」「发」的声母各一个键）也匹配「开发」 ——
+/// 用户用 `'` 分段以后，一段一个键就按那个键的声母算。
+#[test]
+fn a_manual_boundary_allows_jian_pin() {
+    let mut app = engine();
+    app.set_shuangpin(Some(table()));
+    let texts = candidates(&mut app, "k'f");
+    assert!(texts.iter().any(|text| text == "开发"), "{texts:?}");
+
+    // 不分词时还是「两键一个音节」：`kf` 里 `f` 不是韵母键，整段解不出来
+    app.set_input("kf");
+    assert!(app.query().is_err(), "不分词就不按简拼读");
+}
+
+/// 选「整句」候选时按键要**整段吃掉**：它的音节数可能比按下的键多 —— `buesy`（3 个音节、5 个键）
+/// 会出 4 个音节的「不受影响」（少敲变体读出来的）。这时候 `typed_covered` 算不出按键数（返回 0），
+/// 必须整段吃掉，否则选完拼音串原样留着（用户报的 `不受影响buesy`）。
+#[test]
+fn committing_a_sentence_with_more_syllables_than_keys_eats_the_whole_scope() {
+    let mut app = engine();
+    app.set_shuangpin(Some(table()));
+    app.set_input("klfa"); // 两个音节（开发），只有 4 个键
+    // 手搓一条 4 个音节的整句候选（真实数据里由「少敲」变体产出，这里按它的形状构造）
+    let sentence = Candidate {
+        text: "开开发发".to_owned(),
+        display: None,
+        kind: CandidateKind::Sentence,
+        syllables: vec!["kai".into(), "kai".into(), "fa".into(), "fa".into()],
+        reading: None,
+        auxiliary: None,
+        auxiliary_typed: None,
+    };
+    assert_eq!(app.commit(&sentence).as_deref(), Some("开开发发"));
+    assert!(
+        app.composition().is_empty(),
+        "整段吃掉了，拼音串里不该留着原来的按键"
+    );
+}
+
 /// 按键只按方案解释：解不出来就是切不出来，**不按全拼再读一遍**。
 ///
 /// `ceshi` 在这张表里（`c-e` 的 `e` 不是韵母、`s-h` 的 `h` 也不是）解不出任何音节；

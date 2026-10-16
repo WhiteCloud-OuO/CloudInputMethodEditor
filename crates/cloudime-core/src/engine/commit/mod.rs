@@ -384,9 +384,16 @@ impl Engine {
         // `typed_covered` 把这半个音节的键也算上；落到下面全拼那套（拿按键当拼音去对齐）
         // 只会吃掉一两个键，拼音串里会残留半截按键。
         if let Some(table) = &self.shuangpin {
-            let consumed = table
-                .typed_covered(&self.composition.typed_scope(), candidate.syllables.len())
-                .min(keys.len());
+            // 候选的音节数**按键覆盖不了**时（整句里带「少敲」变体：`buesy` 出 4 个音节的「不受影响」，
+            // 5 个键怎么也算不出 4 个音节）：它必然是按**整段**读出来的，整段吃掉 ——
+            // 不然 `typed_covered` 返回 0，选完候选拼音串原样留着（`不受影响buesy`）。
+            // 覆盖得了就按它那几个音节换算按键数（`vhdo` 选 云朵 只吃 4 个键，剩下的接着打）。
+            let covered =
+                table.typed_covered(&self.composition.typed_scope(), candidate.syllables.len());
+            if covered == 0 {
+                return self.whole_scope();
+            }
+            let consumed = covered.min(keys.len());
             return (consumed, choice_key(keys, consumed));
         }
         let consumed = match self.correction_reading_for(keys, &candidate.syllables) {

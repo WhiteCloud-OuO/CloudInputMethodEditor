@@ -105,6 +105,9 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 候选**末音节只按了第一个键**时那半个音节的键也算它的 —— 那种前缀候选（`yzd` 的「云朵」，`d` 是「朵」的声母）
 从前算不出按键数会落到全拼那套对齐上，只吃掉一两个键，拼音串里残留半截按键），
 这样选完候选对应的按键才从缓冲区里去掉（不然拼音串里会留着 `vhgo`）；双拼下不记「敲错」（按键不是拼音本身）。
+**候选的音节数按键覆盖不了时**（整句里带「少敲」变体：`buesy` 出 4 个音节的「不受影响」，
+5 个键算不出 4 个音节 → `typed_covered` 返回 0）按**整段**吃掉（`whole_scope()`，与英文词 / 快捷候选同一档）——
+不然选完候选拼音串原样留着（`不受影响buesy`）。
 
 `Engine` 是对外唯一门面，`Learner` trait 在 `engine` 模块；词库是「用户词 + 主词库 + 稀有词库（`with_rare` / `set_rare_enabled`，缺省关闭）+ 附加词库（`set_extra_dictionaries`，按添加顺序）」的列表，**按优先级从高到低**；同一个词在靠前词库里命中后，后面的词库不再重复产出（跨词库去重、靠前优先：词级在 `Engine::lookup_across_dictionaries`，整句词图在 `sentence::span_candidates`，都按 `text` 挡重），**同一本词库内部的重复不去重**，留给 `ranking::rank` / `dedup_by` 按名次保留最高的一条。繁体输出（`traditional` 开关与 `traditional_map` 映射）依赖 `ferrous-opencc`（`s2tw`）在出候选与上屏边界转换，内部保持简体。
 - 候选排序分两级：先按**结构键**，同一结构下再按**权重**降序、`hit.text` 升序。结构键（`ranking::Scored`）依序：
