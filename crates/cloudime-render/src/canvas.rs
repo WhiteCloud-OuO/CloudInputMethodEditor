@@ -127,6 +127,9 @@ impl Canvas {
     }
 
     /// 8 位覆盖率遮罩（普通字形）按颜色叠上来。
+    ///
+    /// 字形合成是文字那条路的热点：先按覆盖率把颜色**预乘成一张 256 项的表**（每像素少 4 次乘法），
+    /// 再把矩形裁到画布内、按行切片逐像素叠 —— 不再每像素判一次边界。
     pub(crate) fn blend_mask(
         &mut self,
         x: i32,
@@ -136,19 +139,35 @@ impl Canvas {
         data: &[u8],
         color: Color,
     ) {
-        for row in 0..height {
-            for col in 0..width {
-                let Some(&coverage) = data.get((row * width + col) as usize) else {
-                    return;
-                };
+        if width == 0 || height == 0 || data.len() < (width * height) as usize {
+            return;
+        }
+        let mut coverage_lut = [PremultipliedColorU8::TRANSPARENT; 256];
+        for (coverage, slot) in coverage_lut.iter_mut().enumerate().skip(1) {
+            *slot = color.premultiplied(coverage as u8);
+        }
+        let canvas_width = self.pixmap.width() as i32;
+        let canvas_height = self.pixmap.height() as i32;
+        let left = x.max(0);
+        let top = y.max(0);
+        let right = (x + width as i32).min(canvas_width);
+        let bottom = (y + height as i32).min(canvas_height);
+        if right <= left || bottom <= top {
+            return;
+        }
+        let (visible_width, visible_height) = ((right - left) as usize, (bottom - top) as usize);
+        let mask_left = (left - x) as usize;
+        let first_mask_row = (top - y) as usize;
+        for row in 0..visible_height {
+            let mask_start = (first_mask_row + row) * width as usize + mask_left;
+            let mask_row = &data[mask_start..mask_start + visible_width];
+            let pixel_start = (top as usize + row) * canvas_width as usize + left as usize;
+            let pixels = &mut self.pixmap.pixels_mut()[pixel_start..pixel_start + visible_width];
+            for (dst, &coverage) in pixels.iter_mut().zip(mask_row) {
                 if coverage == 0 {
                     continue;
                 }
-                self.blend_pixel(
-                    x + col as i32,
-                    y + row as i32,
-                    color.premultiplied(coverage),
-                );
+                blend_over(dst, coverage_lut[coverage as usize]);
             }
         }
     }
@@ -174,16 +193,22 @@ impl Canvas {
             return;
         }
         let index = y as usize * self.pixmap.width() as usize + x as usize;
-        let dst = &mut self.pixmap.pixels_mut()[index];
-        let inverse = 255 - src.alpha();
-        let a = src.alpha().saturating_add(mul_u8(dst.alpha(), inverse));
-        let channel = |s: u8, d: u8| s.saturating_add(mul_u8(d, inverse)).min(a);
-        let r = channel(src.red(), dst.red());
-        let g = channel(src.green(), dst.green());
-        let b = channel(src.blue(), dst.blue());
-        if let Some(out) = PremultipliedColorU8::from_rgba(r, g, b, a) {
-            *dst = out;
-        }
+        blend_over(&mut self.pixmap.pixels_mut()[index], src);
+    }
+}
+
+/// source-over 的单像素合成：`dst = src + dst × (1 − src.a)`（预乘 RGBA）。
+fn blend_over(dst: &mut PremultipliedColorU8, src: PremultipliedColorU8) {
+    let inverse = 255 - src.alpha();
+    let alpha = src.alpha().saturating_add(mul_u8(dst.alpha(), inverse));
+    let channel = |source: u8, back: u8| source.saturating_add(mul_u8(back, inverse)).min(alpha);
+    if let Some(out) = PremultipliedColorU8::from_rgba(
+        channel(src.red(), dst.red()),
+        channel(src.green(), dst.green()),
+        channel(src.blue(), dst.blue()),
+        alpha,
+    ) {
+        *dst = out;
     }
 }
 

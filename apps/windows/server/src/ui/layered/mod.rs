@@ -30,14 +30,56 @@ pub(super) fn present(hwnd: HWND, pixmap: &Pixmap, win_pos: (i32, i32), alpha: u
         return Err(Error::from(E_INVALIDARG));
     }
     let mut canvas = Canvas::new(w, h)?;
-    // tiny-skia 是 RGBA，DIB 是 BGRA；都是预乘，只换通道顺序。
-    for (dst, src) in canvas.pixels().chunks_exact_mut(4).zip(pixmap.pixels()) {
-        dst[0] = src.blue();
-        dst[1] = src.green();
-        dst[2] = src.red();
-        dst[3] = src.alpha();
-    }
+    // tiny-skia 是 RGBA，DIB 是 BGRA；都是预乘，只换 R / B 两个字节。
+    swap_rb(pixmap.data(), canvas.pixels());
     update(hwnd, canvas.dc(), win_pos, (w, h), alpha)
+}
+
+/// RGBA → BGRA：只在 4 字节组里换 R / B（预乘值本身不变）。
+///
+/// 一帧 640×600@200% 是 1.46MB，标量逐像素约 0.5ms；有 SSSE3 时 16 字节一组 shuffle，快四倍左右。
+fn swap_rb(source: &[u8], target: &mut [u8]) {
+    #[cfg(target_arch = "x86_64")]
+    {
+        if std::is_x86_feature_detected!("ssse3") {
+            // SAFETY: 上面刚检测过 SSSE3；两个切片长度都由调用方保证一致。
+            unsafe { swap_rb_ssse3(source, target) };
+            return;
+        }
+    }
+    swap_rb_scalar(source, target);
+}
+
+/// 标量兜底（也负责处理 16 字节对齐之后的尾巴）。
+fn swap_rb_scalar(source: &[u8], target: &mut [u8]) {
+    for (dst, src) in target.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+        dst[0] = src[2];
+        dst[1] = src[1];
+        dst[2] = src[0];
+        dst[3] = src[3];
+    }
+}
+
+/// SSSE3：一次 16 字节（4 个像素）做一次字节洗牌。
+#[cfg(target_arch = "x86_64")]
+#[target_feature(enable = "ssse3")]
+unsafe fn swap_rb_ssse3(source: &[u8], target: &mut [u8]) {
+    use std::arch::x86_64::{
+        __m128i, _mm_loadu_si128, _mm_setr_epi8, _mm_shuffle_epi8, _mm_storeu_si128,
+    };
+
+    // 每个 4 字节组：2,1,0,3
+    let mask = _mm_setr_epi8(2, 1, 0, 3, 6, 5, 4, 7, 10, 9, 8, 11, 14, 13, 12, 15);
+    let chunks = (source.len() / 16).min(target.len() / 16);
+    for index in 0..chunks {
+        let offset = index * 16;
+        // `_mm_setr_epi8` / `_mm_shuffle_epi8` 本身是安全的，只有读写裸指针那两下要 `unsafe`
+        let input = unsafe { _mm_loadu_si128(source.as_ptr().add(offset).cast::<__m128i>()) };
+        let output = _mm_shuffle_epi8(input, mask);
+        unsafe { _mm_storeu_si128(target.as_mut_ptr().add(offset).cast::<__m128i>(), output) };
+    }
+    let done = chunks * 16;
+    swap_rb_scalar(&source[done..], &mut target[done..]);
 }
 
 /// `UpdateLayeredWindow`：整张位图按预乘 alpha 贴上并挪到 `win_pos`。
@@ -73,5 +115,30 @@ fn update(
             Some(&blend),
             ULW_ALPHA,
         )
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::swap_rb;
+
+    /// SSSE3 那条路与逐字节版结果一致（含不足 16 / 4 字节的尾巴）。
+    #[test]
+    fn swap_rb_matches_the_bytewise_version() {
+        let source: Vec<u8> = (0..=255u8).cycle().take(64 * 4 + 3).collect();
+        // 尾巴（不足 4 字节）本来就不该被写：先把目标填成同一份内容，才看得出「没动」
+        let mut fast = source.clone();
+        swap_rb(&source, &mut fast);
+
+        let mut slow = source.clone();
+        for (dst, src) in slow.chunks_exact_mut(4).zip(source.chunks_exact(4)) {
+            dst[0] = src[2];
+            dst[1] = src[1];
+            dst[2] = src[0];
+            dst[3] = src[3];
+        }
+        let done = source.len() - source.len() % 4;
+        assert_eq!(fast[..done], slow[..done]);
+        assert_eq!(fast[done..], source[done..], "尾巴不动");
     }
 }
