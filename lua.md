@@ -69,7 +69,8 @@
 4. **只加载根目录的 `Scripts\*.lua`**：`Scripts\lib\` 是子目录、加载器不认，适合放共享模块
    （用 `dofile` 引）；`template.lua` 是模板，**不执行**；在 `[script] disabled` 名单里的也跳过。
 
-最小可用脚本（内容和模板里那份一样）：
+最小可用脚本（和模板的默认骨架一样：Ctrl+Alt+J 上屏；模板里还留了时间段的 `time_range`、
+候选拼音的 `candidate_pinyin`、焦点程序的 `apps` 这几行，换触发方式时取消注释即可）：
 
 ```lua
 cloudime.script{
