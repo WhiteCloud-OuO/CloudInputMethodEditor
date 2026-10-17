@@ -611,6 +611,10 @@ impl ScriptWindow {
     ///
     /// 按在 `drag = false` 的区域上不拖窗口（点击照常）—— 留给以后区域自己处理拖动（滑块之类）。
     fn begin_drag(&self, client_x: i32, client_y: i32) {
+        // 每次按下都从「这一按还没拖动」起算。上一次拖拽结束时如果走的是
+        // 「`drag = false` 区域」（比如关闭按钮）这条提前返回的路，`end_drag` 不会被调到，
+        // 不重置就会把下一次正常点击也当成拖拽（表现：悬停有反应，点击没反应）。
+        self.moved_since_press.set(false);
         let (_, _, _, region) = self.hit_at(client_x, client_y);
         if let Some(index) = region
             && !self
@@ -630,7 +634,6 @@ impl ScriptWindow {
             start_cursor: (point.x, point.y),
             start_window: (x - margin, y - margin),
         }));
-        self.moved_since_press.set(false);
         let _ = unsafe { SetCapture(self.hwnd()) };
         // 点一下就算拿到键盘焦点（脚本可以据此处理按键）
         self.notify_focus();
@@ -673,7 +676,10 @@ impl ScriptWindow {
     fn end_drag(&self) -> bool {
         self.drag.set(None);
         let _ = unsafe { ReleaseCapture() };
-        self.moved_since_press.get()
+        let moved = self.moved_since_press.get();
+        // 下一次按下会重新起算；这里顺手清掉，别让退出路径不同的那次拖拽漏到后面的点击上。
+        self.moved_since_press.set(false);
+        moved
     }
 }
 
