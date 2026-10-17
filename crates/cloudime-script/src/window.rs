@@ -41,6 +41,9 @@ const MAX_REGION_PARTS: usize = 32;
 /// 图像解码后的像素数上限（约 4096 × 4096）：脚本给的图不该把整块内存吃掉。
 const MAX_IMAGE_PIXELS: u32 = 16 * 1024 * 1024;
 
+/// 从文件读 SVG 时的大小上限（字节）：SVG 是文本，2 MB 已经够复杂图标用了。
+const MAX_SVG_BYTES: u64 = 2 * 1024 * 1024;
+
 /// 图像缓存最多留几张（按最近使用排序，超了丢最久没用的）。
 const MAX_CACHED_IMAGES: usize = 8;
 
@@ -705,9 +708,17 @@ fn parse_element(table: &mlua::Table, images: &mut ImageCache) -> mlua::Result<E
             })
         }
         "svg" => {
-            let source: String = table.get("source").map_err(|_| {
-                mlua::Error::RuntimeError("svg 元素缺 source（整段 SVG 文本）".to_owned())
-            })?;
+            let source = match table.get::<Option<String>>("source")? {
+                Some(source) => source,
+                None => {
+                    let path: String = table.get("path").map_err(|_| {
+                        mlua::Error::RuntimeError(
+                            "svg 元素缺 source（整段 SVG 文本）或 path（SVG 文件路径）".to_owned(),
+                        )
+                    })?;
+                    read_svg(&path)?
+                }
+            };
             Ok(Element::Svg {
                 x: number(table, "x", 0.0)?,
                 y: number(table, "y", 0.0)?,
@@ -739,6 +750,34 @@ fn parse_element(table: &mlua::Table, images: &mut ImageCache) -> mlua::Result<E
             "元素 type 不认识：{other}（可用：rect / circle / line / text / svg / img / path）"
         ))),
     }
+}
+
+/// 从文件读一段 SVG 文本（`svg` 元素的 `path`）。
+fn read_svg(path: &str) -> mlua::Result<String> {
+    let path = Path::new(path);
+    let size = std::fs::metadata(path)
+        .map_err(|error| {
+            mlua::Error::RuntimeError(format!("svg 文件读不到：{}（{error}）", path.display()))
+        })?
+        .len();
+    if size > MAX_SVG_BYTES {
+        return Err(mlua::Error::RuntimeError(format!(
+            "svg 文件太大：{}（{size} 字节，最多 {MAX_SVG_BYTES}）",
+            path.display()
+        )));
+    }
+    std::fs::read(path)
+        .map_err(|error| {
+            mlua::Error::RuntimeError(format!("svg 文件读不到：{}（{error}）", path.display()))
+        })
+        .and_then(|bytes| {
+            String::from_utf8(bytes).map_err(|error| {
+                mlua::Error::RuntimeError(format!(
+                    "svg 文件不是 UTF-8：{}（{error}）",
+                    path.display()
+                ))
+            })
+        })
 }
 
 /// `path` 的 `commands`：`{ {"M", 0, 0}, {"L", 10, 0}, {"C", …}, {"Z"} }`。
@@ -1200,6 +1239,54 @@ mod tests {
         let triangle = &document.regions[2];
         assert!(triangle.contains(10.0, 10.0));
         assert!(!triangle.contains(30.0, 30.0), "斜边外面");
+    }
+
+    /// `svg` 元素可以给 `path` 直接读文件；文件不存在时整份内容报错。
+    #[test]
+    fn svg_elements_can_load_a_file() {
+        let dir = std::env::temp_dir().join("cloudime-script-svg-file");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("icon.svg");
+        std::fs::write(
+            &path,
+            r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 10 10"><rect width="10" height="10"/></svg>"#,
+        )
+        .unwrap();
+
+        let lua = mlua::Lua::new();
+        let source = format!(
+            r#"return {{ width = 40, height = 40, {{ type = "svg", x = 0, y = 0, size = 20, path = [[{}]] }} }}"#,
+            path.display()
+        );
+        let content = lua.load(&source).eval::<mlua::Table>().unwrap();
+        let document = parse_document(
+            &content,
+            (Some(40.0), Some(40.0)),
+            &mut ImageCache::default(),
+        )
+        .expect("读得出来");
+        match &document.elements[0] {
+            Element::Svg { source, .. } => assert!(source.contains("<svg")),
+            other => panic!("不是 svg 元素：{other:?}"),
+        }
+
+        let content = lua
+            .load(
+                r#"return { width = 40, height = 40,
+                    { type = "svg", x = 0, y = 0, size = 20, path = "missing.svg" } }"#,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        assert!(
+            parse_document(
+                &content,
+                (Some(40.0), Some(40.0)),
+                &mut ImageCache::default()
+            )
+            .is_err(),
+            "文件不存在该报错"
+        );
     }
 
     /// `region_contains` / `region_relation`：在工人线程上查区域镜像（含合并 / 剪除之后）。

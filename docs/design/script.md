@@ -114,7 +114,7 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
 ## 规则二：有脚本 → 在固定四个位置运行
 
 脚本在**加载时**执行一遍（按文件名排序），用 `cloudime.on(事件名, 处理函数)` 登记；之后由 Server 在
-下面四处派发。每个位置为什么在那儿，与它能改什么：
+下面几处派发。每个位置为什么在那儿，与它能改什么：
 
 | 时机 | 位置 | 脚本能做什么 |
 |---|---|---|
@@ -122,6 +122,7 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
 | `key` | 一次按键、**引擎处理之前** | 只有**组合键对得上清单**（`combination_modifiers` + `keys`）的脚本才收 —— 组句与否都一样；看这一键与当时状态（载荷里有 `vk` / `ctrl` / `window` 与高亮候选文本 `highlight`）；`passthrough`（不吃、交给应用）、`commit`（吃掉并上屏）、`notice`、`adjust`、`order` / `display`（下一屏生效）、`online`（候选窗底部那一行；`Ctrl + 反引号` 会把它当一条译文上屏，见 `docs/design/online-translate.md`）、`theme`（换主题：写进配置 `[theme] curr_theme` 并重启输入法服务，`false` 回本进程启动时那份） |
 | `candidates` | **引擎排完之后**（`recompose`） | 只有**拼音串等于清单 `candidate_pinyin`** 的脚本才收；看这一屏候选（含 `pinyin` 与 Core 的 `weight`）；`order`（临时接管顺序）、`display`（改显示）、`notice`、`adjust`、`online`、`theme`；`passthrough` / `commit` 不认 |
 | `focus` | 焦点**切进**清单 `apps` 里的某个程序（前台 DLL 的 `SyncMode` 与首次按键都会更新焦点） | 同「没有按键的那一拍」：`notice` / `adjust` / `online` / `theme`；载荷 `{ app }`。同一程序里换输入框不重复派 |
+| `caret` | 脚本调过 `cloudime.caret()`，DLL 量到插入点之后（`ClientMessage::Caret`） | 同「没有按键的那一拍」；载荷是插入点矩形 + 所在显示器工作区（屏幕坐标 / **点**）。不受 `trigger_condition` 限制 |
 | 异步回调 | 结果回来那一拍 `tick`（`http_get` / `http_post`） | 同 `candidates`：`order` / `display` / `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 不认 |
 | `time` | 本地时间**第一次**落进清单 `time_range` 那个时间段（跨夜按「昨晚开的窗口」算） | 同「没有按键的那一拍」：`notice` / `adjust` / `online` / `theme`；载荷同 `cloudime.get_time()` 另加 `app`。**每个时间段窗口只派一次** |
 
@@ -177,6 +178,16 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
 - **剪贴板**：`cloudime.clipboard.settext(文本)` 写、`cloudime.clipboard.gettext()` 读（→ 字符串 / `nil`）。
   实现在 Server 侧（Windows 剪贴板 API，被别的程序占着时短等重试、仍不行报错），不经 DLL。
   `gettext` 读得到任何程序放进剪贴板的文本（含密码管理器）—— 用户自担，文档里写明。
+- **光标位置**：`cloudime.caret()` 是**请求**（没有返回值）：Server 在下一拍的 `KeyResult.want_caret`
+  里请 DLL 量一次插入点（异步只读编辑会话，`com/edit/caret.rs`；拿不到退到鼠标位置），DLL 用
+  `ClientMessage::Caret` 送回来，Server 派 `caret` 事件。载荷是插入点矩形与所在显示器工作区
+  （屏幕坐标 / **点**）：`{ left, top, right, bottom, work_left, work_top, work_right,
+  work_bottom, scale }`。在 `key` 处理函数里调用时量的是这一键处理完之后的位置。
+- **安装目录**：`cloudime.install_dir()` → 安装目录绝对路径；`cloudime.install_path("Images/SVG/…")`
+  → 目录里文件的绝对路径（`canonicalize` 后必须仍在安装目录内，越界报错、不存在给 `nil`）。
+  `svg` 元素因此可以写 `path` 直接读文件（见元素表），不必让脚本把 SVG 文本抄进 Lua。
+  `Runtime::load` 从脚本目录的上一级取安装目录，加载期就能用；Server 建 Router 时再用
+  `bundled_root()` 校正一次。
 - **输入法自己的组合键优先**：`Ctrl + 数字`（主键盘 / 小键盘）、`Ctrl + Enter`、`Ctrl + 反引号`、
   `Shift + 反引号`、`Ctrl + Alt + 空格`（中英切换的可选组合）、`Ctrl + Alt + ,` `.`（TSF 保留键），
   以及**预留给非全拼 v/u/i 模式**的 `Ctrl + Alt + V` / `U` / `I`（2026-10-17 起，带不带 Shift 都保留）——
@@ -271,7 +282,7 @@ win:set_content{
     { type = "line",   from = { x = 0, y = 32 }, to = { x = 240, y = 32 },
       thickness = 1, color = "#22000000" },
     { type = "circle", cx = 220, cy = 16, radius = 8, color = "#FF66AAFF" },
-    { type = "svg",    x = 8, y = 8, size = 20, source = "<svg …>", tint = "#FF888888" },
+    { type = "svg",    x = 8, y = 8, size = 20, path = cloudime.install_path("Images/SVG/打叉.svg"), tint = "#FF888888" },
     { type = "img",    x = 0, y = 0, w = 64, h = 64, path = "Scripts/lib/icon.png" },
     { type = "path",   color = "#FF0000FF",
       commands = { { "M", 0, 0 }, { "L", 10, 0 }, { "C", 12, 0, 12, 10, 0, 10 }, { "Z" } } },
@@ -284,7 +295,7 @@ win:set_content{
 | `circle` | `cx` / `cy` / `radius`；`color` 必给 |
 | `line` | `from` / `to`（`{ x = …, y = … }` 或 `{ x, y }`）、`thickness`（点，缺省 1）；`color` 必给 |
 | `text` | `x` / `y`（行框左上角）/ `text` / `size`（点，缺省 16）；`font` = `candidate`（缺省）/ `pinyin` / `item_number` / `translate`；`color` 缺省黑；`italic` 可选 |
-| `svg` | `x` / `y` / `size`（见方）/ `source`（整段 SVG 文本）；`tint` 可选（按 alpha 染色） |
+| `svg` | `x` / `y` / `size`（见方）/ `source`（整段 SVG 文本）或 `path`（SVG 文件）；`tint` 可选（按 alpha 染色） |
 | `img` | `x` / `y` / `w` / `h` / `path`（PNG；相对路径按 Server 的工作目录 = 安装目录算） |
 | `path` | `commands`（`{"M",x,y}` / `{"L",x,y}` / `{"Q",cx,cy,x,y}` / `{"C",…}` / `{"Z"}`）；`color` 必给 |
 

@@ -127,6 +127,11 @@ pub enum ServerMessage {
         #[serde(default)]
         delete_before: u16,
 
+        /// 脚本要光标位置（`cloudime.caret()`）：这次按键处理完请量一下插入点，用
+        /// [`super::ClientMessage::Caret`] 送回来。老 Server 不带该字段 → 读成 `false`。
+        #[serde(default)]
+        want_caret: bool,
+
         /// 处理后要绘制的组句状态（preedit + 候选）；空 [`Frame`] 表示收起候选窗口。
         frame: Frame,
     },

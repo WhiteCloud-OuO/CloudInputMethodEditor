@@ -3,7 +3,9 @@
 use std::mem::ManuallyDrop;
 
 use windows::Win32::Foundation::{POINT, RECT};
-use windows::Win32::UI::TextServices::{ITfContext, ITfRange, TF_DEFAULT_SELECTION, TF_SELECTION};
+use windows::Win32::UI::TextServices::{
+    ITfContext, ITfRange, TF_ANCHOR_END, TF_DEFAULT_SELECTION, TF_SELECTION,
+};
 use windows::Win32::UI::WindowsAndMessaging::GetCursorPos;
 use windows::core::BOOL;
 
@@ -19,6 +21,18 @@ pub(crate) fn anchor_rect(context: &ITfContext, ec: u32, range: &ITfRange) -> Sc
 pub(crate) fn caret_rect(context: &ITfContext, ec: u32) -> ScreenRect {
     match selection_range(context, ec) {
         Some(range) => anchor_rect(context, ec, &range),
+        None => mouse_screen_rect(),
+    }
+}
+
+/// 插入点（没有选区时是光标，有选区时是选区终点）的屏幕矩形。脚本要「光标位置」时用它。
+pub(crate) fn insertion_rect(context: &ITfContext, ec: u32) -> ScreenRect {
+    match selection_range(context, ec) {
+        Some(range) => {
+            // 有选区时插入符在终点（与编辑器的习惯一致）
+            let _ = unsafe { range.Collapse(ec, TF_ANCHOR_END) };
+            anchor_rect(context, ec, &range)
+        }
         None => mouse_screen_rect(),
     }
 }

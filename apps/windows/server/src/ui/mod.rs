@@ -42,6 +42,7 @@ mod independent_window_template;
 mod layered;
 mod measure;
 mod monitor;
+pub(crate) use monitor::{dpi_near, work_area_near};
 mod painter;
 mod region;
 mod script_window;

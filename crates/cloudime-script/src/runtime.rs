@@ -686,6 +686,14 @@ pub struct Runtime {
     /// 就是一个「脏」标记 —— 派发/回调结束后 Server 取一次（取了就清）。
     redraw: Rc<Cell<bool>>,
 
+    /// 脚本调过 `cloudime.caret()`：请 Server 让 DLL 量一次光标位置（下一次按键时）。
+    /// 派发/回调结束后 Server 取一次（取了就清）。
+    caret: Rc<Cell<bool>>,
+
+    /// 安装目录（`Images\` / `Scripts\` 的上一级）：`cloudime.install_dir()` / `install_path()`
+    /// 用它。不是正式安装（测试 / CLI）时是 `None`。
+    install_dir: Rc<RefCell<Option<PathBuf>>>,
+
     /// 脚本要的候选窗尺寸（`cloudime.candidate.set_*`）：派发/回调结束后 Server 取一次。
     size: Rc<RefCell<SizeRequest>>,
 
@@ -755,6 +763,8 @@ impl Runtime {
             seq: Rc::new(Cell::new(0)),
             requests: Rc::new(Requests::new()),
             redraw: Rc::new(Cell::new(false)),
+            caret: Rc::new(Cell::new(false)),
+            install_dir: Rc::new(RefCell::new(None)),
             size: Rc::new(RefCell::new(SizeRequest::default())),
             theme: Rc::new(RefCell::new(None)),
             viewport: Rc::new(RefCell::new(None)),
@@ -796,6 +806,11 @@ impl Runtime {
     ///（大小写不敏感；来自 `[script] disabled` —— 设置页的「启用 / 禁用」开关写它）。
     pub fn load(dir: &Path, disabled: &[String]) -> Self {
         let mut runtime = Self::none();
+        // 脚本目录的上一级就是安装目录：加载期就能用 `cloudime.install_dir()` / `install_path()`
+        //（`Scripts\` 与 `Images\` 同级）。相对路径 / 没有上一级时留 `None`。
+        if let Some(root) = dir.parent().filter(|parent| !parent.as_os_str().is_empty()) {
+            runtime.set_install_dir(root.to_path_buf());
+        }
         match std::fs::read_dir(dir) {
             Ok(entries) => {
                 let mut files: Vec<PathBuf> = entries
@@ -1007,6 +1022,17 @@ impl Runtime {
     /// `None` = 没提；`Some(None)` = 回配置里的主题；`Some(Some(名))` = 换到它。
     pub fn take_theme_request(&self) -> Option<Option<String>> {
         self.theme.borrow_mut().take()
+    }
+
+    /// 脚本要光标位置（`cloudime.caret()`）：取一次（取了就清），Server 在 `KeyResult.want_caret`
+    /// 里请 DLL 量。
+    pub fn take_caret_request(&self) -> bool {
+        self.caret.replace(false)
+    }
+
+    /// 装安装目录（`cloudime.install_dir()` / `install_path()` 用）。Server 建 Router 时调一次。
+    pub fn set_install_dir(&self, dir: PathBuf) {
+        *self.install_dir.borrow_mut() = Some(dir);
     }
 
     /// 取一次脚本对窗口的操作（`cloudime.window.*`），取了就清。
@@ -1232,6 +1258,8 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     let seq = &runtime.seq;
     let requests = &runtime.requests;
     let redraw = &runtime.redraw;
+    let caret = &runtime.caret;
+    let install_dir = &runtime.install_dir;
     let size = &runtime.size;
     let theme = &runtime.theme;
     let viewport = &runtime.viewport;
@@ -1245,6 +1273,49 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     let table = lua.create_table()?;
     // 光标前文：第一次派发前也能读到（空串），不用先判断 nil
     table.set("context", "")?;
+    // 光标位置：`cloudime.caret()` 只是**请求**一次，结果以 `caret` 事件送来
+    //（`{ left, top, right, bottom, work_left, …, scale }`，屏幕坐标 / 点）。
+    let caret_flag = caret.clone();
+    let caret_current = current.clone();
+    table.set(
+        "caret",
+        lua.create_function(move |_, ()| {
+            caret_flag.set(true);
+            tracing::debug!(script = %caret_current.borrow(), "脚本请求光标位置");
+            Ok(())
+        })?,
+    )?;
+    // 安装目录：`cloudime.install_dir()` → 绝对路径（测试 / 没装时是 nil）；
+    // `cloudime.install_path("Images/SVG/打叉.svg")` → 安装目录里的文件绝对路径（不存在 / 越界给 nil / 报错）。
+    let dir_state = install_dir.clone();
+    table.set(
+        "install_dir",
+        lua.create_function(move |_, ()| {
+            Ok(dir_state
+                .borrow()
+                .as_ref()
+                .map(|dir| dir.to_string_lossy().into_owned()))
+        })?,
+    )?;
+    let path_state = install_dir.clone();
+    table.set(
+        "install_path",
+        lua.create_function(move |_, relative: String| -> mlua::Result<Option<String>> {
+            let Some(root) = path_state.borrow().clone() else {
+                return Ok(None);
+            };
+            let root = root.canonicalize().unwrap_or(root);
+            let Ok(path) = root.join(&relative).canonicalize() else {
+                return Ok(None);
+            };
+            if !path.starts_with(&root) {
+                return Err(mlua::Error::RuntimeError(
+                    "install_path 只认安装目录里的文件".to_owned(),
+                ));
+            }
+            Ok(Some(path.to_string_lossy().into_owned()))
+        })?,
+    )?;
     let log_current = current.clone();
     table.set(
         "log",
@@ -2369,6 +2440,173 @@ mod tests {
         let _ = std::fs::remove_dir_all(&dir);
         std::fs::create_dir_all(&dir).unwrap();
         dir
+    }
+
+    /// `cloudime.caret()` 只是置标记，Server 取一次就清。
+    #[test]
+    fn caret_requests_are_taken_once() {
+        let runtime = Runtime::none();
+        assert!(!runtime.take_caret_request(), "一开始没有请求");
+        runtime.lua().load("cloudime.caret()").exec().unwrap();
+        assert!(runtime.take_caret_request(), "脚本请求过");
+        assert!(!runtime.take_caret_request(), "取过就清");
+    }
+
+    /// 随包的测试脚本：按键请求光标 → `caret` 事件建窗口 / 读 SVG → 点关闭区域销毁；
+    /// 窗口开着时再按 F3 不关它。
+    #[test]
+    fn the_caret_window_test_script_creates_then_closes_on_the_close_region() {
+        use cloudime_render::Element;
+
+        const SCRIPT: &str = include_str!("../../../Scripts/lib/test-caret-window.lua");
+        let dir = script_dir("caret-window");
+        std::fs::write(dir.join("test-caret-window.lua"), SCRIPT).unwrap();
+        let runtime = Runtime::load(&dir, &[]);
+        runtime.set_install_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+        assert!(runtime.scripts().iter().any(|name| name == "光标窗口测试"));
+
+        let key = runtime.lua().create_table().unwrap();
+        for (name, value) in [
+            ("vk", mlua::Value::Integer(0x72)),
+            ("ctrl", mlua::Value::Boolean(true)),
+            ("alt", mlua::Value::Boolean(true)),
+            ("shift", mlua::Value::Boolean(false)),
+            ("win", mlua::Value::Boolean(false)),
+            ("composing", mlua::Value::Boolean(false)),
+        ] {
+            key.set(name, value).unwrap();
+        }
+        runtime.dispatch("key", key.clone(), None);
+        assert!(runtime.take_caret_request(), "按键处理函数请求了光标位置");
+
+        let caret = runtime.lua().create_table().unwrap();
+        for (name, value) in [
+            ("left", 100.0f32),
+            ("top", 200.0),
+            ("right", 101.0),
+            ("bottom", 216.0),
+            ("work_left", 0.0),
+            ("work_top", 0.0),
+            ("work_right", 1920.0),
+            ("work_bottom", 1080.0),
+            ("scale", 1.0),
+        ] {
+            caret.set(name, value).unwrap();
+        }
+        runtime.dispatch("caret", caret, None);
+
+        let requests = runtime.take_window_requests();
+        let id = requests
+            .iter()
+            .find_map(|request| match request {
+                window::Request::Create(id, _) => Some(*id),
+                _ => None,
+            })
+            .expect("建了窗口");
+        let show = requests
+            .iter()
+            .find_map(|request| match request {
+                window::Request::Show(shown, Some((x, y))) => (*shown == id).then_some((*x, *y)),
+                _ => None,
+            })
+            .expect("显示窗口");
+        assert_eq!(show, (100.0, 30.0), "光标上方 30 点（200 - 30 - 140）");
+        let document = requests
+            .iter()
+            .find_map(|request| match request {
+                window::Request::SetContent(shown, document) if *shown == id => Some(document),
+                _ => None,
+            })
+            .expect("送了内容");
+        assert!(
+            document.elements.iter().any(|element| matches!(
+                element,
+                Element::Svg { source, .. } if source.contains("<svg")
+            )),
+            "从 Images\\SVG\\打叉.svg 读到了 SVG"
+        );
+        assert!(document.regions.iter().any(|region| region.name == "close"));
+
+        // 窗口开着再按一次：不创建、也不关闭。
+        runtime.dispatch("key", key, None);
+        assert!(
+            !runtime
+                .take_window_requests()
+                .iter()
+                .any(|request| matches!(
+                    request,
+                    window::Request::Close(_) | window::Request::Create(_, _)
+                )),
+            "F3 只创建，不销毁"
+        );
+
+        // 点右上角关闭区域：销毁窗口。
+        let event = runtime.lua().create_table().unwrap();
+        for (name, value) in [
+            ("id", mlua::Value::Integer(id as i64)),
+            (
+                "action",
+                mlua::Value::String(runtime.lua().create_string("click").unwrap()),
+            ),
+            (
+                "region",
+                mlua::Value::String(runtime.lua().create_string("close").unwrap()),
+            ),
+        ] {
+            event.set(name, value).unwrap();
+        }
+        runtime.dispatch("window", event, None);
+        assert!(
+            runtime
+                .take_window_requests()
+                .iter()
+                .any(|request| matches!(request, window::Request::Close(closed) if *closed == id)),
+            "点关闭区域要销毁窗口"
+        );
+    }
+
+    /// `install_path` 只认安装目录里的文件：存在的给绝对路径，越界的报错，不存在的给 nil。
+    #[test]
+    fn install_paths_stay_inside_the_install_directory() {
+        let dir = script_dir("install-path");
+        let images = dir.join("Images");
+        std::fs::create_dir_all(&images).unwrap();
+        std::fs::write(images.join("icon.svg"), "<svg/>").unwrap();
+        let outside = std::env::temp_dir().join("cloudime-script-install-outside.txt");
+        std::fs::write(&outside, "x").unwrap();
+
+        let runtime = Runtime::none();
+        runtime.set_install_dir(dir.clone());
+        let root: String = runtime
+            .lua()
+            .load("return cloudime.install_dir()")
+            .eval()
+            .unwrap();
+        assert_eq!(Path::new(&root), dir.as_path());
+        let found: Option<String> = runtime
+            .lua()
+            .load(r#"return cloudime.install_path("Images/icon.svg")"#)
+            .eval()
+            .unwrap();
+        let found = PathBuf::from(found.expect("安装目录里的文件该找得到"));
+        assert_eq!(found.file_name().unwrap(), "icon.svg");
+        assert!(found.is_absolute());
+
+        let missing: Option<String> = runtime
+            .lua()
+            .load(r#"return cloudime.install_path("Images/missing.svg")"#)
+            .eval()
+            .unwrap();
+        assert!(missing.is_none());
+        assert!(
+            runtime
+                .lua()
+                .load(r#"return cloudime.install_path("../cloudime-script-install-outside.txt")"#)
+                .eval::<Option<String>>()
+                .is_err(),
+            "跑出安装目录该报错"
+        );
+        let _ = std::fs::remove_file(outside);
     }
 
     /// 一个合法清单：测试脚本都用它（`write_script` 自动加在最前面）。

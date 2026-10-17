@@ -73,6 +73,7 @@ impl<S: Read + Write> EngineClient<S> {
                 caret_shift,
                 delete_before,
                 frame,
+                want_caret,
                 ..
             } => Ok(KeyResponse {
                 outcome,
@@ -80,6 +81,7 @@ impl<S: Read + Write> EngineClient<S> {
                 caret_shift,
                 delete_before,
                 frame,
+                want_caret,
             }),
             _ => Err(ClientError::Unexpected("expected key result")),
         }
@@ -137,6 +139,14 @@ impl<S: Read + Write> EngineClient<S> {
     /// 报组句范围的屏幕矩形，Server 据此摆候选窗口。不回话。
     pub fn position_candidates(&mut self, rect: ScreenRect) -> Result<(), ClientError> {
         self.send(&ClientMessage::PositionCandidates {
+            session: self.session,
+            rect,
+        })
+    }
+
+    /// 报插入点的屏幕矩形（脚本 `cloudime.caret()` 要）。不回话。
+    pub fn caret(&mut self, rect: ScreenRect) -> Result<(), ClientError> {
+        self.send(&ClientMessage::Caret {
             session: self.session,
             rect,
         })

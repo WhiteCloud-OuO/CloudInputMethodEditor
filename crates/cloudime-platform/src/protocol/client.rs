@@ -94,6 +94,16 @@ pub enum ClientMessage {
         rect: ScreenRect,
     },
 
+    /// 脚本要光标位置（`cloudime.caret()`）：DLL 在只读编辑会话里量到的**插入点**屏幕矩形。
+    /// 不等回话：Server 以 `caret` 事件派给脚本。
+    Caret {
+        /// 会话标识。
+        session: SessionId,
+
+        /// 插入点的屏幕矩形（像素）；拿不到时是鼠标处一个零宽的近似矩形。
+        rect: ScreenRect,
+    },
+
     /// 组句在 DLL 侧结束、而 Server 无从知晓时（应用强行终止组句 `OnCompositionTerminated`、断连兜底），
     /// 让 Server 收起候选窗口。Server 按空帧 / [`Commit`](Self::Commit) 能自行收窗口的场合不需要这条。
     /// 不等回话。

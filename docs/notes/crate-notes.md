@@ -321,6 +321,12 @@ DLL 据此在**组句里**把这一个键送来问一趟（`eats_key` 里那条�
 老 DLL 读成 `0` = 「设成组合键那种方式时按不出来」，是静默少一个功能，所以按规矩 +1。同一版里给
 `Candidate` 加了 `auxiliary`（候选右侧要显示的辅助码，见「双键拼音」那段）：与 `display` 同理，老 DLL 不读候选内容，不单独影响版本。
 
+**v20** 给 `ServerMessage::KeyResult` 加了 `want_caret`（脚本 `cloudime.caret()` 要光标位置），并新增
+`ClientMessage::Caret`（DLL 量到的插入点屏幕矩形）。老 DLL 不读 `want_caret`、老 Server 也不认
+`Caret`，脚本的「按键后取光标」会拿不到位置 —— 静默少一个功能，按规矩 +1。DLL 侧用一次**异步只读编辑会话**
+量插入点（`com/edit/caret.rs`，与读光标前文同一套，不能同步）；Server 把矩形按所在显示器 DPI 换算成点
+（另带工作区）派 `caret` 事件。
+
 **主题文件**（`theme.rs`）：`Themes\*.json` 装候选窗口 / 悬浮工具栏 / 状态切换提示三个窗口的 21 个颜色，分 `candidate`（15 项）/ `bar`（背景 / 图标 / 阴影）/ `tip`（同三项）三组；`ThemeColor` 是一个 `#AARRGGBB`（也认 `#RRGGBB`，serde 走字符串、缺键回缺省，`Default` 对齐现有观感）。`ThemeFile::{load, save}`（`save` 建父目录 + 美化 JSON）；`theme_dirs(bundled_root)` 给出两个候选目录 —— 用户目录 `%APPDATA%\CloudIME\Themes`（可写）与随包目录 `<安装目录>\Themes`（只读），`list_themes` 两处都扫、**用户目录优先**（同名盖掉随包的）、按名字排序，`find_theme` 在它上面按名字找（可带 / 不带 `.json`、大小写不敏感）；`DEFAULT_THEME_FILE` = `Default.json`（随包另有一份 `Panic.json`，两份都是内置主题）、`THEMES_DIR` = `Themes`。`[theme]` 只有一个 `curr_theme`（文件名，不是路径；缺省 `Default.json`），设置页「主题」页写它、Server 靠它选主题。注解色（`gloss` / `pos` / `fresh`）暂不进主题文件。
 
 **输入方案文件**（`input_schemes`，2026-10-10；规范见 `docs/design/input-schemes.md`）：`double_keys.rs` 读双键拼音方案文件（`.toml` / `.ini`）——
@@ -996,6 +1002,14 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `begin_drag` 按命中区域的 `draggable` 决定拖不拖窗口。悬浮工具栏把渲染器给的 `cell_edges`
   变成每个图标一个 `HitShape::Rect` 区域（名字 = 当前图标名），`Placement::on_click` 用
   `region.contains` 命中（不再按 x 边界）。
+- **光标位置 / 安装目录**（2026-10-17）：`cloudime.caret()` 只置一个「要位置」标记（`Runtime::caret`），
+  Server 在 `KeyResult.want_caret` 里请 DLL 量一次插入点；DLL 用异步只读编辑会话
+  （`com/edit/caret.rs`，`insertion_rect` 折到选区终点）量完发 `ClientMessage::Caret`，Server 按
+  插入点所在显示器 DPI 把像素换成**点**、连同工作区派 `caret` 事件（`dispatch/script.rs::caret_payload`）。
+  这样脚本窗口的 `show{ x, y }` 与载荷同一单位，不用自己乘 DPI。`Runtime::load` 从脚本目录上一级
+  取安装目录，Server 再用 `bundled_root()` 校正；`cloudime.install_dir()` / `install_path()` 给绝对路径，
+  `canonicalize` 后必须仍在安装目录内。`svg` 元素新增 `path`（读文件文本，最多 2 MB），配合
+  `install_path` 就能直接画随包的 `Images\SVG\*.svg`，不用把 SVG 抄进 Lua。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

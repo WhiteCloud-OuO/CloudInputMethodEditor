@@ -212,6 +212,10 @@ impl Router {
             Some(dir) => cloudime_script::Runtime::load(dir, &config.script_disabled),
             None => cloudime_script::Runtime::none(),
         };
+        // 安装目录（`cloudime.install_dir()` / `install_path()`）：与 `Scripts\` / `Images\` 同级的那一级。
+        if let Some(root) = cloudime_platform::resources::bundled_root() {
+            scripts.set_install_dir(root);
+        }
         // 脚本的量尺（`cloudime.ui.measure`）：懒加载的渲染器 + 当前字体设置（`apply_config` 会刷新），
         // 装进脚本运行时 —— 量出来的点宽与候选窗画出来的一致。
         let measure = Rc::new(RefCell::new((

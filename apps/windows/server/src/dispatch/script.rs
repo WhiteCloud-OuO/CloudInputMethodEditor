@@ -15,6 +15,9 @@
 //! - `candidates`：**引擎排完之后**这一屏候选。载荷是 1 起的数组（另有 `app` 字段），每项
 //!   `{ text = 上屏文本, display = 显示的文本, pinyin = 词库读音, weight = Core 的排名权重,
 //!   kind = "chinese" / "english" / "shortcut" / "custom" / "sentence" }`（快捷候选没有 `weight`）。
+//! - `caret`：脚本用 `cloudime.caret()` 请过一次光标位置，DLL 量到之后送来。载荷是插入点的屏幕矩形
+//!   （屏幕坐标 / **点**）：`{ left, top, right, bottom, work_left, work_top, work_right,
+//!   work_bottom, scale }`，`work_*` 是它所在显示器的工作区。
 //!
 //! 处理函数**返回一张表**就是「要改的东西」；多个脚本按登记顺序合并，后面的盖前面的（表里缺的项不动）。
 //! 现在认这几项：
@@ -42,9 +45,10 @@
 
 use cloudime_core::{Candidate, CandidateKind, CandidateLayout};
 use cloudime_platform::Config;
-use cloudime_platform::protocol::{InputMode, KeyEvent, OnlineLine, OnlineState};
+use cloudime_platform::protocol::{InputMode, KeyEvent, OnlineLine, OnlineState, ScreenRect};
 use cloudime_script::SizeRequest;
 use cloudime_script::mlua;
+use windows::Win32::Foundation::POINT;
 
 use std::collections::HashMap;
 
@@ -347,7 +351,51 @@ fn wrong_type(key: &str, value: &mlua::Value) {
     );
 }
 
+/// `caret` 事件的载荷：屏幕坐标一律换算成**点**（与 `win:show{ x, y }` / 内容坐标同一单位）。
+fn caret_payload(lua: &mlua::Lua, rect: ScreenRect) -> mlua::Result<mlua::Table> {
+    let point = POINT {
+        x: rect.left,
+        y: rect.top,
+    };
+    let dpi = crate::ui::dpi_near(point).unwrap_or(96).max(1);
+    let scale = dpi as f32 / 96.0;
+    let work = crate::ui::work_area_near(point);
+    let payload = lua.create_table()?;
+    for (key, value) in [
+        ("left", rect.left),
+        ("top", rect.top),
+        ("right", rect.right),
+        ("bottom", rect.bottom),
+        ("work_left", work.left),
+        ("work_top", work.top),
+        ("work_right", work.right),
+        ("work_bottom", work.bottom),
+    ] {
+        payload.set(key, value as f32 / scale)?;
+    }
+    payload.set("scale", scale)?;
+    Ok(payload)
+}
+
 impl Router {
+    /// 脚本要的光标位置到了（DLL 量到的插入点，`ClientMessage::Caret`）：派给 `caret` 处理函数，
+    /// 再把它们建 / 改 / 收窗口的请求转给 UI 线程。
+    pub(super) fn dispatch_caret_to_scripts(&mut self, rect: ScreenRect) {
+        if !self.scripts.has_handlers("caret") {
+            return;
+        }
+        let payload = match caret_payload(self.scripts.lua(), rect) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::warn!(%error, "拼光标位置载荷给脚本失败");
+                return;
+            }
+        };
+        let actions = self.with_script_actions("caret", payload, self.focused_app());
+        self.apply_common_actions(&actions);
+        self.flush_script_windows();
+    }
+
     /// 全部脚本加载完，可以开始派发事件了。没人关心 `startup` 就什么都不做。
     pub(super) fn dispatch_startup_to_scripts(&mut self) {
         if !self.scripts.has_handlers("startup") {

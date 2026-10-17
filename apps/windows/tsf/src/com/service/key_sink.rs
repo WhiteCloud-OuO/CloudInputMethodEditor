@@ -279,6 +279,7 @@ impl TextService_Impl {
             self.shared.set_last_context(Some(context.clone()));
         }
         // Server 交互在这段借用里做完，放掉借用再走编辑会话。
+        let mut want_caret = false;
         let next = {
             let mut guard = self.engine.borrow_mut();
             let Some(client) = guard.as_mut() else {
@@ -292,6 +293,7 @@ impl TextService_Impl {
             };
             match response {
                 Ok(response) => {
+                    want_caret = response.want_caret;
                     // 「只在候选窗口」模式应用里不放行内拼音（那一行由 Server 画在候选窗口顶部）。
                     let preedit = if response.frame.preedit_mode.inline() {
                         preedit_string(&response.frame)
@@ -331,7 +333,8 @@ impl TextService_Impl {
         };
         // 带 Ctrl / Alt / Win 的组合放行时仍交还应用，别把热键的字母插进文档。
         let insertable = !event.modifiers.has_command_key();
-        match (next, passthrough_char) {
+        let caret_context = pic.ok().ok().cloned();
+        let ate = match (next, passthrough_char) {
             // 放行 + 没在组句 + 可打印字符：输入法插入，吃掉；Server 顺带交出的英文直输段字母拼在前面。
             (
                 Next::Document {
@@ -386,7 +389,16 @@ impl TextService_Impl {
                 true
             }
             (Next::Abort, _) => false,
+        };
+        // 脚本要光标位置：等这个键的文档更新排上队之后再量（异步只读会话，见 `com/edit/caret.rs`）。
+        if want_caret && let Some(context) = caret_context {
+            crate::com::edit::request_caret_now(
+                &context,
+                self.client_id.get(),
+                self.engine.clone(),
+            );
         }
+        ate
     }
 }
 

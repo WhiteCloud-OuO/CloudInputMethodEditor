@@ -70,7 +70,11 @@ mod session;
 /// 老 DLL 不带这两个字段、读成 `0`，表现成「设成组合键那种方式时按不出来」——静默少一个功能，+1 并重装 DLL。
 /// 同一版里给 [`cloudime_core::Candidate`] 加了 `auxiliary`（候选右侧要显示的辅助码）：与 `display` 同理，
 /// 带 `serde(default)` 两边仍能对话、老 DLL 不读候选内容，不单独影响版本。
-pub const PROTOCOL_VERSION: u32 = 19;
+///
+/// v20 给 [`ServerMessage::KeyResult`] 加了 `want_caret`（脚本 `cloudime.caret()` 要光标位置），
+/// 并新增 [`ClientMessage::Caret`]（DLL 量到的插入点屏幕矩形）。老 DLL 读不到 `want_caret`、老 Server
+/// 也不认 `Caret` —— 脚本的「按键后取光标」会拿不到位置，+1 并重装 DLL。
+pub const PROTOCOL_VERSION: u32 = 20;
 
 /// 从哪个协议版本起 DLL 会在 `OpenSession` 后阻塞读一条 [`ServerMessage::SessionOpened`]。
 /// 门槛是固定值而不是当前版本：以后版本再升，没重启的应用里那些旧 DLL 仍在等这条回包，

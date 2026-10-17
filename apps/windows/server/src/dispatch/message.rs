@@ -83,6 +83,12 @@ impl Router {
                 self.position_candidates(session, rect);
                 None
             }
+            ClientMessage::Caret { session, rect } => {
+                if self.focused == Some(session) {
+                    self.dispatch_caret_to_scripts(rect);
+                }
+                None
+            }
             ClientMessage::HideCandidates { session } => {
                 // 组句在 DLL 侧结束（应用终止组句）：只收窗口；缓冲留给下一键的 Commit 清。
                 if self.focused == Some(session) {
@@ -166,6 +172,8 @@ impl Router {
         } else {
             self.script_actions(&event)
         };
+        // 脚本在这次（或之前某次回调里）要过光标位置：这一拍的 KeyResult 顺路请 DLL 量一次。
+        let want_caret = self.scripts.take_caret_request();
         // 脚本给的加权 / 降权：排序仍在 Core，这里只把参数递过去（没给就不动 Core 那份）
         if let Some(adjustments) = &actions.adjust {
             self.engine
@@ -184,6 +192,7 @@ impl Router {
                 commit: None,
                 caret_shift: 0,
                 delete_before: 0,
+                want_caret,
                 frame: self.current_frame(),
             };
         }
@@ -196,6 +205,7 @@ impl Router {
                 commit: Some(text),
                 caret_shift: 0,
                 delete_before: 0,
+                want_caret,
                 frame: self.current_frame(),
             };
         }
@@ -239,6 +249,7 @@ impl Router {
             commit,
             caret_shift: self.caret_shift,
             delete_before: self.delete_before,
+            want_caret,
             frame: self.current_frame(),
         }
     }

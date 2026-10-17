@@ -41,4 +41,7 @@ pub struct KeyResponse {
 
     /// 处理后的组句状态（preedit + 候选）；空帧表示收起候选窗口。
     pub frame: Frame,
+
+    /// Server 要光标位置（脚本 `cloudime.caret()`）：处理完这个键后量一次插入点送回去。
+    pub want_caret: bool,
 }
