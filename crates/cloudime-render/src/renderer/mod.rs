@@ -293,6 +293,28 @@ impl Renderer {
         ))
     }
 
+    /// 只画**窗口阴影**那一层（面板本身留空）：给「内容用绘制、阴影单独一块分层窗」的窗口用。
+    ///
+    /// 位图比内容区四周各大出 [`Shadow::margin`]，与 [`Self::render_panel`] 的留白算法一致；阴影铺满整块
+    /// 圆角区域（内容区那部分会被面板盖住，看不见）。阴影**不是**窗口内部的元素，所以它能留在渲染那条路上。
+    pub fn render_shadow(
+        &self,
+        content: (f32, f32),
+        theme: &Theme,
+        scale: f32,
+        shadow: &Shadow,
+    ) -> Result<Rendered, RenderError> {
+        let metrics = Metrics { theme, scale };
+        let margin = metrics.px(shadow.margin());
+        let width = (content.0 + margin * 2.0).ceil();
+        let height = (content.1 + margin * 2.0).ceil();
+        let mut render = Render::new(width as u32, height as u32, self.text.clone())?;
+        if let Some(rect) = tiny_skia::Rect::from_xywh(margin, margin, content.0, content.1) {
+            shadow.paint(&mut render, rect, metrics.corner_radius(), scale);
+        }
+        Ok(Self::panel_rendered(render, margin, content, scale))
+    }
+
     /// 面板类窗口的画布与内容区留白（阴影边）：[`Self::render_panel`] / [`Self::render_key_map`] 共用。
     fn panel_canvas(
         &self,
@@ -706,6 +728,52 @@ mod tests {
             HighlightRect::new(0.0, 10.0, 10.0, 20.0),
             HighlightRect::new(0.0, 20.0, 10.0, 30.0),
         ]
+    }
+
+    /// 只画阴影那一层：位图比内容区四周大出一圈（阴影边），边上有点 alpha、四角几乎全透明。
+    #[test]
+    fn the_shadow_layer_is_a_soft_margin_around_the_content() {
+        use crate::shadow::Shadow;
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let theme = Theme::new();
+        let shadow = Shadow::panel();
+        let content = (200.0, 120.0);
+        let rendered = renderer
+            .render_shadow(content, &theme, 1.0, &shadow)
+            .expect("阴影层");
+        let margin = rendered.content_x;
+        assert!(margin > 0, "阴影边不能为 0");
+        assert_eq!(
+            rendered.pixmap.width(),
+            rendered.content_width + margin * 2,
+            "位图 = 内容区 + 两边阴影边"
+        );
+        assert_eq!(
+            rendered.pixmap.height(),
+            rendered.content_height + margin * 2
+        );
+        // 内容区正中间（面板会盖住）不透明：阴影铺满整块圆角，边角才不会漏一条缝
+        let center = rendered
+            .pixmap
+            .pixel(rendered.content_width / 2, rendered.content_height / 2)
+            .expect("像素");
+        assert!(center.alpha() > 0, "内容区底下也该有阴影");
+        // 框外那一圈：靠近内容区的地方有 alpha，最角上几乎没有
+        let edge = rendered
+            .pixmap
+            .pixel(margin / 2, rendered.pixmap.height() / 2)
+            .expect("像素");
+        let corner = rendered.pixmap.pixel(0, 0).expect("像素");
+        assert!(edge.alpha() > 0, "内容区边上要有阴影");
+        assert!(
+            corner.alpha() < edge.alpha(),
+            "最角上该比边上淡（{} vs {}）",
+            corner.alpha(),
+            edge.alpha()
+        );
     }
 
     /// 没有动画时高亮条就是目标行的矩形；第 0 行也要能取到。

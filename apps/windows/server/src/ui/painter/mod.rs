@@ -178,6 +178,19 @@ impl Painter {
         Some(rendered)
     }
 
+    /// 只出**阴影**那一层（面板留空）：键位映射参考的面板是绘制，阴影单独一块分层窗垫在底下。
+    pub(super) fn render_shadow(&self, content: (i32, i32), dpi: u32) -> Option<Rendered> {
+        self.renderer
+            .render_shadow(
+                (content.0 as f32, content.1 as f32),
+                &self.theme,
+                scale(dpi),
+                &self.candidate_shadow,
+            )
+            .inspect_err(|error| tracing::warn!(%error, "阴影层渲染失败"))
+            .ok()
+    }
+
     /// 键位映射参考的内容尺寸（**物理像素**）：与 [`Self::paint_key_map`] 画出来的完全一致。
     pub(super) fn key_map_pixel_size(
         &self,
@@ -201,11 +214,13 @@ impl Painter {
         size: (i32, i32),
     ) {
         let mut paint = Paint::new(hdc);
-        paint.rect(
+        // 底色按圆角铺（窗口区域也切在同一个圆角上）：四个角留给底下的阴影窗
+        paint.round_rect(
             0.0,
             0.0,
             size.0 as f32,
             size.1 as f32,
+            self.corner_radius(dpi) as f32,
             self.theme.colors.background,
         );
         if layout.rows.is_empty() {

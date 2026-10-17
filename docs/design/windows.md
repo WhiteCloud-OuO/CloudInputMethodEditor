@@ -170,7 +170,9 @@ pub(super) trait Clonable: Asset {
 **例外（2026-10-17 起试验）：辅助窗口模板改用绘制。** 眼下它只服务「键位映射参考」：窗口不是分层的，
 `WM_PAINT` 里 `BeginPaint` → `Paint`（GDI）把整块面板重画 → `EndPaint`。取舍：
 
-- **拿不到逐像素 alpha**：圆角用 `SetWindowRgn`（`CreateRoundRectRgn`）切，边缘是硬的；**没有阴影**；
+- **面板拿不到逐像素 alpha**：圆角用 `SetWindowRgn`（`CreateRoundRectRgn`）切，边缘是硬的；
+  **阴影单独一块分层窗**垫在面板底下 —— 阴影不是窗口内部的元素，仍走渲染（`Renderer::render_shadow`
+  只出阴影、面板留空，`layered::present` 贴上去、`SetWindowPos` 排在面板后面），观感与原来一致；
 - **文字走 GDI 的字形管线**（`TextOut`）：没有字距微调 / 连字 / 彩色 emoji，字号比 cosmic-text 略小；
 - 半透明的主题色（如 `text` = 黑 216）要先按背景**压平**（`Theme::flattened`），否则 GDI 忽略 alpha、
   画出来会比渲染深；
@@ -248,7 +250,9 @@ pub(super) trait Clonable: Asset {
 - **辅助窗口模板**（`ui/auxiliary_window_template/`）：资产用的那块**绘制面板**（主题背景 + 圆角；
   宽 / 高 / 间隙三个属性，没设过按宿主形状算默认；`show(宿主内容区矩形, 排布方向)` 摆位 —— 宿主右边 /
   下边放不下就换左边 / 上边）。窗口**不是分层窗**：`WM_PAINT` 里 `BeginPaint` → `Painter::paint_key_map`
-  （`Paint` / GDI，调色板先 `Theme::flattened` 压平）→ `EndPaint`；圆角用 `SetWindowRgn` 切，没有阴影。
+  （`Paint` / GDI，调色板先 `Theme::flattened` 压平）→ `EndPaint`；圆角用 `SetWindowRgn` 切。**阴影**是另
+  一块分层窗（`Painter::render_shadow` → `layered::present` → `SetWindowPos` 排在面板后面），不是窗口
+  内部的元素；面板与阴影同生共死（`hide` / `Drop` 一起收）。
   模板指针挂在窗口的 `GWLP_USERDATA` 上（`show` 挂、`Drop` 清），`show` 按「位置 / 尺寸 / 版面版本 /
   渲染器代号」判重。**焦点**：`new` 收一个 `able_to_get_focus`，`set_focused` 开关鼠标穿透
   （`WS_EX_TRANSPARENT` 与命中测试读同一个位，两边不会打架）。

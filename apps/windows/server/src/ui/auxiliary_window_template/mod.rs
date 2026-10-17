@@ -40,9 +40,10 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW, HTCLIENT,
-    HTTRANSPARENT, MA_NOACTIVATE, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOZORDER,
-    SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_MOUSEACTIVATE, WM_NCHITTEST, WM_PAINT,
-    WNDCLASSEXW, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    HTTRANSPARENT, MA_NOACTIVATE, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_MOUSEACTIVATE,
+    WM_NCHITTEST, WM_PAINT, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -50,6 +51,7 @@ use cloudime_platform::LayoutMode;
 use cloudime_platform::input_schemes;
 use cloudime_render::{Layout, key_map_cell};
 
+use super::layered;
 use super::monitor;
 use super::painter::{Painter, SharedPainter};
 use super::window_class::WindowClass;
@@ -82,6 +84,10 @@ pub(super) struct AuxiliaryWindowSpec {
 /// 窗口模板创建的那个窗口；不显示时只是藏在层里。
 pub(super) struct AuxiliaryWindowTemplate {
     hwnd: HWND,
+
+    /// 阴影窗：单独一块**分层**窗，垫在面板底下。阴影不是窗口内部的元素，所以它留在渲染那条路上
+    /// （逐像素 alpha 才做得出柔和边）；面板自己仍是绘制。
+    shadow: HWND,
 
     /// 创建时声明的「允许获取焦点」（`able_to_get_focus`）：`false`（缺省）时**永远**不接输入。
     focusable: bool,
@@ -160,8 +166,30 @@ impl AuxiliaryWindowTemplate {
                 None,
             )?
         };
+        // 阴影窗：分层 + 鼠标穿透（永远不接输入），只由 `UpdateLayeredWindow` 一块位图填
+        let shadow = unsafe {
+            CreateWindowExW(
+                WS_EX_LAYERED
+                    | WS_EX_TRANSPARENT
+                    | WS_EX_TOOLWINDOW
+                    | WS_EX_TOPMOST
+                    | WS_EX_NOACTIVATE,
+                CLASS_NAME,
+                w!("云朵辅助窗口阴影"),
+                WS_POPUP,
+                0,
+                0,
+                0,
+                0,
+                None,
+                None,
+                Some(super::module_handle()),
+                None,
+            )?
+        };
         Ok(Self {
             hwnd,
+            shadow,
             focusable: able_to_get_focus,
             focused: Cell::new(false),
             painter,
@@ -268,6 +296,8 @@ impl AuxiliaryWindowTemplate {
             .borrow()
             .as_ref()
             .map_or(0, |painter| painter.corner_radius(dpi));
+        // 阴影：单独一块分层窗，垫在面板底下（阴影不是窗口内部元素 —— 它仍用渲染的逐像素 alpha）
+        self.present_shadow(content, (x, y), dpi);
         // 绘制这条路的内容不持久：记下这次要画的东西，`WM_PAINT` 里照它重画
         self.paint_state.set(Some(PaintState {
             size: content,
@@ -323,8 +353,47 @@ impl AuxiliaryWindowTemplate {
         self.painted.set(None);
         if self.placed.replace(None).is_some() {
             let _ = unsafe { ShowWindow(self.hwnd, SW_HIDE) };
+            let _ = unsafe { ShowWindow(self.shadow, SW_HIDE) };
             tracing::info!("窗口模板已收起");
         }
+    }
+
+    /// 把阴影层贴到阴影窗上，并让它紧贴面板**下面**（顶层窗里排在面板后面）。
+    ///
+    /// 阴影走渲染（`Painter::render_shadow` 只出阴影、面板留空），面板盖住中间那部分；贴不上去就只显示面板。
+    fn present_shadow(&self, content: (i32, i32), origin: (i32, i32), dpi: u32) {
+        let rendered = self
+            .painter
+            .borrow()
+            .as_ref()
+            .and_then(|painter| painter.render_shadow(content, dpi));
+        let Some(rendered) = rendered else {
+            let _ = unsafe { ShowWindow(self.shadow, SW_HIDE) };
+            return;
+        };
+        let margin = rendered.content_x as i32;
+        if let Err(error) = layered::present(
+            self.shadow,
+            &rendered.pixmap,
+            (origin.0 - margin, origin.1 - margin),
+            255,
+        ) {
+            tracing::warn!(%error, "窗口模板：阴影贴图失败，只显示面板");
+            let _ = unsafe { ShowWindow(self.shadow, SW_HIDE) };
+            return;
+        }
+        // `hWndInsertAfter` = 面板 → 阴影紧贴在面板**下面**（同属置顶层，靠 z 序先后）
+        let _ = unsafe {
+            SetWindowPos(
+                self.shadow,
+                Some(self.hwnd),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
+            )
+        };
     }
 
     /// `WM_PAINT`：把整块面板画在 `hdc` 上（绘制这条路每次都要整块重画）。
@@ -365,6 +434,7 @@ impl Drop for AuxiliaryWindowTemplate {
         unsafe {
             // 先摘掉指针再销毁窗口：别让一次迟到的 `WM_PAINT` 摸到已经没了的模板
             let _ = SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
+            let _ = DestroyWindow(self.shadow);
             let _ = DestroyWindow(self.hwnd);
         }
     }

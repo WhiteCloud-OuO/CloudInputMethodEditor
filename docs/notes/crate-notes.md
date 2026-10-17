@@ -913,7 +913,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 - **辅助窗口模板**（`server/src/ui/auxiliary_window_template/`，`AuxiliaryWindowTemplate`）：给资产用的那块**绘制面板** ——
   窗口**不是分层的**：`WM_PAINT` 里 `BeginPaint` → `Painter::paint_key_map`（`Paint` / GDI，调色板先
   `Theme::flattened` 压平，否则半透明的字色会画得过深）→ `EndPaint`；圆角用 `SetWindowRgn`（`CreateRoundRectRgn`）切，
-  **没有阴影**，字号 / 抗锯齿走 GDI 那档。内容不持久（每次 `WM_PAINT` 整块重画）；模板指针挂在 `GWLP_USERDATA`
+  字号 / 抗锯齿走 GDI 那档。**阴影**不归面板：另有一块分层窗（`Painter::render_shadow` 只出阴影、面板留空 →
+  `layered::present` 贴上去 → `SetWindowPos(hWndInsertAfter = 面板)` 排在面板后面），`hide` / `Drop` 一起收。内容不持久（每次 `WM_PAINT` 整块重画）；模板指针挂在 `GWLP_USERDATA`
   （`show` 挂、`Drop` 清），`show` 按「位置 / 尺寸 / 版面版本 / 渲染器代号」判重（`set_key_map` 把版面版本 +1）。
   **焦点**：`new(painter, able_to_get_focus)`
   里收下这件资产创建时声明的「允许获取焦点」（`false` = 永远不接输入，缺省），`focusable()` 读回去给资产声明用；
