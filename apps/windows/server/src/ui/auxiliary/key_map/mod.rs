@@ -17,7 +17,7 @@ use cloudime_platform::input_schemes::KeyMapLayout;
 
 /// 键位映射参考窗口。
 pub(crate) struct KeyMapWindow {
-    /// 辅助窗口模板：主题背景 / 圆角 + 贴宿主摆位（内容由模板在 `WM_PAINT` 里绘制）。
+    /// 辅助窗口模板：主题背景 / 圆角 / 阴影都出一张位图，贴宿主摆位。
     template: AuxiliaryWindowTemplate,
 }
 

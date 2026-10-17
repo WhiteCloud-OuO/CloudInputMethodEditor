@@ -173,7 +173,7 @@ pub(super) trait Clonable: Asset {
 阴影与面板同一张位图 —— 于是又退回渲染，`Paint` 与 GDI+ 依赖一并删掉。要重看那版实现：
 `git log --all --oneline -- crates/cloudime-render/src/paint.rs`。
 
-**能画的元素**（绘制与渲染都支持这七类）：
+**能画的元素**（眼下只有渲染那份实现，七类都支持）：
 
 | 元素 | 是什么 | 落在哪儿（实现） |
 |---|---|---|
