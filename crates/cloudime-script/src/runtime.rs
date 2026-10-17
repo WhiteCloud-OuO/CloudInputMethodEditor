@@ -1563,6 +1563,18 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
         })?,
     )?;
     table.set("window", window_table)?;
+    // 图像句柄：`cloudime.image.load(路径)` → 用户数据（`Arc<Pixmap>`），可以反复放进
+    // `static_image` / `img` 的 `image` 字段；Lua 丢掉句柄后，已经放进内容的图仍由元素持有。
+    let image = lua.create_table()?;
+    let image_cache = runtime.image_cache.clone();
+    image.set(
+        "load",
+        lua.create_function(move |_, path: String| {
+            let pixmap = image_cache.borrow_mut().load(Path::new(&path))?;
+            Ok(window::ImageHandle(pixmap))
+        })?,
+    )?;
+    table.set("image", image)?;
     // 输入框文本：`cloudime.text.all(上限?)` / `cloudime.text.before(上限?)` → `{ text, truncated }`；
     // 这一拍还拿不到（DLL 要读一趟、走个来回）给 `nil`，脚本下一次调用再试。
     // 上限按**显示宽度**算：西文 / 半角 1、中文 / 全角 2；缺省 2^64-1（等于不限）

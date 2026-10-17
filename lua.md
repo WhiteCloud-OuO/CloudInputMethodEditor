@@ -278,6 +278,7 @@ cloudime.on(事件名, function(载荷) … end)   -- 登记处理函数，只�
 | `cloudime.install_dir()` | 安装目录的绝对路径（`Scripts\` / `Images\` 的上一级）；测试 / 没有安装目录时给 `nil` |
 | `cloudime.install_path(相对路径)` | 安装目录里的文件绝对路径（如 `"Images/SVG/打叉.svg"`）；文件不存在给 `nil`，`..` 跑出安装目录**报错** |
 | `cloudime.get_theme()` | 当前生效主题的颜色表（`{ candidate = { … }, bar = { … }, tip = { … } }`，颜色是 `#AARRGGBB`）；详见下面「主题颜色」 |
+| `cloudime.image.load(路径)` | 读一张图（PNG / BMP / JPG）→ 图像句柄（用户数据），给 `static_image` 的 `image` 字段；同一文件按长度 + 修改时间缓存 |
 | `cloudime.get_time()` | 当前**本地时间** → `{ year, month, day, hour, minute, second, weekday, unix }`；`weekday` 1 = 周一 … 7 = 周日，`unix` 是 Unix 秒（标准库的 `os.date` / `os.time` 也能用，这一份是不依赖标准库的稳定形状） |
 | `cloudime.get_curr_config()` | 当前**配置**的一张表：**键名与 `config.toml` 一致**、分节同名（`candidate` / `input` / `general` / `theme` / `translate` / `status_bar` / `debugging` / `script` / `word_bank` / `phrase` / `update`）；`theme` 那一节多一个 `available`（可选主题名列表）。每次调用读的都是**当前**那份（配置热加载后跟着变） |
 | `cloudime.foreground_app()` | 当前**前台程序**的 exe 名（如 `"notepad.exe"`）；没聚焦任何程序给 `nil`。**随时可问**，不必等事件 —— 事件载荷里的 `app` 也是同一个值（`key` / `candidates` / `time` / 回调都带） |
@@ -475,10 +476,39 @@ aux:show()
 | `line` | `from` / `to`（`{ x = …, y = … }` 或 `{ x, y }`）、`thickness`（缺省 1）、`color` |
 | `text` | `x` / `y`（行框左上角）/ `text` / `size`（点，缺省 16）/ `font`（`candidate` 缺省、`pinyin`、`item_number`、`translate`）/ `color`（缺省黑）/ `italic` |
 | `svg` | `x` / `y` / `size`（见方）/ `source`（整段 SVG 文本）**或** `path`（SVG 文件，常用 `cloudime.install_path`）/ `tint`（可选，按 alpha 染色） |
-| `img` | `x` / `y` / `w` / `h` / `path`（PNG；相对路径按安装目录算） |
+| `img` | `x` / `y` / `w` / `h` / `path`（PNG / BMP / JPG；相对路径按安装目录算） |
 | `path` | `commands` = `{ {"M",x,y}, {"L",x,y}, {"Q",cx,cy,x,y}, {"C",…}, {"Z"} }`、`color` |
+| `label` | `x` / `y` / `size` / `font`；`runs = { { text = "云朵", color = "#FF0000FF" }, … }`，每段可单独着色 |
+| `text_block` | `x` / `y` / `text`（可含 `\n`）/ `size` / `font` / `line_spacing`（点，缺省 2）/ `color`（整块同色） |
+| `static_shape` | `shape` = `line` / `rect` / `round_rect` / `circle` / `path`；字段与该形状同名（`from`/`to`/`x`/`y`/`w`/`h`/`radius`/`cx`/`cy`/`commands`）+ `color` |
+| `static_image` | `x` / `y` / `w` / `h` + `image`（`cloudime.image.load` 的句柄）或 `path`（PNG / BMP / JPG） |
+| `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（缺省 `#FFE0E0E0`）/ `children = { …元素… }`；子控件用面板内相对坐标 |
 
 颜色写 `"#RRGGBB"` / `"#AARRGGBB"` / `"#RGB"`，或 `{ r = …, g = …, b = …, a = … }`（0–255）。
+
+**静态控件**（`label` / `text_block` / `static_shape` / `static_image` / `panel`）只是显示内容：
+**没有命中框**，不参与 hover / click / `event.element`。面板只做分组：`children` 的坐标相对面板左上角，
+绘制时整体平移；面板自己按 `color` / `radius` 画圆角背景。
+
+```lua
+win:set_content{
+    width = 240, height = 120,
+    { type = "panel", x = 8, y = 8, w = 224, h = 104,
+      children = {
+          { type = "label", x = 12, y = 12, size = 18,
+            runs = { { text = "云朵", color = "#FF2F6FED" },
+                     { text = "输入法", color = "#FF222222" } } },
+          { type = "text_block", x = 12, y = 44, size = 12, line_spacing = 4,
+            text = "第一行\n第二行", color = "#FF666666" },
+          { type = "static_shape", shape = "round_rect", x = 12, y = 78,
+            w = 80, h = 20, radius = 6, color = "#FF4A90E2" },
+      } },
+}
+```
+
+`static_image` 的 `image` 句柄：`local icon = cloudime.image.load(cloudime.install_path("Images/a.png"))`，
+之后 `{ type = "static_image", x = 8, y = 8, w = 32, h = 32, image = icon }`。句柄是用户数据，Lua 丢掉它
+之后已经放进内容的位图仍由元素持有；`path` 直接给文件也行（只解码一次，按文件长度 + 修改时间缓存）。
 
 **区域（region）**：一块可以被鼠标**点击 / 拖拽**的范围 —— 元素只管画，交互看区域：
 

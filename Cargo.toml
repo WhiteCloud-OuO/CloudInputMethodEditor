@@ -78,6 +78,8 @@ base64 = "0.23.1"
 
 # 自绘渲染器：CPU 栅格 + 文字整形/回退/栅格（fontdb / rustybuzz / swash）
 tiny-skia = "0.12.0"
+# 脚本窗口的静态图像：BMP / JPG 解码（PNG 仍走 tiny-skia）；只开解码，不要编码 / 其他格式
+image = { version = "0.25.10", default-features = false, features = ["png", "jpeg", "bmp"] }
 # 状态条 SVG 图标栅格化；关默认特性：不扫系统字体（图标里没有文字）、不要 svgz 与光栅图解码
 resvg = { version = "0.48.1", default-features = false }
 # 不开 fontconfig：不扫系统字体库，字体文件由渲染器按清单自己加载

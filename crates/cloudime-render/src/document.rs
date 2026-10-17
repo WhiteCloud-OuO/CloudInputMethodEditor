@@ -14,6 +14,7 @@ use i_overlay::float::single::SingleFloatOverlay;
 use tiny_skia::{PathBuilder, Pixmap};
 
 use crate::color::Color;
+use crate::control::{Label, Panel, StaticImage, StaticShape, TextBlock};
 
 /// 一份内容：内容区尺寸（点）+ 元素表（按顺序画，后面的盖前面的）。
 #[derive(Clone)]
@@ -416,6 +417,21 @@ pub enum Element {
         commands: Vec<PathCommand>,
         color: Color,
     },
+
+    /// 静态控件：标签（每段可单独着色）。
+    Label(Label),
+
+    /// 静态控件：多行文本块（统一颜色、可调行距）。
+    TextBlock(TextBlock),
+
+    /// 静态控件：直线 / 矩形 / 圆角矩形 / 圆 / 路径。
+    StaticShape(StaticShape),
+
+    /// 静态控件：图像（文件 / 内存句柄在脚本侧解析成位图）。
+    StaticImage(StaticImage),
+
+    /// 静态控件：面板容器（背景 + 相对坐标的子控件）。
+    Panel(Panel),
 }
 
 /// 元素在内容区里的命中区域（**点**）。
@@ -715,17 +731,19 @@ impl HitRect {
 pub(crate) fn build_path(
     commands: &[PathCommand],
     scale: f32,
-    offset: f32,
+    offset_x: f32,
+    offset_y: f32,
 ) -> Option<tiny_skia::Path> {
     let mut builder = PathBuilder::new();
-    let px = |value: f32| offset + value * scale;
+    let px = |value: f32| offset_x + value * scale;
+    let py = |value: f32| offset_y + value * scale;
     for command in commands {
         match *command {
-            PathCommand::MoveTo(x, y) => builder.move_to(px(x), px(y)),
-            PathCommand::LineTo(x, y) => builder.line_to(px(x), px(y)),
-            PathCommand::QuadTo(cx, cy, x, y) => builder.quad_to(px(cx), px(cy), px(x), px(y)),
+            PathCommand::MoveTo(x, y) => builder.move_to(px(x), py(y)),
+            PathCommand::LineTo(x, y) => builder.line_to(px(x), py(y)),
+            PathCommand::QuadTo(cx, cy, x, y) => builder.quad_to(px(cx), py(cy), px(x), py(y)),
             PathCommand::CubicTo(cx1, cy1, cx2, cy2, x, y) => {
-                builder.cubic_to(px(cx1), px(cy1), px(cx2), px(cy2), px(x), px(y));
+                builder.cubic_to(px(cx1), py(cy1), px(cx2), py(cy2), px(x), py(y));
             }
             PathCommand::Close => builder.close(),
         }
@@ -837,6 +855,23 @@ impl std::fmt::Debug for Element {
                 .debug_struct("Path")
                 .field("commands", &commands.len())
                 .field("color", color)
+                .finish(),
+            Self::Label(label) => f
+                .debug_struct("Label")
+                .field("runs", &label.runs.len())
+                .finish(),
+            Self::TextBlock(text) => f
+                .debug_struct("TextBlock")
+                .field("chars", &text.text.chars().count())
+                .finish(),
+            Self::StaticShape(_) => f.write_str("StaticShape"),
+            Self::StaticImage(image) => f
+                .debug_struct("StaticImage")
+                .field("pixels", &(image.image.width(), image.image.height()))
+                .finish(),
+            Self::Panel(panel) => f
+                .debug_struct("Panel")
+                .field("children", &panel.children.len())
                 .finish(),
         }
     }

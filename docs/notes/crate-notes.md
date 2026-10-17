@@ -1022,6 +1022,15 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `apply_config`）时同步 `script_theme_name`。`get_theme()` 在加载期还没有钩子，给 `nil`。
   `create` 的 `shadow` 缺省 **true**（与候选窗同一套阴影），与 `background`（面板填充）互不影响：
   `background = false, shadow = true` 就是「脚本画底色、输入法画阴影」。
+- **静态控件**（2026-10-18）：`cloudime-render/src/control.rs` 用元素 traits（`ControlRender` =
+  `TextElement` + `SvgElement` + `ImageElement` + `LineElement` + `RectElement` + `PathElement`）
+  组合出 `Label`（多段彩色）/ `TextBlock`（多行、行距）/ `StaticShape`（线 / 矩形 / 圆角矩形 / 圆 / 路径）/
+  `StaticImage`（`Arc<Pixmap>`，文件或句柄）/ `Panel`（背景 + 相对坐标子控件，缺省 `#FFE0E0E0` 圆角 6）。
+  它们落在 `Element` 的控件变体上，`draw_element` 返回 `None`（**没有命中框**，不参与 hover / click /
+  `element` 编号）；面板的子控件用 `origin` 平移递归绘制。Lua 端 `set_content` 解析 `label` /
+  `text_block` / `static_shape` / `static_image` / `panel`（面板嵌套上限 8 层）。
+  `cloudime.image.load` 返回的用户数据持有 `Arc<Pixmap>`，脚本丢掉后元素仍持有；文件解码在
+  `image::decode_image` 里先试 tiny-skia PNG，再交给 `image` crate（BMP / JPG，只开解码特性）。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

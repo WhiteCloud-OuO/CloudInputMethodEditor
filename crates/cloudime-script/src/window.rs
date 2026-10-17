@@ -14,7 +14,8 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use cloudime_render::{
-    Color, Document, Element, FontSlot, HitRect, HitShape, PathCommand, Pixmap, Region, load_image,
+    Color, Document, Element, FontSlot, HitRect, HitShape, Label, LabelRun, Panel, PathCommand,
+    Pixmap, Region, StaticImage, StaticShape, TextBlock, load_image,
 };
 
 use crate::mlua;
@@ -37,6 +38,12 @@ const MAX_REGIONS: usize = 128;
 
 /// 一个区域最多合并 / 剪除几个形状。
 const MAX_REGION_PARTS: usize = 32;
+
+/// 一个标签最多几段不同颜色。
+const MAX_LABEL_RUNS: usize = 64;
+
+/// 面板最多套几层（防止脚本写出无限嵌套）。
+const MAX_PANEL_DEPTH: usize = 8;
 
 /// 图像解码后的像素数上限（约 4096 × 4096）：脚本给的图不该把整块内存吃掉。
 const MAX_IMAGE_PIXELS: u32 = 16 * 1024 * 1024;
@@ -63,6 +70,13 @@ pub(crate) struct ImageCache {
     pixels: u64,
 }
 
+/// 脚本拿在手里的图像句柄（`cloudime.image.load`）：`Arc` 与元素共享位图，Lua 丢掉句柄后
+/// 已经放进内容里的图仍然活着。
+#[derive(Clone)]
+pub(crate) struct ImageHandle(pub(crate) Arc<Pixmap>);
+
+impl mlua::UserData for ImageHandle {}
+
 struct CachedImage {
     path: PathBuf,
     len: u64,
@@ -72,7 +86,7 @@ struct CachedImage {
 
 impl ImageCache {
     /// 读一张图（缓存命中就不解码）。路径按 Server 的工作目录（安装目录）解析。
-    fn load(&mut self, path: &Path) -> mlua::Result<Arc<Pixmap>> {
+    pub(crate) fn load(&mut self, path: &Path) -> mlua::Result<Arc<Pixmap>> {
         let metadata = std::fs::metadata(path).map_err(|error| {
             mlua::Error::RuntimeError(format!("读不了图像 {}：{error}", path.display()))
         })?;
@@ -509,7 +523,7 @@ fn parse_document(
                 "一份内容最多 {MAX_ELEMENTS} 个元素"
             )));
         }
-        elements.push(parse_element(&table, images)?);
+        elements.push(parse_element(&table, images, 0)?);
     }
     Ok(Document {
         width,
@@ -657,7 +671,11 @@ fn parse_region_shapes(entry: &mlua::Table, key: &str) -> mlua::Result<Vec<HitSh
 }
 
 /// 一个元素：按 `type` 分派到七类里的一类。
-fn parse_element(table: &mlua::Table, images: &mut ImageCache) -> mlua::Result<Element> {
+fn parse_element(
+    table: &mlua::Table,
+    images: &mut ImageCache,
+    depth: usize,
+) -> mlua::Result<Element> {
     let kind: String = table.get("type").map_err(|_| {
         mlua::Error::RuntimeError(
             "元素缺 type（可用：rect / circle / line / text / svg / img / path）".to_owned(),
@@ -751,9 +769,200 @@ fn parse_element(table: &mlua::Table, images: &mut ImageCache) -> mlua::Result<E
                 color: color(table, "color", true)?.expect("要了颜色"),
             })
         }
+        "label" => parse_label(table),
+        "text_block" => parse_text_block(table),
+        "static_shape" => parse_static_shape(table),
+        "static_image" => parse_static_image(table, images),
+        "panel" => parse_panel(table, images, depth),
         other => Err(mlua::Error::RuntimeError(format!(
-            "元素 type 不认识：{other}（可用：rect / circle / line / text / svg / img / path）"
+            "元素 type 不认识：{other}（可用：rect / circle / line / text / svg / img / path / \
+             label / text_block / static_shape / static_image / panel）"
         ))),
+    }
+}
+
+/// `label`：一行文字，`runs` 里每段自带颜色。
+fn parse_label(table: &mlua::Table) -> mlua::Result<Element> {
+    let runs = table.get::<Option<mlua::Table>>("runs")?.ok_or_else(|| {
+        mlua::Error::RuntimeError("label 缺 runs（每段 { text, color }）".to_owned())
+    })?;
+    let mut parsed = Vec::new();
+    for entry in runs.sequence_values::<mlua::Table>() {
+        if parsed.len() >= MAX_LABEL_RUNS {
+            return Err(mlua::Error::RuntimeError(format!(
+                "一个 label 最多 {MAX_LABEL_RUNS} 段文字"
+            )));
+        }
+        let entry = entry?;
+        let text: String = entry
+            .get("text")
+            .map_err(|_| mlua::Error::RuntimeError("label 的 runs 里有一段缺 text".to_owned()))?;
+        check_text(&text)?;
+        parsed.push(LabelRun {
+            text,
+            color: color(&entry, "color", false)?.unwrap_or(Color::rgb(0, 0, 0)),
+        });
+    }
+    if parsed.is_empty() {
+        return Err(mlua::Error::RuntimeError(
+            "label 的 runs 不能是空的".to_owned(),
+        ));
+    }
+    Ok(Element::Label(Label {
+        x: number(table, "x", 0.0)?,
+        y: number(table, "y", 0.0)?,
+        size: number(table, "size", 16.0)?.clamp(1.0, 256.0),
+        slot: font_slot(table)?,
+        runs: parsed,
+    }))
+}
+
+/// `text_block`：多行文本，统一颜色、行距可调。
+fn parse_text_block(table: &mlua::Table) -> mlua::Result<Element> {
+    let text: String = table
+        .get("text")
+        .map_err(|_| mlua::Error::RuntimeError("text_block 缺 text".to_owned()))?;
+    check_text(&text)?;
+    let size = number(table, "size", 16.0)?.clamp(1.0, 256.0);
+    Ok(Element::TextBlock(TextBlock {
+        x: number(table, "x", 0.0)?,
+        y: number(table, "y", 0.0)?,
+        size,
+        slot: font_slot(table)?,
+        line_spacing: number(table, "line_spacing", 2.0)?.clamp(-size * 2.0, size * 4.0),
+        color: color(table, "color", false)?.unwrap_or(Color::rgb(0, 0, 0)),
+        text,
+    }))
+}
+
+/// `static_shape`：`shape = "line" | "rect" | "round_rect" | "circle" | "path"`。
+fn parse_static_shape(table: &mlua::Table) -> mlua::Result<Element> {
+    let kind: String = table
+        .get("shape")
+        .map_err(|_| mlua::Error::RuntimeError("static_shape 缺 shape".to_owned()))?;
+    let color = || {
+        color(table, "color", true)?
+            .ok_or_else(|| mlua::Error::RuntimeError("static_shape 缺 color".to_owned()))
+    };
+    let shape = match kind.as_str() {
+        "line" => StaticShape::Line {
+            from: point(table, "from")?,
+            to: point(table, "to")?,
+            thickness: number(table, "thickness", 1.0)?.max(0.5),
+            color: color()?,
+        },
+        "rect" => StaticShape::Rect {
+            x: number(table, "x", 0.0)?,
+            y: number(table, "y", 0.0)?,
+            width: positive(table, "w", "width")?,
+            height: positive(table, "h", "height")?,
+            color: color()?,
+        },
+        "round_rect" => StaticShape::RoundRect {
+            x: number(table, "x", 0.0)?,
+            y: number(table, "y", 0.0)?,
+            width: positive(table, "w", "width")?,
+            height: positive(table, "h", "height")?,
+            radius: number(table, "radius", 6.0)?.max(0.0),
+            color: color()?,
+        },
+        "circle" => StaticShape::Circle {
+            cx: number(table, "cx", 0.0)?,
+            cy: number(table, "cy", 0.0)?,
+            radius: positive(table, "radius", "radius")?,
+            color: color()?,
+        },
+        "path" => StaticShape::Path {
+            commands: parse_path(table)?,
+            color: color()?,
+        },
+        other => {
+            return Err(mlua::Error::RuntimeError(format!(
+                "static_shape 的 shape 不认识：{other}（可用：line / rect / round_rect / circle / path）"
+            )));
+        }
+    };
+    Ok(Element::StaticShape(shape))
+}
+
+/// `static_image`：`image` 给 `cloudime.image.load` 的句柄，或 `path` 给文件（PNG / BMP / JPG）。
+fn parse_static_image(table: &mlua::Table, images: &mut ImageCache) -> mlua::Result<Element> {
+    let image = match table.get::<mlua::Value>("image")? {
+        mlua::Value::UserData(handle) => handle.borrow::<ImageHandle>()?.0.clone(),
+        mlua::Value::Nil => {
+            let path: String = table.get("path").map_err(|_| {
+                mlua::Error::RuntimeError("static_image 缺 image 或 path".to_owned())
+            })?;
+            images.load(Path::new(&path))?
+        }
+        other => {
+            return Err(mlua::Error::RuntimeError(format!(
+                "static_image 的 image 要 cloudime.image.load 的句柄，给的是 {}",
+                other.type_name()
+            )));
+        }
+    };
+    Ok(Element::StaticImage(StaticImage {
+        x: number(table, "x", 0.0)?,
+        y: number(table, "y", 0.0)?,
+        width: positive(table, "w", "width")?,
+        height: positive(table, "h", "height")?,
+        image,
+    }))
+}
+
+/// `panel`：容器 + 背景，`children` 里是面板内相对坐标的元素。
+fn parse_panel(
+    table: &mlua::Table,
+    images: &mut ImageCache,
+    depth: usize,
+) -> mlua::Result<Element> {
+    if depth >= MAX_PANEL_DEPTH {
+        return Err(mlua::Error::RuntimeError(format!(
+            "panel 最多套 {MAX_PANEL_DEPTH} 层"
+        )));
+    }
+    let mut children = Vec::new();
+    if let Some(list) = table.get::<Option<mlua::Table>>("children")? {
+        for child in list.sequence_values::<mlua::Table>() {
+            if children.len() >= MAX_ELEMENTS {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "一个 panel 最多 {MAX_ELEMENTS} 个子控件"
+                )));
+            }
+            children.push(parse_element(&child?, images, depth + 1)?);
+        }
+    }
+    Ok(Element::Panel(Panel {
+        x: number(table, "x", 0.0)?,
+        y: number(table, "y", 0.0)?,
+        width: positive(table, "w", "width")?,
+        height: positive(table, "h", "height")?,
+        radius: number(table, "radius", 6.0)?.max(0.0),
+        color: color(table, "color", false)?.unwrap_or(Color::rgba(0xE0, 0xE0, 0xE0, 0xFF)),
+        children,
+    }))
+}
+
+/// 单个控件允许的最大字符数（与 `text` 元素共用 [`MAX_TEXT`]）。
+fn check_text(text: &str) -> mlua::Result<()> {
+    if text.chars().count() > MAX_TEXT {
+        return Err(mlua::Error::RuntimeError(format!(
+            "一段文字最多 {MAX_TEXT} 个字符"
+        )));
+    }
+    Ok(())
+}
+
+/// 控件与 `text` 元素共用的字体槽位解析。
+fn font_slot(table: &mlua::Table) -> mlua::Result<FontSlot> {
+    match table.get::<Option<String>>("font")? {
+        None => Ok(FontSlot::Candidate),
+        Some(name) => FontSlot::from_name(&name).ok_or_else(|| {
+            mlua::Error::RuntimeError(format!(
+                "font 不认识：{name}（可用：candidate / pinyin / item_number / translate）"
+            ))
+        }),
     }
 }
 
@@ -1254,6 +1463,130 @@ mod tests {
         let triangle = &document.regions[2];
         assert!(triangle.contains(10.0, 10.0));
         assert!(!triangle.contains(30.0, 30.0), "斜边外面");
+    }
+
+    /// `label` / `text_block` / `static_shape` / `static_image` / `panel` 都能从元素表解析出来。
+    #[test]
+    fn static_controls_are_parsed_from_the_content_table() {
+        let dir = std::env::temp_dir().join("cloudime-script-controls");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let image_path = dir.join("dot.png");
+        Pixmap::new(2, 2).unwrap().save_png(&image_path).unwrap();
+
+        let lua = mlua::Lua::new();
+        let source = format!(
+            r##"
+            return {{
+                width = 200, height = 120,
+                {{ type = "label", x = 4, y = 4, size = 14,
+                   runs = {{ {{ text = "云朵", color = "#FF0000FF" }}, {{ text = "输入法" }} }} }},
+                {{ type = "text_block", x = 4, y = 24, text = "第一行\n第二行",
+                   size = 10, line_spacing = 4, color = "#FF333333" }},
+                {{ type = "static_shape", shape = "circle", cx = 20, cy = 60,
+                   radius = 8, color = "#FFFF0000" }},
+                {{ type = "static_image", x = 40, y = 60, w = 20, h = 10,
+                   path = [[{}]] }},
+                {{ type = "panel", x = 100, y = 4, w = 90, h = 100,
+                   children = {{
+                       {{ type = "static_shape", shape = "round_rect", x = 4, y = 4,
+                          w = 40, h = 20, radius = 6, color = "#FF00FF00" }},
+                   }} }},
+            }}
+            "##,
+            image_path.display()
+        );
+        let content = lua.load(&source).eval::<mlua::Table>().unwrap();
+        let document = parse_document(
+            &content,
+            (Some(200.0), Some(120.0)),
+            &mut ImageCache::default(),
+        )
+        .expect("读得出来");
+        assert_eq!(document.elements.len(), 5);
+
+        match &document.elements[0] {
+            Element::Label(label) => {
+                assert_eq!(label.runs.len(), 2);
+                assert_eq!(label.runs[0].color, Color::rgba(0, 0, 255, 255));
+                assert_eq!(label.runs[1].color, Color::rgb(0, 0, 0), "缺省黑色");
+            }
+            other => panic!("不是 label：{other:?}"),
+        }
+        match &document.elements[1] {
+            Element::TextBlock(block) => {
+                assert_eq!(block.text, "第一行\n第二行");
+                assert_eq!(block.line_spacing, 4.0);
+                assert_eq!(block.color, Color::rgb(0x33, 0x33, 0x33));
+            }
+            other => panic!("不是 text_block：{other:?}"),
+        }
+        assert!(matches!(
+            &document.elements[2],
+            Element::StaticShape(StaticShape::Circle { radius, .. }) if (*radius - 8.0).abs() < 0.01
+        ));
+        assert!(matches!(
+            &document.elements[3],
+            Element::StaticImage(image) if (image.width - 20.0).abs() < 0.01
+                && (image.height - 10.0).abs() < 0.01
+                && image.image.width() == 2
+        ));
+        match &document.elements[4] {
+            Element::Panel(panel) => {
+                assert_eq!(panel.children.len(), 1);
+                assert_eq!(panel.radius, 6.0);
+                assert_eq!(panel.color, Color::rgba(0xE0, 0xE0, 0xE0, 0xFF));
+                assert!(matches!(
+                    &panel.children[0],
+                    Element::StaticShape(StaticShape::RoundRect { radius, .. })
+                        if (*radius - 6.0).abs() < 0.01
+                ));
+            }
+            other => panic!("不是 panel：{other:?}"),
+        }
+    }
+
+    /// `cloudime.image.load` 的句柄可以直接放进 `static_image`（生命周期由 Arc 持有）。
+    #[test]
+    fn static_images_accept_a_memory_handle() {
+        use crate::Runtime;
+
+        let dir = std::env::temp_dir().join("cloudime-script-image-handle");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let image_path = dir.join("dot.png");
+        Pixmap::new(3, 4).unwrap().save_png(&image_path).unwrap();
+
+        let runtime = Runtime::none();
+        let lua = runtime.lua();
+        let handle = lua
+            .load(format!(
+                "return cloudime.image.load([[{}]])",
+                image_path.display()
+            ))
+            .eval::<mlua::AnyUserData>()
+            .expect("图像句柄");
+        let content = lua
+            .load(
+                r#"return { width = 40, height = 40,
+                    { type = "static_image", x = 0, y = 0, w = 10, h = 10 } }"#,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let element: mlua::Table = content.get(1).unwrap();
+        element.set("image", handle).unwrap();
+        let document = parse_document(
+            &content,
+            (Some(40.0), Some(40.0)),
+            &mut ImageCache::default(),
+        )
+        .expect("句柄解析得出来");
+        match &document.elements[0] {
+            Element::StaticImage(image) => {
+                assert_eq!((image.image.width(), image.image.height()), (3, 4));
+            }
+            other => panic!("不是 static_image：{other:?}"),
+        }
     }
 
     /// `svg` 元素可以给 `path` 直接读文件；文件不存在时整份内容报错。

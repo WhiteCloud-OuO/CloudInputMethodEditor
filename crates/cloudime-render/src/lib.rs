@@ -15,6 +15,7 @@
 
 mod canvas;
 mod color;
+mod control;
 mod document;
 mod elements;
 mod error;
@@ -31,10 +32,14 @@ mod theme;
 
 #[cfg(target_os = "windows")]
 pub use color::Color;
+pub use control::{Label, LabelRun, Panel, StaticImage, StaticShape, TextBlock};
 /// 脚本窗口 / 面板的内容：**声明式**元素表（display list），由 [`Renderer::render_document`] 一次出图。
 pub use document::{Document, Element, FontSlot, HitRect, HitShape, PathCommand, Region};
-/// **能画的元素**的 traits：`text` / `svg` / `img` / `line` / `rect`（含圆角与圆）/ `path`。
-pub use elements::{ImageElement, LineElement, PathElement, RectElement, SvgElement, TextElement};
+/// **能画的元素**的 traits：`text` / `svg` / `img` / `line` / `rect`（含圆角与圆）/ `path`；
+/// 以及控件绘制用的一整套 [`ControlRender`]。
+pub use elements::{
+    ControlRender, ImageElement, LineElement, PathElement, RectElement, SvgElement, TextElement,
+};
 pub use error::RenderError;
 /// Windows 的字体登记：按字族名找文件、列字族名（设置页用）。
 #[cfg(target_os = "windows")]

@@ -77,10 +77,12 @@ local function draw()
         -- 窗口背景由脚本画（`create` 用了 background = false）；颜色跟随当前主题。
         { type = "rect", x = 0, y = 0, w = WIDTH, h = HEIGHT, radius = PANEL_RADIUS,
           color = color.background },
-        { type = "text", x = MARGIN + 8, y = 18, text = "光标窗口", size = 16, color = color.accent },
-        { type = "text", x = MARGIN + 8, y = 44, text = "180 × 140", size = 12, color = color.muted },
-        { type = "text", x = MARGIN + 8, y = 66, text = "Ctrl+Alt+F3 只创建", size = 12,
-          color = color.muted },
+        -- 静态控件：label 每段颜色不同；text_block 多行 + 行距。
+        { type = "label", x = MARGIN + 8, y = 18, size = 16,
+          runs = { { text = "云朵", color = color.accent },
+                   { text = "输入法", color = color.text } } },
+        { type = "text_block", x = MARGIN + 8, y = 44, size = 12, line_spacing = 4,
+          text = "180 × 140\nCtrl+Alt+F3 只创建", color = color.muted },
     }
     -- 鼠标在关闭区域里才画按钮底色；先画它、再画叉（叉在上面）。
     if hovering then

@@ -364,7 +364,13 @@ impl Renderer {
         let metrics = Metrics { theme, scale };
         let mut hits = Vec::with_capacity(document.elements.len());
         for element in &document.elements {
-            hits.push(draw_element(&mut render, element, &metrics, margin));
+            hits.push(draw_element(
+                &mut render,
+                element,
+                &metrics,
+                margin,
+                (0.0, 0.0),
+            ));
         }
         Ok(RenderedDocument {
             rendered: Self::panel_rendered(render, margin, (width, height), scale),
@@ -787,10 +793,12 @@ fn draw_element(
     element: &Element,
     m: &Metrics,
     margin: f32,
+    origin: (f32, f32),
 ) -> Option<HitShape> {
     let scale = m.scale;
-    // 位置要加上内容区在位图里的偏移（阴影留白）；尺寸不用。
-    let at = |value: f32| margin + value * scale;
+    // 位置要加上内容区在位图里的偏移（阴影留白）与控件容器的平移；尺寸不用。
+    let x_at = |value: f32| margin + (origin.0 + value) * scale;
+    let y_at = |value: f32| margin + (origin.1 + value) * scale;
     let len = |value: f32| value * scale;
     match element {
         Element::Rect {
@@ -803,8 +811,8 @@ fn draw_element(
         } => {
             let hit = if *radius > 0.0 {
                 render.round_rect(
-                    at(*x),
-                    at(*y),
+                    x_at(*x),
+                    y_at(*y),
                     len(*width),
                     len(*height),
                     len(*radius),
@@ -818,7 +826,7 @@ fn draw_element(
                     radius: *radius,
                 }
             } else {
-                render.rect(at(*x), at(*y), len(*width), len(*height), *color);
+                render.rect(x_at(*x), y_at(*y), len(*width), len(*height), *color);
                 HitShape::Rect(HitRect::new(*x, *y, *width, *height))
             };
             Some(hit)
@@ -830,8 +838,8 @@ fn draw_element(
             color,
         } => {
             render.line(
-                (at(from.0), at(from.1)),
-                (at(to.0), at(to.1)),
+                (x_at(from.0), y_at(from.1)),
+                (x_at(to.0), y_at(to.1)),
                 len(*thickness),
                 *color,
             );
@@ -847,7 +855,7 @@ fn draw_element(
             radius,
             color,
         } => {
-            render.circle(at(*cx), at(*cy), len(*radius), *color);
+            render.circle(x_at(*cx), y_at(*cy), len(*radius), *color);
             Some(HitShape::Circle {
                 cx: *cx,
                 cy: *cy,
@@ -867,7 +875,7 @@ fn draw_element(
             let mut style = TextStyle::new(font, *size, *color, m.theme.text_gamma);
             style.family = document::family_for(m.theme, *slot).cloned();
             style.italic = *italic;
-            let width = render.text(text, &style, at(*x), at(*y)) / scale;
+            let width = render.text(text, &style, x_at(*x), y_at(*y)) / scale;
             Some(HitShape::Rect(HitRect::new(
                 *x,
                 *y,
@@ -882,7 +890,9 @@ fn draw_element(
             source,
             tint,
         } => {
-            render.svg(source, at(*x), at(*y), len(*size), *tint).ok()?;
+            render
+                .svg(source, x_at(*x), y_at(*y), len(*size), *tint)
+                .ok()?;
             Some(HitShape::Rect(HitRect::new(*x, *y, *size, *size)))
         }
         Element::Image {
@@ -892,15 +902,62 @@ fn draw_element(
             height,
             image,
         } => {
-            render.image(image, at(*x), at(*y), len(*width), len(*height));
+            render.image(image, x_at(*x), y_at(*y), len(*width), len(*height));
             Some(HitShape::Rect(HitRect::new(*x, *y, *width, *height)))
         }
         Element::Path { commands, color } => {
-            let path = document::build_path(commands, scale, margin)?;
+            let path = document::build_path(
+                commands,
+                scale,
+                margin + origin.0 * scale,
+                margin + origin.1 * scale,
+            )?;
             render.path(&path, *color);
             Some(HitShape::Path {
                 contours: document::path_contours(commands),
             })
+        }
+        // 静态控件没有命中框：只画，不参与 hover / click / element 编号。
+        Element::Label(label) => {
+            label.draw(render, m.theme, scale, origin, margin);
+            None
+        }
+        Element::TextBlock(text) => {
+            text.draw(render, m.theme, scale, origin, margin);
+            None
+        }
+        Element::StaticShape(shape) => {
+            shape.draw(render, scale, origin, margin);
+            None
+        }
+        Element::StaticImage(image) => {
+            image.draw(render, scale, origin, margin);
+            None
+        }
+        Element::Panel(panel) => {
+            if panel.radius > 0.0 {
+                render.round_rect(
+                    x_at(panel.x),
+                    y_at(panel.y),
+                    len(panel.width),
+                    len(panel.height),
+                    len(panel.radius),
+                    panel.color,
+                );
+            } else {
+                render.rect(
+                    x_at(panel.x),
+                    y_at(panel.y),
+                    len(panel.width),
+                    len(panel.height),
+                    panel.color,
+                );
+            }
+            let child_origin = (origin.0 + panel.x, origin.1 + panel.y);
+            for child in &panel.children {
+                let _ = draw_element(render, child, m, margin, child_origin);
+            }
+            None
         }
     }
 }
@@ -1266,5 +1323,94 @@ mod tests {
         };
         assert_eq!(text.x, 4.0);
         assert!(text.width > 0.0, "文字宽度是量出来的：{text:?}");
+    }
+
+    /// 静态控件：画出来，但整条 `hits` 都是 `None`（点不到、也不参与 `event.element`）。
+    #[test]
+    fn static_controls_draw_without_hit_boxes() {
+        use crate::color::Color;
+        use crate::control::{Label, LabelRun, Panel, StaticImage, StaticShape, TextBlock};
+        use crate::document::{Document, Element, FontSlot};
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let mut image = crate::Pixmap::new(2, 2).unwrap();
+        for pixel in image.pixels_mut() {
+            *pixel = tiny_skia::PremultipliedColorU8::from_rgba(255, 0, 0, 255).unwrap();
+        }
+        let document = Document {
+            width: 120.0,
+            height: 80.0,
+            regions: Vec::new(),
+            elements: vec![
+                Element::Panel(Panel {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 100.0,
+                    height: 60.0,
+                    radius: 6.0,
+                    color: Color::rgb(0xE0, 0xE0, 0xE0),
+                    children: vec![
+                        Element::Label(Label {
+                            x: 4.0,
+                            y: 4.0,
+                            size: 12.0,
+                            slot: FontSlot::Candidate,
+                            runs: vec![
+                                LabelRun {
+                                    text: "云朵".to_owned(),
+                                    color: Color::rgb(0, 0, 255),
+                                },
+                                LabelRun {
+                                    text: "输入法".to_owned(),
+                                    color: Color::rgb(0, 0, 0),
+                                },
+                            ],
+                        }),
+                        Element::TextBlock(TextBlock {
+                            x: 4.0,
+                            y: 24.0,
+                            size: 10.0,
+                            slot: FontSlot::Candidate,
+                            line_spacing: 2.0,
+                            color: Color::rgb(0x33, 0x33, 0x33),
+                            text: "第一行\n第二行".to_owned(),
+                        }),
+                        Element::StaticShape(StaticShape::Rect {
+                            x: 70.0,
+                            y: 4.0,
+                            width: 20.0,
+                            height: 10.0,
+                            color: Color::rgb(0, 255, 0),
+                        }),
+                    ],
+                }),
+                Element::StaticImage(StaticImage {
+                    x: 10.0,
+                    y: 66.0,
+                    width: 20.0,
+                    height: 10.0,
+                    image: std::sync::Arc::new(image),
+                }),
+            ],
+        };
+        let rendered = renderer
+            .render_document(&document, &Theme::new(), 1.0, None, false)
+            .expect("画得出来");
+        assert_eq!(rendered.hits.len(), 2);
+        assert!(
+            rendered.hits.iter().all(Option::is_none),
+            "静态控件没有命中框"
+        );
+        // 面板右下角只剩底色（子控件都在左上 / 右上）。
+        let panel = rendered.rendered.pixmap.pixel(90, 50).unwrap();
+        assert_eq!(
+            (panel.red(), panel.green(), panel.blue()),
+            (0xE0, 0xE0, 0xE0)
+        );
+        // 静态图像按目标矩形缩放画上去了。
+        let image = rendered.rendered.pixmap.pixel(15, 70).unwrap();
+        assert_eq!((image.red(), image.green(), image.blue()), (255, 0, 0));
     }
 }

@@ -1,19 +1,20 @@
-//! **图像**（`img`）元素：从**文件**或**文件句柄**读一张 PNG，解码成预乘 RGBA 位图；画的时候按目标矩形缩放叠上去。
+//! **图像**（`img`）元素：从**文件**或**文件句柄**读一张图（PNG / BMP / JPG），解码成预乘 RGBA 位图；
+//! 画的时候按目标矩形缩放叠上去。
 //!
 //! 这是「能画的元素」里的 `img`（见 `docs/design/windows.md` §6）：
 //! `text` 在 `text`、`svg` 在 [`crate::svg`]、`line` / `rect` / `path` 都走画布那几笔填充原语，
 //! 图像这条以前只能叠**已经在内存里**的位图（`Canvas::blend_pixmap`），现在多了「读进来」这一步。
 //!
-//! 解码交给 tiny-skia（`Pixmap::decode_png`，与编码、光栅化同一套，不另引解码库）；眼下只认 PNG。
+//! 解码：PNG 优先走 tiny-skia（与编码、光栅化同一套）；BMP / JPG 交给 `image`（只开解码特性）。
 
 use std::io::Read;
 use std::path::Path;
 
-use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, Transform};
+use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, PremultipliedColorU8, Transform};
 
 use crate::error::RenderError;
 
-/// 从**文件**读一张 PNG 并解码。
+/// 从**文件**读一张图并解码（PNG / BMP / JPG）。
 pub fn load_image(path: &Path) -> Result<Pixmap, RenderError> {
     let file = std::fs::File::open(path).map_err(|error| RenderError::InvalidImage {
         message: format!("打开 {} 失败：{error}", path.display()),
@@ -21,7 +22,7 @@ pub fn load_image(path: &Path) -> Result<Pixmap, RenderError> {
     read_image(file)
 }
 
-/// 从**文件句柄**读一张 PNG 并解码 —— 任何 `Read` 都行（`File` / `Cursor` / 管道 / 内存里的字节流）。
+/// 从**文件句柄**读一张图并解码 —— 任何 `Read` 都行（`File` / `Cursor` / 管道 / 内存里的字节流）。
 pub fn read_image(reader: impl Read) -> Result<Pixmap, RenderError> {
     let mut bytes = Vec::new();
     reader
@@ -33,11 +34,23 @@ pub fn read_image(reader: impl Read) -> Result<Pixmap, RenderError> {
     decode_image(&bytes)
 }
 
-/// 把 PNG 字节解码成预乘 RGBA 位图。
+/// 从字节解码成预乘 RGBA 位图：PNG（tiny-skia）优先，其余交给 `image`（BMP / JPG）。
 pub fn decode_image(bytes: &[u8]) -> Result<Pixmap, RenderError> {
-    Pixmap::decode_png(bytes).map_err(|error| RenderError::InvalidImage {
+    if let Ok(pixmap) = Pixmap::decode_png(bytes) {
+        return Ok(pixmap);
+    }
+    let decoded = image::load_from_memory(bytes).map_err(|error| RenderError::InvalidImage {
         message: error.to_string(),
-    })
+    })?;
+    let rgba = decoded.to_rgba8();
+    let (width, height) = rgba.dimensions();
+    let mut pixmap =
+        Pixmap::new(width, height).ok_or(RenderError::InvalidSize { width, height })?;
+    for (target, source) in pixmap.pixels_mut().iter_mut().zip(rgba.pixels()) {
+        *target = PremultipliedColorU8::from_rgba(source[0], source[1], source[2], source[3])
+            .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+    Ok(pixmap)
 }
 
 /// 把一张图按**目标矩形**（像素）缩放画到 `target` 上：左上角 `(x, y)`、宽 `width`、高 `height`。
@@ -115,6 +128,46 @@ mod tests {
         let from_file = load_image(&path).expect("从文件解码");
         let _ = std::fs::remove_file(&path);
         assert_eq!(from_file.pixels(), quarters().pixels());
+    }
+
+    /// 2×2、24 位的 BMP（底行红 / 绿，顶行蓝 / 白）：`image` 解码后颜色与方向都对。
+    #[test]
+    fn decodes_bmp_as_well_as_png() {
+        let mut bytes = Vec::new();
+        bytes.extend_from_slice(b"BM");
+        bytes.extend_from_slice(&70u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&54u32.to_le_bytes());
+        bytes.extend_from_slice(&40u32.to_le_bytes());
+        bytes.extend_from_slice(&2i32.to_le_bytes());
+        bytes.extend_from_slice(&2i32.to_le_bytes());
+        bytes.extend_from_slice(&1u16.to_le_bytes());
+        bytes.extend_from_slice(&24u16.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&16u32.to_le_bytes());
+        bytes.extend_from_slice(&0i32.to_le_bytes());
+        bytes.extend_from_slice(&0i32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        bytes.extend_from_slice(&0u32.to_le_bytes());
+        // 底行（BMP 从下往上）：红、绿，再补两个对齐字节
+        bytes.extend_from_slice(&[0, 0, 255, 0, 255, 0, 0, 0]);
+        // 顶行：蓝、白，再补两个对齐字节
+        bytes.extend_from_slice(&[255, 0, 0, 255, 255, 255, 0, 0]);
+
+        let pixmap = decode_image(&bytes).expect("BMP 解得出来");
+        assert_eq!((pixmap.width(), pixmap.height()), (2, 2));
+        let top_left = pixmap.pixel(0, 0).unwrap();
+        assert_eq!(
+            (top_left.red(), top_left.green(), top_left.blue()),
+            (0, 0, 255),
+            "顶行是蓝色"
+        );
+        let bottom_left = pixmap.pixel(0, 1).unwrap();
+        assert_eq!(
+            (bottom_left.red(), bottom_left.green(), bottom_left.blue()),
+            (255, 0, 0),
+            "底行是红色"
+        );
     }
 
     /// 不是 PNG 就报 `InvalidImage`（不 panic、不画半张）。

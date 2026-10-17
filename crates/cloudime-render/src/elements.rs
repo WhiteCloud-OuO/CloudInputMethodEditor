@@ -64,3 +64,17 @@ pub trait RectElement {
 pub trait PathElement {
     fn path(&mut self, path: &Path, color: Color);
 }
+
+/// 控件绘制用的一整套原语：能画控件的地方必须同时实现上面这些 trait。
+///
+/// `Render` 全实现了，所以控件在内存渲染器上直接可用；以后加别的后端（比如直接画 DC）
+/// 只要也实现这几个 trait，控件代码不用改。
+pub trait ControlRender:
+    TextElement + SvgElement + ImageElement + LineElement + RectElement + PathElement
+{
+}
+
+impl<T> ControlRender for T where
+    T: TextElement + SvgElement + ImageElement + LineElement + RectElement + PathElement
+{
+}
