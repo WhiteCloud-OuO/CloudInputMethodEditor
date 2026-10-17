@@ -362,7 +362,7 @@ impl Renderer {
         let metrics = Metrics { theme, scale };
         let mut hits = Vec::with_capacity(document.elements.len());
         for element in &document.elements {
-            hits.push(draw_element(&mut render, element, &metrics));
+            hits.push(draw_element(&mut render, element, &metrics, margin));
         }
         Ok(RenderedDocument {
             rendered: Self::panel_rendered(render, margin, (width, height), scale),
@@ -774,9 +774,19 @@ pub(super) fn truncate_with(
 
 /// 画脚本内容里的一个元素，返回它在**内容区**里的包围盒（点）：鼠标命中测试按外框算，不抠形状。
 /// 画不出来（SVG 解析失败 / 空路径）返回 `None`。
-fn draw_element(render: &mut Render, element: &Element, m: &Metrics) -> Option<HitRect> {
+///
+/// `margin` 是位图四周的阴影留白（像素）：内容区左上角在位图里的位置，所有坐标都要加上它。
+/// 命中框仍然只报**内容区**坐标（与 `Document` 同一套，鼠标事件那边减掉留白再换算）。
+fn draw_element(
+    render: &mut Render,
+    element: &Element,
+    m: &Metrics,
+    margin: f32,
+) -> Option<HitRect> {
     let scale = m.scale;
-    let px = |value: f32| value * scale;
+    // 位置要加上内容区在位图里的偏移（阴影留白）；尺寸不用。
+    let at = |value: f32| margin + value * scale;
+    let len = |value: f32| value * scale;
     match element {
         Element::Rect {
             x,
@@ -787,9 +797,16 @@ fn draw_element(render: &mut Render, element: &Element, m: &Metrics) -> Option<H
             color,
         } => {
             if *radius > 0.0 {
-                render.round_rect(px(*x), px(*y), px(*width), px(*height), px(*radius), *color);
+                render.round_rect(
+                    at(*x),
+                    at(*y),
+                    len(*width),
+                    len(*height),
+                    len(*radius),
+                    *color,
+                );
             } else {
-                render.rect(px(*x), px(*y), px(*width), px(*height), *color);
+                render.rect(at(*x), at(*y), len(*width), len(*height), *color);
             }
             Some(HitRect::new(*x, *y, *width, *height))
         }
@@ -800,9 +817,9 @@ fn draw_element(render: &mut Render, element: &Element, m: &Metrics) -> Option<H
             color,
         } => {
             render.line(
-                (px(from.0), px(from.1)),
-                (px(to.0), px(to.1)),
-                px(*thickness),
+                (at(from.0), at(from.1)),
+                (at(to.0), at(to.1)),
+                len(*thickness),
                 *color,
             );
             // 包围盒按「两端点外扩半个线宽」算：斜线也点得着。
@@ -820,7 +837,7 @@ fn draw_element(render: &mut Render, element: &Element, m: &Metrics) -> Option<H
             radius,
             color,
         } => {
-            render.circle(px(*cx), px(*cy), px(*radius), *color);
+            render.circle(at(*cx), at(*cy), len(*radius), *color);
             Some(HitRect::new(
                 cx - radius,
                 cy - radius,
@@ -841,7 +858,7 @@ fn draw_element(render: &mut Render, element: &Element, m: &Metrics) -> Option<H
             let mut style = TextStyle::new(font, *size, *color, m.theme.text_gamma);
             style.family = document::family_for(m.theme, *slot).cloned();
             style.italic = *italic;
-            let width = render.text(text, &style, px(*x), px(*y)) / scale;
+            let width = render.text(text, &style, at(*x), at(*y)) / scale;
             Some(HitRect::new(*x, *y, width, font.line_height / scale))
         }
         Element::Svg {
@@ -851,7 +868,7 @@ fn draw_element(render: &mut Render, element: &Element, m: &Metrics) -> Option<H
             source,
             tint,
         } => {
-            render.svg(source, px(*x), px(*y), px(*size), *tint).ok()?;
+            render.svg(source, at(*x), at(*y), len(*size), *tint).ok()?;
             Some(HitRect::new(*x, *y, *size, *size))
         }
         Element::Image {
@@ -861,16 +878,16 @@ fn draw_element(render: &mut Render, element: &Element, m: &Metrics) -> Option<H
             height,
             image,
         } => {
-            render.image(image, px(*x), px(*y), px(*width), px(*height));
+            render.image(image, at(*x), at(*y), len(*width), len(*height));
             Some(HitRect::new(*x, *y, *width, *height))
         }
         Element::Path { commands, color } => {
-            let path = document::build_path(commands, scale)?;
+            let path = document::build_path(commands, scale, margin)?;
             let bounds = path.bounds();
             render.path(&path, *color);
             Some(HitRect::new(
-                bounds.x() / scale,
-                bounds.y() / scale,
+                (bounds.x() - margin) / scale,
+                (bounds.y() - margin) / scale,
                 bounds.width() / scale,
                 bounds.height() / scale,
             ))
@@ -1206,7 +1223,7 @@ mod tests {
             ],
         };
         let rendered = renderer
-            .render_document(&document, &theme, 1.0, None)
+            .render_document(&document, &theme, 1.0, Some(&crate::Shadow::panel()))
             .expect("画得出来");
         assert_eq!(
             (
@@ -1215,9 +1232,16 @@ mod tests {
             ),
             (120, 48)
         );
-        // 左上角落在矩形里：红通道满、绿蓝为零
-        let pixel = rendered.rendered.pixmap.pixels()[0];
-        assert!(pixel.red() > 200 && pixel.green() == 0 && pixel.blue() == 0);
+        // 阴影留白让内容区从位图里挪开：左上角（留白处）透明，内容区左上角才是那块红矩形
+        let margin = rendered.rendered.content_x;
+        assert!(margin > 0, "带阴影时内容区不该贴着位图边");
+        assert_eq!(rendered.rendered.pixmap.pixels()[0].alpha(), 0, "留白透明");
+        let pixel = rendered.rendered.pixmap.pixels()
+            [(margin * rendered.rendered.pixmap.width() + margin) as usize];
+        assert!(
+            pixel.red() > 200 && pixel.green() == 0 && pixel.blue() == 0,
+            "内容区左上角落在矩形里"
+        );
 
         assert_eq!(rendered.hits.len(), 2);
         assert_eq!(

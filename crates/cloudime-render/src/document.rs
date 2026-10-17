@@ -174,10 +174,15 @@ impl HitRect {
     }
 }
 
-/// 把路径命令换成 tiny-skia 的路径（像素坐标由 `scale` 换算）。空路径 / 画不出来返回 `None`。
-pub(crate) fn build_path(commands: &[PathCommand], scale: f32) -> Option<tiny_skia::Path> {
+/// 把路径命令换成 tiny-skia 的路径：坐标乘 `scale` 换成像素，再整体加 `offset`（阴影留白）。
+/// 空路径 / 画不出来返回 `None`。
+pub(crate) fn build_path(
+    commands: &[PathCommand],
+    scale: f32,
+    offset: f32,
+) -> Option<tiny_skia::Path> {
     let mut builder = PathBuilder::new();
-    let px = |value: f32| value * scale;
+    let px = |value: f32| offset + value * scale;
     for command in commands {
         match *command {
             PathCommand::MoveTo(x, y) => builder.move_to(px(x), px(y)),
