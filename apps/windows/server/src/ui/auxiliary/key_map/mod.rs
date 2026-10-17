@@ -1,7 +1,8 @@
 //! 键位映射参考：**候选窗口的一件资产**（见 [`super`] 那份说明）。
 //!
 //! 把当前双键拼音方案的小写键（声母 / 韵母 / 零声母）逐行列出来，给新手对着敲。
-//! 窗口本身（分层窗、主题背景 + 圆角、阴影、贴宿主摆位）走辅助窗口模板 [`AuxiliaryWindowTemplate`]；
+//! 窗口本身（主题背景 + 圆角、贴宿主摆位）走辅助窗口模板 [`AuxiliaryWindowTemplate`] —— 那块是**绘制**
+//! （GDI 直画窗口 DC，见 `docs/design/windows.md` §6），所以没有阴影、圆角是窗口区域切出来的硬边；
 //! 内容（几行文字）由 Server 按当前方案生成，经宿主（候选窗口）转过来。
 //!
 //! 开关在设置页「输入 → 双键拼音 → 启用键位映射参考」（`use_input_scheme.cfg` 的 `key_map_reference`）；
@@ -16,7 +17,7 @@ use cloudime_platform::input_schemes::KeyMapLayout;
 
 /// 键位映射参考窗口。
 pub(crate) struct KeyMapWindow {
-    /// 辅助窗口模板：分层面板 + 主题背景 / 圆角 + 阴影 + 贴宿主摆位。
+    /// 辅助窗口模板：主题背景 / 圆角 + 贴宿主摆位（内容由模板在 `WM_PAINT` 里绘制）。
     template: AuxiliaryWindowTemplate,
 }
 

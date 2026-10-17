@@ -14,8 +14,7 @@
 use crate::color::Color;
 use crate::elements::{RectElement, TextElement};
 use crate::error::RenderError;
-use crate::render::Render;
-use crate::renderer::{Metrics, Renderer};
+use crate::renderer::{Metrics, Renderer, truncate_with};
 use crate::shadow::Shadow;
 use crate::text::TextStyle;
 use crate::theme::{FontSpec, Theme};
@@ -180,164 +179,193 @@ impl Renderer {
         scale: f32,
         shadow: Option<&Shadow>,
     ) -> Result<crate::renderer::Rendered, RenderError> {
-        let metrics = Metrics { theme, scale };
-        let styles = KeyMapStyles::new(&metrics, cell);
-        // 边长**取整到设备像素**：相邻两格共用一条线，落在整像素上才是干净的 1 点（不然两条半透明的
-        // 边叠在一起，看着像 2 点）。取整后画布尺寸也按像素算，与画的完全一致。
-        let cell = metrics.px(cell).round().max(1.0);
-        let (width, height) = key_map_size(layout, cell);
+        let (width, height) = key_map_pixel_size(layout, cell, scale);
         let (mut render, margin) = self.panel_canvas(width, height, theme, scale, shadow)?;
-        // 相邻两格共用一条线：步距 = 边长 − 线宽
-        let pitch = KeyMapLayout::pitch(cell);
-        let stagger = KeyMapLayout::stagger(cell).round();
-        let left = margin + metrics.px(PADDING);
-        let top = margin + metrics.px(PADDING);
-        for (row, caps) in layout.rows.iter().enumerate() {
-            // 每排再右移半格：像真实键盘那样错开
-            let row_left = left + row as f32 * stagger;
-            for (column, cap) in caps.iter().enumerate() {
-                let x = row_left + column as f32 * pitch;
-                let y = top + row as f32 * pitch;
-                self.draw_key_cap(&mut render, cap, &styles, &metrics, (x, y, cell, cell));
-            }
-        }
-        // 零声母表：键盘**下方**、隔 [`TABLE_GAP`]，6 列 × 最多 2 行；格子矮一点、宽一点（放「按键=韵母」一行）
-        let table_rows = layout.table_rows();
-        if table_rows > 0 {
-            let table_top =
-                top + KeyMapLayout::span(layout.rows.len(), cell) + metrics.px(TABLE_GAP);
-            let zero_width = (cell * ZERO_WIDTH_RATIO).round().max(1.0);
-            let zero_height = (cell * ZERO_HEIGHT_RATIO).round().max(1.0);
-            for (index, cap) in layout.zero_initials.iter().enumerate() {
-                let x = left + (index % TABLE_COLUMNS) as f32 * KeyMapLayout::pitch(zero_width);
-                let y =
-                    table_top + (index / TABLE_COLUMNS) as f32 * KeyMapLayout::pitch(zero_height);
-                self.draw_zero_cap(
-                    &mut render,
-                    cap,
-                    &styles,
-                    &metrics,
-                    (x, y, zero_width, zero_height),
-                );
-            }
-        }
+        draw_key_map(&mut render, layout, cell, theme, scale, (margin, margin));
         Ok(Self::panel_rendered(render, margin, (width, height), scale))
     }
+}
 
-    /// 画零声母表的一格：**一行**「按键=韵母」（`AY=ang`）居中，韵母开头的字母照 [`head_color`] 上色。
-    fn draw_zero_cap(
-        &self,
-        render: &mut Render,
-        cap: &KeyCap,
-        styles: &KeyMapStyles,
-        metrics: &Metrics,
-        (x, y, width, height): (f32, f32, f32, f32),
-    ) {
-        let line = metrics.px(LINE).max(1.0);
-        render.rect(x, y, width, height, styles.line);
-        render.rect(
-            x + line,
-            y + line,
-            (width - line * 2.0).max(0.0),
-            (height - line * 2.0).max(0.0),
-            styles.background,
-        );
-        if cap.mapping.is_empty() {
-            return;
+/// 键位映射参考的内容尺寸（**设备像素**）：格子先按缩放倍数取整到设备像素（相邻两格共用一条线，
+/// 落在整像素上才是干净的 1 点），再按版面算。
+pub fn key_map_pixel_size(layout: &KeyMapLayout, cell: f32, scale: f32) -> (f32, f32) {
+    let cell = (cell * scale).round().max(1.0);
+    key_map_size(layout, cell)
+}
+
+/// 把「键位映射参考」画到任何能画元素的目标上（渲染的 [`crate::Render`]、绘制的 [`crate::Paint`]）：
+/// `origin` 是**内容区**左上角（设备像素），`cell` 是格子边长（**点**）。
+///
+/// 两条路共用这一份版面：格子尺寸、逐排错开、零声母表位置、文字摆位都只在这里算一次；量字走目标自己的
+/// [`TextElement::measure`]（渲染是 cosmic-text，绘制是 GDI），所以截断位置可能差一两个像素，版面不变。
+pub fn draw_key_map<T: RectElement + TextElement>(
+    target: &mut T,
+    layout: &KeyMapLayout,
+    cell: f32,
+    theme: &Theme,
+    scale: f32,
+    origin: (f32, f32),
+) {
+    let metrics = Metrics { theme, scale };
+    let styles = KeyMapStyles::new(&metrics, cell);
+    let cell = metrics.px(cell).round().max(1.0);
+    // 相邻两格共用一条线：步距 = 边长 − 线宽
+    let pitch = KeyMapLayout::pitch(cell);
+    let stagger = KeyMapLayout::stagger(cell).round();
+    let left = origin.0 + metrics.px(PADDING);
+    let top = origin.1 + metrics.px(PADDING);
+    for (row, caps) in layout.rows.iter().enumerate() {
+        // 每排再右移半格：像真实键盘那样错开
+        let row_left = left + row as f32 * stagger;
+        for (column, cap) in caps.iter().enumerate() {
+            let x = row_left + column as f32 * pitch;
+            let y = top + row as f32 * pitch;
+            draw_key_cap(target, cap, &styles, &metrics, (x, y, cell, cell));
         }
-        let prefix = format!("{}=", cap.key);
-        let mut chars = cap.mapping.chars();
-        let head = chars.next().unwrap_or_default();
-        let rest = chars.as_str();
-        let head_style = if head_color(head).is_some() {
-            styles.head_style(metrics, head)
-        } else {
-            styles.mapping.clone()
-        };
-        let prefix_width = render.measure(&prefix, &styles.mapping).width;
-        let head_width = render.measure(&head.to_string(), &head_style).width;
-        let rest_width = render.measure(rest, &styles.mapping).width;
-        let mut text_x = x + (width - prefix_width - head_width - rest_width) / 2.0;
-        let text_y = y + (height - styles.mapping.line_height) / 2.0;
-        render.text(&prefix, &styles.mapping, text_x, text_y);
-        text_x += prefix_width;
-        render.text(&head.to_string(), &head_style, text_x, text_y);
-        text_x += head_width;
-        render.text(rest, &styles.mapping, text_x, text_y);
     }
-
-    /// 画一格：一格宽的边框，**左上角**那颗键、**右上角**的声母（棕色）、中间几行韵母
-    /// （一义一行，每行第一颗字母按 [`head_color`] 上色，其余用普通文字色）。
-    ///
-    /// 相邻格之间**共用**这条线：调用方把两格摆成相差「边长 − 线宽」，各自画出来正好重叠在一条上。
-    fn draw_key_cap(
-        &self,
-        render: &mut Render,
-        cap: &KeyCap,
-        styles: &KeyMapStyles,
-        metrics: &Metrics,
-        (x, y, width, height): (f32, f32, f32, f32),
-    ) {
-        let line = metrics.px(LINE).max(1.0);
-        // 边框：先铺一层格线色，再把里面挖成背景色
-        render.rect(x, y, width, height, styles.line);
-        render.rect(
-            x + line,
-            y + line,
-            (width - line * 2.0).max(0.0),
-            (height - line * 2.0).max(0.0),
-            styles.background,
-        );
-        let inset = metrics.px(width * CELL_INSET_RATIO);
-        // 左上角那颗键
-        if !cap.key.is_empty() {
-            render.text(&cap.key, &styles.key, x + inset, y + inset);
-        }
-        // 右上角的声母（棕色，右对齐）
-        if !cap.initial.is_empty() {
-            let initial_width = render.measure(&cap.initial, &styles.initial).width;
-            render.text(
-                &cap.initial,
-                &styles.initial,
-                x + width - inset - initial_width,
-                y + inset,
+    // 零声母表：键盘**下方**、隔 [`TABLE_GAP`]，6 列 × 最多 2 行；格子矮一点、宽一点（放「按键=韵母」一行）
+    if layout.table_rows() > 0 {
+        let table_top = top + KeyMapLayout::span(layout.rows.len(), cell) + metrics.px(TABLE_GAP);
+        let zero_width = (cell * ZERO_WIDTH_RATIO).round().max(1.0);
+        let zero_height = (cell * ZERO_HEIGHT_RATIO).round().max(1.0);
+        for (index, cap) in layout.zero_initials.iter().enumerate() {
+            let x = left + (index % TABLE_COLUMNS) as f32 * KeyMapLayout::pitch(zero_width);
+            let y = table_top + (index / TABLE_COLUMNS) as f32 * KeyMapLayout::pitch(zero_height);
+            draw_zero_cap(
+                target,
+                cap,
+                &styles,
+                &metrics,
+                (x, y, zero_width, zero_height),
             );
         }
-        let budget = width - inset * 2.0;
-        if cap.mapping.is_empty() || budget <= 0.0 {
-            return;
-        }
-        let lines = self.mapping_lines(&cap.mapping, &styles.mapping, budget);
-        let line_height = styles.mapping.line_height;
-        let block = lines.len() as f32 * line_height;
-        let mut text_y = y + (height - block) / 2.0;
-        for text in &lines {
-            // 第一颗字母换个颜色（a 红 / o 橙 / e 绿 / i 蓝 / u 紫 / ü 棕），其余字母黑色
-            let mut chars = text.chars();
-            let head = chars.next().unwrap_or_default();
-            let rest = chars.as_str();
-            let head_style = styles
-                .head
-                .as_ref()
-                .filter(|_| head_color(head).is_some())
-                .map(|_| styles.head_style(metrics, head))
-                .unwrap_or_else(|| styles.mapping.clone());
-            let head_width = render.measure(&head.to_string(), &head_style).width;
-            let rest_width = render.measure(rest, &styles.mapping).width;
-            let text_x = x + (width - head_width - rest_width) / 2.0;
-            render.text(&head.to_string(), &head_style, text_x, text_y);
-            render.text(rest, &styles.mapping, text_x + head_width, text_y);
-            text_y += line_height;
-        }
     }
+}
 
-    /// 一格里的韵母：**按换行符拆行**（一个键多个义时一义一行），每行放不下就截尾。
-    fn mapping_lines(&self, text: &str, style: &TextStyle, budget: f32) -> Vec<String> {
-        text.lines()
-            .filter(|line| !line.is_empty())
-            .map(|line| self.truncate(line, style, budget).0)
-            .collect()
+/// 画零声母表的一格：**一行**「按键=韵母」（`AY=ang`）居中，韵母开头的字母照 [`head_color`] 上色。
+fn draw_zero_cap<T: RectElement + TextElement>(
+    target: &mut T,
+    cap: &KeyCap,
+    styles: &KeyMapStyles,
+    metrics: &Metrics,
+    (x, y, width, height): (f32, f32, f32, f32),
+) {
+    let line = metrics.px(LINE).max(1.0);
+    target.rect(x, y, width, height, styles.line);
+    target.rect(
+        x + line,
+        y + line,
+        (width - line * 2.0).max(0.0),
+        (height - line * 2.0).max(0.0),
+        styles.background,
+    );
+    if cap.mapping.is_empty() {
+        return;
     }
+    let prefix = format!("{}=", cap.key);
+    let mut chars = cap.mapping.chars();
+    let head = chars.next().unwrap_or_default();
+    let rest = chars.as_str();
+    let head_style = if head_color(head).is_some() {
+        styles.head_style(metrics, head)
+    } else {
+        styles.mapping.clone()
+    };
+    let prefix_width = target.measure(&prefix, &styles.mapping).width;
+    let head_width = target.measure(&head.to_string(), &head_style).width;
+    let rest_width = target.measure(rest, &styles.mapping).width;
+    let mut text_x = x + (width - prefix_width - head_width - rest_width) / 2.0;
+    let text_y = y + (height - styles.mapping.line_height) / 2.0;
+    target.text(&prefix, &styles.mapping, text_x, text_y);
+    text_x += prefix_width;
+    target.text(&head.to_string(), &head_style, text_x, text_y);
+    text_x += head_width;
+    target.text(rest, &styles.mapping, text_x, text_y);
+}
+
+/// 画一格：一格宽的边框，**左上角**那颗键、**右上角**的声母（棕色）、中间几行韵母
+/// （一义一行，每行第一颗字母按 [`head_color`] 上色，其余用普通文字色）。
+///
+/// 相邻格之间**共用**这条线：调用方把两格摆成相差「边长 − 线宽」，各自画出来正好重叠在一条上。
+fn draw_key_cap<T: RectElement + TextElement>(
+    target: &mut T,
+    cap: &KeyCap,
+    styles: &KeyMapStyles,
+    metrics: &Metrics,
+    (x, y, width, height): (f32, f32, f32, f32),
+) {
+    let line = metrics.px(LINE).max(1.0);
+    // 边框：先铺一层格线色，再把里面挖成背景色
+    target.rect(x, y, width, height, styles.line);
+    target.rect(
+        x + line,
+        y + line,
+        (width - line * 2.0).max(0.0),
+        (height - line * 2.0).max(0.0),
+        styles.background,
+    );
+    let inset = metrics.px(width * CELL_INSET_RATIO);
+    // 左上角那颗键
+    if !cap.key.is_empty() {
+        target.text(&cap.key, &styles.key, x + inset, y + inset);
+    }
+    // 右上角的声母（棕色，右对齐）
+    if !cap.initial.is_empty() {
+        let initial_width = target.measure(&cap.initial, &styles.initial).width;
+        target.text(
+            &cap.initial,
+            &styles.initial,
+            x + width - inset - initial_width,
+            y + inset,
+        );
+    }
+    let budget = width - inset * 2.0;
+    if cap.mapping.is_empty() || budget <= 0.0 {
+        return;
+    }
+    let lines = mapping_lines(target, &cap.mapping, &styles.mapping, budget);
+    let line_height = styles.mapping.line_height;
+    let block = lines.len() as f32 * line_height;
+    let mut text_y = y + (height - block) / 2.0;
+    for text in &lines {
+        // 第一颗字母换个颜色（a 红 / o 橙 / e 绿 / i 蓝 / u 紫 / ü 棕），其余字母黑色
+        let mut chars = text.chars();
+        let head = chars.next().unwrap_or_default();
+        let rest = chars.as_str();
+        let head_style = styles
+            .head
+            .as_ref()
+            .filter(|_| head_color(head).is_some())
+            .map(|_| styles.head_style(metrics, head))
+            .unwrap_or_else(|| styles.mapping.clone());
+        let head_width = target.measure(&head.to_string(), &head_style).width;
+        let rest_width = target.measure(rest, &styles.mapping).width;
+        let text_x = x + (width - head_width - rest_width) / 2.0;
+        target.text(&head.to_string(), &head_style, text_x, text_y);
+        target.text(rest, &styles.mapping, text_x + head_width, text_y);
+        text_y += line_height;
+    }
+}
+
+/// 一格里的韵母：**按换行符拆行**（一个键多个义时一义一行），每行放不下就截尾。
+fn mapping_lines<T: TextElement>(
+    target: &T,
+    text: &str,
+    style: &TextStyle,
+    budget: f32,
+) -> Vec<String> {
+    text.lines()
+        .filter(|line| !line.is_empty())
+        .map(|line| {
+            truncate_with(
+                |text, style| target.measure(text, style),
+                line,
+                style,
+                budget,
+            )
+            .0
+        })
+        .collect()
 }
 
 /// 键位映射参考用到的颜色与文字样式（按主题 + 缩放算一次，整幅图共用）。
@@ -413,6 +441,84 @@ mod tests {
                 (0..7).map(|_| cap("Z")).collect(),
             ],
             zero_initials: (0..zero).map(|_| cap("AA")).collect(),
+        }
+    }
+
+    /// 绘制这条路（GDI）照同一份版面画：格线、背景、文字都落到内存 DC 的像素上。
+    #[cfg(target_os = "windows")]
+    #[test]
+    fn the_key_map_paints_onto_a_window_dc() {
+        use crate::Paint;
+        use windows::Win32::Graphics::Gdi::{
+            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection,
+            DIB_RGB_COLORS, DeleteDC, DeleteObject, HBITMAP, HDC, HGDIOBJ, RGBQUAD, SelectObject,
+        };
+
+        /// 32 位 DIB（自上而下）的内存 DC：(DC, 位图, 像素指针)。
+        fn memory_dc(width: i32, height: i32) -> (HDC, HBITMAP, *mut u8) {
+            let header = BITMAPINFOHEADER {
+                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
+                biWidth: width,
+                biHeight: -height,
+                biPlanes: 1,
+                biBitCount: 32,
+                biCompression: BI_RGB.0,
+                ..Default::default()
+            };
+            let info = BITMAPINFO {
+                bmiHeader: header,
+                bmiColors: [RGBQUAD::default()],
+            };
+            let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
+            unsafe {
+                let dc = CreateCompatibleDC(None);
+                let bitmap = CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0)
+                    .expect("DIB");
+                SelectObject(dc, HGDIOBJ(bitmap.0));
+                (dc, bitmap, bits.cast::<u8>())
+            }
+        }
+
+        let theme = Theme::new();
+        let layout = KeyMapLayout {
+            rows: vec![vec![KeyCap {
+                key: "Q".to_owned(),
+                initial: "zh".to_owned(),
+                mapping: "ang".to_owned(),
+            }]],
+            zero_initials: Vec::new(),
+        };
+        let cell = 46.0;
+        let (width, height) = key_map_pixel_size(&layout, cell, 1.0);
+        let (dc, bitmap, bits) = memory_dc(width as i32, height as i32);
+        {
+            let mut paint = Paint::new(dc);
+            paint.rect(0.0, 0.0, width, height, theme.colors.background);
+            draw_key_map(&mut paint, &layout, cell, &theme, 1.0, (0.0, 0.0));
+        }
+        // DIB 是 BGRA
+        let pixel = |x: i32, y: i32| unsafe {
+            let at = bits.offset(((y * width as i32 + x) * 4) as isize);
+            (*at, *at.offset(1), *at.offset(2))
+        };
+        // 格子左边那条线在 x = 8（PADDING），里面是背景色
+        let line = pixel(8, 20);
+        let background = pixel(20, 20);
+        assert_ne!(line, background, "格子边框与背景不是同一个颜色");
+        // 格子中间的文字（「Q」「zh」「ang」）应该有暗像素
+        let mut dark = 0;
+        for y in 9..55 {
+            for x in 9..55 {
+                let (b, g, r) = pixel(x, y);
+                if (b as i32 + g as i32 + r as i32) / 3 < 128 {
+                    dark += 1;
+                }
+            }
+        }
+        assert!(dark > 5, "格子里的字画上去了（暗像素 {dark} 个）");
+        unsafe {
+            let _ = DeleteObject(HGDIOBJ(bitmap.0));
+            let _ = DeleteDC(dc);
         }
     }
 

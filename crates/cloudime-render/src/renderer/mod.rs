@@ -26,7 +26,9 @@ use crate::shadow::Shadow;
 use crate::text::{TextPainter, TextSize, TextStyle};
 use crate::theme::{FontSpec, Theme};
 
-pub use key_map::{KeyCap, KeyMapLayout, key_map_cell, key_map_size};
+pub use key_map::{
+    KeyCap, KeyMapLayout, draw_key_map, key_map_cell, key_map_pixel_size, key_map_size,
+};
 pub use rendered::Rendered;
 pub use status::{RenderedStatus, StatusCell};
 
@@ -612,12 +614,43 @@ impl Renderer {
                 break;
             }
             let style = m.translate_style(m.tone_color(segment.tone), segment.italic);
-            let (shown, _) = self.truncate(&segment.text, &style, budget);
+            let (shown, _) = truncate_with(
+                |text, style| render.measure(text, style),
+                &segment.text,
+                &style,
+                budget,
+            );
             let used = render.text(&shown, &style, x, y);
             x += used;
             budget -= used;
         }
     }
+}
+
+const ELLIPSIS: &str = "…";
+
+/// `text` 宽度超过 `max_width` 就从末尾去字、补上「…」直到放得下；返回显示文字与是否截断过。
+///
+/// `measure` 是「量一段字」那一手 —— 绘制路上是 [`crate::Render`] 的 `measure`，版面阶段是
+/// [`Renderer::measure`]，键位映射两条路共用（`draw_key_map` 里传目标的 `measure`）。
+pub(super) fn truncate_with(
+    measure: impl Fn(&str, &TextStyle) -> TextSize,
+    text: &str,
+    style: &TextStyle,
+    max_width: f32,
+) -> (String, bool) {
+    if text.is_empty() || measure(text, style).width <= max_width {
+        return (text.to_owned(), false);
+    }
+    let mut kept: Vec<char> = text.chars().collect();
+    while kept.pop().is_some() {
+        let mut candidate: String = kept.iter().collect();
+        candidate.push_str(ELLIPSIS);
+        if kept.is_empty() || measure(&candidate, style).width <= max_width {
+            return (candidate, true);
+        }
+    }
+    (ELLIPSIS.to_owned(), true)
 }
 
 /// 在线翻译那一段段文字按 `\n` 拆成几行（脚本体里写了换行就显示成多行，换行后面的字从新一行左端开始）。

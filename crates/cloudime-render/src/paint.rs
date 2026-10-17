@@ -5,9 +5,10 @@
 //! `Ellipse` / `LineTo` / `FillPath` / `TextOut` / `AlphaBlend`）。
 //!
 //! ⚠️ 与 [`crate::Render`] 不共享字形管线：文字只有 GDI 那套整形（没有字距微调 / 连字 / 彩色 emoji），
-//! 抗锯齿也只有 GDI 那档。所以窗口里**默认不用它**（见 §6「一律用渲染」），留给「临时涂两笔、下一帧
-//! 自己消失」的场合。GDI 对象一律**现建现删**，不缓存。
+//! 抗锯齿也只有 GDI 那档。画笔 / 刷子**现建现删**；字体在同一次绘制里按样式缓存（一次绘制通常只用四五档，
+//! 每段文字都重建 `CreateFontW` 太浪费），`Paint` 析构时统一删掉。
 
+use std::cell::RefCell;
 use std::ffi::c_void;
 
 use tiny_skia::{Path, PathSegment, Pixmap};
@@ -17,9 +18,9 @@ use windows::Win32::Graphics::Gdi::{
     BeginPath, CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CloseFigure, CreateCompatibleDC,
     CreateDIBSection, CreateFontW, CreatePen, CreateSolidBrush, DEFAULT_CHARSET, DEFAULT_PITCH,
     DIB_RGB_COLORS, DeleteDC, DeleteObject, Ellipse, EndPath, FF_DONTCARE, FillPath, FillRect,
-    GetTextExtentPoint32W, HDC, HGDIOBJ, LineTo, MoveToEx, OUT_DEFAULT_PRECIS, PS_NULL, PS_SOLID,
-    PolyBezierTo, RGBQUAD, RoundRect, SelectObject, SetBkMode, SetPolyFillMode, SetTextColor,
-    TRANSPARENT, TextOutW, WINDING,
+    GetTextExtentPoint32W, HDC, HFONT, HGDIOBJ, LineTo, MoveToEx, OUT_DEFAULT_PRECIS, PS_NULL,
+    PS_SOLID, PolyBezierTo, RGBQUAD, RoundRect, SelectObject, SetBkMode, SetPolyFillMode,
+    SetTextColor, TRANSPARENT, TextOutW, WINDING,
 };
 use windows::core::PCWSTR;
 
@@ -29,19 +30,92 @@ use crate::elements::{
 };
 use crate::error::RenderError;
 use crate::svg;
-use crate::text::TextStyle;
+use crate::text::{TextSize, TextStyle};
 
 /// 画在窗口 DC 上的那支笔。
 pub struct Paint {
     hdc: HDC,
+
+    /// 这次绘制建过的字体（同一样式只建一次，析构时删）。
+    fonts: RefCell<Vec<CachedFont>>,
+}
+
+/// 缓存的一个 GDI 字体。
+struct CachedFont {
+    key: FontKey,
+    font: HFONT,
+}
+
+/// 字体的「同不同样」看这几个字段。
+#[derive(Debug, Clone, PartialEq, Eq)]
+struct FontKey {
+    /// 字族名（空 = 系统缺省）。
+    face: String,
+
+    /// GDI 的字符高度（负 = 字符高度，正 = 单元格高度）。
+    height: i32,
+
+    italic: bool,
+    underline: bool,
+    strike: bool,
 }
 
 impl Paint {
     /// 直接在 `hdc` 上画 —— DC 由调用方拿（`GetDC` / `BeginPaint`）也由调用方还。
     pub fn new(hdc: HDC) -> Self {
-        Self { hdc }
+        Self {
+            hdc,
+            fonts: RefCell::new(Vec::new()),
+        }
     }
 
+    /// 取一个按 `style` 建的字体；这次绘制里同样的样式只建一次。
+    fn font(&self, style: &TextStyle) -> HFONT {
+        let key = FontKey {
+            face: style.family.clone().unwrap_or_default(),
+            height: -(style.size.round() as i32).max(1),
+            italic: style.italic,
+            underline: style.underline,
+            strike: style.strike,
+        };
+        if let Some(cached) = self.fonts.borrow().iter().find(|cached| cached.key == key) {
+            return cached.font;
+        }
+        let face: Vec<u16> = key.face.encode_utf16().chain(std::iter::once(0)).collect();
+        let font = unsafe {
+            CreateFontW(
+                key.height,
+                0,
+                0,
+                0,
+                400,
+                key.italic.into(),
+                key.underline.into(),
+                key.strike.into(),
+                DEFAULT_CHARSET,
+                OUT_DEFAULT_PRECIS,
+                CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY,
+                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
+                PCWSTR(face.as_ptr()),
+            )
+        };
+        self.fonts.borrow_mut().push(CachedFont { key, font });
+        font
+    }
+}
+
+impl Drop for Paint {
+    fn drop(&mut self) {
+        for cached in self.fonts.get_mut().drain(..) {
+            unsafe {
+                let _ = DeleteObject(HGDIOBJ(cached.font.0));
+            }
+        }
+    }
+}
+
+impl Paint {
     /// 把一张预乘 RGBA 位图按目标矩形贴上去（`AlphaBlend`，逐像素 alpha）。
     fn blit(&self, pixmap: &Pixmap, x: f32, y: f32, width: f32, height: f32) {
         let (source_width, source_height) = (pixmap.width() as i32, pixmap.height() as i32);
@@ -124,39 +198,34 @@ fn with_selected<R>(hdc: HDC, object: HGDIOBJ, draw: impl FnOnce() -> R) -> R {
 
 impl TextElement for Paint {
     fn text(&mut self, text: &str, style: &TextStyle, x: f32, y: f32) -> f32 {
-        let face: Vec<u16> = style
-            .family
-            .as_deref()
-            .unwrap_or_default()
-            .encode_utf16()
-            .chain(std::iter::once(0))
-            .collect();
+        let font = self.font(style);
         let wide: Vec<u16> = text.encode_utf16().collect();
+        // 行框顶边 → GDI 的字符框顶边：字形在行高里垂直居中（跟渲染器同一套约定）
+        let top = y + ((style.line_height - style.size) / 2.0).max(0.0);
+        let mut size = SIZE::default();
         unsafe {
-            let font = CreateFontW(
-                -(style.size.round() as i32).max(1),
-                0,
-                0,
-                0,
-                400,
-                style.italic.into(),
-                style.underline.into(),
-                style.strike.into(),
-                DEFAULT_CHARSET,
-                OUT_DEFAULT_PRECIS,
-                CLIP_DEFAULT_PRECIS,
-                CLEARTYPE_QUALITY,
-                (DEFAULT_PITCH.0 | FF_DONTCARE.0) as u32,
-                PCWSTR(face.as_ptr()),
-            );
-            let mut size = SIZE::default();
-            with_selected(self.hdc, HGDIOBJ(font.0), || {
-                let _ = SetBkMode(self.hdc, TRANSPARENT);
-                SetTextColor(self.hdc, colorref(style.color));
-                let _ = GetTextExtentPoint32W(self.hdc, &wide, &mut size);
-                let _ = TextOutW(self.hdc, x.round() as i32, y.round() as i32, &wide);
-            });
-            size.cx as f32
+            let previous = SelectObject(self.hdc, HGDIOBJ(font.0));
+            let _ = SetBkMode(self.hdc, TRANSPARENT);
+            SetTextColor(self.hdc, colorref(style.color));
+            let _ = GetTextExtentPoint32W(self.hdc, &wide, &mut size);
+            let _ = TextOutW(self.hdc, x.round() as i32, top.round() as i32, &wide);
+            SelectObject(self.hdc, previous);
+        }
+        size.cx as f32
+    }
+
+    fn measure(&self, text: &str, style: &TextStyle) -> TextSize {
+        let font = self.font(style);
+        let wide: Vec<u16> = text.encode_utf16().collect();
+        let mut size = SIZE::default();
+        unsafe {
+            let previous = SelectObject(self.hdc, HGDIOBJ(font.0));
+            let _ = GetTextExtentPoint32W(self.hdc, &wide, &mut size);
+            SelectObject(self.hdc, previous);
+        }
+        TextSize {
+            width: size.cx as f32,
+            height: style.line_height,
         }
     }
 }

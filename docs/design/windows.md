@@ -155,7 +155,7 @@ pub(super) trait Clonable: Asset {
 | 持续性 | **没有** —— 窗口一更新 / 刷新，先前画的全没了，得等下一帧再画一遍 | **有** —— 窗口怎么更新 / 刷新都不变，除非那块内存区域被**释放**、或里面的内容被**更新** |
 | 时机 | 每次 `WM_PAINT`（被遮住又露出来、`InvalidateRect`、改大小…）都得重画 | 只有内容变了才出图；贴上去之后窗口自己不会把它擦掉 |
 | 代价 | 每帧重画整窗；刷新与重画不同步就闪 | 出图有成本，但贴图是整块一次，不闪 |
-| 谁在用 | 只出现在**系统控件**上：状态条图标的悬停提示是 comctl32 的 tooltip（`TTF_SUBCLASS`），系统自己画、自己擦 —— 咱自绘的窗口一处都没有 | **全部**：候选窗口、悬浮工具栏、状态切换提示、辅助窗口面板 |
+| 谁在用 | **键位映射参考**（辅助窗口模板，2026-10-17 起试验）+ **系统控件**：状态条图标的悬停提示是 comctl32 的 tooltip（`TTF_SUBCLASS`），系统自己画、自己擦 | 其余**全部**：候选窗口、悬浮工具栏、状态切换提示 |
 
 **规定：独立窗口与辅助窗口一律用渲染。** 云朵渲染器把一整帧（阴影、圆角、渐变、文字、图标）出成一块
 **预乘 RGBA 位图**（就是上面说的内存区域），`ui/layered` 换通道后 `UpdateLayeredWindow` **整块一次**贴上
@@ -166,6 +166,17 @@ pub(super) trait Clonable: Asset {
 - 一块内存区域 = **一帧**：内容变了（新候选、翻页、高亮滑动、换 DPI、换主题）才重新出图再贴；没变就不贴。
   贴上去的那一帧一直留在窗口上 —— 这就是渲染的**持续性**；
 - 要「擦掉」只有两条路：**贴一帧新的**（覆盖），或者**销毁窗口**。不存在「刷新之后要重画一遍」这回事。
+
+**例外（2026-10-17 起试验）：辅助窗口模板改用绘制。** 眼下它只服务「键位映射参考」：窗口不是分层的，
+`WM_PAINT` 里 `BeginPaint` → `Paint`（GDI）把整块面板重画 → `EndPaint`。取舍：
+
+- **拿不到逐像素 alpha**：圆角用 `SetWindowRgn`（`CreateRoundRectRgn`）切，边缘是硬的；**没有阴影**；
+- **文字走 GDI 的字形管线**（`TextOut`）：没有字距微调 / 连字 / 彩色 emoji，字号比 cosmic-text 略小；
+- 半透明的主题色（如 `text` = 黑 216）要先按背景**压平**（`Theme::flattened`），否则 GDI 忽略 alpha、
+  画出来会比渲染深；
+- 内容**不持久**：每次 `WM_PAINT` 整块重画。窗口过程靠 `GWLP_USERDATA` 找回模板（`show` 里挂、`Drop` 里清）；
+  `show` 按「位置 / 尺寸 / 版面版本 / 渲染器代号」判重，没变就不重画；
+- `Render` 那条路仍在（`Renderer::render_key_map`），想换回去只要改模板 `show` 的贴图那一步。
 
 **能画的元素**（绘制与渲染都支持这七类）：
 
@@ -234,16 +245,19 @@ pub(super) trait Clonable: Asset {
   **失焦 / 聚焦**（`unfocusing` / `focusing`，两边都落到 `sync_input()` 上），并给窗口过程一个 `focused()`：
   焦点不在自己身上时整块让开，自己那块窗鼠标穿透（`WS_EX_TRANSPARENT`，`ui::set_mouse_transparent`），
   窗口过程的 `WM_NCHITTEST` 也按 `focused()` 回 `HTTRANSPARENT`。
-- **辅助窗口模板**（`ui/auxiliary_window_template/`）：资产用的那块**分层面板**（主题背景 + 圆角 + 阴影；
-  宽 / 高 / 间隙三个属性，没设过按宿主形状算默认；`set_lines` 填几行文字；`show(宿主内容区矩形, 排布方向)`
-  贴宿主摆位 —— 宿主右边 / 下边放不下就换左边 / 上边）。**焦点**：`new` 收一个 `able_to_get_focus`，
-  `set_focused` 开关鼠标穿透（`WS_EX_TRANSPARENT` 与命中测试读同一个位，两边不会打架）。
+- **辅助窗口模板**（`ui/auxiliary_window_template/`）：资产用的那块**绘制面板**（主题背景 + 圆角；
+  宽 / 高 / 间隙三个属性，没设过按宿主形状算默认；`show(宿主内容区矩形, 排布方向)` 摆位 —— 宿主右边 /
+  下边放不下就换左边 / 上边）。窗口**不是分层窗**：`WM_PAINT` 里 `BeginPaint` → `Painter::paint_key_map`
+  （`Paint` / GDI，调色板先 `Theme::flattened` 压平）→ `EndPaint`；圆角用 `SetWindowRgn` 切，没有阴影。
+  模板指针挂在窗口的 `GWLP_USERDATA` 上（`show` 挂、`Drop` 清），`show` 按「位置 / 尺寸 / 版面版本 /
+  渲染器代号」判重。**焦点**：`new` 收一个 `able_to_get_focus`，`set_focused` 开关鼠标穿透
+  （`WS_EX_TRANSPARENT` 与命中测试读同一个位，两边不会打架）。
 - **资产这层**（`ui/auxiliary/`）：`Asset`（资产：`name`、声明 `able_to_get_focus`、收 `focusing` / `unfocusing`）、  `Assets`（宿主名下的资产表 + 这一组的**焦点**；`add` 收资产时**不动焦点**，§4 规则 8）、`Bridge`（桥：
   `designate_focus(name)` 是同一所有者的两件资产之间转手的路，`return_focus_to_owner()` 是把焦点交回去）、
   `Host`（宿主喂给资产的形状：内容区矩形 / 排布方向 / 是不是展开着）、`Focus`（焦点在谁身上，§4）、
   `DesignatedAssetToGetFocus`（指定资产获取焦点）。
 - **画元素**（`cloudime-render`）：`elements`（六条元素 trait）、`render`（`Render`：一块离屏位图 + 共享的字形
-  管线，自绘窗口的每一笔都经它）、`paint`（`Paint`：GDI 直画到窗口 DC，眼下没有窗口用）。渲染器内部
-  （候选窗 / 键位映射参考 / 状态条）已经**全走 `Render` 的 trait**，不再直接碰画布原语。
+  管线）、`paint`（`Paint`：GDI 直画到窗口 DC）。候选窗 / 状态条 / 状态提示走 `Render`；键位映射参考
+  （辅助窗口模板）走 `Paint` —— 两条路共用 `draw_key_map` 那一份版面。
 - 现在只有一件资产：候选窗口的**键位映射参考**（`ui/auxiliary/key_map/`，名字 `key_map`）—— 它**没**声明
   `able_to_get_focus`，所以眼下整组一直由候选窗口持有焦点。

@@ -910,8 +910,12 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `return_focus_to_owner` / `focus`，指定时自己**失焦** `unfocusing`、收回时**聚焦** `focusing`，两边都落到
   `sync_input()` 上：`ui::set_mouse_transparent` + 命中测试），所以**每块独立窗口都有**这个特性
   （见下「辅助窗口」那条）。
-- **辅助窗口模板**（`server/src/ui/auxiliary_window_template/`，`AuxiliaryWindowTemplate`）：给资产用的那块**分层面板** ——
-  主题背景 + 圆角（与候选窗口同源、都是 `theme.corner_radius`）+ 阴影。**焦点**：`new(painter, able_to_get_focus)`
+- **辅助窗口模板**（`server/src/ui/auxiliary_window_template/`，`AuxiliaryWindowTemplate`）：给资产用的那块**绘制面板** ——
+  窗口**不是分层的**：`WM_PAINT` 里 `BeginPaint` → `Painter::paint_key_map`（`Paint` / GDI，调色板先
+  `Theme::flattened` 压平，否则半透明的字色会画得过深）→ `EndPaint`；圆角用 `SetWindowRgn`（`CreateRoundRectRgn`）切，
+  **没有阴影**，字号 / 抗锯齿走 GDI 那档。内容不持久（每次 `WM_PAINT` 整块重画）；模板指针挂在 `GWLP_USERDATA`
+  （`show` 挂、`Drop` 清），`show` 按「位置 / 尺寸 / 版面版本 / 渲染器代号」判重（`set_key_map` 把版面版本 +1）。
+  **焦点**：`new(painter, able_to_get_focus)`
   里收下这件资产创建时声明的「允许获取焦点」（`false` = 永远不接输入，缺省），`focusable()` 读回去给资产声明用；
   `set_focused(bool)` 由所有者驱动、只动一个位 —— `WS_EX_TRANSPARENT`（窗口过程命中测试也读它，两边同一个来源，
   不会打架），没焦点就鼠标穿透；没声明过 `able_to_get_focus` 的面板不会被打开输入（记一条日志）。
@@ -976,17 +980,19 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 - **绘制 / 渲染**（`docs/design/windows.md` §6）：两种画法各是一个结构体、元素各是一条 trait（`cloudime-render`）——
   `elements` 里六条（`TextElement` / `SvgElement` / `ImageElement` / `LineElement` / `RectElement` /
   `PathElement`），`Render`（离屏位图 + 共享字形管线，`measure` 也走它）与 `Paint`（GDI 直画窗口 DC）**各实现一遍**；
-  窗口里只准经这些 trait 画。自绘的几个窗口**一律用渲染** —— 渲染器把一整帧出成预乘 RGBA 位图
+  窗口里只准经这些 trait 画。除「键位映射参考」（辅助窗口模板，2026-10-17 起走 `Paint` / GDI，见上）之外，
+  自绘的几个窗口**一律用渲染** —— 渲染器把一整帧出成预乘 RGBA 位图
   （就是那块**内存区域**）→ `ui/layered::present` 换通道 → `UpdateLayeredWindow(ULW_ALPHA)` **整块一次**贴上。
   窗口过程**不处理 `WM_PAINT`**、窗口类**不设 `hbrBackground`**、不调 `InvalidateRect`，所以没有「刷新把画布
-  擦掉」的时机：贴上去的那一帧一直在，要变只能**再贴一帧**（重新出图）或**销毁窗口**。直接绘制（GDI 往窗口
-  DC 上画，下一帧就没了）**一处都没有**，也不该混进来：逐像素 alpha / 柔和阴影只有分层贴图能做，且每帧重画
-  整窗会闪。**能画的元素**：`text`（字形管线）/ `svg`（`svg.rs`：usvg + resvg 光栅化）/ `img`
+  擦掉」的时机：贴上去的那一帧一直在，要变只能**再贴一帧**（重新出图）或**销毁窗口**。直接绘制只用在
+  **键位映射参考**那一块（辅助窗口模板）：没有逐像素 alpha（圆角靠窗口区域切）、没有阴影，半透明的主题色
+  要先 `Theme::flattened` 压平。**能画的元素**：`text`（字形管线）/ `svg`（`svg.rs`：usvg + resvg 光栅化）/ `img`
   （`image.rs`：PNG 从文件或文件句柄读 + 解码 + 按目标矩形双线性缩放）/ `line`（细矩形或细长填充路径）/
   `rect`（含圆角矩形与圆：`fill_round_rect`，圆 = 半径取半边长）/ `path`（`fill_path`，tiny-skia 的路径）。
 
 **辅助窗口**（`server/src/ui/auxiliary/`）：眼下只一件资产 —— 候选窗口的**键位映射参考**
-（`key_map/`，`KeyMapWindow`）：用**辅助窗口模板**搭的实窗，把当前方案的键位映射画成一张**键盘**给新手对着敲
+（`key_map/`，`KeyMapWindow`）：用**辅助窗口模板**搭的实窗（**绘制**：`WM_PAINT` 里 GDI 重画，没有阴影、
+圆角是窗口区域切出来的硬边），把当前方案的键位映射画成一张**键盘**给新手对着敲
 （版面由 `input_schemes::key_map_layout()` 按当前方案生成 —— 三排格子 + 零声母表，经 `CandidateSink::set_auxiliary`
 送到候选窗口、再落到资产上）。宿主是**候选窗口**（它实现 `Bridge`）：`CandidateWindow` 里 `assets_on` + `template.assets()`，
 `show` 里 `sync_assets`（经桥驱动资产）、`hide` 里收起资产并把开关归零；窗口与资产的销毁都交给独立窗口模板。

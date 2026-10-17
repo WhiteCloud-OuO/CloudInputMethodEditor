@@ -4,17 +4,14 @@
 
 use super::{
     BADGE_GAP, HIGHLIGHT_INSET, INDEX_GAP, Layout, Metrics, Renderer, VERTICAL_CELL_MIN_EMS,
-    highlight_rect,
+    highlight_rect, truncate_with,
 };
 use crate::elements::TextElement;
 use crate::frame::{Frame, HighlightRect};
 use crate::render::Render;
-use crate::text::TextStyle;
 
 /// 帧没给列宽时，一格里候选词最多多宽（按候选字号的倍数）。
 const MAX_CELL_EMS: f32 = 4.0;
-
-const ELLIPSIS: &str = "…";
 
 /// 量好的网格：每格显示的文字（可能已截断）、各列的宽度与统一的行高（像素）。
 struct Cells {
@@ -208,7 +205,14 @@ impl Renderer {
         let texts = frame
             .rows
             .iter()
-            .map(|row| self.truncate(&row.text, &text_style, limit))
+            .map(|row| {
+                truncate_with(
+                    |text, style| self.measure(text, style),
+                    &row.text,
+                    &text_style,
+                    limit,
+                )
+            })
             .collect();
         let row_height = self.measure("国", &text_style).height + m.row_padding() * 2.0;
         let used = columns.min(frame.rows.len().max(1)).max(1);
@@ -219,23 +223,5 @@ impl Renderer {
             columns: used,
             row_height,
         }
-    }
-}
-
-impl Renderer {
-    /// `text` 宽度超过 `max_width` 就从末尾去字、补上「…」直到放得下；返回显示文字与是否截断过。
-    pub(super) fn truncate(&self, text: &str, style: &TextStyle, max_width: f32) -> (String, bool) {
-        if text.is_empty() || self.measure(text, style).width <= max_width {
-            return (text.to_owned(), false);
-        }
-        let mut kept: Vec<char> = text.chars().collect();
-        while kept.pop().is_some() {
-            let mut candidate: String = kept.iter().collect();
-            candidate.push_str(ELLIPSIS);
-            if kept.is_empty() || self.measure(&candidate, style).width <= max_width {
-                return (candidate, true);
-            }
-        }
-        (ELLIPSIS.to_owned(), true)
     }
 }

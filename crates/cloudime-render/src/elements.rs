@@ -14,11 +14,15 @@ use tiny_skia::{Path, Pixmap};
 
 use crate::color::Color;
 use crate::error::RenderError;
-use crate::text::TextStyle;
+use crate::text::{TextSize, TextStyle};
 
-/// **文本**：按 `style` 在 `(x, y)`（行框左上角）画一段，返回这段的宽度。
+/// **文本**：画一段、量一段 —— 两条路（渲染 / 绘制）各用自己那套字形管线。
 pub trait TextElement {
+    /// 按 `style` 在 `(x, y)`（行框左上角）画一段，返回这段的宽度。
     fn text(&mut self, text: &str, style: &TextStyle, x: f32, y: f32) -> f32;
+
+    /// 只量不画（排版要先知道宽度）；宽度与 [`Self::text`] 返回的那个一致。
+    fn measure(&self, text: &str, style: &TextStyle) -> TextSize;
 }
 
 /// **SVG 图形**：按 SVG 自己的宽高比等比缩放，塞进 `(x, y)` 起 `size` 见方的框里（居中、不裁剪）。

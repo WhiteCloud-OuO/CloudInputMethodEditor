@@ -82,6 +82,10 @@ impl TextElement for Render {
             .borrow_mut()
             .draw(&mut self.canvas, text, style, x, y)
     }
+
+    fn measure(&self, text: &str, style: &TextStyle) -> TextSize {
+        Render::measure(self, text, style)
+    }
 }
 
 impl SvgElement for Render {
