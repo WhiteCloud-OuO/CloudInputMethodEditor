@@ -986,7 +986,12 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   问目标显示器 DPI 再重算（`resolve_point`，最多迭代两次），签名里带 DPI，拖到另一块屏后
   `refresh_after_move` 按新 DPI 重画。
   `interactive` 映射到模板的 `transparent`，辅助窗口的 `interactive` 只是 `able_to_get_focus`，真要接鼠标
-  得脚本 `aux:focus(true)` 走所有者指定。
+  得脚本 `aux:focus(true)` 走所有者指定。**窗口外观归脚本**：`create{ background = false }` 让
+  `Renderer::render_document` 跳过面板底色 / 圆角的填充（`panel_canvas` 的 `background` 参数），
+  内容区保持透明，脚本用一整块圆角 `rect` 等元素自己画背景；阴影按 `shadow` 走同一套通用阴影层
+  （也可以再关掉，连阴影都不画）。随包的 `Scripts/lib/test-caret-window.lua` 就是这么画的
+  （`background = false` / `shadow = false`，关闭按钮的悬停换色也全在 Lua 里），
+  对应的行为测试在 `crates/cloudime-script/tests/caret_window_script.rs`，`runtime.rs` 只留宿主 API。
 - **区域**（`region`，2026-10-17）：窗口内容里可以被鼠标**点击 / 拖拽**的范围，数据在
   `cloudime_render::document::Region`（名字 / `HitShape` / `draggable` + 合并 / 剪除形状），命中在
   `ui::region::hit`（后写的盖住先写的）。形状不限于矩形：`HitShape` 支持矩形 / 圆角 / 圆 / 线段 / 路径，

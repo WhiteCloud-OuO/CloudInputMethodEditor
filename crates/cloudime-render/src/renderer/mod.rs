@@ -335,7 +335,7 @@ impl Renderer {
         shadow: Option<&Shadow>,
     ) -> Result<Rendered, RenderError> {
         let (render, margin) =
-            self.panel_canvas(content_width, content_height, theme, scale, shadow)?;
+            self.panel_canvas(content_width, content_height, theme, scale, shadow, true)?;
         Ok(Self::panel_rendered(
             render,
             margin,
@@ -355,10 +355,12 @@ impl Renderer {
         theme: &Theme,
         scale: f32,
         shadow: Option<&Shadow>,
+        background: bool,
     ) -> Result<RenderedDocument, RenderError> {
         let width = (document.width * scale).max(1.0);
         let height = (document.height * scale).max(1.0);
-        let (mut render, margin) = self.panel_canvas(width, height, theme, scale, shadow)?;
+        let (mut render, margin) =
+            self.panel_canvas(width, height, theme, scale, shadow, background)?;
         let metrics = Metrics { theme, scale };
         let mut hits = Vec::with_capacity(document.elements.len());
         for element in &document.elements {
@@ -420,6 +422,7 @@ impl Renderer {
         theme: &Theme,
         scale: f32,
         shadow: Option<&Shadow>,
+        background: bool,
     ) -> Result<(Render, f32), RenderError> {
         let metrics = Metrics { theme, scale };
         let margin = shadow.map_or(0.0, |s| metrics.px(s.margin()));
@@ -433,14 +436,16 @@ impl Renderer {
         {
             self.paint_shadow(&mut render, content, radius, scale, shadow);
         }
-        render.round_rect(
-            margin,
-            margin,
-            content_width,
-            content_height,
-            radius,
-            theme.colors.background,
-        );
+        if background {
+            render.round_rect(
+                margin,
+                margin,
+                content_width,
+                content_height,
+                radius,
+                theme.colors.background,
+            );
+        }
         Ok((render, margin))
     }
 
@@ -1229,7 +1234,7 @@ mod tests {
             ],
         };
         let rendered = renderer
-            .render_document(&document, &theme, 1.0, Some(&crate::Shadow::panel()))
+            .render_document(&document, &theme, 1.0, Some(&crate::Shadow::panel()), true)
             .expect("画得出来");
         assert_eq!(
             (

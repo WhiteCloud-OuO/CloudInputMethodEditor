@@ -423,7 +423,7 @@ impl AuxiliaryWindowTemplate {
                     )
                 }
                 Content::Document(document) => {
-                    let rendered = painter.render_document(document, dpi, self.shadow.get());
+                    let rendered = painter.render_document(document, dpi, self.shadow.get(), true);
                     let hits = rendered
                         .as_ref()
                         .map(|rendered| rendered.hits.clone())

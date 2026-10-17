@@ -180,7 +180,7 @@ impl Renderer {
         shadow: Option<&Shadow>,
     ) -> Result<crate::renderer::Rendered, RenderError> {
         let (width, height) = key_map_pixel_size(layout, cell, scale);
-        let (mut render, margin) = self.panel_canvas(width, height, theme, scale, shadow)?;
+        let (mut render, margin) = self.panel_canvas(width, height, theme, scale, shadow, true)?;
         draw_key_map(&mut render, layout, cell, theme, scale, (margin, margin));
         Ok(Self::panel_rendered(render, margin, (width, height), scale))
     }

@@ -35,6 +35,7 @@ use std::time::{Duration, Instant};
 use mlua::{Function, Lua, Table};
 
 use crate::http;
+use crate::install;
 use crate::window;
 
 /// 脚本目录名：**安装目录**（与 `Phrases\`、`WordBank\` 同级）下的这个子目录。
@@ -692,7 +693,7 @@ pub struct Runtime {
 
     /// 安装目录（`Images\` / `Scripts\` 的上一级）：`cloudime.install_dir()` / `install_path()`
     /// 用它。不是正式安装（测试 / CLI）时是 `None`。
-    install_dir: Rc<RefCell<Option<PathBuf>>>,
+    install: Rc<install::InstallDir>,
 
     /// 脚本要的候选窗尺寸（`cloudime.candidate.set_*`）：派发/回调结束后 Server 取一次。
     size: Rc<RefCell<SizeRequest>>,
@@ -764,7 +765,7 @@ impl Runtime {
             requests: Rc::new(Requests::new()),
             redraw: Rc::new(Cell::new(false)),
             caret: Rc::new(Cell::new(false)),
-            install_dir: Rc::new(RefCell::new(None)),
+            install: Rc::new(install::InstallDir::default()),
             size: Rc::new(RefCell::new(SizeRequest::default())),
             theme: Rc::new(RefCell::new(None)),
             viewport: Rc::new(RefCell::new(None)),
@@ -1032,7 +1033,7 @@ impl Runtime {
 
     /// 装安装目录（`cloudime.install_dir()` / `install_path()` 用）。Server 建 Router 时调一次。
     pub fn set_install_dir(&self, dir: PathBuf) {
-        *self.install_dir.borrow_mut() = Some(dir);
+        self.install.set(dir);
     }
 
     /// 取一次脚本对窗口的操作（`cloudime.window.*`），取了就清。
@@ -1259,7 +1260,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     let requests = &runtime.requests;
     let redraw = &runtime.redraw;
     let caret = &runtime.caret;
-    let install_dir = &runtime.install_dir;
+    let install = &runtime.install;
     let size = &runtime.size;
     let theme = &runtime.theme;
     let viewport = &runtime.viewport;
@@ -1286,34 +1287,23 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
         })?,
     )?;
     // 安装目录：`cloudime.install_dir()` → 绝对路径（测试 / 没装时是 nil）；
-    // `cloudime.install_path("Images/SVG/打叉.svg")` → 安装目录里的文件绝对路径（不存在 / 越界给 nil / 报错）。
-    let dir_state = install_dir.clone();
+    // `cloudime.install_path("Images/SVG/打叉.svg")` → 安装目录里的文件绝对路径（不存在给 nil / 越界报错）。
+    let dir_state = install.clone();
     table.set(
         "install_dir",
         lua.create_function(move |_, ()| {
             Ok(dir_state
-                .borrow()
-                .as_ref()
+                .root()
                 .map(|dir| dir.to_string_lossy().into_owned()))
         })?,
     )?;
-    let path_state = install_dir.clone();
+    let path_state = install.clone();
     table.set(
         "install_path",
         lua.create_function(move |_, relative: String| -> mlua::Result<Option<String>> {
-            let Some(root) = path_state.borrow().clone() else {
-                return Ok(None);
-            };
-            let root = root.canonicalize().unwrap_or(root);
-            let Ok(path) = root.join(&relative).canonicalize() else {
-                return Ok(None);
-            };
-            if !path.starts_with(&root) {
-                return Err(mlua::Error::RuntimeError(
-                    "install_path 只认安装目录里的文件".to_owned(),
-                ));
-            }
-            Ok(Some(path.to_string_lossy().into_owned()))
+            path_state
+                .resolve(&relative)
+                .map_err(mlua::Error::RuntimeError)
         })?,
     )?;
     let log_current = current.clone();
@@ -2450,191 +2440,6 @@ mod tests {
         runtime.lua().load("cloudime.caret()").exec().unwrap();
         assert!(runtime.take_caret_request(), "脚本请求过");
         assert!(!runtime.take_caret_request(), "取过就清");
-    }
-
-    /// 随包的测试脚本：按键请求光标 → `caret` 事件建窗口 / 读 SVG → 点关闭区域销毁；
-    /// 窗口开着时再按 F3 不关它。
-    #[test]
-    fn the_caret_window_test_script_creates_then_closes_on_the_close_region() {
-        use cloudime_render::{Color, Element};
-
-        const SCRIPT: &str = include_str!("../../../Scripts/lib/test-caret-window.lua");
-        let dir = script_dir("caret-window");
-        std::fs::write(dir.join("test-caret-window.lua"), SCRIPT).unwrap();
-        let runtime = Runtime::load(&dir, &[]);
-        runtime.set_install_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
-        assert!(runtime.scripts().iter().any(|name| name == "光标窗口测试"));
-
-        let key = runtime.lua().create_table().unwrap();
-        for (name, value) in [
-            ("vk", mlua::Value::Integer(0x72)),
-            ("ctrl", mlua::Value::Boolean(true)),
-            ("alt", mlua::Value::Boolean(true)),
-            ("shift", mlua::Value::Boolean(false)),
-            ("win", mlua::Value::Boolean(false)),
-            ("composing", mlua::Value::Boolean(false)),
-        ] {
-            key.set(name, value).unwrap();
-        }
-        runtime.dispatch("key", key.clone(), None);
-        assert!(runtime.take_caret_request(), "按键处理函数请求了光标位置");
-
-        let caret = runtime.lua().create_table().unwrap();
-        for (name, value) in [
-            ("left", 100.0f32),
-            ("top", 200.0),
-            ("right", 101.0),
-            ("bottom", 216.0),
-            ("work_left", 0.0),
-            ("work_top", 0.0),
-            ("work_right", 1920.0),
-            ("work_bottom", 1080.0),
-            ("scale", 1.0),
-        ] {
-            caret.set(name, value).unwrap();
-        }
-        runtime.dispatch("caret", caret, None);
-
-        let requests = runtime.take_window_requests();
-        let id = requests
-            .iter()
-            .find_map(|request| match request {
-                window::Request::Create(id, _) => Some(*id),
-                _ => None,
-            })
-            .expect("建了窗口");
-        let show = requests
-            .iter()
-            .find_map(|request| match request {
-                window::Request::Show(shown, Some((x, y))) => (*shown == id).then_some((*x, *y)),
-                _ => None,
-            })
-            .expect("显示窗口");
-        assert_eq!(show, (100.0, 30.0), "光标上方 30 点（200 - 30 - 140）");
-        let document = requests
-            .iter()
-            .find_map(|request| match request {
-                window::Request::SetContent(shown, document) if *shown == id => Some(document),
-                _ => None,
-            })
-            .expect("送了内容");
-        assert!(
-            document.elements.iter().any(|element| matches!(
-                element,
-                Element::Svg { source, .. } if source.contains("<svg")
-            )),
-            "从 Images\\SVG\\打叉.svg 读到了 SVG"
-        );
-        assert!(document.regions.iter().any(|region| region.name == "close"));
-
-        // 窗口开着再按一次：不创建、也不关闭。
-        runtime.dispatch("key", key, None);
-        assert!(
-            !runtime
-                .take_window_requests()
-                .iter()
-                .any(|request| matches!(
-                    request,
-                    window::Request::Close(_) | window::Request::Create(_, _)
-                )),
-            "F3 只创建，不销毁"
-        );
-
-        // 没悬停：叉是黑色，按钮没有底色。
-        let svg_tint = |document: &cloudime_render::Document| {
-            document
-                .elements
-                .iter()
-                .find_map(|element| match element {
-                    Element::Svg { tint, .. } => Some(*tint),
-                    _ => None,
-                })
-                .flatten()
-        };
-        let button_rect = |document: &cloudime_render::Document| {
-            document.elements.iter().any(|element| {
-                matches!(
-                    element,
-                    Element::Rect { x, y, width, height, radius, .. }
-                        if (*x - 152.0).abs() < 0.01
-                            && (*y - 8.0).abs() < 0.01
-                            && (*width - 20.0).abs() < 0.01
-                            && (*height - 20.0).abs() < 0.01
-                            && (*radius - 3.0).abs() < 0.01
-                )
-            })
-        };
-        assert_eq!(svg_tint(document), Some(Color::rgba(0, 0, 0, 255)));
-        assert!(!button_rect(document), "没悬停时不画按钮底色");
-
-        // 鼠标进 close 区域：先画圆角矩形（#FFFF3300），再把叉染成白色。
-        let hover_close = runtime.lua().create_table().unwrap();
-        hover_close.set("id", id).unwrap();
-        hover_close.set("action", "hover").unwrap();
-        hover_close.set("region", "close").unwrap();
-        runtime.dispatch("window", hover_close, None);
-        let hovered = runtime.take_window_requests();
-        let hovered = hovered
-            .iter()
-            .find_map(|request| match request {
-                window::Request::SetContent(shown, document) if *shown == id => Some(document),
-                _ => None,
-            })
-            .expect("悬停时重画了内容");
-        assert!(button_rect(hovered), "悬停时画按钮底色");
-        assert!(
-            hovered.elements.iter().any(|element| matches!(
-                element,
-                Element::Rect { color, .. } if *color == Color::rgba(255, 51, 0, 255)
-            )),
-            "按钮底色是 #FFFF3300"
-        );
-        assert_eq!(
-            svg_tint(hovered),
-            Some(Color::rgba(255, 255, 255, 255)),
-            "悬停时叉是白色"
-        );
-
-        // 鼠标回到 body：底色收起、叉恢复黑色。
-        let hover_body = runtime.lua().create_table().unwrap();
-        hover_body.set("id", id).unwrap();
-        hover_body.set("action", "hover").unwrap();
-        hover_body.set("region", "body").unwrap();
-        runtime.dispatch("window", hover_body, None);
-        let left = runtime.take_window_requests();
-        let left = left
-            .iter()
-            .find_map(|request| match request {
-                window::Request::SetContent(shown, document) if *shown == id => Some(document),
-                _ => None,
-            })
-            .expect("离开按钮时重画了内容");
-        assert!(!button_rect(left), "离开按钮后底色收起");
-        assert_eq!(svg_tint(left), Some(Color::rgba(0, 0, 0, 255)));
-
-        // 点右上角关闭区域：销毁窗口。
-        let event = runtime.lua().create_table().unwrap();
-        for (name, value) in [
-            ("id", mlua::Value::Integer(id as i64)),
-            (
-                "action",
-                mlua::Value::String(runtime.lua().create_string("click").unwrap()),
-            ),
-            (
-                "region",
-                mlua::Value::String(runtime.lua().create_string("close").unwrap()),
-            ),
-        ] {
-            event.set(name, value).unwrap();
-        }
-        runtime.dispatch("window", event, None);
-        assert!(
-            runtime
-                .take_window_requests()
-                .iter()
-                .any(|request| matches!(request, window::Request::Close(closed) if *closed == id)),
-            "点关闭区域要销毁窗口"
-        );
     }
 
     /// `install_path` 只认安装目录里的文件：存在的给绝对路径，越界的报错，不存在的给 nil。

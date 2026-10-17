@@ -10,6 +10,7 @@
 //! 能读写文件、起进程，风险由用户自担。
 
 mod http;
+mod install;
 mod runtime;
 mod window;
 

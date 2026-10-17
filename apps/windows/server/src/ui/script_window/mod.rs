@@ -429,9 +429,12 @@ impl ScriptWindow {
                 return;
             };
             let generation = painter.generation();
-            let Some(rendered) =
-                painter.render_document(&self.document.borrow(), dpi, self.spec.shadow)
-            else {
+            let Some(rendered) = painter.render_document(
+                &self.document.borrow(),
+                dpi,
+                self.spec.shadow,
+                self.spec.background,
+            ) else {
                 tracing::warn!(id = self.id, "脚本窗口：画不出来，不显示");
                 self.hide();
                 return;

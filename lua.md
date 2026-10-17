@@ -404,6 +404,7 @@ local box = cloudime.ui.truncate(文本, 行宽 [, 选项])   -- → { text, lin
 -- 建一块 240 × 120 点的面板（interactive = true 才接鼠标）
 local win = cloudime.window.create{
     name = "统计", width = 240, height = 120, interactive = true,
+    -- background = false  -- 不要输入法画的面板底色 / 圆角，改由元素表自己画背景
 }
 
 -- 换一整份内容：坐标与尺寸都是点，左上角原点
@@ -422,6 +423,9 @@ local aux = cloudime.window.create_auxiliary{ owner = win, width = 160, height =
 aux:set_content{ { type = "text", x = 8, y = 8, text = "附注", size = 12, color = "#FF666666" } }
 aux:show()
 ```
+
+`background = false` 时窗口只有一块透明的内容区：输入法不画面板底色 / 圆角，脚本用一整块圆角
+`rect` 当背景；阴影仍按 `shadow` 决定（再设 `shadow = false` 就连阴影也不画），窗口长什么样完全由脚本决定。
 
 **窗口句柄上的方法**：
 

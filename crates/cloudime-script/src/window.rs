@@ -143,6 +143,10 @@ pub struct WindowSpec {
 
     /// 要不要阴影（与候选窗同源的那一层）。
     pub shadow: bool,
+
+    /// 要不要输入法画的面板底色 / 圆角。`false` = 内容区透明，由脚本自己画背景
+    ///（窗口外观完全归脚本；阴影仍按 `shadow` 决定）。
+    pub background: bool,
 }
 
 /// 辅助窗口（宿主名下的资产）的创建参数。
@@ -425,6 +429,7 @@ pub(crate) fn parse_window(options: &mlua::Table) -> mlua::Result<WindowSpec> {
         height: size(options, "height", 120.0)?,
         interactive: options.get::<Option<bool>>("interactive")?.unwrap_or(false),
         shadow: options.get::<Option<bool>>("shadow")?.unwrap_or(true),
+        background: options.get::<Option<bool>>("background")?.unwrap_or(true),
     })
 }
 

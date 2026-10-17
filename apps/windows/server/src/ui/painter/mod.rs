@@ -222,6 +222,7 @@ impl Painter {
         document: &cloudime_render::Document,
         dpi: u32,
         shadow: bool,
+        background: bool,
     ) -> Option<cloudime_render::RenderedDocument> {
         self.renderer
             .render_document(
@@ -229,6 +230,7 @@ impl Painter {
                 &self.theme,
                 scale(dpi),
                 shadow.then_some(&self.candidate_shadow),
+                background,
             )
             .inspect_err(|error| tracing::warn!(%error, "脚本窗口渲染失败"))
             .ok()

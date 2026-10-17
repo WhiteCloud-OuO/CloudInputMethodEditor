@@ -240,6 +240,7 @@ local win = cloudime.window.create{
     height = 120,         -- 内容区高（点，8–2048；缺省 120）
     interactive = true,   -- 接不接鼠标（缺省 false = 鼠标穿透，纯展示）
     shadow = true,        -- 要不要与候选窗同源的那层阴影（缺省 true）
+    background = true,    -- 要不要输入法画的面板底色 / 圆角（缺省 true）；false = 全由元素表自己画
 }
 
 local aux = cloudime.window.create_auxiliary{
