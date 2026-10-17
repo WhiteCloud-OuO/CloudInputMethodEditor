@@ -217,7 +217,8 @@ impl Kind {
     }
 }
 
-/// 给一个窗口句柄装上方法：`set_content` / `show` / `hide` / `close` / `focus`。
+/// 给一个窗口句柄装上方法：`set_content` / `show` / `hide` / `close` / `focus` /
+/// `combine_region` / `prune_region` / `region_contains` / `region_relation`。
 ///
 /// 句柄是一张普通表（`kind` / `name` / `width` / `height` 只是给人看的），方法闭包里带着编号；
 /// 脚本怎么改那张表都影响不到运行时 —— 与 `cloudime` 表是只读代理同一个规矩。
@@ -237,8 +238,13 @@ pub(crate) fn handle(
     handle.set("width", size.0)?;
     handle.set("height", size.1)?;
 
+    // 这份窗口的区域镜像：`set_content` / `combine_region` / `prune_region` 时同步更新，
+    // `region_contains` / `region_relation` 就在工人线程上直接查它（不用等 UI 线程回话）。
+    let regions: Rc<RefCell<Vec<Region>>> = Rc::new(RefCell::new(Vec::new()));
+
     let content_requests = requests.clone();
     let content_images = images.clone();
+    let content_regions = regions.clone();
     handle.set(
         "set_content",
         lua.create_function(move |_, (this, content): (mlua::Table, mlua::Table)| {
@@ -247,6 +253,7 @@ pub(crate) fn handle(
                 fallback_size(&this),
                 &mut content_images.borrow_mut(),
             )?;
+            *content_regions.borrow_mut() = document.regions.clone();
             content_requests
                 .borrow_mut()
                 .push(Request::SetContent(id, document));
@@ -276,20 +283,30 @@ pub(crate) fn handle(
     )?;
 
     let close_requests = requests.clone();
+    let close_regions = regions.clone();
     handle.set(
         "close",
         lua.create_function(move |_, _this: mlua::Table| {
+            close_regions.borrow_mut().clear();
             close_requests.borrow_mut().push(Request::Close(id));
             Ok(())
         })?,
     )?;
 
     let combine_requests = requests.clone();
+    let combine_regions = regions.clone();
     handle.set(
         "combine_region",
         lua.create_function(
             move |_, (_this, name, shape): (mlua::Table, String, mlua::Table)| {
                 let shape = shape_from_table(&shape)?;
+                if let Some(region) = combine_regions
+                    .borrow_mut()
+                    .iter_mut()
+                    .find(|region| region.name == name)
+                {
+                    region.combine(shape.clone());
+                }
                 combine_requests.borrow_mut().push(Request::EditRegion {
                     id,
                     name,
@@ -302,11 +319,19 @@ pub(crate) fn handle(
     )?;
 
     let prune_requests = requests.clone();
+    let prune_regions = regions.clone();
     handle.set(
         "prune_region",
         lua.create_function(
             move |_, (_this, name, shape): (mlua::Table, String, mlua::Table)| {
                 let shape = shape_from_table(&shape)?;
+                if let Some(region) = prune_regions
+                    .borrow_mut()
+                    .iter_mut()
+                    .find(|region| region.name == name)
+                {
+                    region.prune(shape.clone());
+                }
                 prune_requests.borrow_mut().push(Request::EditRegion {
                     id,
                     name,
@@ -314,6 +339,58 @@ pub(crate) fn handle(
                     combine: false,
                 });
                 Ok(())
+            },
+        )?,
+    )?;
+
+    // 查询：点是否在区域里（与鼠标命中同一套判断，含边界）。
+    let contains_regions = regions.clone();
+    handle.set(
+        "region_contains",
+        lua.create_function(
+            move |_, (_this, name, x, y): (mlua::Table, String, f32, f32)| {
+                let found = contains_regions
+                    .borrow()
+                    .iter()
+                    .find(|region| region.name == name)
+                    .map(|region| region.contains(x, y));
+                Ok(found)
+            },
+        )?,
+    )?;
+
+    // 查询：两块区域的关系（相离 / 相交 / 内含 / 重合）。只有面积上的重叠才算相交，贴一条边算相离。
+    let relation_regions = regions.clone();
+    handle.set(
+        "region_relation",
+        lua.create_function(
+            move |lua, (_this, name_a, name_b): (mlua::Table, String, String)| {
+                let regions = relation_regions.borrow();
+                let (Some(a), Some(b)) = (
+                    regions.iter().find(|region| region.name == name_a),
+                    regions.iter().find(|region| region.name == name_b),
+                ) else {
+                    return Ok(mlua::Value::Nil);
+                };
+                let a_in_b = a.contains_region(b);
+                let b_in_a = b.contains_region(a);
+                let (relation, contains) = if a_in_b && b_in_a {
+                    ("coincide", None)
+                } else if a_in_b {
+                    ("contains", Some("a"))
+                } else if b_in_a {
+                    ("contains", Some("b"))
+                } else if a.intersects(b) {
+                    ("intersect", None)
+                } else {
+                    ("disjoint", None)
+                };
+                let result = lua.create_table()?;
+                result.set("relation", relation)?;
+                if let Some(side) = contains {
+                    result.set("contains", side)?;
+                }
+                Ok(mlua::Value::Table(result))
             },
         )?,
     )?;
@@ -479,8 +556,34 @@ fn parse_regions(content: &mlua::Table) -> mlua::Result<Vec<Region>> {
     Ok(regions)
 }
 
-/// 一个形状表 `{ x, y, w, h, radius }` → [`HitShape`]（区域 / 合并 / 剪除共用）。
+/// 一个形状表 → [`HitShape`]（区域 / 合并 / 剪除共用）。
+///
+/// 形状不必是矩形：`shape` 显式写 `rect` / `round_rect` / `circle` / `path`；不写就按字段猜
+///（有 `commands` 当路径，有 `cx` / `cy` 当圆，其余当矩形 / 圆角矩形）。
 fn shape_from_table(table: &mlua::Table) -> mlua::Result<HitShape> {
+    match table.get::<Option<String>>("shape")?.as_deref() {
+        Some("circle") => circle_shape(table),
+        Some("path") => path_shape(table),
+        Some("rect") | Some("round_rect") => rect_shape(table),
+        Some(other) => Err(mlua::Error::RuntimeError(format!(
+            "形状的 shape 不认识：{other}（可用：rect / round_rect / circle / path）"
+        ))),
+        None if has_field(table, "commands")? => path_shape(table),
+        None if has_field(table, "cx")? || has_field(table, "cy")? => circle_shape(table),
+        None => rect_shape(table),
+    }
+}
+
+/// 表里有没有这个字段（`nil` 也算没有）。
+fn has_field(table: &mlua::Table, key: &str) -> mlua::Result<bool> {
+    Ok(!matches!(
+        table.raw_get::<mlua::Value>(key)?,
+        mlua::Value::Nil
+    ))
+}
+
+/// 矩形 / 圆角矩形：`{ x, y, w, h, radius }`。
+fn rect_shape(table: &mlua::Table) -> mlua::Result<HitShape> {
     let x = number(table, "x", 0.0)?;
     let y = number(table, "y", 0.0)?;
     let width = positive(table, "w", "width")?;
@@ -499,13 +602,37 @@ fn shape_from_table(table: &mlua::Table) -> mlua::Result<HitShape> {
     })
 }
 
+/// 圆：`{ cx, cy, radius }`。
+fn circle_shape(table: &mlua::Table) -> mlua::Result<HitShape> {
+    Ok(HitShape::Circle {
+        cx: number(table, "cx", 0.0)?,
+        cy: number(table, "cy", 0.0)?,
+        radius: positive(table, "radius", "radius")?,
+    })
+}
+
+/// 任意闭合路径：`{ commands = { {"M", …}, … } }`（与 `path` 元素同一套命令）。
+fn path_shape(table: &mlua::Table) -> mlua::Result<HitShape> {
+    let commands = parse_path(table)?;
+    HitShape::from_path(&commands).ok_or_else(|| {
+        mlua::Error::RuntimeError(
+            "path 形状的 commands 画不出闭合区域（至少要有一段 M / L / Q / C / Z）".to_owned(),
+        )
+    })
+}
+
 /// `regions[i].combine` / `.prune`：可以写一个形状表，也可以写一张形状表的数组。
 fn parse_region_shapes(entry: &mlua::Table, key: &str) -> mlua::Result<Vec<HitShape>> {
     let mlua::Value::Table(table) = entry.get::<mlua::Value>(key)? else {
         return Ok(Vec::new());
     };
-    // 单个形状：带了 x / w 就是形状本身，否则当数组
-    if table.raw_get::<Option<f32>>("x")?.is_some() || table.raw_get::<Option<f32>>("w")?.is_some()
+    // 单个形状：带了形状字段就是形状本身，否则当数组
+    if has_field(&table, "x")?
+        || has_field(&table, "w")?
+        || has_field(&table, "cx")?
+        || has_field(&table, "cy")?
+        || has_field(&table, "shape")?
+        || has_field(&table, "commands")?
     {
         return Ok(vec![shape_from_table(&table)?]);
     }
@@ -618,7 +745,7 @@ fn parse_element(table: &mlua::Table, images: &mut ImageCache) -> mlua::Result<E
 fn parse_path(table: &mlua::Table) -> mlua::Result<Vec<PathCommand>> {
     let list: mlua::Table = table
         .get("commands")
-        .map_err(|_| mlua::Error::RuntimeError("path 元素缺 commands".to_owned()))?;
+        .map_err(|_| mlua::Error::RuntimeError("path 缺 commands".to_owned()))?;
     let mut commands = Vec::new();
     for entry in list.sequence_values::<mlua::Table>() {
         let entry = entry?;
@@ -1026,5 +1153,103 @@ mod tests {
         assert!(region.contains(120.0, 60.0), "合并进来的那一块");
         assert!(!region.contains(70.0, 70.0), "剪掉的小块");
         assert!(!region.contains(120.0, 20.0), "两个形状都没盖住");
+    }
+
+    /// 区域不必是矩形：圆、带洞的环、任意闭合路径都能声明。
+    #[test]
+    fn region_shapes_cover_circles_and_paths() {
+        let lua = mlua::Lua::new();
+        let content = lua
+            .load(
+                r##"
+                return {
+                    regions = {
+                        { name = "circle", shape = "circle", cx = 50, cy = 50, radius = 20 },
+                        {
+                            name = "ring", x = 0, y = 0, w = 100, h = 100,
+                            prune = { shape = "circle", cx = 50, cy = 50, radius = 10 },
+                        },
+                        {
+                            name = "tri", shape = "path",
+                            commands = { {"M", 0, 0}, {"L", 40, 0}, {"L", 0, 40}, {"Z"} },
+                        },
+                    },
+                    { type = "rect", x = 0, y = 0, w = 10, h = 10, color = "#FF000000" },
+                }
+            "##,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let document = parse_document(
+            &content,
+            (Some(200.0), Some(100.0)),
+            &mut ImageCache::default(),
+        )
+        .expect("读得出来");
+        assert_eq!(document.regions.len(), 3);
+
+        let circle = &document.regions[0];
+        assert!(circle.contains(50.0, 50.0));
+        assert!(circle.contains(68.0, 50.0), "贴着边也算在圆里");
+        assert!(!circle.contains(20.0, 20.0));
+
+        let ring = &document.regions[1];
+        assert!(ring.contains(5.0, 5.0), "环的外圈");
+        assert!(!ring.contains(50.0, 50.0), "中间挖掉的圆");
+
+        let triangle = &document.regions[2];
+        assert!(triangle.contains(10.0, 10.0));
+        assert!(!triangle.contains(30.0, 30.0), "斜边外面");
+    }
+
+    /// `region_contains` / `region_relation`：在工人线程上查区域镜像（含合并 / 剪除之后）。
+    #[test]
+    fn region_queries_answer_from_the_script_side_mirror() {
+        let lua = mlua::Lua::new();
+        let handle = handle(
+            &lua,
+            Kind::Independent,
+            1,
+            "面板",
+            (Some(200.0), Some(100.0)),
+            Rc::new(RefCell::new(Vec::new())),
+            Rc::new(RefCell::new(ImageCache::default())),
+        )
+        .unwrap();
+        lua.globals().set("win", handle).unwrap();
+        lua.load(
+            r#"
+            win:set_content{
+                width = 200, height = 100,
+                regions = {
+                    { name = "a", x = 0, y = 0, w = 40, h = 40 },
+                    { name = "b", x = 100, y = 60, w = 40, h = 40 },
+                    { name = "big", x = 0, y = 0, w = 100, h = 100 },
+                    { name = "small", x = 10, y = 10, w = 20, h = 20 },
+                    { name = "same", x = 0, y = 0, w = 40, h = 40 },
+                },
+            }
+
+            assert(win:region_contains("a", 10, 10) == true)
+            assert(win:region_contains("a", 150, 10) == false)
+            assert(win:region_contains("missing", 10, 10) == nil)
+
+            assert(win:region_relation("a", "b").relation == "disjoint")
+            assert(win:region_relation("big", "small").relation == "contains")
+            assert(win:region_relation("big", "small").contains == "a")
+            assert(win:region_relation("small", "big").contains == "b")
+            assert(win:region_relation("a", "same").relation == "coincide")
+            assert(win:region_relation("a", "missing") == nil)
+
+            -- 合并 / 剪除之后镜像同步更新
+            win:combine_region("a", { x = 60, y = 0, w = 20, h = 20 })
+            assert(win:region_contains("a", 65, 5) == true)
+            win:prune_region("a", { x = 0, y = 0, w = 5, h = 5 })
+            assert(win:region_contains("a", 2, 2) == false)
+            assert(win:region_relation("a", "same").relation == "intersect")
+            "#,
+        )
+        .exec()
+        .unwrap();
     }
 }

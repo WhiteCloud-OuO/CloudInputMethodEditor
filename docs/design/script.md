@@ -250,6 +250,10 @@ local aux = cloudime.window.create_auxiliary{
 | `win:hide()` | 收起（不销毁；内容留着，再 `show` 原样回来） |
 | `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
 | `win:focus(true/false)` | 独立窗口：拿 / 放**键盘焦点**（`key` 载荷里会带 `window`）；辅助窗口：把逻辑焦点指定给它 / 交还给宿主 |
+| `win:combine_region(name, 形状)` | 把形状并进已有区域（只改命中、不重画） |
+| `win:prune_region(name, 形状)` | 从已有区域里挖掉形状（只改命中、不重画） |
+| `win:region_contains(name, x, y)` | 点是否在区域里（含边界）；没有这个区域给 `nil` |
+| `win:region_relation(a, b)` | 两块区域的关系：`{ relation = "disjoint" / "intersect" / "contains" / "coincide", contains = "a" / "b" }`；没有区域给 `nil` |
 
 - 辅助窗口**默认不接鼠标**：`interactive = true` 只是「能」拿焦点，真要它接还得 `aux:focus(true)`
   （§4 的规矩：只有所有者能指定）。宿主被收起时名下资产跟着收起，`win:show()` 时自己回来。
@@ -293,13 +297,21 @@ win:set_content{
   就会用新图。相对路径按 Server 的工作目录（安装目录）算。
 - **混合 DPI**（2026-10-17）：`show{ x, y }` 的点坐标先按当前显示器 DPI 猜一个落点、问出那块显示器真正的 DPI
   再换算；窗口拖到另一块 DPI 不同的屏上会按新 DPI 重画（内容尺寸跟着变），名下的辅助窗口一起重新摆。
-- **区域（region）**：内容里可以声明 `regions = { { name = "plus", x = …, y = …, w = …, h = …, radius = …, drag = true } }`
-  —— 区域是**鼠标点击 / 拖拽的命中范围**（元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true`
-  = 按住它拖会移动整块窗口，`false` = 不拖窗口（点击照常）。后写的区域盖住先写的；
-  事件里的 `event.region` 就是命中的区域名（没声明 `regions` 时仍按元素命中 `event.element`）。
-  区域还可以带 `combine`（并集：绿框并蓝框）与 `prune`（差集：红框减黑框），各写一个形状或形状数组；
-  命中先看 `prune`，再看原始形状与 `combine`。运行时也能用 `win:combine_region(name, 形状)` /
-  `win:prune_region(name, 形状)` 改已有区域（只改命中、不重画）。
+- **区域（region）**：内容里可以声明 `regions = { … }` —— 区域是**鼠标点击 / 拖拽的命中范围**
+  （元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true` = 按住它拖会移动整块窗口，
+  `false` = 不拖窗口（点击照常）。后写的区域盖住先写的；事件里的 `event.region` 就是命中的区域名
+  （没声明 `regions` 时仍按元素命中 `event.element`）。
+  - **形状**不必是矩形：不写 `shape` 时按字段猜（有 `commands` 当路径、有 `cx` / `cy` 当圆、其余当矩形），
+    也可以显式写 `shape = "rect" | "round_rect" | "circle" | "path"`：矩形 / 圆角矩形
+    `{ x, y, w, h, radius }`、圆 `{ cx, cy, radius }`、路径 `{ commands = { … } }`（与 `path` 元素同一套命令）。
+  - 区域还可以带 `combine`（并集）与 `prune`（差集），各写一个形状或形状数组；命中先看 `prune`，
+    再看原始形状与 `combine`。运行时也能用 `win:combine_region(name, 形状)` /
+    `win:prune_region(name, 形状)` 改已有区域（只改命中、不重画）。
+  - **查询**：`win:region_contains(name, x, y)` 判断点是否在区域里（与鼠标命中同一套判断，含边界），
+    没有这个区域给 `nil`；`win:region_relation(a, b)` 判断两块区域的关系，返回
+    `{ relation = "disjoint" | "intersect" | "contains" | "coincide", contains = "a" | "b" | nil }`
+    （内含时 `contains` 说明谁包住谁；只贴一条边算相离）。查的是脚本侧的区域镜像
+    （`set_content` / 合并 / 剪除后同步），不开销 UI 线程。
 
 ### 鼠标、滚轮、拖动（`cloudime.on("window", …)`）
 

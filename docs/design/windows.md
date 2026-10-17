@@ -214,6 +214,9 @@ pub(super) trait Clonable: Asset {
 - **合并 / 剪除**：区域可以带 `combine`（并集）与 `prune`（差集）形状；命中先看 `prune`，再看原始形状与
   `combine`。命中检测只做**成员判断**（并集 = 任一形状命中、差集 = 任一剪除形状命中就不算），
   不把轮廓真的做布尔运算，所以对矩形 / 圆角 / 圆 / 路径都成立。
+- **形状与关系**：区域的形状不限于矩形（脚本里 `shape = "rect" | "round_rect" | "circle" | "path"`）。
+  `Region::contains_region` / `intersects` 用 `i_overlay` 把形状转成多边形做并 / 差 / 交，
+  给出内含 / 相交 / 重合 / 相离（只贴一条边不算相交）；脚本侧另有 `region_contains` 查点。
 
 实现：`cloudime_render::Region`（数据：名字 / 形状 / `draggable`）、`ui/region.rs::hit`（命中）、
 脚本窗口的 `begin_drag` 按命中区域的 `draggable` 决定要不要开始拖窗口。

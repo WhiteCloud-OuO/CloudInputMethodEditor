@@ -983,8 +983,14 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   得脚本 `aux:focus(true)` 走所有者指定。
 - **区域**（`region`，2026-10-17）：窗口内容里可以被鼠标**点击 / 拖拽**的范围，数据在
   `cloudime_render::document::Region`（名字 / `HitShape` / `draggable` + 合并 / 剪除形状），命中在
-  `ui::region::hit`（后写的盖住先写的）。`contains` 先看 `pruned`（差集）、再看原始形状与 `combined`
-  （并集）—— 只做成员判断，不做几何布尔运算。脚本窗口的 `set_content` 把 `regions` 存进
+  `ui::region::hit`（后写的盖住先写的）。形状不限于矩形：`HitShape` 支持矩形 / 圆角 / 圆 / 线段 / 路径，
+  脚本 `regions` 里用 `shape = "rect" | "round_rect" | "circle" | "path"`（不写就按 `cx` / `commands` 猜）。
+  `contains` 先看 `pruned`（差集）、再看原始形状与 `combined`（并集）—— 命中只做成员判断。
+  **关系判断**（`contains_region` / `intersects`）另走 `i_overlay`：把形状转成多边形，依次
+  `union` / `difference` / `intersect` 算出实际轮廓与面积，只贴一条边不算相交；依赖在根
+  `[workspace.dependencies]`（纯 Rust，无系统库）。脚本侧 `region_contains` / `region_relation`
+  查的是句柄闭包里的**区域镜像**（`set_content` / `combine_region` / `prune_region` 时同步），
+  在工人线程上直接算，不往 UI 线程发请求。脚本窗口的 `set_content` 把 `regions` 存进
   `ScriptWindow.regions`，`hit_at` 同时给元素与区域、事件载荷带 `region`；`combine_region` /
   `prune_region` 走 `Request::EditRegion` 直接改内容里的区域（只改命中、不重画）；
   `begin_drag` 按命中区域的 `draggable` 决定拖不拖窗口。悬浮工具栏把渲染器给的 `cell_edges`

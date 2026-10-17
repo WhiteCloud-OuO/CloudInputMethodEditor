@@ -402,6 +402,10 @@ aux:show()
 | `win:hide()` | 收起（不销毁） |
 | `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
 | `win:focus(true / false)` | 独立窗口：拿 / 放**键盘焦点**（之后 `key` 载荷里带 `window` / `window_id`）；辅助窗口：把逻辑焦点指定给它 / 交还给宿主 |
+| `win:combine_region(name, 形状)` | 把形状并进已有区域（只改命中、不重画） |
+| `win:prune_region(name, 形状)` | 从已有区域里挖掉形状（只改命中、不重画） |
+| `win:region_contains(name, x, y)` | 点是否在区域里（含边界）；没有这个区域给 `nil` |
+| `win:region_relation(a, b)` | 两块区域的关系：`{ relation = "disjoint" / "intersect" / "contains" / "coincide", contains = "a" / "b" }`；没有区域给 `nil` |
 
 **元素表**（坐标 / 尺寸都是点，超出内容区的部分被裁掉）：
 
@@ -431,8 +435,22 @@ win:set_content{
 }
 ```
 
-- `name` 必写、同一份内容里唯一；`x` / `y` / `w` / `h` 必给，`radius` 可选（圆角区域）；
-  `drag` 缺省 `true` = 按住它拖会移动整块窗口，`false` = 按住它不拖窗口（点击照常）。
+- `name` 必写、同一份内容里唯一；`drag` 缺省 `true` = 按住它拖会移动整块窗口，
+  `false` = 按住它不拖窗口（点击照常）。
+- **形状不必是矩形**。不写 `shape` 时按字段猜（有 `commands` 当路径、有 `cx` / `cy` 当圆、其余当矩形），
+  也可以显式写 `shape`：
+  - `shape = "rect"` / `"round_rect"`：`{ x, y, w, h, radius }`，`radius > 0` 就是圆角矩形；
+  - `shape = "circle"`：`{ cx, cy, radius }`；
+  - `shape = "path"`：`{ commands = { {"M",…}, … } }`，与 `path` 元素同一套命令（自动闭合填充）。
+
+  ```lua
+  regions = {
+      { name = "dot",    shape = "circle", cx = 60, cy = 60, radius = 24 },
+      { name = "corner", x = 0, y = 0, w = 120, h = 120, radius = 12 },
+      { name = "arrow",  shape = "path",
+        commands = { {"M", 10, 80}, {"L", 60, 30}, {"L", 110, 80}, {"Z"} } },
+  }
+  ```
 - 鼠标事件里的 **`event.region`** 就是命中的区域名；没命中 / 没声明区域是 `nil`。
 - 后写的区域盖住先写的（与元素绘制顺序一致）。没声明 `regions` 时仍按元素命中（`event.element`）。
 - **合并（combine）/ 剪除（prune）**：区域声明里可以带这两个字段（一个形状，或形状数组）：
@@ -450,6 +468,24 @@ win:set_content{
   运行时也能改**已有区域**：`win:combine_region("keys", { x, y, w, h })` /
   `win:prune_region("keys", { x, y, w, h })` —— 只改命中、不重画；下一次 `set_content` 会重置成
   内容里声明的那份。
+- **查询区域**：`win:region_contains(name, x, y)` 判断点是否在区域里（与鼠标命中同一套判断，含边界），
+  没有这个区域给 `nil`；`win:region_relation(a, b)` 判断两块区域的关系，返回
+  `{ relation = … , contains = … }`（没有区域给 `nil`）：
+
+  | `relation` | 含义 |
+  | --- | --- |
+  | `"disjoint"` | 相离（只贴一条边也算相离） |
+  | `"intersect"` | 相交（有面积上的重叠） |
+  | `"contains"` | 内含；`contains = "a"` 表示前者包住后者，`"b"` 反过来 |
+  | `"coincide"` | 重合 |
+
+  ```lua
+  if win:region_contains("dot", event.x, event.y) then … end
+  local rel = win:region_relation("dot", "corner")
+  if rel and rel.relation == "contains" and rel.contains == "a" then … end
+  ```
+
+  查的是脚本这一侧的区域镜像（`set_content` / 合并 / 剪除之后同步更新），不占 UI 线程。
 
 **命中按形状**：圆角矩形抠掉四个角、圆按边界、线段按粗细、路径按非零环绕填充；文字 / 图像 / SVG 按外框。
 `img` 按路径**缓存**解码结果（最多 8 张 / 32M 像素，文件改过下一次 `set_content` 生效），同一张图不用反复解码。

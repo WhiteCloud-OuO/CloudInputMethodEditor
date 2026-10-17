@@ -61,6 +61,8 @@ zerocopy = { version = "0.8", features = ["derive"] }
 rusqlite = { version = "0.40.2", features = ["bundled"] }
 # 用户脚本的运行时：mlua 的 LuaJIT 后端；vendored 让 LuaJIT 源码随包编译，装机包不依赖外部 Lua
 mlua = { version = "0.12.2", features = ["luajit", "vendored"] }
+  # 区域（region）的并集 / 差集 / 相交与关系判断：纯 Rust 的多边形布尔运算
+  i_overlay = "9.1.0"
 
 # 本地神经语言模型推理（字级 Transformer，权重 safetensors）
 candle-core = "0.11.0"

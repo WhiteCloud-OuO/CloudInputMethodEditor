@@ -11,6 +11,7 @@ tiny-skia.workspace = true
 # 状态条 SVG 图标：usvg 解析 + resvg 光栅化（借它的 tiny-skia 与上面同一版本）
 resvg.workspace = true
 cosmic-text.workspace = true
+i_overlay.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 

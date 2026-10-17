@@ -8,6 +8,9 @@
 
 use std::sync::Arc;
 
+use i_overlay::core::fill_rule::FillRule;
+use i_overlay::core::overlay_rule::OverlayRule;
+use i_overlay::float::single::SingleFloatOverlay;
 use tiny_skia::{PathBuilder, Pixmap};
 
 use crate::color::Color;
@@ -93,6 +96,212 @@ impl Region {
     pub fn prune(&mut self, shape: HitShape) {
         self.pruned.push(shape);
     }
+
+    /// **内含**：`self` 完全覆盖 `other`（`other` 减掉 `self` 之后没有面积）；空区域不算。
+    pub fn contains_region(&self, other: &Region) -> bool {
+        let a = self.effective_contours();
+        let b = other.effective_contours();
+        if a.is_empty() || b.is_empty() {
+            return false;
+        }
+        let rest = b.overlay(&a, OverlayRule::Difference, FillRule::NonZero);
+        shapes_area(&rest) <= AREA_EPSILON
+    }
+
+    /// **相交**：两块区域有**面积**上的重叠（只贴一条边不算相交，算相离）。
+    pub fn intersects(&self, other: &Region) -> bool {
+        let a = self.effective_contours();
+        let b = other.effective_contours();
+        if a.is_empty() || b.is_empty() {
+            return false;
+        }
+        let overlap = a.overlay(&b, OverlayRule::Intersect, FillRule::NonZero);
+        shapes_area(&overlap) > AREA_EPSILON
+    }
+
+    /// 实际命中轮廓：原始形状 ∪ `combined` − `pruned`（用多边形布尔运算算出来）。
+    fn effective_contours(&self) -> Vec<Contour> {
+        let mut subject = shape_contours(&self.shape);
+        for shape in &self.combined {
+            let clip = shape_contours(shape);
+            subject = flatten(subject.overlay(&clip, OverlayRule::Union, FillRule::NonZero));
+        }
+        for shape in &self.pruned {
+            let clip = shape_contours(shape);
+            subject = flatten(subject.overlay(&clip, OverlayRule::Difference, FillRule::NonZero));
+        }
+        subject
+    }
+}
+
+/// 多边形布尔运算用的轮廓（点集，自动闭合）。
+type Contour = Vec<[f64; 2]>;
+
+/// 一块有孔洞的形状（第一个轮廓是外圈，后面的圈是洞）。
+type PolygonShape = Vec<Contour>;
+
+/// 关系判断里认为「有面积」的下限（点²）。
+const AREA_EPSILON: f64 = 1e-3;
+
+/// 元素 / 区域的形状 → 多边形轮廓（圆角 / 圆 / 线段都按折线近似；路径用它自己的扁平化轮廓）。
+fn shape_contours(shape: &HitShape) -> Vec<Contour> {
+    match shape {
+        HitShape::Rect(rect) => vec![vec![
+            [f64::from(rect.x), f64::from(rect.y)],
+            [f64::from(rect.x + rect.width), f64::from(rect.y)],
+            [
+                f64::from(rect.x + rect.width),
+                f64::from(rect.y + rect.height),
+            ],
+            [f64::from(rect.x), f64::from(rect.y + rect.height)],
+        ]],
+        HitShape::RoundRect {
+            x,
+            y,
+            width,
+            height,
+            radius,
+        } => vec![round_rect_contour(*x, *y, *width, *height, *radius)],
+        HitShape::Circle { cx, cy, radius } => vec![circle_contour(*cx, *cy, *radius)],
+        HitShape::Segment {
+            from,
+            to,
+            thickness,
+        } => vec![segment_contour(*from, *to, *thickness)],
+        HitShape::Path { contours } => contours
+            .iter()
+            .map(|contour| {
+                contour
+                    .iter()
+                    .map(|&(x, y)| [f64::from(x), f64::from(y)])
+                    .collect()
+            })
+            .collect(),
+    }
+}
+
+/// 圆角矩形的轮廓（每个角 16 段折线）。
+fn round_rect_contour(x: f32, y: f32, width: f32, height: f32, radius: f32) -> Contour {
+    const ARC_SEGMENTS: usize = 16;
+    let radius = f64::from(radius.min(width.min(height) * 0.5).max(0.0));
+    let (x, y, width, height) = (
+        f64::from(x),
+        f64::from(y),
+        f64::from(width),
+        f64::from(height),
+    );
+    if radius <= 0.0 {
+        return vec![
+            [x, y],
+            [x + width, y],
+            [x + width, y + height],
+            [x, y + height],
+        ];
+    }
+    let mut points = Vec::with_capacity(ARC_SEGMENTS * 4 + 4);
+    let arc = |points: &mut Contour, cx: f64, cy: f64, from: f64, to: f64| {
+        for step in 1..=ARC_SEGMENTS {
+            let angle = from + (to - from) * step as f64 / ARC_SEGMENTS as f64;
+            points.push([cx + radius * angle.cos(), cy + radius * angle.sin()]);
+        }
+    };
+    points.push([x + radius, y]);
+    points.push([x + width - radius, y]);
+    arc(
+        &mut points,
+        x + width - radius,
+        y + radius,
+        -std::f64::consts::FRAC_PI_2,
+        0.0,
+    );
+    points.push([x + width, y + height - radius]);
+    arc(
+        &mut points,
+        x + width - radius,
+        y + height - radius,
+        0.0,
+        std::f64::consts::FRAC_PI_2,
+    );
+    points.push([x + radius, y + height]);
+    arc(
+        &mut points,
+        x + radius,
+        y + height - radius,
+        std::f64::consts::FRAC_PI_2,
+        std::f64::consts::PI,
+    );
+    points.push([x, y + radius]);
+    arc(
+        &mut points,
+        x + radius,
+        y + radius,
+        std::f64::consts::PI,
+        std::f64::consts::PI + std::f64::consts::FRAC_PI_2,
+    );
+    // 最后一段圆弧的终点就是起点，去掉重复点
+    points.pop();
+    points
+}
+
+/// 圆的轮廓（64 段折线）。
+fn circle_contour(cx: f32, cy: f32, radius: f32) -> Contour {
+    const SEGMENTS: usize = 64;
+    let (cx, cy, radius) = (f64::from(cx), f64::from(cy), f64::from(radius.max(0.0)));
+    (0..SEGMENTS)
+        .map(|index| {
+            let angle = std::f64::consts::TAU * index as f64 / SEGMENTS as f64;
+            [cx + radius * angle.cos(), cy + radius * angle.sin()]
+        })
+        .collect()
+}
+
+/// 线段按「细长矩形」算（区域关系用；命中仍按点到线段的距离）。
+fn segment_contour(from: (f32, f32), to: (f32, f32), thickness: f32) -> Contour {
+    let (x1, y1) = (f64::from(from.0), f64::from(from.1));
+    let (x2, y2) = (f64::from(to.0), f64::from(to.1));
+    let (dx, dy) = (x2 - x1, y2 - y1);
+    let length = (dx * dx + dy * dy).sqrt();
+    let half = f64::from(thickness.max(0.1)) * 0.5;
+    if length <= f64::EPSILON {
+        return circle_contour(from.0, from.1, thickness.max(0.1) * 0.5);
+    }
+    let (nx, ny) = (-dy / length * half, dx / length * half);
+    vec![
+        [x1 + nx, y1 + ny],
+        [x2 + nx, y2 + ny],
+        [x2 - nx, y2 - ny],
+        [x1 - nx, y1 - ny],
+    ]
+}
+
+/// `Vec<Shape>`（布尔运算的结果）→ 扁平轮廓表。
+fn flatten(shapes: Vec<PolygonShape>) -> Vec<Contour> {
+    shapes.into_iter().flatten().collect()
+}
+
+/// 一组轮廓的净面积（外圈正、洞负；i_overlay 的输出方向就是外圈逆时针、洞顺时针）。
+fn shapes_area(shapes: &[PolygonShape]) -> f64 {
+    let mut total = 0.0;
+    for shape in shapes {
+        for contour in shape {
+            total += signed_area(contour);
+        }
+    }
+    total.abs()
+}
+
+/// 鞋带公式：逆时针为正、顺时针为负。
+fn signed_area(contour: &Contour) -> f64 {
+    if contour.len() < 3 {
+        return 0.0;
+    }
+    let mut sum = 0.0;
+    for index in 0..contour.len() {
+        let [x1, y1] = contour[index];
+        let [x2, y2] = contour[(index + 1) % contour.len()];
+        sum += x1 * y2 - x2 * y1;
+    }
+    sum * 0.5
 }
 
 /// 字体槽：与 `cloudime.ui.measure` 的字体名同一套（候选 / 拼音 / 序号 / 译文）。
@@ -248,6 +457,12 @@ impl From<HitRect> for HitShape {
 }
 
 impl HitShape {
+    /// 由路径命令造一个**闭合填充**形状（与元素的 `path` 同一套扁平化 + 非零环绕）。
+    pub fn from_path(commands: &[PathCommand]) -> Option<Self> {
+        let contours = path_contours(commands);
+        (!contours.is_empty()).then_some(Self::Path { contours })
+    }
+
     /// 点是不是落在这块区域里（含边界）。
     pub fn contains(&self, x: f32, y: f32) -> bool {
         match self {
@@ -757,5 +972,76 @@ mod tests {
         both.prune(rect(120.0, 10.0, 10.0, 10.0));
         assert!(both.contains(140.0, 40.0), "合并进来的");
         assert!(!both.contains(125.0, 15.0), "合并之后又挖掉");
+    }
+
+    /// 两个区域的关系：相离 / 相交 / 内含 / 重合；只贴边算相离。
+    #[test]
+    fn region_relations_cover_the_four_cases() {
+        let rect = |x, y, width, height| {
+            Region::new("r", HitShape::Rect(HitRect::new(x, y, width, height)), true)
+        };
+        let a = rect(0.0, 0.0, 100.0, 100.0);
+
+        // 重合
+        let same = rect(0.0, 0.0, 100.0, 100.0);
+        assert!(a.contains_region(&same) && same.contains_region(&a));
+        assert!(a.intersects(&same));
+
+        // 内含（大包小）
+        let inner = rect(20.0, 20.0, 40.0, 40.0);
+        assert!(a.contains_region(&inner));
+        assert!(!inner.contains_region(&a));
+        assert!(a.intersects(&inner));
+
+        // 相交（部分重叠）
+        let overlap = rect(80.0, 80.0, 50.0, 50.0);
+        assert!(!a.contains_region(&overlap));
+        assert!(!overlap.contains_region(&a));
+        assert!(a.intersects(&overlap));
+
+        // 相离
+        let far = rect(200.0, 200.0, 20.0, 20.0);
+        assert!(!a.contains_region(&far));
+        assert!(!a.intersects(&far));
+
+        // 只贴边：不算相交（没有面积重叠），也不算内含
+        let touching = rect(100.0, 0.0, 50.0, 50.0);
+        assert!(!a.intersects(&touching));
+        assert!(!a.contains_region(&touching));
+    }
+
+    /// 圆 / 圆角 / 带洞的区域也能判关系（多边形近似）。
+    #[test]
+    fn region_relations_work_with_circles_and_holes() {
+        let circle = |cx, cy, radius| Region::new("c", HitShape::Circle { cx, cy, radius }, true);
+        let big = circle(50.0, 50.0, 40.0);
+        let small = circle(50.0, 50.0, 10.0);
+        assert!(big.contains_region(&small));
+        assert!(big.intersects(&small));
+        let next = circle(85.0, 50.0, 10.0);
+        assert!(big.intersects(&next), "两个圆部分重叠");
+        assert!(!big.contains_region(&next));
+
+        // 挖了洞的区域：洞里的小块与它相离，环上的小块与它相交
+        let mut ring = Region::new(
+            "ring",
+            HitShape::Rect(HitRect::new(0.0, 0.0, 100.0, 100.0)),
+            true,
+        );
+        ring.prune(HitShape::Rect(HitRect::new(25.0, 25.0, 50.0, 50.0)));
+        let in_hole = Region::new(
+            "hole",
+            HitShape::Rect(HitRect::new(40.0, 40.0, 10.0, 10.0)),
+            true,
+        );
+        assert!(!ring.intersects(&in_hole), "洞里的块不碰环");
+        assert!(!ring.contains_region(&in_hole));
+        let on_ring = Region::new(
+            "edge",
+            HitShape::Rect(HitRect::new(10.0, 10.0, 10.0, 10.0)),
+            true,
+        );
+        assert!(ring.intersects(&on_ring));
+        assert!(ring.contains_region(&on_ring));
     }
 }
