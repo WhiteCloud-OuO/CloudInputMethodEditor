@@ -920,7 +920,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   （`WS_EX_TRANSPARENT`，命中测试读同一个位），没声明过的不接输入（记一条日志）。
 
 **窗口的两类**（`server/src/ui/`）—— **规则见 [`docs/design/windows.md`](../design/windows.md)**（两类窗口、
-所有者唯一且不转移、桥接 bridging、**焦点 focus**、资产克隆与资产窃取、**绘制 painting / 渲染 rendering**）。
+所有者唯一且不转移、桥接 bridging、**焦点 focus**、资产克隆与资产窃取、**渲染 rendering**）。
 这里只记实现落点：
 
 - **独立窗口**（`independent window`）：候选窗口（`candidates/`）、悬浮工具栏（`status/`）、状态切换提示
@@ -953,10 +953,10 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   也得所有者**指定**才拿得到；**资产克隆 / 窃取**（§5.1 / §5.2）来的就是这条路：特性跟原件一样（克隆件 /
   窃取件自带自己的 `able_to_get_focus`），焦点还留在所有者或姊妹资产身上。两边差别在原件：窃取时原件
   被销毁、它那一组销毁前按「生命周期末」自动归还焦点；克隆则原件与它那一组**一点不动**。
-- **绘制 / 渲染**（`docs/design/windows.md` §6）：两种画法各是一个结构体、元素各是一条 trait（`cloudime-render`）——
-  `elements` 里六条（`TextElement` / `SvgElement` / `ImageElement` / `LineElement` / `RectElement` /
-  `PathElement`），唯一的实现是 `Render`（离屏位图 + 共享字形管线，`measure` 也走它）。（曾经还有一份 GDI + GDI+ 的
-  `Paint`，2026-10-17 试完删了 —— 见 `windows.md` §6 的历史注记。）
+- **渲染**（`docs/design/windows.md` §6）：元素各是一条 trait（`cloudime-render`）—— `elements` 里六条
+  （`TextElement` / `SvgElement` / `ImageElement` / `LineElement` / `RectElement` / `PathElement`），实现是
+  `Render`（离屏位图 + 共享字形管线，`measure` 也走它）。（曾经还有一份 GDI + GDI+ 的 `Paint`，2026-10-17 试完删了；
+  那版在 git 历史里。）
   **两处缓存**（2026-10-17）：① **阴影层缓存** —— 阴影只跟尺寸 / 圆角 / 模糊 / 偏移 / 颜色 / 缩放有关，跟内容无关，
   `Renderer` 按这个 key 留最多 4 份已经算好的 `Pixmap`（候选窗 / 键位映射 / 状态条 / 提示各一份），命中就整块
   `copy_from_slice`（`Render::blit`，目标这时还是空的）；没缓存时每帧要 3 遍盒式模糊 + 整画布混合，200% 缩放下
@@ -975,8 +975,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `rect`（含圆角矩形与圆：`fill_round_rect`，圆 = 半径取半边长）/ `path`（`fill_path`，tiny-skia 的路径）。
 
 **辅助窗口**（`server/src/ui/auxiliary/`）：眼下只一件资产 —— 候选窗口的**键位映射参考**
-（`key_map/`，`KeyMapWindow`）：用**辅助窗口模板**搭的实窗（**绘制**：`WM_PAINT` 里 GDI 重画，没有阴影、
-圆角是窗口区域切出来的硬边），把当前方案的键位映射画成一张**键盘**给新手对着敲
+（`key_map/`，`KeyMapWindow`）：用**辅助窗口模板**搭的实窗（分层面板：阴影 / 圆角 / 内容一张位图），
+把当前方案的键位映射画成一张**键盘**给新手对着敲
 （版面由 `input_schemes::key_map_layout()` 按当前方案生成 —— 三排格子 + 零声母表，经 `CandidateSink::set_auxiliary`
 送到候选窗口、再落到资产上）。宿主是**候选窗口**（它实现 `Bridge`）：`CandidateWindow` 里 `assets_on` + `template.assets()`，
 `show` 里 `sync_assets`（经桥驱动资产）、`hide` 里收起资产并把开关归零；窗口与资产的销毁都交给独立窗口模板。
