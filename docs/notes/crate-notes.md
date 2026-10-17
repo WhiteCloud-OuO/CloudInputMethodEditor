@@ -982,11 +982,14 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `interactive` 映射到模板的 `transparent`，辅助窗口的 `interactive` 只是 `able_to_get_focus`，真要接鼠标
   得脚本 `aux:focus(true)` 走所有者指定。
 - **区域**（`region`，2026-10-17）：窗口内容里可以被鼠标**点击 / 拖拽**的范围，数据在
-  `cloudime_render::document::Region`（名字 / `HitShape` / `draggable`），命中在 `ui::region::hit`
-  （后写的盖住先写的）。脚本窗口的 `set_content` 把 `regions` 存进 `ScriptWindow.regions`，`hit_at`
-  同时给元素与区域、事件载荷带 `region`，`begin_drag` 按命中区域的 `draggable` 决定拖不拖窗口；
-  悬浮工具栏把渲染器给的 `cell_edges` 变成每个图标一个 `HitShape::Rect` 区域（名字 = 当前图标名），
-  `Placement::on_click` 用 `region.contains` 命中（不再按 x 边界）。
+  `cloudime_render::document::Region`（名字 / `HitShape` / `draggable` + 合并 / 剪除形状），命中在
+  `ui::region::hit`（后写的盖住先写的）。`contains` 先看 `pruned`（差集）、再看原始形状与 `combined`
+  （并集）—— 只做成员判断，不做几何布尔运算。脚本窗口的 `set_content` 把 `regions` 存进
+  `ScriptWindow.regions`，`hit_at` 同时给元素与区域、事件载荷带 `region`；`combine_region` /
+  `prune_region` 走 `Request::EditRegion` 直接改内容里的区域（只改命中、不重画）；
+  `begin_drag` 按命中区域的 `draggable` 决定拖不拖窗口。悬浮工具栏把渲染器给的 `cell_edges`
+  变成每个图标一个 `HitShape::Rect` 区域（名字 = 当前图标名），`Placement::on_click` 用
+  `region.contains` 命中（不再按 x 边界）。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

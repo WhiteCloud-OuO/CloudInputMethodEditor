@@ -35,6 +35,9 @@ const MAX_TEXT: usize = 4096;
 /// 一份内容最多几个区域（点击 / 拖拽范围）。
 const MAX_REGIONS: usize = 128;
 
+/// 一个区域最多合并 / 剪除几个形状。
+const MAX_REGION_PARTS: usize = 32;
+
 /// 图像解码后的像素数上限（约 4096 × 4096）：脚本给的图不该把整块内存吃掉。
 const MAX_IMAGE_PIXELS: u32 = 16 * 1024 * 1024;
 
@@ -187,6 +190,15 @@ pub enum Request {
 
     /// 把逻辑焦点指定给这件辅助窗口 / 交还给宿主；独立窗口则是拿 / 放键盘焦点。
     Focus(WindowId, bool),
+
+    /// 动态改一个**已有区域**的命中范围：`combine` = 合并进来（并集），否则剪除（差集）。
+    /// 只影响鼠标命中，不重画（区域不参与绘制）。
+    EditRegion {
+        id: WindowId,
+        name: String,
+        shape: HitShape,
+        combine: bool,
+    },
 }
 
 /// 窗口句柄是「独立窗口」还是「辅助窗口」（同一套方法，落点不同）。
@@ -270,6 +282,40 @@ pub(crate) fn handle(
             close_requests.borrow_mut().push(Request::Close(id));
             Ok(())
         })?,
+    )?;
+
+    let combine_requests = requests.clone();
+    handle.set(
+        "combine_region",
+        lua.create_function(
+            move |_, (_this, name, shape): (mlua::Table, String, mlua::Table)| {
+                let shape = shape_from_table(&shape)?;
+                combine_requests.borrow_mut().push(Request::EditRegion {
+                    id,
+                    name,
+                    shape,
+                    combine: true,
+                });
+                Ok(())
+            },
+        )?,
+    )?;
+
+    let prune_requests = requests.clone();
+    handle.set(
+        "prune_region",
+        lua.create_function(
+            move |_, (_this, name, shape): (mlua::Table, String, mlua::Table)| {
+                let shape = shape_from_table(&shape)?;
+                prune_requests.borrow_mut().push(Request::EditRegion {
+                    id,
+                    name,
+                    shape,
+                    combine: false,
+                });
+                Ok(())
+            },
+        )?,
     )?;
 
     // `focus`：独立窗口 = 拿键盘焦点（`key` 载荷里会带 `window`）；辅助窗口 = 把逻辑焦点指定给它 /
@@ -416,29 +462,63 @@ fn parse_regions(content: &mlua::Table) -> mlua::Result<Vec<Region>> {
         if regions.iter().any(|region| region.name == name) {
             return Err(mlua::Error::RuntimeError(format!("区域名字重复：{name}")));
         }
-        let x = number(&entry, "x", 0.0)?;
-        let y = number(&entry, "y", 0.0)?;
-        let width = positive(&entry, "w", "width")?;
-        let height = positive(&entry, "h", "height")?;
-        let radius = number(&entry, "radius", 0.0)?.max(0.0);
-        let shape = if radius > 0.0 {
-            HitShape::RoundRect {
-                x,
-                y,
-                width,
-                height,
-                radius,
-            }
-        } else {
-            HitShape::Rect(HitRect::new(x, y, width, height))
-        };
-        regions.push(Region {
+        let shape = shape_from_table(&entry)?;
+        let mut region = Region::new(
             name,
             shape,
-            draggable: entry.get::<Option<bool>>("drag")?.unwrap_or(true),
-        });
+            entry.get::<Option<bool>>("drag")?.unwrap_or(true),
+        );
+        for shape in parse_region_shapes(&entry, "combine")? {
+            region.combine(shape);
+        }
+        for shape in parse_region_shapes(&entry, "prune")? {
+            region.prune(shape);
+        }
+        regions.push(region);
     }
     Ok(regions)
+}
+
+/// 一个形状表 `{ x, y, w, h, radius }` → [`HitShape`]（区域 / 合并 / 剪除共用）。
+fn shape_from_table(table: &mlua::Table) -> mlua::Result<HitShape> {
+    let x = number(table, "x", 0.0)?;
+    let y = number(table, "y", 0.0)?;
+    let width = positive(table, "w", "width")?;
+    let height = positive(table, "h", "height")?;
+    let radius = number(table, "radius", 0.0)?.max(0.0);
+    Ok(if radius > 0.0 {
+        HitShape::RoundRect {
+            x,
+            y,
+            width,
+            height,
+            radius,
+        }
+    } else {
+        HitShape::Rect(HitRect::new(x, y, width, height))
+    })
+}
+
+/// `regions[i].combine` / `.prune`：可以写一个形状表，也可以写一张形状表的数组。
+fn parse_region_shapes(entry: &mlua::Table, key: &str) -> mlua::Result<Vec<HitShape>> {
+    let mlua::Value::Table(table) = entry.get::<mlua::Value>(key)? else {
+        return Ok(Vec::new());
+    };
+    // 单个形状：带了 x / w 就是形状本身，否则当数组
+    if table.raw_get::<Option<f32>>("x")?.is_some() || table.raw_get::<Option<f32>>("w")?.is_some()
+    {
+        return Ok(vec![shape_from_table(&table)?]);
+    }
+    let mut shapes = Vec::new();
+    for item in table.sequence_values::<mlua::Table>() {
+        if shapes.len() >= MAX_REGION_PARTS {
+            return Err(mlua::Error::RuntimeError(format!(
+                "一个区域最多 {MAX_REGION_PARTS} 个合并 / 剪除形状"
+            )));
+        }
+        shapes.push(shape_from_table(&item?)?);
+    }
+    Ok(shapes)
 }
 
 /// 一个元素：按 `type` 分派到七类里的一类。
@@ -911,5 +991,40 @@ mod tests {
             .is_err(),
             "区域名字重复该报错"
         );
+    }
+
+    /// 区域声明的 `combine` / `prune`：合并（并集）与剪除（差集）都进命中范围。
+    #[test]
+    fn region_combine_and_prune_are_parsed() {
+        let lua = mlua::Lua::new();
+        let content = lua
+            .load(
+                r##"
+                return {
+                    regions = {
+                        {
+                            name = "union", x = 0, y = 0, w = 100, h = 100,
+                            combine = { x = 50, y = 50, w = 100, h = 100 },
+                            prune = { { x = 60, y = 60, w = 20, h = 20 } },
+                        },
+                    },
+                    { type = "rect", x = 0, y = 0, w = 10, h = 10, color = "#FF000000" },
+                }
+            "##,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let document = parse_document(
+            &content,
+            (Some(200.0), Some(100.0)),
+            &mut ImageCache::default(),
+        )
+        .expect("读得出来");
+        let region = &document.regions[0];
+        assert_eq!(region.name, "union");
+        assert!(region.contains(25.0, 25.0), "原始形状");
+        assert!(region.contains(120.0, 60.0), "合并进来的那一块");
+        assert!(!region.contains(70.0, 70.0), "剪掉的小块");
+        assert!(!region.contains(120.0, 20.0), "两个形状都没盖住");
     }
 }

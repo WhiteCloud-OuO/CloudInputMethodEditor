@@ -3658,6 +3658,45 @@ mod tests {
         assert_eq!(runtime.scripts().to_vec(), ["fine.lua"]);
     }
 
+    /// `combine_region` / `prune_region`：各排一条 `EditRegion` 请求（合并 / 剪除）。
+    #[test]
+    fn region_edit_methods_queue_requests() {
+        let dir = script_dir("region-edit");
+        write_script(
+            &dir,
+            "edit.lua",
+            r##"
+            local win = cloudime.window.create{ name = "面板", width = 120, height = 60 }
+            win:combine_region("box", { x = 10, y = 10, w = 20, h = 20 })
+            win:prune_region("box", { x = 5, y = 5, w = 8, h = 8, radius = 2 })
+            "##,
+        );
+        let runtime = Runtime::load(&dir, &[]);
+        let requests = runtime.take_window_requests();
+        assert_eq!(requests.len(), 3, "create + combine + prune");
+        match &requests[1] {
+            window::Request::EditRegion {
+                id: 1,
+                name,
+                shape,
+                combine,
+            } => {
+                assert_eq!(name, "box");
+                assert!(combine);
+                assert!(matches!(shape, cloudime_render::HitShape::Rect(_)));
+            }
+            other => panic!("第二条该是合并：{other:?}"),
+        }
+        match &requests[2] {
+            window::Request::EditRegion {
+                combine: false,
+                shape: cloudime_render::HitShape::RoundRect { .. },
+                ..
+            } => {}
+            other => panic!("第三条该是剪除（圆角）：{other:?}"),
+        }
+    }
+
     /// `time_range`：同一天 / 跨夜两套时间段，左闭右开；窗口开始那天跨夜算昨天。
     #[test]
     fn time_ranges_cover_same_day_and_overnight() {

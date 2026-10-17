@@ -211,6 +211,9 @@ pub(super) trait Clonable: Asset {
 - **脚本窗口**：内容里声明 `regions`（`cloudime.window`），事件里带命中的区域名；`drag = false` 的区域
   按住了不拖窗口（点击照常）；
 - 命中规则：后写的区域盖住先写的；**先看区域、再看元素**（`event.region` / `event.element` 各给一份）。
+- **合并 / 剪除**：区域可以带 `combine`（并集）与 `prune`（差集）形状；命中先看 `prune`，再看原始形状与
+  `combine`。命中检测只做**成员判断**（并集 = 任一形状命中、差集 = 任一剪除形状命中就不算），
+  不把轮廓真的做布尔运算，所以对矩形 / 圆角 / 圆 / 路径都成立。
 
 实现：`cloudime_render::Region`（数据：名字 / 形状 / `draggable`）、`ui/region.rs::hit`（命中）、
 脚本窗口的 `begin_drag` 按命中区域的 `draggable` 决定要不要开始拖窗口。

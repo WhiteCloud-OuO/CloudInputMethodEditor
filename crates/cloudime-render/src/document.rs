@@ -43,6 +43,9 @@ impl Document {
 /// 窗口里的一个**区域**（region）：一块可以被鼠标点击 / 拖拽的范围。
 ///
 /// 坐标单位跟内容一致（脚本窗口是点、悬浮工具栏是像素），`shape` 与元素的命中形状同一套。
+/// 命中范围可以再**合并**（并集）与**剪除**（差集）：`combined` 里的形状只要命中就算命中，
+/// `pruned` 里的形状命中就一律不算 —— 与「绿框并上蓝框」「红框减掉黑框」的几何结果一致，
+/// 只是命中检测不需要把轮廓真的算出来。
 #[derive(Debug, Clone, PartialEq)]
 pub struct Region {
     /// 名字：同一窗口里唯一，鼠标事件里带它（`event.region`）。
@@ -51,14 +54,44 @@ pub struct Region {
     /// 命中范围（与元素命中同一套形状：矩形 / 圆角 / 圆 / 线段 / 路径）。
     pub shape: HitShape,
 
+    /// **合并**进来的形状（并集）：任一命中就命中。
+    pub combined: Vec<HitShape>,
+
+    /// **剪除**掉的形状（差集）：任一命中就不命中（优先于原始形状与 `combined`）。
+    pub pruned: Vec<HitShape>,
+
     /// 拖这块区域时移动整块窗口；`false` = 按住它不拖窗口（留给以后元素自己处理，比如滑块）。
     pub draggable: bool,
 }
 
 impl Region {
-    /// 点是不是落在这个区域里。
+    /// 一个只有基础形状的区域（还没有合并 / 剪除）。
+    pub fn new(name: impl Into<String>, shape: HitShape, draggable: bool) -> Self {
+        Self {
+            name: name.into(),
+            shape,
+            combined: Vec::new(),
+            pruned: Vec::new(),
+            draggable,
+        }
+    }
+
+    /// 点是不是落在这个区域里：先看剪除（剪掉的优先），再看原始形状与合并进来的。
     pub fn contains(&self, x: f32, y: f32) -> bool {
-        self.shape.contains(x, y)
+        if self.pruned.iter().any(|shape| shape.contains(x, y)) {
+            return false;
+        }
+        self.shape.contains(x, y) || self.combined.iter().any(|shape| shape.contains(x, y))
+    }
+
+    /// **合并**：把 `shape` 并进这个区域（命中范围取并集）。
+    pub fn combine(&mut self, shape: HitShape) {
+        self.combined.push(shape);
+    }
+
+    /// **剪除**：把这个区域里的 `shape` 挖掉（命中范围取差集）。
+    pub fn prune(&mut self, shape: HitShape) {
+        self.pruned.push(shape);
     }
 }
 
@@ -693,5 +726,36 @@ mod tests {
         };
         assert!(shape.contains(50.0, 20.0), "拱形里面");
         assert!(!shape.contains(50.0, 60.0), "拱形外面（曲线下方）");
+    }
+
+    /// 区域的合并（并集）与剪除（差集）：与「绿框并蓝框」「红框减黑框」的几何结果一致。
+    #[test]
+    fn combining_and_pruning_change_the_hit_area() {
+        let rect = |x, y, width, height| HitShape::Rect(HitRect::new(x, y, width, height));
+
+        // 合并：绿框 ∪ 蓝框（蓝框在右下，重叠一块）
+        let mut union = Region::new("union", rect(0.0, 0.0, 100.0, 100.0), true);
+        union.combine(rect(50.0, 50.0, 100.0, 100.0));
+        assert!(union.contains(25.0, 25.0), "绿框里");
+        assert!(union.contains(60.0, 60.0), "重叠那块");
+        assert!(union.contains(120.0, 60.0), "蓝框露出来的那一块");
+        assert!(union.contains(60.0, 120.0), "蓝框下面那块");
+        assert!(!union.contains(120.0, 25.0), "两个框都没盖住");
+        assert!(!union.contains(160.0, 160.0));
+
+        // 剪除：红框 − 黑框（黑框压在右下角）
+        let mut cut = Region::new("cut", rect(0.0, 0.0, 100.0, 100.0), true);
+        cut.prune(rect(50.0, 50.0, 50.0, 50.0));
+        assert!(cut.contains(25.0, 25.0));
+        assert!(cut.contains(80.0, 25.0), "黑框上边还在");
+        assert!(!cut.contains(80.0, 80.0), "挖掉的角");
+        assert!(!cut.contains(120.0, 25.0));
+
+        // 剪除优先于合并：合并进来的那块也能挖掉
+        let mut both = Region::new("both", rect(0.0, 0.0, 100.0, 100.0), true);
+        both.combine(rect(100.0, 0.0, 50.0, 50.0));
+        both.prune(rect(120.0, 10.0, 10.0, 10.0));
+        assert!(both.contains(140.0, 40.0), "合并进来的");
+        assert!(!both.contains(125.0, 15.0), "合并之后又挖掉");
     }
 }

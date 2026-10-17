@@ -263,6 +263,30 @@ impl AuxiliaryWindowTemplate {
         self.revision.set(self.revision.get() + 1);
     }
 
+    /// 动态改一个区域的命中范围（合并 / 剪除）：只影响鼠标命中，不重画。
+    pub(super) fn edit_region(&self, name: &str, shape: cloudime_render::HitShape, combine: bool) {
+        let mut content = self.content.borrow_mut();
+        let Content::Document(document) = &mut *content else {
+            tracing::warn!("窗口模板：只有脚本内容才有区域");
+            return;
+        };
+        let Some(region) = document
+            .regions
+            .iter_mut()
+            .find(|region| region.name == name)
+        else {
+            tracing::warn!(region = name, "窗口模板：改区域时找不到它");
+            return;
+        };
+        if combine {
+            region.combine(shape);
+        } else {
+            region.prune(shape);
+        }
+        // 鼠标命中用的是模板自己那份，跟着内容走
+        *self.regions.borrow_mut() = document.regions.clone();
+    }
+
     /// 要不要阴影（脚本 `shadow = false` 时关掉）。
     pub(super) fn set_shadow(&self, shadow: bool) {
         self.shadow.set(shadow);

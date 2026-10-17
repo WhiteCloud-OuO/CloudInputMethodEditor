@@ -21,11 +21,11 @@ mod tests {
     use cloudime_render::{HitRect, HitShape};
 
     fn rect(name: &str, x: f32, y: f32, width: f32, height: f32) -> Region {
-        Region {
-            name: name.to_owned(),
-            shape: HitShape::Rect(HitRect::new(x, y, width, height)),
-            draggable: true,
-        }
+        Region::new(
+            name,
+            HitShape::Rect(HitRect::new(x, y, width, height)),
+            true,
+        )
     }
 
     /// 后写的区域盖住先写的（与元素绘制顺序一致），都没命中就是 `None`。

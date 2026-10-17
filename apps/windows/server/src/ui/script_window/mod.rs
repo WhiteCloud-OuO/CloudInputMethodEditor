@@ -120,6 +120,20 @@ impl ScriptWindows {
             }
             WindowRequest::Close(id) => self.close(id),
             WindowRequest::Focus(id, focus) => self.focus(id, focus),
+            WindowRequest::EditRegion {
+                id,
+                name,
+                shape,
+                combine,
+            } => {
+                if let Some(window) = self.windows.get(&id) {
+                    window.edit_region(&name, shape, combine);
+                } else if let Some(aux) = self.auxiliaries.get(&id) {
+                    aux.edit_region(&name, shape, combine);
+                } else {
+                    tracing::warn!(id, "脚本窗口：改区域时找不到这块窗口");
+                }
+            }
         }
     }
 
@@ -355,6 +369,26 @@ impl ScriptWindow {
             self.render_and_present(position);
             self.sync_assets();
         }
+    }
+
+    /// 动态改一个区域的命中范围（合并 / 剪除）：只影响鼠标命中，不重画。
+    fn edit_region(&self, name: &str, shape: HitShape, combine: bool) {
+        let mut document = self.document.borrow_mut();
+        let Some(region) = document
+            .regions
+            .iter_mut()
+            .find(|region| region.name == name)
+        else {
+            tracing::warn!(id = self.id, region = name, "脚本窗口：改区域时找不到它");
+            return;
+        };
+        if combine {
+            region.combine(shape);
+        } else {
+            region.prune(shape);
+        }
+        // 命中用的是 `self.regions`，跟着内容里的那份走
+        *self.regions.borrow_mut() = document.regions.clone();
     }
 
     /// 显示：`position` 是内容区左上角的屏幕坐标（点）；`None` = 上次的位置 / 光标旁。
@@ -768,6 +802,11 @@ impl ScriptAuxiliary {
 
     fn set_content(&self, document: Document) {
         self.template.set_document(document);
+    }
+
+    /// 动态改一个区域的命中范围（合并 / 剪除）。
+    fn edit_region(&self, name: &str, shape: cloudime_render::HitShape, combine: bool) {
+        self.template.edit_region(name, shape, combine);
     }
 
     fn show(&self) {

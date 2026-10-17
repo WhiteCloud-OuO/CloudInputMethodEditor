@@ -249,6 +249,8 @@ impl StatusBar {
                 let region = Region {
                     name: button.name(&state).to_owned(),
                     shape: HitShape::Rect(HitRect::new(left, 0.0, right - left, height)),
+                    combined: Vec::new(),
+                    pruned: Vec::new(),
                     draggable: true,
                 };
                 left = right;

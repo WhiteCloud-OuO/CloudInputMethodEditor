@@ -297,6 +297,9 @@ win:set_content{
   —— 区域是**鼠标点击 / 拖拽的命中范围**（元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true`
   = 按住它拖会移动整块窗口，`false` = 不拖窗口（点击照常）。后写的区域盖住先写的；
   事件里的 `event.region` 就是命中的区域名（没声明 `regions` 时仍按元素命中 `event.element`）。
+  区域还可以带 `combine`（并集：绿框并蓝框）与 `prune`（差集：红框减黑框），各写一个形状或形状数组；
+  命中先看 `prune`，再看原始形状与 `combine`。运行时也能用 `win:combine_region(name, 形状)` /
+  `win:prune_region(name, 形状)` 改已有区域（只改命中、不重画）。
 
 ### 鼠标、滚轮、拖动（`cloudime.on("window", …)`）
 
