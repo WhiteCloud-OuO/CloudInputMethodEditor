@@ -417,6 +417,25 @@ aux:show()
 
 颜色写 `"#RRGGBB"` / `"#AARRGGBB"` / `"#RGB"`，或 `{ r = …, g = …, b = …, a = … }`（0–255）。
 
+**区域（region）**：一块可以被鼠标**点击 / 拖拽**的范围 —— 元素只管画，交互看区域：
+
+```lua
+win:set_content{
+    width = 220, height = 96,
+    regions = {
+        { name = "counter", x = 12, y = 36, w = 196, h = 44, radius = 10 },
+        { name = "label",   x = 12, y = 6,  w = 196, h = 24, drag = false },
+    },
+    { type = "rect", x = 12, y = 36, w = 196, h = 44, radius = 10, color = "#FF4A90E2" },
+    -- …元素照常写…
+}
+```
+
+- `name` 必写、同一份内容里唯一；`x` / `y` / `w` / `h` 必给，`radius` 可选（圆角区域）；
+  `drag` 缺省 `true` = 按住它拖会移动整块窗口，`false` = 按住它不拖窗口（点击照常）。
+- 鼠标事件里的 **`event.region`** 就是命中的区域名；没命中 / 没声明区域是 `nil`。
+- 后写的区域盖住先写的（与元素绘制顺序一致）。没声明 `regions` 时仍按元素命中（`event.element`）。
+
 **命中按形状**：圆角矩形抠掉四个角、圆按边界、线段按粗细、路径按非零环绕填充；文字 / 图像 / SVG 按外框。
 `img` 按路径**缓存**解码结果（最多 8 张 / 32M 像素，文件改过下一次 `set_content` 生效），同一张图不用反复解码。
 
@@ -431,6 +450,7 @@ cloudime.on("window", function(event)
     -- event.action                 "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur"
     -- event.x / event.y            内容区坐标（点）
     -- event.element               命中的元素（内容数组里 1 起的下标；没命中是 nil）
+    -- event.region                命中的区域名（内容里的 regions；没命中是 nil）
     -- event.delta                 滚轮量（一格 ±120，正数往上；只有 wheel 有）
     if event.action == "wheel" then
         count = math.max(0, count + math.floor(event.delta / 120))

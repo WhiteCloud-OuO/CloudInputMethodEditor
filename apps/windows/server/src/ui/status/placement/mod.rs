@@ -7,6 +7,8 @@ use std::cell::{Cell, RefCell};
 use windows::Win32::Foundation::{HWND, RECT};
 use windows::Win32::UI::WindowsAndMessaging::GetWindowRect;
 
+use cloudime_render::Region;
+
 pub(super) use self::action::StatusAction;
 use crate::dispatch::StatusEvent;
 use crate::ui::StatusEvents;
@@ -22,8 +24,9 @@ pub(super) struct Placement {
     /// 内容左上角的屏幕坐标（物理像素）；`None` 表示还没摆放过。
     pub(super) pos: Cell<Option<(i32, i32)>>,
 
-    /// 上次画出的各格右边界（内容坐标）与动作，从左到右；点击按 x 落进哪格。
-    pub(super) cells: RefCell<Vec<(i32, StatusAction)>>,
+    /// 上次画出的图标**区域**（内容坐标，像素）与动作，从左到右；点击按坐标落进哪个区域。
+    /// 每个图标一个区域（`name` 是图标名，如 `ch` / `options`），拖它们都是拖整块状态条。
+    pub(super) regions: RefCell<Vec<(Region, StatusAction)>>,
 
     /// Caps Lock 亮着没有：窗口过程的定时器盯着它，「中 / 英」按钮据此换成「A」图标。
     pub(super) caps: Cell<bool>,
@@ -41,7 +44,7 @@ impl Placement {
             hwnd,
             margin: Cell::new(margin),
             pos: Cell::new(None),
-            cells: RefCell::new(Vec::new()),
+            regions: RefCell::new(Vec::new()),
             caps: Cell::new(super::caps_lock_on()),
             fullscreen_hidden: Cell::new(false),
             events,
@@ -60,14 +63,15 @@ impl Placement {
         }
     }
 
-    /// 单击：`client_x` 是客户区横坐标。
-    pub(super) fn on_click(&self, client_x: i32) {
-        let x = client_x - self.margin.get();
+    /// 单击：`client_x` / `client_y` 是客户区坐标（像素）。
+    pub(super) fn on_click(&self, client_x: i32, client_y: i32) {
+        let x = (client_x - self.margin.get()) as f32;
+        let y = (client_y - self.margin.get()) as f32;
         let action = self
-            .cells
+            .regions
             .borrow()
             .iter()
-            .find(|(right, _)| x < *right)
+            .find(|(region, _)| region.contains(x, y))
             .map(|(_, action)| *action);
         match action {
             Some(StatusAction::ToggleLang) => (self.events)(StatusEvent::ToggleLang),

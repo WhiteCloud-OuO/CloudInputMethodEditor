@@ -32,7 +32,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, Result, w};
 
 use cloudime_platform::LayoutMode;
-use cloudime_render::{Document, HitShape};
+use cloudime_render::{Document, HitShape, Region};
 use cloudime_script::{
     AuxiliarySpec, ScriptWindowEvent, WindowAction, WindowId, WindowRequest, WindowSpec,
 };
@@ -267,8 +267,12 @@ pub(super) struct ScriptWindow {
     /// 最近一帧每个元素的命中区域（内容区坐标，点）。
     hits: RefCell<Vec<Option<HitShape>>>,
 
-    /// 鼠标正停在哪个元素上（1 起）。
-    hover: Cell<Option<usize>>,
+    /// 内容里声明的区域（点击 / 拖拽的命中范围；与 `document.regions` 同步）。
+    regions: RefCell<Vec<Region>>,
+
+    /// 鼠标正停在哪（元素下标、区域下标；都是 0 起，`None` = 没停在任何东西上）：
+    /// 悬停事件只在「换元素 / 换区域」时派一次。
+    hover: Cell<Option<(Option<usize>, Option<usize>)>>,
 
     /// 拖动中：按下时的光标屏幕坐标 + 窗口左上角。
     drag: Cell<Option<Drag>>,
@@ -320,6 +324,7 @@ impl ScriptWindow {
             revision: Cell::new(0),
             painted: Cell::new(None),
             hits: RefCell::new(Vec::new()),
+            regions: RefCell::new(Vec::new()),
             hover: Cell::new(None),
             drag: Cell::new(None),
             moved_since_press: Cell::new(false),
@@ -341,6 +346,7 @@ impl ScriptWindow {
 
     /// 换一整份内容：显示着就立刻重画（名下的资产跟着重新摆）。
     fn set_content(&self, document: Document) {
+        *self.regions.borrow_mut() = document.regions.clone();
         *self.document.borrow_mut() = document;
         self.revision.set(self.revision.get() + 1);
         if self.shown.get()
@@ -491,9 +497,22 @@ impl ScriptWindow {
     }
 
     /// 客户区坐标 → 内容区坐标（点）+ 命中的元素（1 起）。
-    fn hit_at(&self, client_x: i32, client_y: i32) -> (f32, f32, Option<usize>) {
+    /// 客户区坐标 → 内容坐标 + 命中的元素下标 + 区域下标（都是 0 起）。
+    fn hit_at(&self, client_x: i32, client_y: i32) -> (f32, f32, Option<usize>, Option<usize>) {
         let (x, y) = content_point(client_x, client_y, self.margin.get(), self.scale.get());
-        (x, y, element_at(&self.hits.borrow(), x, y))
+        let element = element_at(&self.hits.borrow(), x, y);
+        let region = super::region::hit(&self.regions.borrow(), x, y);
+        (x, y, element, region)
+    }
+
+    /// 区域下标 → 区域名（事件里给人看的那个）。
+    fn region_name(&self, index: Option<usize>) -> Option<String> {
+        index.and_then(|index| {
+            self.regions
+                .borrow()
+                .get(index)
+                .map(|region| region.name.clone())
+        })
     }
 
     fn emit(&self, action: WindowAction, client_x: i32, client_y: i32) {
@@ -507,7 +526,8 @@ impl ScriptWindow {
         client_y: i32,
         delta: Option<i32>,
     ) {
-        let (x, y, element) = self.hit_at(client_x, client_y);
+        let (x, y, element, region) = self.hit_at(client_x, client_y);
+        let region = self.region_name(region);
         (self.events)(ScriptWindowEvent {
             window: self.id,
             name: self.name.clone(),
@@ -515,17 +535,19 @@ impl ScriptWindow {
             x,
             y,
             element,
+            region,
             delta,
         });
     }
 
     fn emit_move(&self, client_x: i32, client_y: i32) {
         self.last.set((client_x, client_y));
-        let (_, _, element) = self.hit_at(client_x, client_y);
-        if self.hover.replace(element) == element {
+        let (_, _, element, region) = self.hit_at(client_x, client_y);
+        let key = (element, region);
+        if self.hover.replace(Some(key)) == Some(key) {
             return;
         }
-        if element.is_some() {
+        if element.is_some() || region.is_some() {
             self.emit(WindowAction::Hover, client_x, client_y);
         }
     }
@@ -549,7 +571,20 @@ impl ScriptWindow {
     }
 
     /// 左键按下：记住起点，等移动超过阈值再算「拖」。
-    fn begin_drag(&self) {
+    ///
+    /// 按在 `drag = false` 的区域上不拖窗口（点击照常）—— 留给以后区域自己处理拖动（滑块之类）。
+    fn begin_drag(&self, client_x: i32, client_y: i32) {
+        let (_, _, _, region) = self.hit_at(client_x, client_y);
+        if let Some(index) = region
+            && !self
+                .regions
+                .borrow()
+                .get(index)
+                .is_some_and(|region| region.draggable)
+        {
+            self.notify_focus();
+            return;
+        }
         let mut point = POINT::default();
         let _ = unsafe { GetCursorPos(&mut point) };
         let (x, y) = self.position.get().unwrap_or((0, 0));
@@ -717,6 +752,7 @@ impl ScriptAuxiliary {
                 x: panel.x,
                 y: panel.y,
                 element: panel.element,
+                region: panel.region.clone(),
                 delta: panel.delta,
             });
         }));
@@ -924,7 +960,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
         // 左键按下：开始记拖动起点；同时算这块窗口拿到键盘焦点。
         WM_LBUTTONDOWN => {
-            with_window(hwnd, ScriptWindow::begin_drag);
+            with_window(hwnd, |window| {
+                window.begin_drag(client_x(lparam), client_y(lparam));
+            });
             LRESULT(0)
         }
         WM_MOUSEMOVE => {

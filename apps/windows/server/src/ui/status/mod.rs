@@ -30,7 +30,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, Result, w};
 
-use cloudime_render::StatusCell;
+use cloudime_render::{HitRect, HitShape, Region, StatusCell};
 
 use self::arrangement::{Arrangement, ButtonState};
 use self::placement::{Placement, StatusAction};
@@ -180,19 +180,24 @@ impl StatusBar {
         caps: bool,
         limit: usize,
     ) -> Vec<StatusCell> {
-        let state = ButtonState {
-            english: view.english,
-            caps,
-            full_width_punctuation: view.full_width_punctuation,
-            full_width_chars: view.full_width_chars,
-            traditional: view.traditional,
-        };
+        let state = Self::button_state(view, caps);
         arrangement
             .buttons
             .iter()
             .take(limit)
             .map(|button| StatusCell::icon(button.svg(&state)))
             .collect()
+    }
+
+    /// 这一拍按钮的显示状态（画图标与起区域名共用）。
+    fn button_state(view: &StatusView, caps: bool) -> ButtonState {
+        ButtonState {
+            english: view.english,
+            caps,
+            full_width_punctuation: view.full_width_punctuation,
+            full_width_chars: view.full_width_chars,
+            traditional: view.traditional,
+        }
     }
 
     /// 画好贴上并显示；顺带记下各按钮边界给点击用。没有可画的按钮、渲染不出来就隐藏。
@@ -231,12 +236,26 @@ impl StatusBar {
         }
         let margin = bitmap.content_x as i32;
         self.placement.margin.set(margin);
-        *self.placement.cells.borrow_mut() = rendered
+        // 每个图标一个区域（名字用当前显示的图标名）：点击按坐标落进哪个区域，拖它们都是拖整块状态条。
+        let state = Self::button_state(&view, self.placement.caps.get());
+        let height = content.1 as f32;
+        let mut left = 0.0_f32;
+        let regions: Vec<(Region, StatusAction)> = rendered
             .cell_edges
             .iter()
-            .zip(arrangement.buttons.iter().map(|button| button.action))
-            .map(|(edge, action)| (edge.round() as i32, action))
+            .zip(arrangement.buttons.iter())
+            .map(|(edge, button)| {
+                let right = edge.round().max(left + 1.0);
+                let region = Region {
+                    name: button.name(&state).to_owned(),
+                    shape: HitShape::Rect(HitRect::new(left, 0.0, right - left, height)),
+                    draggable: true,
+                };
+                left = right;
+                (region, button.action)
+            })
             .collect();
+        *self.placement.regions.borrow_mut() = regions;
         // 悬停提示：跟点击命中用同一套格子，文字按动作给。
         if let Some(tooltip) = &self.tooltip {
             let tips: Vec<(i32, &str)> = rendered
@@ -378,8 +397,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                     )
                 };
             } else if let Some(placement) = placement_of(hwnd) {
-                // lparam 低 16 位是客户区 x（有符号）。
-                placement.on_click((lparam.0 & 0xFFFF) as i16 as i32);
+                // lparam 低 16 位是客户区 x、高 16 位是 y（都有符号）。
+                let x = (lparam.0 & 0xFFFF) as i16 as i32;
+                let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+                placement.on_click(x, y);
             }
             LRESULT(0)
         }

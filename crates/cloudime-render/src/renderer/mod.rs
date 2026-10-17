@@ -1207,6 +1207,7 @@ mod tests {
         let document = Document {
             width: 120.0,
             height: 48.0,
+            regions: Vec::new(),
             elements: vec![
                 Element::Rect {
                     x: 0.0,

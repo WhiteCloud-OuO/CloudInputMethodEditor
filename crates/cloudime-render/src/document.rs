@@ -23,6 +23,9 @@ pub struct Document {
 
     /// 要画的元素；空表就是一块空面板。
     pub elements: Vec<Element>,
+
+    /// 可交互的**区域**（点击 / 拖拽的命中范围）；空表 = 没有区域（元素仍可单独命中）。
+    pub regions: Vec<Region>,
 }
 
 impl Document {
@@ -32,7 +35,30 @@ impl Document {
             width,
             height,
             elements: Vec::new(),
+            regions: Vec::new(),
         }
+    }
+}
+
+/// 窗口里的一个**区域**（region）：一块可以被鼠标点击 / 拖拽的范围。
+///
+/// 坐标单位跟内容一致（脚本窗口是点、悬浮工具栏是像素），`shape` 与元素的命中形状同一套。
+#[derive(Debug, Clone, PartialEq)]
+pub struct Region {
+    /// 名字：同一窗口里唯一，鼠标事件里带它（`event.region`）。
+    pub name: String,
+
+    /// 命中范围（与元素命中同一套形状：矩形 / 圆角 / 圆 / 线段 / 路径）。
+    pub shape: HitShape,
+
+    /// 拖这块区域时移动整块窗口；`false` = 按住它不拖窗口（留给以后元素自己处理，比如滑块）。
+    pub draggable: bool,
+}
+
+impl Region {
+    /// 点是不是落在这个区域里。
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        self.shape.contains(x, y)
     }
 }
 
@@ -575,6 +601,7 @@ impl std::fmt::Debug for Document {
             .field("width", &self.width)
             .field("height", &self.height)
             .field("elements", &self.elements.len())
+            .field("regions", &self.regions.len())
             .finish()
     }
 }

@@ -13,7 +13,9 @@ use std::rc::Rc;
 use std::sync::Arc;
 use std::time::SystemTime;
 
-use cloudime_render::{Color, Document, Element, FontSlot, PathCommand, Pixmap, load_image};
+use cloudime_render::{
+    Color, Document, Element, FontSlot, HitRect, HitShape, PathCommand, Pixmap, Region, load_image,
+};
 
 use crate::mlua;
 
@@ -29,6 +31,9 @@ const MAX_SIZE: f32 = 2048.0;
 
 /// 一段文字最多多少个字符。
 const MAX_TEXT: usize = 4096;
+
+/// 一份内容最多几个区域（点击 / 拖拽范围）。
+const MAX_REGIONS: usize = 128;
 
 /// 图像解码后的像素数上限（约 4096 × 4096）：脚本给的图不该把整块内存吃掉。
 const MAX_IMAGE_PIXELS: u32 = 16 * 1024 * 1024;
@@ -379,7 +384,61 @@ fn parse_document(
         width,
         height,
         elements,
+        regions: parse_regions(content)?,
     })
+}
+
+/// 内容里的 `regions`：`{ { name = "plus", x = …, y = …, w = …, h = …, radius = …, drag = true } }`。
+///
+/// 区域是**鼠标点击 / 拖拽**的命中范围（元素只管画）。名字在同一份内容里唯一；
+/// 后写的区域盖住先写的（与元素的绘制顺序一致）。
+fn parse_regions(content: &mlua::Table) -> mlua::Result<Vec<Region>> {
+    let Some(list) = content.get::<Option<mlua::Table>>("regions")? else {
+        return Ok(Vec::new());
+    };
+    let mut regions: Vec<Region> = Vec::new();
+    for entry in list.sequence_values::<mlua::Table>() {
+        let entry = entry?;
+        if regions.len() >= MAX_REGIONS {
+            return Err(mlua::Error::RuntimeError(format!(
+                "一份内容最多 {MAX_REGIONS} 个区域"
+            )));
+        }
+        let name: String = entry.get("name").map_err(|_| {
+            mlua::Error::RuntimeError("区域缺 name（同一份内容里唯一，事件里带它）".to_owned())
+        })?;
+        let name = name.trim().to_owned();
+        if name.is_empty() {
+            return Err(mlua::Error::RuntimeError(
+                "区域的 name 不能是空的".to_owned(),
+            ));
+        }
+        if regions.iter().any(|region| region.name == name) {
+            return Err(mlua::Error::RuntimeError(format!("区域名字重复：{name}")));
+        }
+        let x = number(&entry, "x", 0.0)?;
+        let y = number(&entry, "y", 0.0)?;
+        let width = positive(&entry, "w", "width")?;
+        let height = positive(&entry, "h", "height")?;
+        let radius = number(&entry, "radius", 0.0)?.max(0.0);
+        let shape = if radius > 0.0 {
+            HitShape::RoundRect {
+                x,
+                y,
+                width,
+                height,
+                radius,
+            }
+        } else {
+            HitShape::Rect(HitRect::new(x, y, width, height))
+        };
+        regions.push(Region {
+            name,
+            shape,
+            draggable: entry.get::<Option<bool>>("drag")?.unwrap_or(true),
+        });
+    }
+    Ok(regions)
 }
 
 /// 一个元素：按 `type` 分派到七类里的一类。
@@ -711,11 +770,14 @@ pub struct ScriptWindowEvent {
     /// 命中的元素（内容是 1 起的数组，这里也是 1 起）；`Leave` / 没命中时是 `None`。
     pub element: Option<usize>,
 
+    /// 命中的**区域**名（内容里 `regions` 那个 `name`）；没命中 / 没声明区域时是 `None`。
+    pub region: Option<String>,
+
     /// 滚轮量（只有 `Wheel` 有）。
     pub delta: Option<i32>,
 }
 
-/// 事件的载荷：`{ window = 名字, id = 编号, action = …, x, y, element, delta }`。
+/// 事件的载荷：`{ window = 名字, id = 编号, action = …, x, y, element, region, delta }`。
 pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result<mlua::Table> {
     let payload = lua.create_table()?;
     payload.set("window", event.name.clone())?;
@@ -724,6 +786,7 @@ pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result
     payload.set("x", event.x)?;
     payload.set("y", event.y)?;
     payload.set("element", event.element)?;
+    payload.set("region", event.region.clone())?;
     payload.set("delta", event.delta)?;
     Ok(payload)
 }
@@ -767,7 +830,7 @@ mod tests {
         assert_eq!((third.width(), third.height()), (5, 5));
     }
 
-    /// `window` 事件的载荷：滚轮量、命中元素、动作名都带上了。
+    /// `window` 事件的载荷：滚轮量、命中元素、区域、动作名都带上了。
     #[test]
     fn the_window_event_payload_carries_delta_and_element() {
         let lua = mlua::Lua::new();
@@ -778,14 +841,75 @@ mod tests {
             x: 12.5,
             y: 8.0,
             element: Some(2),
+            region: Some("plus".to_owned()),
             delta: Some(120),
         };
         let payload = event_payload(&lua, &event).unwrap();
         assert_eq!(payload.get::<String>("action").unwrap(), "wheel");
         assert_eq!(payload.get::<String>("window").unwrap(), "面板");
+        assert_eq!(payload.get::<String>("region").unwrap(), "plus");
         assert_eq!(payload.get::<u32>("id").unwrap(), 3);
         assert_eq!(payload.get::<i32>("delta").unwrap(), 120);
         assert_eq!(payload.get::<usize>("element").unwrap(), 2);
         assert_eq!(payload.get::<f32>("x").unwrap(), 12.5);
+    }
+
+    /// `regions`：名字 / 命中形状 / `drag` 开关都读出来；重名判无效。
+    #[test]
+    fn regions_are_parsed_with_names_and_drag_flags() {
+        let lua = mlua::Lua::new();
+        let content = lua
+            .load(
+                r##"
+                return {
+                    width = 200, height = 100,
+                    regions = {
+                        { name = "plus",  x = 0,  y = 0, w = 40, h = 40, radius = 8 },
+                        { name = "box",   x = 50, y = 0, w = 100, h = 40, drag = false },
+                    },
+                    { type = "rect", x = 0, y = 0, w = 200, h = 100, color = "#FFFFFFFF" },
+                }
+            "##,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let document = parse_document(
+            &content,
+            (Some(200.0), Some(100.0)),
+            &mut ImageCache::default(),
+        )
+        .expect("读得出来");
+        assert_eq!(document.elements.len(), 1);
+        assert_eq!(document.regions.len(), 2);
+        assert_eq!(document.regions[0].name, "plus");
+        assert!(document.regions[0].draggable);
+        assert!(document.regions[0].contains(20.0, 20.0), "圆角矩形中间");
+        assert!(!document.regions[0].contains(150.0, 20.0));
+        assert_eq!(document.regions[1].name, "box");
+        assert!(!document.regions[1].draggable, "drag = false");
+
+        // 重名 → 整份内容判无效
+        let content = lua
+            .load(
+                r#"
+                return {
+                    regions = {
+                        { name = "same", x = 0, y = 0, w = 10, h = 10 },
+                        { name = "same", x = 20, y = 0, w = 10, h = 10 },
+                    },
+                }
+            "#,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        assert!(
+            parse_document(
+                &content,
+                (Some(200.0), Some(100.0)),
+                &mut ImageCache::default()
+            )
+            .is_err(),
+            "区域名字重复该报错"
+        );
     }
 }

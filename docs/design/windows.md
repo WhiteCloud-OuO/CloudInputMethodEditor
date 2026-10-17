@@ -202,6 +202,19 @@ pub(super) trait Clonable: Asset {
   （眼下的调用都满足「量字与画字不同时持有」）；② 量字有**两条路**：出图途中用 `render.measure`、排版前置用
   `self.measure`，边界是「手上有没有 `Render`」。
 
+### 6.1 区域（region，2026-10-17）
+
+窗口内容里的一块**可交互范围**：**名字** + **命中形状**（与元素同一套：矩形 / 圆角 / 圆 / 线段 / 路径）+
+**能不能拖**。元素只管画；鼠标点击 / 拖拽看区域 ——
+
+- **悬浮工具栏**：每个图标一个区域（名字 = 当前图标名，如 `ch` / `options`），拖它们都是拖整块状态条；
+- **脚本窗口**：内容里声明 `regions`（`cloudime.window`），事件里带命中的区域名；`drag = false` 的区域
+  按住了不拖窗口（点击照常）；
+- 命中规则：后写的区域盖住先写的；**先看区域、再看元素**（`event.region` / `event.element` 各给一份）。
+
+实现：`cloudime_render::Region`（数据：名字 / 形状 / `draggable`）、`ui/region.rs::hit`（命中）、
+脚本窗口的 `begin_drag` 按命中区域的 `draggable` 决定要不要开始拖窗口。
+
 ## 7. 实现落点
 
 - **独立窗口模板**（`ui/independent_window_template/`）：注册窗口类 + 建一块**分层、置顶、不抢焦点**的弹出窗

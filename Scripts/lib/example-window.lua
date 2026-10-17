@@ -36,6 +36,10 @@ local function draw()
     win:set_content{
         width = 220,
         height = 96,
+        -- 区域：鼠标点击 / 拖拽的命中范围（元素只管画）；名字在事件里的 `event.region`
+        regions = {
+            { name = "counter", x = 12, y = 36, w = 196, h = 44, radius = 10 },
+        },
         { type = "text", x = 12, y = 10, text = "点下面的方块", size = 14, color = "#FF666666" },
         { type = "rect", x = 12, y = 36, w = 196, h = 44, radius = 10, color = "#FF4A90E2" },
         { type = "text", x = 12, y = 46, text = "点了 " .. count .. " 下", size = 18,
@@ -67,7 +71,7 @@ cloudime.on("key", function(event)
 end)
 
 cloudime.on("window", function(event)
-    if event.action == "click" and event.element ~= nil then
+    if event.action == "click" and event.region == "counter" then
         count = count + 1
         draw()                            -- 改完立刻看得见
     elseif event.action == "wheel" then

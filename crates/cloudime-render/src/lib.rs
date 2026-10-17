@@ -32,7 +32,7 @@ mod theme;
 #[cfg(target_os = "windows")]
 pub use color::Color;
 /// 脚本窗口 / 面板的内容：**声明式**元素表（display list），由 [`Renderer::render_document`] 一次出图。
-pub use document::{Document, Element, FontSlot, HitRect, HitShape, PathCommand};
+pub use document::{Document, Element, FontSlot, HitRect, HitShape, PathCommand, Region};
 /// **能画的元素**的 traits：`text` / `svg` / `img` / `line` / `rect`（含圆角与圆）/ `path`。
 pub use elements::{ImageElement, LineElement, PathElement, RectElement, SvgElement, TextElement};
 pub use error::RenderError;

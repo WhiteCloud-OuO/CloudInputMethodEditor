@@ -33,8 +33,9 @@ pub(super) struct Button {
 
 impl Button {
     /// 当前状态该显示哪张图标：按状态名挑；这一组里没有那个状态就退到第一张（cfg 少写一行也还画得出来）。
-    pub(super) fn svg(&self, state: &ButtonState) -> &str {
-        let wanted = match self.action {
+    /// 当前状态该用哪个图标变体（`ch` / `en` / `caps`…；固定按钮是空串）。
+    fn wanted(&self, state: &ButtonState) -> &'static str {
+        match self.action {
             StatusAction::ToggleLang => {
                 if state.caps {
                     "caps"
@@ -68,7 +69,21 @@ impl Button {
             StatusAction::OpenOptions | StatusAction::OpenWidgets | StatusAction::OpenSpecChars => {
                 ""
             }
-        };
+        }
+    }
+
+    /// 当前显示的那个图标名（区域名用它：`ch` / `options` …）。
+    pub(super) fn name(&self, state: &ButtonState) -> &str {
+        let wanted = self.wanted(state);
+        self.variants
+            .iter()
+            .find(|(name, _)| name == wanted)
+            .or_else(|| self.variants.first())
+            .map_or("", |(name, _)| name.as_str())
+    }
+
+    pub(super) fn svg(&self, state: &ButtonState) -> &str {
+        let wanted = self.wanted(state);
         self.variants
             .iter()
             .find(|(name, _)| name == wanted)

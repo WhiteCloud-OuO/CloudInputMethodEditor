@@ -43,6 +43,7 @@ mod layered;
 mod measure;
 mod monitor;
 mod painter;
+mod region;
 mod script_window;
 mod status;
 mod status_tip;

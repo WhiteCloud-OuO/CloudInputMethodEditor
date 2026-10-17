@@ -107,13 +107,15 @@ pub(super) enum PanelAction {
     Wheel,
 }
 
-/// 一次面板鼠标事件：坐标是**内容区点**；`element` 是命中的元素（1 起，`None` = 没命中）。
-#[derive(Debug, Clone, Copy)]
+/// 一次面板鼠标事件：坐标是**内容区点**；`element` 是命中的元素（1 起，`None` = 没命中），
+/// `region` 是命中的区域名（`Document.regions` 里的 `name`）。
+#[derive(Debug, Clone)]
 pub(super) struct PanelEvent {
     pub action: PanelAction,
     pub x: f32,
     pub y: f32,
     pub element: Option<usize>,
+    pub region: Option<String>,
     pub delta: Option<i32>,
 }
 
@@ -148,8 +150,12 @@ pub(super) struct AuxiliaryWindowTemplate {
     /// 最近一帧每个元素的命中区域（内容区坐标，点）：脚本辅助窗口的鼠标事件用。
     hits: RefCell<Vec<Option<cloudime_render::HitShape>>>,
 
+    /// 脚本内容里声明的区域（点击 / 拖拽范围）。
+    regions: RefCell<Vec<cloudime_render::Region>>,
+
     /// 鼠标正停在哪个元素上（1 起；`None` = 没停在任何元素上）：悬停事件只在换元素时派。
-    hover: Cell<Option<usize>>,
+    /// 与区域一起组成「这一拍停在哪」，换元素 / 换区域都算换。
+    hover: Cell<Option<(Option<usize>, Option<usize>)>>,
 
     /// 最后一次收到的客户区坐标：离开窗口时用它报位置。
     last: Cell<(i32, i32)>,
@@ -219,6 +225,7 @@ impl AuxiliaryWindowTemplate {
             content: RefCell::new(Content::Empty),
             events: RefCell::new(None),
             hits: RefCell::new(Vec::new()),
+            regions: RefCell::new(Vec::new()),
             hover: Cell::new(None),
             last: Cell::new((0, 0)),
             scale: Cell::new(1.0),
@@ -267,8 +274,8 @@ impl AuxiliaryWindowTemplate {
         *self.events.borrow_mut() = Some(events);
     }
 
-    /// 客户区坐标 → 内容区坐标（点）+ 命中的元素（1 起）。
-    fn hit_at(&self, client_x: i32, client_y: i32) -> (f32, f32, Option<usize>) {
+    /// 客户区坐标 → 内容区坐标（点）+ 命中的元素（1 起）+ 区域下标（0 起）。
+    fn hit_at(&self, client_x: i32, client_y: i32) -> (f32, f32, Option<usize>, Option<usize>) {
         let scale = self.scale.get().max(0.01);
         let margin = self.margin.get();
         // 窗口左上角 = 内容左上角 - 留白；客户区 0 点在位图 0 点，所以内容像素 = 客户区 - 留白
@@ -285,31 +292,40 @@ impl AuxiliaryWindowTemplate {
                     .filter(|hit| hit.contains(x, y))
                     .map(|_| index + 1)
             });
-        (x, y, element)
+        let region = super::region::hit(&self.regions.borrow(), x, y);
+        (x, y, element, region)
     }
 
     /// 把一次鼠标动作交给出口（没装出口就什么也不做）。
     fn emit(&self, action: PanelAction, client_x: i32, client_y: i32, delta: Option<i32>) {
-        let (x, y, element) = self.hit_at(client_x, client_y);
+        let (x, y, element, region) = self.hit_at(client_x, client_y);
+        let region = region.and_then(|index| {
+            self.regions
+                .borrow()
+                .get(index)
+                .map(|region| region.name.clone())
+        });
         if let Some(events) = self.events.borrow().as_ref() {
             events(PanelEvent {
                 action,
                 x,
                 y,
                 element,
+                region,
                 delta,
             });
         }
     }
 
-    /// 鼠标移动：只有停到**另一个元素**上才派一次 `hover`（同一元素里挪不重复派）。
+    /// 鼠标移动：只有停到**另一个元素 / 区域**上才派一次 `hover`（同一元素里挪不重复派）。
     fn emit_move(&self, client_x: i32, client_y: i32) {
         self.last.set((client_x, client_y));
-        let (_, _, element) = self.hit_at(client_x, client_y);
-        if self.hover.replace(element) == element {
+        let (_, _, element, region) = self.hit_at(client_x, client_y);
+        let key = (element, region);
+        if self.hover.replace(Some(key)) == Some(key) {
             return;
         }
-        if element.is_some() {
+        if element.is_some() || region.is_some() {
             self.emit(PanelAction::Hover, client_x, client_y, None);
         }
     }
@@ -361,7 +377,7 @@ impl AuxiliaryWindowTemplate {
         let spec = self.spec.get();
         let target = key_map_target(candidate, layout, dpi);
         // 出图：键位映射参考 / 脚本内容 / 空面板，三选一
-        let (rendered, hits, generation) = {
+        let (rendered, hits, regions, generation) = {
             let content = self.content.borrow();
             let mut painter = self.painter.borrow_mut();
             let Some(painter) = painter.as_mut() else {
@@ -378,6 +394,7 @@ impl AuxiliaryWindowTemplate {
                     (
                         painter.render_key_map(&render_layout, cell, dpi),
                         Vec::new(),
+                        Vec::new(),
                         generation,
                     )
                 }
@@ -387,7 +404,13 @@ impl AuxiliaryWindowTemplate {
                         .as_ref()
                         .map(|rendered| rendered.hits.clone())
                         .unwrap_or_default();
-                    (rendered.map(|rendered| rendered.rendered), hits, generation)
+                    let regions = document.regions.clone();
+                    (
+                        rendered.map(|rendered| rendered.rendered),
+                        hits,
+                        regions,
+                        generation,
+                    )
                 }
                 _ => {
                     let (default_width, default_height) = default_size(painter, layout, dpi);
@@ -395,7 +418,12 @@ impl AuxiliaryWindowTemplate {
                         spec.width.unwrap_or(default_width).max(1),
                         spec.height.unwrap_or(default_height).max(1),
                     );
-                    (painter.render_panel(content, dpi), Vec::new(), generation)
+                    (
+                        painter.render_panel(content, dpi),
+                        Vec::new(),
+                        Vec::new(),
+                        generation,
+                    )
                 }
             }
         };
@@ -426,6 +454,7 @@ impl AuxiliaryWindowTemplate {
             return;
         }
         *self.hits.borrow_mut() = hits;
+        *self.regions.borrow_mut() = regions;
         self.scale.set(rendered.scale.max(0.01));
         self.margin.set(margin);
         let _ = unsafe { ShowWindow(self.hwnd, SW_SHOWNA) };
@@ -451,6 +480,7 @@ impl AuxiliaryWindowTemplate {
         // 收起来之后窗口内容就不作数了：下次显示重画
         self.painted.set(None);
         self.hits.borrow_mut().clear();
+        self.regions.borrow_mut().clear();
         if self.placed.replace(None).is_some() {
             let _ = unsafe { ShowWindow(self.hwnd, SW_HIDE) };
             tracing::info!("窗口模板已收起");

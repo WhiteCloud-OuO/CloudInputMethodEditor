@@ -293,6 +293,10 @@ win:set_content{
   就会用新图。相对路径按 Server 的工作目录（安装目录）算。
 - **混合 DPI**（2026-10-17）：`show{ x, y }` 的点坐标先按当前显示器 DPI 猜一个落点、问出那块显示器真正的 DPI
   再换算；窗口拖到另一块 DPI 不同的屏上会按新 DPI 重画（内容尺寸跟着变），名下的辅助窗口一起重新摆。
+- **区域（region）**：内容里可以声明 `regions = { { name = "plus", x = …, y = …, w = …, h = …, radius = …, drag = true } }`
+  —— 区域是**鼠标点击 / 拖拽的命中范围**（元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true`
+  = 按住它拖会移动整块窗口，`false` = 不拖窗口（点击照常）。后写的区域盖住先写的；
+  事件里的 `event.region` 就是命中的区域名（没声明 `regions` 时仍按元素命中 `event.element`）。
 
 ### 鼠标、滚轮、拖动（`cloudime.on("window", …)`）
 
@@ -305,6 +309,7 @@ cloudime.on("window", function(event)
     -- event.action   "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur"
     -- event.x, event.y   内容区坐标（点）
     -- event.element  命中的元素（内容是 1 起的数组，这里也是 1 起；没命中是 nil）
+    -- event.region   命中的区域名（内容里的 regions；没命中是 nil）
     -- event.delta    滚轮量（一格 ±120，正数往上；只有 wheel 有）
     if event.action == "wheel" then
         count = math.max(0, count + math.floor(event.delta / 120))
@@ -315,8 +320,10 @@ end)
 
 - `click` / `right_click` 在**左键 / 右键抬起**时派；`hover` 只在**停到另一个元素**上时派一次
   （同一元素里挪不重复派）；`leave` 在鼠标离开窗口时派；`wheel` 带 `delta`。
+- 命中**先看区域、再看元素**（后写的区域 / 元素盖住先写的）：`event.region` 给区域名、`event.element` 给
+  元素下标；没声明区域时只按元素命中。**拖动**从按下点所在的区域开始：`drag = false` 的区域按住了不拖窗口。
 - **命中按形状**（2026-10-17）：圆角矩形抠掉四个角、圆按边界、线段按粗细、路径按非零环绕填充判断；
-  文字 / 图像 / SVG 仍按外框。后画的盖住先画的。
+  文字 / 图像 / SVG 仍按外框。区域与元素用同一套形状。
 - **拖动**：在窗口上按住左键拖动就移动整块窗口（超过 4 像素才算拖，拖过就不派 `click`），
   名下的辅助窗口跟着重新摆；拖到另一块 DPI 不同的显示器上会按新 DPI 重画。
   辅助窗口本身不能拖（摆位归宿主）。
