@@ -100,9 +100,20 @@ impl Router {
                 in_text_input,
                 caps,
             } => {
-                // 前台应用的 DLL 每隔几百毫秒问一次：借这一拍把焦点跟上来（`focus_app` 脚本据此
-                // 在切程序之后不用等按键就能收到 `focus`）
-                self.ensure_focus(session);
+                // 前台应用的 DLL 每隔几百毫秒问一次：借这一拍把「前台程序」跟上来（`focus_app` 脚本
+                // 据此在切程序之后不用等按键就能收到 `focus`）。
+                //
+                // **只在应用真的变了时切会话**：同一个应用里可以有多个会话（资源管理器每个窗口 / 每个
+                // UI 线程一条连接），它们各自都会发 `SyncMode`；无条件切会把正在进行的组句清掉 ——
+                // 真机表现是「在资源管理器里重命名文件夹，每按一键候选窗闪一下就没」。
+                let same_app = match (self.focused_app(), self.session_app(session)) {
+                    (Some(current), Some(next)) => current.eq_ignore_ascii_case(next),
+                    (None, None) => true,
+                    _ => false,
+                };
+                if !same_app {
+                    self.ensure_focus(session);
+                }
                 self.handle_ime_active();
                 // 顺路记下焦点状态：状态切换提示据此决定弹不弹、以及「中 / 英」按钮画不画「A」。
                 self.in_text_input = in_text_input;

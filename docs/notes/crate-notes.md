@@ -737,8 +737,11 @@ Server 只按自己的语义处理 —— 谁先定义谁优先，脚本抢不�
 `Router::tick` 的 `poll_script_time()` 用 `Runtime::time_due()`：遍历 `time` 处理函数、按
 `Manifest::mark_time_due`（本地时间 → 窗口开始那天，`Cell` 记住触发过没有）―― 一个窗口只派一次。
 `focus` 事件由 `ensure_focus` 里 `dispatch_focus_scripts` 派：前台程序**变了**才派（同一程序里换输入框不算），
-载荷 `{ app }`，落地同「没有按键的那一拍」。`ensure_focus` 现在也在 `SyncMode` 里调（前台 DLL 隔几百毫秒报一次，
-切程序之后不用等按键就能派 `focus`）。`cloudime.foreground_app()` 与载荷里的 `app` 读的都是
+载荷 `{ app }`，落地同「没有按键的那一拍」。`ensure_focus` 现在也在 `SyncMode` 里调，但**只在应用真的变了时**
+（`focused_app()` 与 `session_app(session)` 不同 / 一边有一边没有）—— 同一个应用里可以有多个会话
+（资源管理器每个窗口 / UI 线程一条连接），它们各自发 `SyncMode`，无条件切会话会把正在进行的组句清掉
+（真机：资源管理器里重命名文件夹，每按一键候选窗闪一下就没）。切程序之后不用等按键就能派 `focus`。
+`cloudime.foreground_app()` 与载荷里的 `app` 读的都是
 `Router::sync_focused_app` 维护的快照。**输入法自己占用的组合键**（`Ctrl+Enter` / `Ctrl+反引号` /
 `Ctrl+数字` / `Shift+反引号` / `Ctrl+Alt+空格` / `Ctrl+Alt+,` `.`，以及预留给 v/u/i 模式的
 `Ctrl+Alt+V/U/I`）由 `cloudime_script::is_reserved_combination` 一处定义：清单解析时直接把绑定它们的脚本

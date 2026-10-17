@@ -1487,3 +1487,51 @@ fn script_window_requests_reach_the_ui_sink_in_order() {
         cloudime_script::WindowRequest::SetContent(1, _)
     ));
 }
+
+/// 同一个应用里的**另一个会话**问 `SyncMode` 不该把正在进行的组句清掉。
+///
+/// 真机：资源管理器里重命名文件夹，每按一键候选窗闪一下就没 —— 资源管理器每个窗口 / UI 线程
+/// 各是一条连接（不同 `SessionId`、同一个 `explorer.exe`），它们各自发 `SyncMode`；
+/// 以前无条件 `ensure_focus` 会在键与键之间来回切会话、顺手 `reset_composition`。
+#[test]
+fn a_second_session_of_the_same_app_does_not_reset_the_composition() {
+    let mut r = router(5);
+    let normal = KeyModifiers::default();
+    compose(&mut r, "ni", normal);
+    assert!(r.composing(), "先起一段组句");
+    let before = r.self_drawn_frame().candidates.items.len();
+    assert!(before > 0);
+
+    // 同一个应用的另一个会话（测试里两个会话的 app 都是 None）
+    r.handle(ClientMessage::OpenSession {
+        session: SessionId(2),
+        app: None,
+        protocol: PROTOCOL_VERSION,
+    });
+    r.handle(ClientMessage::SyncMode {
+        session: SessionId(2),
+        in_text_input: true,
+        caps: false,
+    });
+    assert!(r.composing(), "同应用的另一个会话不该清组句");
+    assert_eq!(r.self_drawn_frame().candidates.items.len(), before);
+}
+
+/// 真的换了应用（`SyncMode` 报来另一个 app）时才切会话 / 清组句。
+#[test]
+fn a_sync_mode_from_another_app_moves_the_focus() {
+    let mut r = router(5);
+    compose(&mut r, "ni", KeyModifiers::default());
+    assert!(r.composing());
+    r.handle(ClientMessage::OpenSession {
+        session: SessionId(2),
+        app: Some("notepad.exe".to_owned()),
+        protocol: PROTOCOL_VERSION,
+    });
+    r.handle(ClientMessage::SyncMode {
+        session: SessionId(2),
+        in_text_input: true,
+        caps: false,
+    });
+    assert!(!r.composing(), "切到别的应用该清掉上一段的组句");
+}

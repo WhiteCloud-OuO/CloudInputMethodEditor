@@ -19,6 +19,13 @@ impl Router {
             .and_then(|info| info.app.as_deref())
     }
 
+    /// 某个会话报上来的宿主应用名（`None` = DLL 没报 / 会话不在）。
+    pub(super) fn session_app(&self, session: SessionId) -> Option<&str> {
+        self.sessions
+            .get(&session)
+            .and_then(|info| info.app.as_deref())
+    }
+
     pub(super) fn ensure_focus(&mut self, session: SessionId) {
         if self.focused != Some(session) {
             self.reset_composition();
