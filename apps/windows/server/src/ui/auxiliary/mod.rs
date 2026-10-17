@@ -189,7 +189,8 @@ impl Assets {
     ///
     /// **不动焦点**：新收进来的资产哪怕声明了 [`Asset::able_to_get_focus`]，也**不会自己拿到焦点** ——
     /// 焦点还在原持有者（所有者、或者同一所有者名下的某件姊妹资产）身上，要它拿还是得所有者**指定**
-    /// （`docs/design/windows.md` §4 规则 8）。资产窃取（克隆 + 原件销毁）走的就是这条。
+    /// （`docs/design/windows.md` §4 规则 8）。**资产克隆与资产窃取**都是这条：克隆件 / 窃取件进来时一样，
+    /// 特性照旧、焦点不动。
     ///
     /// 名字重了在 debug 下直接叫出来 —— [`Self::designate_focus`] 按名字指认，重名就指不准了。
     pub(super) fn add(&mut self, asset: Box<dyn Asset>) {
@@ -679,10 +680,13 @@ mod tests {
         assert_eq!(assets.focus(), Focus::Asset(1), "焦点转到了 A2");
     }
 
-    /// §4 规则 8：**资产窃取**来的资产与原件具备同样的特性（能不能获得焦点照旧），但**不会第一时间拿到
-    /// 焦点** —— 焦点仍在它的所有者、或同一所有者名下的某件姊妹资产身上。
+    /// §4 规则 8：**资产克隆 / 窃取**来的资产与原件具备同样的特性（能不能获得焦点照旧），但**不会第一时间
+    /// 拿到焦点** —— 焦点仍在它的所有者、或同一所有者名下的某件姊妹资产身上。
+    ///
+    /// 克隆与窃取在**这一组**里是同一个落点（往资产表里加一件，`Assets::add`），差别只在原件那边
+    /// （窃取会销毁原件、它那一组按规则 7 自动归还焦点；克隆不扰动别人）。
     #[test]
-    fn a_stolen_asset_keeps_its_capability_but_never_takes_the_focus() {
+    fn cloned_or_stolen_assets_keep_their_capability_but_never_take_the_focus() {
         // 先有一件能获得焦点的姊妹资产，并且它正拿着焦点
         let events = Rc::new(RefCell::new(Vec::new()));
         let mut assets = Assets::default();
