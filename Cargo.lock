@@ -545,6 +545,7 @@ dependencies = [
 name = "cloudime-script"
 version = "0.0.3"
 dependencies = [
+ "cloudime-render",
  "jiff",
  "mlua",
  "reqwest",

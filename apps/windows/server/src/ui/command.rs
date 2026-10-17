@@ -33,4 +33,7 @@ pub(super) enum UiCommand {
 
     /// 换「辅助窗口」显示的内容（键位映射参考的键盘版面）。
     AuxiliaryKeyMap(cloudime_platform::input_schemes::KeyMapLayout),
+
+    /// 脚本窗口的一次操作（`cloudime.window.*`）：建 / 换内容 / 显示 / 收起 / 关。
+    ScriptWindow(Box<cloudime_script::WindowRequest>),
 }

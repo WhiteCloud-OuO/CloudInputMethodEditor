@@ -1419,3 +1419,71 @@ fn shuangpin_does_not_show_the_expression_hint() {
     let (_, _, frame) = key(&mut r, 'g' as u32, Some('g'), normal);
     assert!(frame.tip.is_none(), "{:?}", frame.tip);
 }
+
+/// 脚本窗口：`cloudime.window.*` 的请求经 [`ScriptWindowSink`] 交给 UI 线程。
+///
+/// `startup` 在 `Router::new` 里就派发（早于输出端装上）—— 那一拍建窗口的请求先攒着，`set_script_window_sink`
+/// 一装上立刻补发；按键处理函数里产出的请求在同一拍结束前送到。
+#[test]
+fn script_window_requests_reach_the_ui_sink_in_order() {
+    struct RequestSink(std::sync::mpsc::Sender<cloudime_script::WindowRequest>);
+    impl crate::dispatch::ScriptWindowSink for RequestSink {
+        fn script_window(&self, request: cloudime_script::WindowRequest) {
+            let _ = self.0.send(request);
+        }
+    }
+
+    let dir = std::env::temp_dir().join("cloudime-key-tests-script-window");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("win.lua"),
+        "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', \
+         budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
+         local win\n\
+         cloudime.on('startup', function()\n\
+             win = cloudime.window.create{ name = '测试', width = 120, height = 60, interactive = true }\n\
+             win:show{ x = 10, y = 10 }\n\
+         end)\n\
+         cloudime.on('key', function(event)\n\
+             if event.vk == 0x57 then\n\
+                 win:set_content{ { type = 'rect', x = 0, y = 0, w = 120, h = 60, color = '#FF00FF00' } }\n\
+             end\n\
+         end)\n",
+    )
+    .unwrap();
+
+    let engine = Engine::new(Dictionary::parse("你\tni\t100\n").unwrap());
+    let mut r = Router::new(
+        engine,
+        RouterConfig {
+            page_size: 9,
+            scripts_dir: Some(dir),
+            ..Default::default()
+        },
+    );
+    let (sender, receiver) = std::sync::mpsc::channel();
+    r.set_script_window_sink(Box::new(RequestSink(sender)));
+
+    // 输出端一装上，`startup` 那一拍攒下的「建窗口 + 显示」就补发过来
+    let startup: Vec<_> = receiver.try_iter().collect();
+    assert_eq!(startup.len(), 2, "startup：create + show");
+    assert!(matches!(
+        startup[0],
+        cloudime_script::WindowRequest::Create(1, _)
+    ));
+    assert!(matches!(
+        startup[1],
+        cloudime_script::WindowRequest::Show(1, Some(_))
+    ));
+
+    // 按键处理函数里换内容：这一拍结束前送到
+    let normal = KeyModifiers::default();
+    key(&mut r, 0x57, Some('w'), normal);
+    let requests: Vec<_> = receiver.try_iter().collect();
+    assert_eq!(requests.len(), 1);
+    assert!(matches!(
+        requests[0],
+        cloudime_script::WindowRequest::SetContent(1, _)
+    ));
+}

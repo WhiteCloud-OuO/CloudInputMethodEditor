@@ -215,6 +215,25 @@ impl Painter {
             .ok()
     }
 
+    /// 画一份**脚本内容**（面板 + 元素表）；`shadow` = 要不要与候选窗同源的那层阴影。
+    /// 给「辅助窗口模板」与脚本独立窗口用。
+    pub(super) fn render_document(
+        &mut self,
+        document: &cloudime_render::Document,
+        dpi: u32,
+        shadow: bool,
+    ) -> Option<cloudime_render::RenderedDocument> {
+        self.renderer
+            .render_document(
+                document,
+                &self.theme,
+                scale(dpi),
+                shadow.then_some(&self.candidate_shadow),
+            )
+            .inspect_err(|error| tracing::warn!(%error, "脚本窗口渲染失败"))
+            .ok()
+    }
+
     /// 「候选窗口装 9 个候选项」那个内容高度（**点**）：键位映射参考的缺省目标高度
     /// （竖排 / 横排都用它当底，见窗口模板的 `key_map_height`）。
     pub(super) fn key_map_height_nine(&mut self, dpi: u32) -> f32 {

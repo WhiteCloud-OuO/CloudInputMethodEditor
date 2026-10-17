@@ -40,6 +40,7 @@ use self::reload::ConfigReload;
 pub use self::reload::DataDirs;
 pub use self::rescore::find_model;
 use self::rescore::{ModelLoader, RescoreState};
+pub use self::script::{NoopScriptWindowSink, ScriptWindowSink};
 use self::session::SessionInfo;
 pub use self::status::{NoopStatusSink, StatusEvent, StatusSink, StatusView};
 use self::translate::Translate;
@@ -99,6 +100,16 @@ pub struct Router {
 
     /// 悬浮状态条输出端；Windows 上由 [`crate::ui`] 注入。
     status: Box<dyn StatusSink>,
+
+    /// 脚本窗口输出端（`cloudime.window.*`）；Windows 上由 [`crate::ui`] 注入，测试里是空实现。
+    script_windows: Box<dyn ScriptWindowSink>,
+
+    /// 脚本窗口输出端装好了没有：`startup` 早于 `set_script_window_sink`，那会儿产出的窗口操作
+    /// 先攒在 [`Self::pending_script_windows`] 里，装好再补发。
+    script_windows_ready: bool,
+
+    /// 输出端装好之前攒下的窗口操作。
+    pending_script_windows: Vec<cloudime_script::WindowRequest>,
 
     /// 全局输入法状态（中文 / 英文 / 禁用），所有应用共用。DLL 切了报来，激活 / 获焦 / 轮询时取走。
     mode: InputMode,
@@ -241,6 +252,9 @@ impl Router {
             reload: None,
             candidates: Box::new(NoopSink),
             status: Box::new(NoopStatusSink),
+            script_windows: Box::new(NoopScriptWindowSink),
+            script_windows_ready: false,
+            pending_script_windows: Vec::new(),
             mode: InputMode::default(),
             ime_active: false,
             in_text_input: false,
@@ -372,6 +386,16 @@ impl Router {
 
     pub fn set_status_sink(&mut self, sink: Box<dyn StatusSink>) {
         self.status = sink;
+    }
+
+    /// 装上脚本窗口的输出端（`cloudime.window.*`）：Windows 上由 `ui::UiHandle` 注入，
+    /// 测试 / 非 Windows 下不装（请求丢掉，输入照常）。装好时补发 `startup` 那一拍攒下的操作。
+    pub fn set_script_window_sink(&mut self, sink: Box<dyn ScriptWindowSink>) {
+        self.script_windows = sink;
+        self.script_windows_ready = true;
+        for request in std::mem::take(&mut self.pending_script_windows) {
+            self.script_windows.script_window(request);
+        }
     }
 
     /// 处理一条消息；`None` 表示不用回话。到点顺带把学习数据落盘。

@@ -188,6 +188,126 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
   改脚本本身要**重启 Server**（托盘右键「重启输入法服务」）才生效：不做热重载。
 - 改脚本要**重启 Server**（托盘右键「重启输入法服务」）才生效：不做热重载。
 
+## 脚本窗口：`cloudime.window`（2026-10-17）
+
+脚本可以自己建**独立窗口**（有自己那块窗与生命周期）与**辅助窗口**（挂在某块脚本独立窗口名下的资产），
+用来做面板、悬浮提示、小工具 —— 两类窗口的定义与规矩见 `docs/design/windows.md` §1–§5，这里只定
+「脚本能看见什么」。
+
+**为什么内容是声明式的**：脚本跑在工人线程、窗口在 UI 线程，两边不能直接互相调用（从 UI 线程回调 Lua
+会卡住所有应用的输入）。所以脚本不「画」，只交一份**元素表**（`Document` = 内容区尺寸 + 有序元素），
+Server 在 UI 线程上经云朵渲染器（`Renderer::render_document`）一次出图、`UpdateLayeredWindow` 整块贴上 ——
+与候选窗同一条渲染路（`docs/design/windows.md` §6）。
+
+### 建窗口
+
+```lua
+local win = cloudime.window.create{
+    name = "统计",        -- 日志与 window 事件里点名；缺省「脚本窗口」
+    width = 240,          -- 内容区宽（点，8–2048；缺省 240）
+    height = 120,         -- 内容区高（点，8–2048；缺省 120）
+    interactive = true,   -- 接不接鼠标（缺省 false = 鼠标穿透，纯展示）
+    shadow = true,        -- 要不要与候选窗同源的那层阴影（缺省 true）
+}
+
+local aux = cloudime.window.create_auxiliary{
+    owner = win,          -- 必给：脚本建过的独立窗口（句柄上的 id）
+    width = 160,          -- 可选：内容尺寸缺省值（set_content 里再给也行）
+    height = 200,
+    gap = 16,             -- 与宿主之间的间隙（点；缺省 16）
+    interactive = false,
+    shadow = true,
+}
+```
+
+句柄上的方法（两类窗口一套）：
+
+| 方法 | 意思 |
+|---|---|
+| `win:set_content{…}` | 换一整份内容（整份替换；见下），尺寸可以跟着变 |
+| `win:show{ x = …, y = … }` | 显示；`x` / `y` 是内容区左上角的**屏幕坐标（点）**，不写 = 上次的位置 / 光标右下 16 点 |
+| `win:hide()` | 收起（不销毁；内容留着，再 `show` 原样回来） |
+| `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
+| `aux:focus(true/false)` | 把逻辑焦点指定给这件辅助窗口 / 交还给宿主（只对辅助窗口有意义） |
+
+- 辅助窗口**默认不接鼠标**：`interactive = true` 只是「能」拿焦点，真要它接还得 `aux:focus(true)`
+  （§4 的规矩：只有所有者能指定）。宿主被收起时名下资产跟着收起，`win:show()` 时自己回来。
+- 窗口都是置顶、不抢系统焦点（`WS_EX_NOACTIVATE`）；`interactive = false` 的整块鼠标穿透。
+- 建窗口 / 换内容 / 显示只是**记一个请求**：脚本不会等 UI 线程，UI 线程按顺序执行。
+
+### 内容（`set_content`）
+
+```lua
+win:set_content{
+    width = 240, height = 120,          -- 可省：缺省用建窗口时那份
+    { type = "rect",   x = 0, y = 0, w = 240, h = 32, radius = 8, color = "#33111111" },
+    { type = "text",   x = 12, y = 6, text = "今日 12 条", size = 16,
+      font = "candidate", color = "#FF222222" },
+    { type = "line",   from = { x = 0, y = 32 }, to = { x = 240, y = 32 },
+      thickness = 1, color = "#22000000" },
+    { type = "circle", cx = 220, cy = 16, radius = 8, color = "#FF66AAFF" },
+    { type = "svg",    x = 8, y = 8, size = 20, source = "<svg …>", tint = "#FF888888" },
+    { type = "img",    x = 0, y = 0, w = 64, h = 64, path = "Scripts/lib/icon.png" },
+    { type = "path",   color = "#FF0000FF",
+      commands = { { "M", 0, 0 }, { "L", 10, 0 }, { "C", 12, 0, 12, 10, 0, 10 }, { "Z" } } },
+}
+```
+
+| 元素 | 字段 |
+|---|---|
+| `rect` | `x` / `y` / `w` / `h` 必给；`radius` 圆角（0 = 直角）；`color` 必给 |
+| `circle` | `cx` / `cy` / `radius`；`color` 必给 |
+| `line` | `from` / `to`（`{ x = …, y = … }` 或 `{ x, y }`）、`thickness`（点，缺省 1）；`color` 必给 |
+| `text` | `x` / `y`（行框左上角）/ `text` / `size`（点，缺省 16）；`font` = `candidate`（缺省）/ `pinyin` / `item_number` / `translate`；`color` 缺省黑；`italic` 可选 |
+| `svg` | `x` / `y` / `size`（见方）/ `source`（整段 SVG 文本）；`tint` 可选（按 alpha 染色） |
+| `img` | `x` / `y` / `w` / `h` / `path`（PNG；相对路径按 Server 的工作目录 = 安装目录算） |
+| `path` | `commands`（`{"M",x,y}` / `{"L",x,y}` / `{"Q",cx,cy,x,y}` / `{"C",…}` / `{"Z"}`）；`color` 必给 |
+
+- 坐标与尺寸一律是**点**（100% 缩放下 1 点 = 1 像素），随 DPI 一起放大；超出内容区的部分被裁掉。
+- 颜色：`"#RRGGBB"` / `"#AARRGGBB"` / `"#RGB"`，或 `{ r = …, g = …, b = …, a = … }`（0–255，`a` 缺省 255）。
+- **限额**（当场报错，这一次调用中止、窗口保持原样）：一份内容最多 **512** 个元素；一段文字最多 **4096** 字符；
+  图像解码后不超过 **4096 × 4096**（约 1600 万像素）；内容区尺寸夹到 **8–2048 点**。
+- `img` 每次 `set_content` 都会重新读文件解码（没有缓存）—— 别在「每按一键」的路径上反复送大图。
+
+### 鼠标事件（`cloudime.on("window", …)`）
+
+`interactive` 的窗口把鼠标动作派给脚本：
+
+```lua
+cloudime.on("window", function(event)
+    -- event.window   建窗口时给的名字
+    -- event.id       窗口编号
+    -- event.action   "click" / "right_click" / "hover" / "leave"
+    -- event.x, event.y   内容区坐标（点）
+    -- event.element  命中的元素（内容是 1 起的数组，这里也是 1 起；没命中是 nil）
+    if event.action == "click" and event.element == 1 then
+        win:set_content{ … }
+    end
+end)
+```
+
+- `click` / `right_click` 在**左键 / 右键抬起**时派；`hover` 只在**停到另一个元素**上时派一次
+  （同一元素里挪不重复派）；`leave` 在鼠标离开窗口时派。
+- 命中按元素的**外框**算（不抠形状；后画的盖住先画的）。
+- `window` 事件**不受清单 `trigger_condition` 的限制**（与 `startup`、HTTP 回调一样）：窗口是脚本自己建的，
+  事件当然归它。
+- 处理函数的返回值按「没有按键的那一拍」处理：认 `notice` / `online` / `theme` / `adjust`，
+  `passthrough` / `commit` 给了只记日志。
+
+### 生命周期与出错
+
+- 窗口活到 `close` 或进程退出；`hide` 不销毁。独立窗口销毁时名下资产一起放掉（§1 的寿命规矩）。
+- 内容写错（缺颜色 / 元素类型不认识 / 尺寸不是正数…）**当场报 Lua 错误**：这一次调用中止、窗口保持原样，
+  输入法照常（与别的脚本 API 一样）。
+- 没有脚本要窗口时零开销：`cloudime.window` 只是一张表，一个窗口都不建。
+
+### 还没做
+
+- **键盘输入 / 拖动 / 滚轮**：现在只派点击与悬停，窗口不接键盘、也不能拖。
+- 命中按形状（圆角 / 圆 / 路径现在都按外框）。
+- 图像按路径缓存、按文件句柄读。
+- 多显示器**混合 DPI** 下的位置换算（现在按系统 DPI 折点）。
+
 ## 调用链路：一次按键走一遍
 
 ```text

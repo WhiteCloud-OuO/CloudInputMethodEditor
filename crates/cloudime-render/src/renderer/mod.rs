@@ -16,7 +16,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::color::Color;
-use crate::elements::{RectElement, TextElement};
+use crate::document::{self, Document, Element, HitRect};
+use crate::elements::{
+    ImageElement, LineElement, PathElement, RectElement, SvgElement, TextElement,
+};
 use crate::error::RenderError;
 use crate::fonts::FontLibrary;
 use crate::frame::{Auxiliary, Frame, HighlightRect, Row, TipSegment, Tone};
@@ -29,7 +32,7 @@ use crate::theme::{FontSpec, Theme};
 pub use key_map::{
     KeyCap, KeyMapLayout, draw_key_map, key_map_cell, key_map_pixel_size, key_map_size,
 };
-pub use rendered::Rendered;
+pub use rendered::{Rendered, RenderedDocument};
 pub use status::{RenderedStatus, StatusCell};
 
 /// preedit 光标的宽度（点）。
@@ -339,6 +342,32 @@ impl Renderer {
             (content_width, content_height),
             scale,
         ))
+    }
+
+    /// 画一份**脚本内容**（[`Document`]：一块面板 + 元素表），并给出每个元素的包围盒（点）——
+    /// 脚本窗口的鼠标命中测试用它。
+    ///
+    /// 元素坐标一律是点；这里乘 `scale` 换成像素。画在 `panel_canvas` 的内容区里（背景 / 圆角 / 阴影与
+    /// 候选窗同源），超出内容区的部分自然被位图边界裁掉。
+    pub fn render_document(
+        &self,
+        document: &Document,
+        theme: &Theme,
+        scale: f32,
+        shadow: Option<&Shadow>,
+    ) -> Result<RenderedDocument, RenderError> {
+        let width = (document.width * scale).max(1.0);
+        let height = (document.height * scale).max(1.0);
+        let (mut render, margin) = self.panel_canvas(width, height, theme, scale, shadow)?;
+        let metrics = Metrics { theme, scale };
+        let mut hits = Vec::with_capacity(document.elements.len());
+        for element in &document.elements {
+            hits.push(draw_element(&mut render, element, &metrics));
+        }
+        Ok(RenderedDocument {
+            rendered: Self::panel_rendered(render, margin, (width, height), scale),
+            hits,
+        })
     }
 
     /// 在一块**空画布**上铺阴影层：同样的尺寸 / 参数直接复用上次算好的那一层。
@@ -743,6 +772,112 @@ pub(super) fn truncate_with(
     (ELLIPSIS.to_owned(), true)
 }
 
+/// 画脚本内容里的一个元素，返回它在**内容区**里的包围盒（点）：鼠标命中测试按外框算，不抠形状。
+/// 画不出来（SVG 解析失败 / 空路径）返回 `None`。
+fn draw_element(render: &mut Render, element: &Element, m: &Metrics) -> Option<HitRect> {
+    let scale = m.scale;
+    let px = |value: f32| value * scale;
+    match element {
+        Element::Rect {
+            x,
+            y,
+            width,
+            height,
+            radius,
+            color,
+        } => {
+            if *radius > 0.0 {
+                render.round_rect(px(*x), px(*y), px(*width), px(*height), px(*radius), *color);
+            } else {
+                render.rect(px(*x), px(*y), px(*width), px(*height), *color);
+            }
+            Some(HitRect::new(*x, *y, *width, *height))
+        }
+        Element::Line {
+            from,
+            to,
+            thickness,
+            color,
+        } => {
+            render.line(
+                (px(from.0), px(from.1)),
+                (px(to.0), px(to.1)),
+                px(*thickness),
+                *color,
+            );
+            // 包围盒按「两端点外扩半个线宽」算：斜线也点得着。
+            let half = thickness * 0.5;
+            Some(HitRect::new(
+                from.0.min(to.0) - half,
+                from.1.min(to.1) - half,
+                (to.0 - from.0).abs() + thickness,
+                (to.1 - from.1).abs() + thickness,
+            ))
+        }
+        Element::Circle {
+            cx,
+            cy,
+            radius,
+            color,
+        } => {
+            render.circle(px(*cx), px(*cy), px(*radius), *color);
+            Some(HitRect::new(
+                cx - radius,
+                cy - radius,
+                radius * 2.0,
+                radius * 2.0,
+            ))
+        }
+        Element::Text {
+            x,
+            y,
+            text,
+            size,
+            slot,
+            color,
+            italic,
+        } => {
+            let font = FontSpec::with_size(*size).scaled(scale);
+            let mut style = TextStyle::new(font, *size, *color, m.theme.text_gamma);
+            style.family = document::family_for(m.theme, *slot).cloned();
+            style.italic = *italic;
+            let width = render.text(text, &style, px(*x), px(*y)) / scale;
+            Some(HitRect::new(*x, *y, width, font.line_height / scale))
+        }
+        Element::Svg {
+            x,
+            y,
+            size,
+            source,
+            tint,
+        } => {
+            render.svg(source, px(*x), px(*y), px(*size), *tint).ok()?;
+            Some(HitRect::new(*x, *y, *size, *size))
+        }
+        Element::Image {
+            x,
+            y,
+            width,
+            height,
+            image,
+        } => {
+            render.image(image, px(*x), px(*y), px(*width), px(*height));
+            Some(HitRect::new(*x, *y, *width, *height))
+        }
+        Element::Path { commands, color } => {
+            let path = document::build_path(commands, scale)?;
+            let bounds = path.bounds();
+            render.path(&path, *color);
+            Some(HitRect::new(
+                bounds.x() / scale,
+                bounds.y() / scale,
+                bounds.width() / scale,
+                bounds.height() / scale,
+            ))
+        }
+    }
+}
+
 /// 在线翻译那一段段文字按 `\n` 拆成几行（脚本体里写了换行就显示成多行，换行后面的字从新一行左端开始）。
 /// 没写换行时就是一行 —— 与以前一样。
 fn online_lines(segments: &[TipSegment]) -> Vec<Vec<TipSegment>> {
@@ -1034,5 +1169,64 @@ mod tests {
         let widened = wide(&mut renderer, 300.0);
         assert!(narrow < 300, "不设下限时该是窄的：{narrow}");
         assert!(widened >= 300, "横排也该撑到最小宽度：{widened}");
+    }
+
+    /// 脚本内容（`Document`）：元素真画进位图里，命中框按元素给出来（文字按量出来的宽度）。
+    #[test]
+    fn a_document_paints_its_elements_and_reports_hit_boxes() {
+        use crate::color::Color;
+        use crate::document::{Document, Element, FontSlot, HitRect};
+
+        // 没有系统字体的环境（CI 容器）跳过
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let theme = Theme::new();
+        let document = Document {
+            width: 120.0,
+            height: 48.0,
+            elements: vec![
+                Element::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 120.0,
+                    height: 20.0,
+                    radius: 0.0,
+                    color: Color::rgb(255, 0, 0),
+                },
+                Element::Text {
+                    x: 4.0,
+                    y: 24.0,
+                    text: "云朵输入法".to_owned(),
+                    size: 12.0,
+                    slot: FontSlot::Candidate,
+                    color: Color::rgb(0, 0, 0),
+                    italic: false,
+                },
+            ],
+        };
+        let rendered = renderer
+            .render_document(&document, &theme, 1.0, None)
+            .expect("画得出来");
+        assert_eq!(
+            (
+                rendered.rendered.content_width,
+                rendered.rendered.content_height
+            ),
+            (120, 48)
+        );
+        // 左上角落在矩形里：红通道满、绿蓝为零
+        let pixel = rendered.rendered.pixmap.pixels()[0];
+        assert!(pixel.red() > 200 && pixel.green() == 0 && pixel.blue() == 0);
+
+        assert_eq!(rendered.hits.len(), 2);
+        assert_eq!(
+            rendered.hits[0],
+            Some(HitRect::new(0.0, 0.0, 120.0, 20.0)),
+            "矩形按外框给命中区域"
+        );
+        let text = rendered.hits[1].expect("文字有命中框");
+        assert_eq!(text.x, 4.0);
+        assert!(text.width > 0.0, "文字宽度是量出来的：{text:?}");
     }
 }

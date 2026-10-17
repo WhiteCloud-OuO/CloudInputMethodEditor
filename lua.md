@@ -14,6 +14,7 @@
 | [`Scripts/lib/example-niutrans.lua`](Scripts/lib/example-niutrans.lua) | 完整示例：小牛翻译（签名、表单编码、折行、多行显示） |
 | [`Scripts/lib/example-theme-by-app.lua`](Scripts/lib/example-theme-by-app.lua) | 示例：按前台程序换主题（组合键触发 + `cloudime.foreground_app()` / `cloudime.apply_theme()`） |
 | [`Scripts/lib/example-auto-number.lua`](Scripts/lib/example-auto-number.lua) | 示例：自动序号（`key` 触发 + `cloudime.text.before()` + `commit`「换行 + 下一条序号」） |
+| [`Scripts/lib/example-window.lua`](Scripts/lib/example-window.lua) | 示例：脚本窗口（`cloudime.window.create` + `set_content` + `window` 点击事件） |
 
 ## 目录
 
@@ -42,6 +43,7 @@
 | 接厂商接口做在线翻译，写在候选窗底部那一行 | `http_post` + `online` |
 | 改候选窗尺寸、缩放、一页几个 | `cloudime.candidate.*` |
 | 量文字宽、截断 / 折行（按窗口宽度排版） | `cloudime.ui.*` |
+| 建自己的面板 / 悬浮小窗（可点、可悬停） | `cloudime.window.*` |
 | 起外部程序、读写自己的文件 | `os.execute` / `io.*` |
 
 **跑在哪儿**：脚本引擎在 **Server 进程**里（`crates/cloudime-script`，mlua + LuaJIT），
@@ -157,6 +159,7 @@ end)
 | `key` | 一次按键、**引擎处理之前**（只有 `combination_key` / `key` 脚本收） | 见[动作表](#5-返回值动作表)全部项；`passthrough` / `commit` 只有这一拍认 |
 | `candidates` | **引擎排完之后**（每次重排；只有 `candidate_context` 脚本收） | `order` / `display` / `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 给了只记日志 |
 | `time` | 到清单里 `trigger_time` 那个点（本地时间 `HH:MM`；只有 `sys_time` 脚本收） | `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 给了只记日志。载荷同 `cloudime.get_time()`，另加 `app`（那一刻前台程序） |
+| `window` | 脚本窗口上的鼠标动作（`click` / `right_click` / `hover` / `leave`） | 同 `candidates`：`notice` / `adjust` / `online` / `theme`；窗口要 `interactive`（辅助窗口还要 `aux:focus(true)`）才接鼠标 |
 | 异步回调 | HTTP 结果回来那一拍（**所有脚本**） | 同 `candidates`；`passthrough` / `commit` 给了只记日志 |
 
 多个脚本按 `(priority, 文件名)` 顺序合并，**后面返回的盖前面的**（表里没写的项不动）。
@@ -355,6 +358,86 @@ local box = cloudime.ui.truncate(文本, 行宽 [, 选项])   -- → { text, lin
 
 返回的 `text` 是最终文本（`"wrap"` 时里面带换行，直接写进 `online` 就按多行显示）、
 `lines` 是行数、`truncated` 说明有没有截断过、`width` 是最宽一行的宽度。
+
+### 脚本窗口
+
+脚本可以自己建窗口：**独立窗口**（自己的生命周期）与**辅助窗口**（挂在某块脚本窗口旁边的小面板）。
+内容是一份**元素表**（矩形 / 圆 / 线 / 文字 / SVG / 图片 / 路径），窗口由输入法在 UI 线程上按模板建、
+用与候选窗同一个渲染器画 —— 脚本不直接画，也卡不住输入。
+
+```lua
+-- 建一块 240 × 120 点的面板（interactive = true 才接鼠标）
+local win = cloudime.window.create{
+    name = "统计", width = 240, height = 120, interactive = true,
+}
+
+-- 换一整份内容：坐标与尺寸都是点，左上角原点
+win:set_content{
+    { type = "rect", x = 0, y = 0, w = 240, h = 32, radius = 8, color = "#33111111" },
+    { type = "text", x = 12, y = 6, text = "今日 12 条", size = 16, color = "#FF222222" },
+    { type = "line", from = { x = 0, y = 32 }, to = { x = 240, y = 32 }, thickness = 1, color = "#22000000" },
+}
+
+win:show{ x = 100, y = 100 }      -- 屏幕坐标（点）；不写 = 上次的位置 / 光标旁
+-- win:hide()                     -- 收起（内容留着）
+-- win:close()                    -- 销毁
+
+-- 辅助窗口：挂在上面那块窗旁边（贴宿主自动选边）
+local aux = cloudime.window.create_auxiliary{ owner = win, width = 160, height = 120, gap = 16 }
+aux:set_content{ { type = "text", x = 8, y = 8, text = "附注", size = 12, color = "#FF666666" } }
+aux:show()
+```
+
+**窗口句柄上的方法**：
+
+| 方法 | 说明 |
+|---|---|
+| `win:set_content{ … }` | 换一整份内容（整份替换；`width` / `height` 可省，缺省用建窗口时那份） |
+| `win:show{ x = …, y = … }` | 显示；坐标是**内容区左上角**的屏幕坐标（点）。不写就沿用上次的位置，没有过就摆在光标右下 |
+| `win:hide()` | 收起（不销毁） |
+| `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
+| `aux:focus(true / false)` | 只对辅助窗口有意义：把逻辑焦点指定给它 / 交还给宿主 |
+
+**元素表**（坐标 / 尺寸都是点，超出内容区的部分被裁掉）：
+
+| `type` | 字段 |
+|---|---|
+| `rect` | `x` / `y` / `w` / `h` 必给；`radius`（圆角，0 = 直角）；`color` 必给 |
+| `circle` | `cx` / `cy` / `radius` / `color` |
+| `line` | `from` / `to`（`{ x = …, y = … }` 或 `{ x, y }`）、`thickness`（缺省 1）、`color` |
+| `text` | `x` / `y`（行框左上角）/ `text` / `size`（点，缺省 16）/ `font`（`candidate` 缺省、`pinyin`、`item_number`、`translate`）/ `color`（缺省黑）/ `italic` |
+| `svg` | `x` / `y` / `size`（见方）/ `source`（整段 SVG 文本）/ `tint`（可选，按 alpha 染色） |
+| `img` | `x` / `y` / `w` / `h` / `path`（PNG；相对路径按安装目录算） |
+| `path` | `commands` = `{ {"M",x,y}, {"L",x,y}, {"Q",cx,cy,x,y}, {"C",…}, {"Z"} }`、`color` |
+
+颜色写 `"#RRGGBB"` / `"#AARRGGBB"` / `"#RGB"`，或 `{ r = …, g = …, b = …, a = … }`（0–255）。
+
+**限额**（超了当场报 Lua 错误，窗口保持原样）：一份内容最多 512 个元素；一段文字最多 4096 字符；
+图片不超过 4096 × 4096；内容区尺寸夹到 8–2048 点。
+
+**鼠标事件**（`interactive = true` 的窗口才会收到）：
+
+```lua
+cloudime.on("window", function(event)
+    -- event.window / event.id      哪块窗口（名字 / 编号）
+    -- event.action                 "click" / "right_click" / "hover" / "leave"
+    -- event.x / event.y            内容区坐标（点）
+    -- event.element               命中的元素（内容数组里 1 起的下标；没命中是 nil）
+    if event.action == "click" then
+        win:set_content{ { type = "text", x = 8, y = 8, text = "点到了 " .. tostring(event.element) } }
+    end
+end)
+```
+
+- `click` / `right_click` 在按键抬起时派；`hover` 只在停到**另一个元素**上时派一次；`leave` 是鼠标离开窗口。
+- 命中按元素**外框**算（后画的在上面）。
+- `window` 事件**不看清单的 `trigger_condition`**（与 `startup`、HTTP 回调一样，所有脚本都能收）。
+- 辅助窗口默认鼠标穿透：`create_auxiliary{ interactive = true }` 之后还要 `aux:focus(true)` 才真正接鼠标
+  （焦点一组里只有一个：给了它，宿主那块窗就让开）。
+- 返回值按「没有按键的那一拍」处理：`notice` / `online` / `theme` / `adjust` 认，`passthrough` / `commit` 忽略。
+
+窗口活到 `close` 或输入法服务退出；`hide` 不销毁。**还没有**键盘输入、拖动、滚轮，
+命中也不抠圆角 / 圆 / 路径的形状（都按外框）。
 
 ## 7. 标准库与运行环境
 
@@ -725,6 +808,7 @@ end)
   老脚本会因为 `api` 不认识被判无效（而不是悄悄行为不对）。
 - **不做热重载**：改脚本 → 重启输入法服务。
 - **还没做的**（设计文档里记着）：惰性 Lua 状态（没脚本时不建状态）、
-  改组句里「已选文本」的内容、把翻译 Tip 交给脚本写（现在是内置的本地词典 Tip + 独立的 `online` 行）。
+  改组句里「已选文本」的内容、把翻译 Tip 交给脚本写（现在是内置的本地词典 Tip + 独立的 `online` 行）、
+  脚本窗口的键盘输入 / 拖动 / 滚轮（`cloudime.window` 现在只有点击与悬停）。
 - **没有脚本时不付代价**：`Scripts\` 不存在或里面没有真脚本时，按键路径上一次查表就返回，
   行为与「没有脚本功能」时逐字节一致。

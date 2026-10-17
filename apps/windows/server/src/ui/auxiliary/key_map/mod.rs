@@ -8,6 +8,8 @@
 //! 开关在设置页「输入 → 双键拼音 → 启用键位映射参考」（`use_input_scheme.cfg` 的 `key_map_reference`）；
 //! 开着时组句里按 `Ctrl + F1` 弹出 / 收起。
 
+use std::rc::Rc;
+
 use windows::core::Result;
 
 use super::{Asset, Bridge};
@@ -18,7 +20,7 @@ use cloudime_platform::input_schemes::KeyMapLayout;
 /// 键位映射参考窗口。
 pub(crate) struct KeyMapWindow {
     /// 辅助窗口模板：主题背景 / 圆角 / 阴影都出一张位图，贴宿主摆位。
-    template: AuxiliaryWindowTemplate,
+    template: Rc<AuxiliaryWindowTemplate>,
 }
 
 impl KeyMapWindow {
@@ -28,9 +30,9 @@ impl KeyMapWindow {
     /// 将来要它接输入时，把这里的 `false` 改成 `true`，再在宿主那边**指定**焦点给它
     /// （[`super::DesignatedAssetToGetFocus`]）。
     pub(crate) fn new(painter: SharedPainter) -> Result<Self> {
-        Ok(Self {
-            template: AuxiliaryWindowTemplate::new(painter, false)?,
-        })
+        let template = Rc::new(AuxiliaryWindowTemplate::new(painter, false)?);
+        template.attach();
+        Ok(Self { template })
     }
 }
 

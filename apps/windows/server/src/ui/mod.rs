@@ -43,6 +43,7 @@ mod layered;
 mod measure;
 mod monitor;
 mod painter;
+mod script_window;
 mod status;
 mod status_tip;
 mod viewport;
@@ -77,10 +78,12 @@ use cloudime_platform::protocol::{Frame, ScreenRect};
 use self::candidates::CandidateWindow;
 use self::command::UiCommand;
 use self::painter::{Painter, SharedPainter};
+use self::script_window::{ScriptWindowEvents, ScriptWindows};
 use self::status::StatusBar;
 use self::status_tip::StatusTip;
 use crate::dispatch::{
-    CandidateEvent, CandidateSink, RenderSettings, StatusEvent, StatusSink, StatusView,
+    CandidateEvent, CandidateSink, RenderSettings, ScriptWindowSink, StatusEvent, StatusSink,
+    StatusView,
 };
 
 /// 状态条上的操作（点格子 / 拖动结束）回给 Router 的回调，UI 线程上调。
@@ -110,7 +113,11 @@ pub struct UiHandle {
 
 impl UiHandle {
     /// 起 UI 线程并等它建好候选窗口。失败返回 `Err`，调用方退化为不画。
-    pub fn spawn(on_status: StatusEvents, on_candidates: CandidateEvents) -> Result<Self> {
+    pub fn spawn(
+        on_status: StatusEvents,
+        on_candidates: CandidateEvents,
+        on_script_window: ScriptWindowEvents,
+    ) -> Result<Self> {
         // 用 Option<u32> 而非 Result 回报，免得 windows Error 跨线程。
         let (ready_tx, ready_rx) = mpsc::channel::<Option<u32>>();
         let (command_tx, command_rx) = mpsc::channel::<UiCommand>();
@@ -124,6 +131,7 @@ impl UiHandle {
                     &ready_tx,
                     on_status,
                     on_candidates,
+                    on_script_window,
                     window_viewport,
                 )
             })
@@ -177,6 +185,13 @@ impl CandidateSink for UiHandle {
     /// 换「辅助窗口」的内容（键位映射参考的键盘版面）。
     fn set_auxiliary(&self, layout: KeyMapLayout) {
         self.post(UiCommand::AuxiliaryKeyMap(layout));
+    }
+}
+
+impl ScriptWindowSink for UiHandle {
+    /// 脚本窗口的操作（建 / 换内容 / 显示 / 收起 / 关）：投给 UI 线程按顺序执行。
+    fn script_window(&self, request: cloudime_script::WindowRequest) {
+        self.post(UiCommand::ScriptWindow(Box::new(request)));
     }
 }
 
@@ -261,6 +276,7 @@ fn run(
     ready: &Sender<Option<u32>>,
     on_status: StatusEvents,
     on_candidates: CandidateEvents,
+    on_script_window: ScriptWindowEvents,
     viewport: Arc<Viewport>,
 ) {
     // 按物理像素定位，与应用报来的组句屏幕矩形对齐；已设过会失败，忽略。
@@ -293,6 +309,9 @@ fn run(
             None
         }
     };
+    // 脚本建的窗口（`cloudime.window.*`）：与其它窗口共用同一个渲染器，鼠标事件经 `on_script_window`
+    // 送回工人线程。
+    let mut script_windows = ScriptWindows::new(painter.clone(), on_script_window);
     if ready.send(Some(thread_id)).is_err() {
         return;
     }
@@ -305,7 +324,14 @@ fn run(
         if msg.message == WM_WAKE {
             // 一次唤醒排空整个队列，保住 Hide→Show 的先后。
             while let Ok(command) = commands.try_recv() {
-                apply(&window, status.as_ref(), tip.as_ref(), &painter, command);
+                apply(
+                    &window,
+                    status.as_ref(),
+                    tip.as_ref(),
+                    &painter,
+                    &mut script_windows,
+                    command,
+                );
             }
             continue;
         }
@@ -327,6 +353,7 @@ fn apply(
     status: Option<&StatusBar>,
     tip: Option<&StatusTip>,
     painter: &SharedPainter,
+    script_windows: &mut ScriptWindows,
     command: UiCommand,
 ) {
     match command {
@@ -379,6 +406,7 @@ fn apply(
             window.configure(&settings);
             Painter::configure(painter, &settings);
         }
+        UiCommand::ScriptWindow(request) => script_windows.apply(*request),
     }
 }
 

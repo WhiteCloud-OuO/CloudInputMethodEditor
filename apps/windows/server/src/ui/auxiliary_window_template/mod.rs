@@ -28,13 +28,18 @@
 //! 同时所有者那侧让位（见 [`super::independent_window_template`]）。
 
 use std::cell::{Cell, RefCell};
+use std::collections::HashMap;
+use std::rc::{Rc, Weak};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
+use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE,
-    SW_HIDE, SW_SHOWNA, ShowWindow, WM_MOUSEACTIVATE, WM_NCHITTEST, WNDCLASSEXW, WS_EX_LAYERED,
-    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    SW_HIDE, SW_SHOWNA, ShowWindow, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCHITTEST,
+    WM_RBUTTONUP, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
+    WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -49,6 +54,13 @@ use super::window_class::WindowClass;
 
 const CLASS_NAME: PCWSTR = w!("CloudIMEAuxiliaryWindow");
 static CLASS: WindowClass = WindowClass::new();
+
+thread_local! {
+    /// 本线程建出来的辅助窗口面板（HWND → 模板）：窗口过程收鼠标事件时按它找回 Rust 状态。
+    /// 存 `Weak`：不替模板续命，`Drop` 之后自然没了。
+    static REGISTRY: RefCell<HashMap<isize, Weak<AuxiliaryWindowTemplate>>> =
+        RefCell::new(HashMap::new());
+}
 
 /// 与候选窗口之间的默认间隙（**逻辑像素**，按 DPI 折成物理像素）。
 pub(super) const DEFAULT_GAP: i32 = 16;
@@ -72,6 +84,39 @@ pub(super) struct AuxiliaryWindowSpec {
     pub gap: Option<i32>,
 }
 
+/// 面板里画什么。
+enum Content {
+    /// 空面板：主题背景 + 圆角 + 阴影，尺寸按宿主形状 / 用户设的属性算。
+    Empty,
+
+    /// 键位映射参考（候选窗口的资产）：格子边长按目标高度反推。
+    KeyMap(input_schemes::KeyMapLayout),
+
+    /// 脚本给的一份内容（`cloudime.window.create_auxiliary` + `set_content`）。
+    Document(cloudime_render::Document),
+}
+
+/// 面板上的鼠标动作（键位映射参考不接鼠标；脚本辅助窗口接）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(super) enum PanelAction {
+    Click,
+    RightClick,
+    Hover,
+    Leave,
+}
+
+/// 一次面板鼠标事件：坐标是**内容区点**；`element` 是命中的元素（1 起，`None` = 没命中）。
+#[derive(Debug, Clone, Copy)]
+pub(super) struct PanelEvent {
+    pub action: PanelAction,
+    pub x: f32,
+    pub y: f32,
+    pub element: Option<usize>,
+}
+
+/// 面板鼠标事件的出口：脚本辅助窗口用它把点击 / 悬停送回工人线程。
+pub(super) type PanelEvents = Box<dyn Fn(PanelEvent) + Send>;
+
 /// 窗口模板创建的那个窗口；不显示时只是藏在层里。
 pub(super) struct AuxiliaryWindowTemplate {
     hwnd: HWND,
@@ -91,13 +136,34 @@ pub(super) struct AuxiliaryWindowTemplate {
     /// 用户设过的三个属性；`None` 的项现算默认。
     spec: Cell<AuxiliaryWindowSpec>,
 
-    /// 面板里要画的键位映射参考版面（平台那边按当前方案准备）；空版面 = 一块空面板。
-    key_map: RefCell<input_schemes::KeyMapLayout>,
+    /// 面板里画什么。
+    content: RefCell<Content>,
 
-    /// 这次显示摆在哪（内容左上角 + 内容尺寸）；`None` = 没显示。
+    /// 鼠标事件出口；`None` = 不接鼠标（键位映射参考）。
+    events: RefCell<Option<PanelEvents>>,
+
+    /// 最近一帧每个元素的命中区域（内容区坐标，点）：脚本辅助窗口的鼠标事件用。
+    hits: RefCell<Vec<Option<cloudime_render::HitRect>>>,
+
+    /// 鼠标正停在哪个元素上（1 起；`None` = 没停在任何元素上）：悬停事件只在换元素时派。
+    hover: Cell<Option<usize>>,
+
+    /// 最后一次收到的客户区坐标：离开窗口时用它报位置。
+    last: Cell<(i32, i32)>,
+
+    /// 最近一帧的渲染倍数（点 → 像素）。
+    scale: Cell<f32>,
+
+    /// 最近一帧位图四周的阴影留白（像素）。
+    margin: Cell<i32>,
+
+    /// 要不要阴影（脚本可以关掉；键位映射参考 / 空面板按缺省开）。
+    shadow: Cell<bool>,
+
+    /// 这次显示摆在哪（内容左上角 + 内容尺寸；物理像素）；`None` = 没显示。
     placed: Cell<Option<(i32, i32, i32, i32)>>,
 
-    /// 版面版本：`set_key_map` 每换一次 +1（判断要不要重画）。
+    /// 版面版本：`set_key_map` / `set_document` 每换一次 +1（判断要不要重画）。
     revision: Cell<u64>,
 
     /// 上次真画出来的是哪一幅（位置 / 尺寸 / 版面版本 / 渲染器代号）：一样就不再重画。
@@ -147,26 +213,103 @@ impl AuxiliaryWindowTemplate {
             painter,
             dpi: Cell::new(unsafe { GetDpiForSystem() }.max(96)),
             spec: Cell::new(AuxiliaryWindowSpec::default()),
-            key_map: RefCell::new(input_schemes::KeyMapLayout::default()),
+            content: RefCell::new(Content::Empty),
+            events: RefCell::new(None),
+            hits: RefCell::new(Vec::new()),
+            hover: Cell::new(None),
+            last: Cell::new((0, 0)),
+            scale: Cell::new(1.0),
+            margin: Cell::new(0),
+            shadow: Cell::new(true),
             placed: Cell::new(None),
             revision: Cell::new(0),
             painted: Cell::new(None),
         })
     }
 
+    /// 把自己登记进本线程的表，窗口过程按 HWND 找回它（`Weak`：不续命，`Drop` 之后自然没了）。
+    pub(super) fn attach(self: &Rc<Self>) {
+        REGISTRY.with(|map| {
+            map.borrow_mut()
+                .insert(self.hwnd.0 as isize, Rc::downgrade(self));
+        });
+    }
+
     /// 设三个属性（物理像素）；`None` 的项回到默认算法。
-    ///
-    /// 现在还没有谁来调它 —— 这是模板留给下一步的口子（将来由配置 / 脚本喂）。
-    #[allow(dead_code)]
     pub(super) fn set_spec(&self, spec: AuxiliaryWindowSpec) {
         self.spec.set(spec);
     }
 
     /// 换面板里要画的键位映射参考版面（当前方案变了一整份重送）；空版面就是一块空面板。
     pub(super) fn set_key_map(&self, layout: input_schemes::KeyMapLayout) {
-        *self.key_map.borrow_mut() = layout;
+        *self.content.borrow_mut() = Content::KeyMap(layout);
         // 版面变了：下次 `show` 一定重画
         self.revision.set(self.revision.get() + 1);
+    }
+
+    /// 换面板里要画的脚本内容（`cloudime.window.create_auxiliary` + `set_content`）。
+    pub(super) fn set_document(&self, document: cloudime_render::Document) {
+        *self.content.borrow_mut() = Content::Document(document);
+        self.revision.set(self.revision.get() + 1);
+    }
+
+    /// 要不要阴影（脚本 `shadow = false` 时关掉）。
+    pub(super) fn set_shadow(&self, shadow: bool) {
+        self.shadow.set(shadow);
+        self.revision.set(self.revision.get() + 1);
+    }
+
+    /// 装鼠标事件出口（脚本辅助窗口用；键位映射参考不装，鼠标一律穿透）。
+    pub(super) fn set_events(&self, events: PanelEvents) {
+        *self.events.borrow_mut() = Some(events);
+    }
+
+    /// 客户区坐标 → 内容区坐标（点）+ 命中的元素（1 起）。
+    fn hit_at(&self, client_x: i32, client_y: i32) -> (f32, f32, Option<usize>) {
+        let scale = self.scale.get().max(0.01);
+        let margin = self.margin.get();
+        let x = (client_x + margin) as f32 / scale;
+        let y = (client_y + margin) as f32 / scale;
+        let element = self
+            .hits
+            .borrow()
+            .iter()
+            .enumerate()
+            .rev()
+            .find_map(|(index, hit)| hit.filter(|hit| hit.contains(x, y)).map(|_| index + 1));
+        (x, y, element)
+    }
+
+    /// 把一次鼠标动作交给出口（没装出口就什么也不做）。
+    fn emit(&self, action: PanelAction, client_x: i32, client_y: i32) {
+        let (x, y, element) = self.hit_at(client_x, client_y);
+        if let Some(events) = self.events.borrow().as_ref() {
+            events(PanelEvent {
+                action,
+                x,
+                y,
+                element,
+            });
+        }
+    }
+
+    /// 鼠标移动：只有停到**另一个元素**上才派一次 `hover`（同一元素里挪不重复派）。
+    fn emit_move(&self, client_x: i32, client_y: i32) {
+        self.last.set((client_x, client_y));
+        let (_, _, element) = self.hit_at(client_x, client_y);
+        if self.hover.replace(element) == element {
+            return;
+        }
+        if element.is_some() {
+            self.emit(PanelAction::Hover, client_x, client_y);
+        }
+    }
+
+    /// 鼠标离开窗口：派一次 `leave`（带着离开前的位置）。
+    fn emit_leave(&self) {
+        self.hover.set(None);
+        let (x, y) = self.last.get();
+        self.emit(PanelAction::Leave, x, y);
     }
 
     /// 创建时声明的 `able_to_get_focus`。
@@ -207,10 +350,10 @@ impl AuxiliaryWindowTemplate {
             .max(1);
         self.dpi.set(dpi);
         let spec = self.spec.get();
-        let render_layout = to_render_layout(&self.key_map.borrow());
         let target = key_map_target(candidate, layout, dpi);
-        // 出图：有版面就画键位映射参考，没有就画一块空面板
-        let (rendered, generation) = {
+        // 出图：键位映射参考 / 脚本内容 / 空面板，三选一
+        let (rendered, hits, generation) = {
+            let content = self.content.borrow();
             let mut painter = self.painter.borrow_mut();
             let Some(painter) = painter.as_mut() else {
                 tracing::warn!("窗口模板：渲染器没起来，不显示");
@@ -218,19 +361,34 @@ impl AuxiliaryWindowTemplate {
                 return;
             };
             let generation = painter.generation();
-            let rendered = if render_layout.rows.is_empty() {
-                let (default_width, default_height) = default_size(painter, layout, dpi);
-                let content = (
-                    spec.width.unwrap_or(default_width).max(1),
-                    spec.height.unwrap_or(default_height).max(1),
-                );
-                painter.render_panel(content, dpi)
-            } else {
-                let nine_rows = painter.key_map_height_nine(dpi);
-                let cell = key_map_cell(key_map_height(target, nine_rows, dpi));
-                painter.render_key_map(&render_layout, cell, dpi)
-            };
-            (rendered, generation)
+            match &*content {
+                Content::KeyMap(layout_map) if !layout_map.rows.is_empty() => {
+                    let render_layout = to_render_layout(layout_map);
+                    let nine_rows = painter.key_map_height_nine(dpi);
+                    let cell = key_map_cell(key_map_height(target, nine_rows, dpi));
+                    (
+                        painter.render_key_map(&render_layout, cell, dpi),
+                        Vec::new(),
+                        generation,
+                    )
+                }
+                Content::Document(document) => {
+                    let rendered = painter.render_document(document, dpi, self.shadow.get());
+                    let hits = rendered
+                        .as_ref()
+                        .map(|rendered| rendered.hits.clone())
+                        .unwrap_or_default();
+                    (rendered.map(|rendered| rendered.rendered), hits, generation)
+                }
+                _ => {
+                    let (default_width, default_height) = default_size(painter, layout, dpi);
+                    let content = (
+                        spec.width.unwrap_or(default_width).max(1),
+                        spec.height.unwrap_or(default_height).max(1),
+                    );
+                    (painter.render_panel(content, dpi), Vec::new(), generation)
+                }
+            }
         };
         let Some(rendered) = rendered else {
             tracing::warn!("窗口模板：渲染器画不出来，不显示");
@@ -258,6 +416,9 @@ impl AuxiliaryWindowTemplate {
             self.hide();
             return;
         }
+        *self.hits.borrow_mut() = hits;
+        self.scale.set(rendered.scale.max(0.01));
+        self.margin.set(margin);
         let _ = unsafe { ShowWindow(self.hwnd, SW_SHOWNA) };
         self.painted.set(Some(signature));
         // 从「没显示」到「显示」记一条：排查「按了键没看见」时看它就知道摆到哪去了。
@@ -280,6 +441,7 @@ impl AuxiliaryWindowTemplate {
     pub(super) fn hide(&self) {
         // 收起来之后窗口内容就不作数了：下次显示重画
         self.painted.set(None);
+        self.hits.borrow_mut().clear();
         if self.placed.replace(None).is_some() {
             let _ = unsafe { ShowWindow(self.hwnd, SW_HIDE) };
             tracing::info!("窗口模板已收起");
@@ -309,6 +471,9 @@ fn default_size(painter: &mut Painter, layout: LayoutMode, dpi: u32) -> (i32, i3
 
 impl Drop for AuxiliaryWindowTemplate {
     fn drop(&mut self) {
+        REGISTRY.with(|map| {
+            map.borrow_mut().remove(&(self.hwnd.0 as isize));
+        });
         let _ = unsafe { DestroyWindow(self.hwnd) };
     }
 }
@@ -421,7 +586,60 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             })
         }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        // 装了事件出口（脚本辅助窗口）才把鼠标动作送出去；键位映射参考没装，这些消息就当没看见。
+        WM_MOUSEMOVE => {
+            track_leave(hwnd);
+            with_template(hwnd, |template| {
+                template.emit_move(client_x(lparam), client_y(lparam));
+            });
+            LRESULT(0)
+        }
+        WM_MOUSELEAVE => {
+            with_template(hwnd, AuxiliaryWindowTemplate::emit_leave);
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            with_template(hwnd, |template| {
+                template.emit(PanelAction::Click, client_x(lparam), client_y(lparam));
+            });
+            LRESULT(0)
+        }
+        WM_RBUTTONUP => {
+            with_template(hwnd, |template| {
+                template.emit(PanelAction::RightClick, client_x(lparam), client_y(lparam));
+            });
+            LRESULT(0)
+        }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// 客户区坐标：`lparam` 低 16 位是 x、高 16 位是 y（带符号）。
+fn client_x(lparam: LPARAM) -> i32 {
+    (lparam.0 & 0xFFFF) as u16 as i16 as i32
+}
+
+fn client_y(lparam: LPARAM) -> i32 {
+    ((lparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32
+}
+
+/// 让窗口在鼠标离开时收到一条 `WM_MOUSELEAVE`（每次移动调一次，系统自己只报一次）。
+fn track_leave(hwnd: HWND) {
+    let mut event = TRACKMOUSEEVENT {
+        cbSize: core::mem::size_of::<TRACKMOUSEEVENT>() as u32,
+        dwFlags: TME_LEAVE,
+        hwndTrack: hwnd,
+        dwHoverTime: 0,
+    };
+    let _ = unsafe { TrackMouseEvent(&mut event) };
+}
+
+/// 按 HWND 找回本线程的模板（`Weak` 升级不上来就什么也不做）。
+fn with_template(hwnd: HWND, act: impl FnOnce(&AuxiliaryWindowTemplate)) {
+    let template =
+        REGISTRY.with(|map| map.borrow().get(&(hwnd.0 as isize)).and_then(Weak::upgrade));
+    if let Some(template) = template {
+        act(&template);
     }
 }
 

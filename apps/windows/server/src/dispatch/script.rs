@@ -51,6 +51,21 @@ use std::collections::HashMap;
 use super::Router;
 use super::composed::Composed;
 
+/// 脚本窗口的输出端（UI 线程）：Router 把 `cloudime.window.*` 产出的请求交出去，窗口在那边建。
+///
+/// 没有 UI 的测试 / UI 没起来时用 [`NoopScriptWindowSink`]：请求直接丢掉，输入照常。
+pub trait ScriptWindowSink: Send {
+    /// 执行一次脚本窗口操作（按脚本产出的顺序）。
+    fn script_window(&self, request: cloudime_script::WindowRequest);
+}
+
+/// 什么都不做的窗口输出端（测试 / UI 没起来）。
+pub struct NoopScriptWindowSink;
+
+impl ScriptWindowSink for NoopScriptWindowSink {
+    fn script_window(&self, _request: cloudime_script::WindowRequest) {}
+}
+
 /// 脚本对**这一拍**的要求：几张开给的表合并出来的结果。
 #[derive(Debug, Default)]
 pub(super) struct ScriptActions {
@@ -334,7 +349,7 @@ fn wrong_type(key: &str, value: &mlua::Value) {
 
 impl Router {
     /// 全部脚本加载完，可以开始派发事件了。没人关心 `startup` 就什么都不做。
-    pub(super) fn dispatch_startup_to_scripts(&self) {
+    pub(super) fn dispatch_startup_to_scripts(&mut self) {
         if !self.scripts.has_handlers("startup") {
             return;
         }
@@ -348,13 +363,14 @@ impl Router {
         // `startup` 的返回值还没有约定，读了也没处用，丢掉；它早于任何应用，不按应用过滤。
         self.scripts.set_viewport(self.candidates.viewport());
         self.scripts.dispatch("startup", payload, None);
+        self.flush_script_windows();
     }
 
     /// 把一次按键派给脚本，合并出这一拍要改的东西。
     ///
     /// **没有任何脚本关心 `key` 时直接空手而归**（一次查表就返回）：没脚本就走老路，
     /// 按键路径上不该多花一点（连载荷都不拼）。
-    pub(super) fn script_actions(&self, event: &KeyEvent) -> ScriptActions {
+    pub(super) fn script_actions(&mut self, event: &KeyEvent) -> ScriptActions {
         if !self.scripts.has_handlers("key") {
             return ScriptActions::default();
         }
@@ -372,7 +388,10 @@ impl Router {
                 return ScriptActions::default();
             }
         };
-        self.with_script_actions("key", payload, self.focused_app())
+        let actions = self.with_script_actions("key", payload, self.focused_app());
+        // 脚本在 key 处理函数里建 / 改 / 收窗口：这一拍结束前转给 UI 线程
+        self.flush_script_windows();
+        actions
     }
 
     /// 引擎排完候选之后把这一屏交给脚本：`order` 改顺序、`display` 改显示。
@@ -398,7 +417,7 @@ impl Router {
             }
         };
         let actions = self.with_script_actions("candidates", payload, self.focused_app());
-        if actions.is_empty() {
+        if actions.is_empty() && !self.scripts.has_window_requests() {
             return;
         }
         // 这一拍也认 `notice` / `adjust`（HTTP 回调那一拍同理）：`adjust` 影响下一次查询，
@@ -413,6 +432,7 @@ impl Router {
         self.apply_script_theme(ThemeCommand::from_request(
             self.scripts.take_theme_request(),
         ));
+        self.flush_script_windows();
     }
 
     /// 两个「非按键」时机（`candidates` 事件、HTTP 回调）共用的那几项：提示与加权 / 降权。
@@ -656,7 +676,12 @@ impl Router {
         let redraw = self.scripts.take_redraw_request();
         let size = self.scripts.take_size_request();
         let theme = ThemeCommand::from_request(self.scripts.take_theme_request());
-        if responses.is_empty() && !redraw && size.is_empty() && theme.is_none() {
+        if responses.is_empty()
+            && !redraw
+            && size.is_empty()
+            && theme.is_none()
+            && !self.scripts.has_window_requests()
+        {
             return;
         }
         let mut actions = ScriptActions::default();
@@ -673,6 +698,7 @@ impl Router {
         self.apply_script_theme(theme);
         // 换主题 / 改提示 / 在线那一行要立刻看得见
         self.reconcile_candidates(&self.self_drawn_frame());
+        self.flush_script_windows();
     }
 
     /// 收脚本的 HTTP 结果：调回调，把回调要改的（候选 / 提示 / 加权）落到当前这一屏上再重画。
@@ -701,7 +727,12 @@ impl Router {
         let redraw = self.scripts.take_redraw_request();
         let size = self.scripts.take_size_request();
         let theme = ThemeCommand::from_request(self.scripts.take_theme_request());
-        if responses.is_empty() && !redraw && size.is_empty() && theme.is_none() {
+        if responses.is_empty()
+            && !redraw
+            && size.is_empty()
+            && theme.is_none()
+            && !self.scripts.has_window_requests()
+        {
             return;
         }
         let mut actions = ScriptActions::default();
@@ -727,6 +758,43 @@ impl Router {
         }
         // 重画：回调改的顺序 / 显示 / 提示要立刻看得见
         self.reconcile_candidates(&self.self_drawn_frame());
+        self.flush_script_windows();
+    }
+
+    /// UI 线程发来的一次脚本窗口鼠标事件：派给 `window` 处理函数。
+    ///
+    /// 与 `startup` / HTTP 回调一样，**不受清单 `trigger_condition` 的限制**（窗口是脚本自己建的，
+    /// 事件当然归它）。处理函数里通常调 `win:set_content{…}`，攒下的操作由 [`Self::flush_script_windows`]
+    /// 在同一拍转回 UI 线程。
+    pub fn handle_script_window_event(&mut self, event: cloudime_script::ScriptWindowEvent) {
+        if !self.scripts.has_handlers("window") {
+            return;
+        }
+        let payload = match cloudime_script::window_event_payload(self.scripts.lua(), &event) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::warn!(%error, "建 `window` 事件载荷失败");
+                return;
+            }
+        };
+        let actions = self.with_script_actions("window", payload, self.focused_app());
+        // 没有按键的那一拍：`passthrough` / `commit` 由 `apply_common_actions` 记日志忽略
+        self.apply_common_actions(&actions);
+        self.flush_script_windows();
+    }
+
+    /// 把脚本这一拍攒下的窗口操作按顺序转给 UI 线程（`cloudime.window.*`）。
+    ///
+    /// 脚本在工人线程产出请求、窗口在 UI 线程上建：这条队伍是单向的，不会等回话。
+    /// 输出端还没装（`Router::new` 里的 `startup` 早于 `set_script_window_sink`）就先攒着。
+    fn flush_script_windows(&mut self) {
+        for request in self.scripts.take_window_requests() {
+            if self.script_windows_ready {
+                self.script_windows.script_window(request);
+            } else {
+                self.pending_script_windows.push(request);
+            }
+        }
     }
 
     /// 现在这一屏候选在脚本那边的样子（没在组句 / 一个候选都没有时 `None`）。

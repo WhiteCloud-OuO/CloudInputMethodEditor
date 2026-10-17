@@ -330,10 +330,21 @@ fn serve(mut router: Router) {
     let on_candidates = Box::new(move |event| {
         let _ = candidate_events.send(Work::Candidate(event));
     });
-    match UiHandle::spawn(on_status, on_candidates) {
+    // 脚本窗口的鼠标事件：UI 线程（渲染窗口那条线程）→ 工人线程（派给脚本的 `window` 事件）。
+    // 多个脚本窗口共享同一份出口，所以用 `Arc`；`Sender` 不是 `Sync`，拿锁包一层。
+    let script_window_events = {
+        let sender = std::sync::Mutex::new(work_tx.clone());
+        std::sync::Arc::new(move |event| {
+            if let Ok(sender) = sender.lock() {
+                let _ = sender.send(Work::ScriptWindow(event));
+            }
+        })
+    };
+    match UiHandle::spawn(on_status, on_candidates, script_window_events) {
         Ok(ui) => {
             router.set_candidate_sink(Box::new(ui.clone()));
-            router.set_status_sink(Box::new(ui));
+            router.set_status_sink(Box::new(ui.clone()));
+            router.set_script_window_sink(Box::new(ui));
         }
         Err(error) => tracing::error!(%error, "UI 线程启动失败，将不显示候选框 / 状态条"),
     }

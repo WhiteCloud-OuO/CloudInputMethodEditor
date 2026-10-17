@@ -80,6 +80,7 @@ pub fn serve_pipe(
             }
             Ok(Work::Status(event)) => router.handle_status_event(event),
             Ok(Work::Candidate(event)) => router.handle_candidate_event(event),
+            Ok(Work::ScriptWindow(event)) => router.handle_script_window_event(event),
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => break,
         }

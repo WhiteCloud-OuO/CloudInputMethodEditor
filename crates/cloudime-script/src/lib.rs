@@ -11,11 +11,16 @@
 
 mod http;
 mod runtime;
+mod window;
 
 pub use mlua;
 pub use runtime::{
     AppHook, ClipboardGetHook, ClipboardSetHook, ConfigHook, DIRECTORY, MeasureFont, Runtime,
     SizeRequest, TEMPLATE_FILE, TextHook, TextRange, TriggerCondition,
+};
+pub use window::{
+    AuxiliarySpec, Request as WindowRequest, ScriptWindowEvent, WindowAction, WindowId, WindowSpec,
+    event_payload as window_event_payload,
 };
 
 #[cfg(test)]

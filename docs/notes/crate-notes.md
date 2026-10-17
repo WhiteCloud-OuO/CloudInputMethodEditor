@@ -497,6 +497,15 @@ LuaJIT 源码随 crate 编译进二进制，装机包不依赖机器上装的 Lu
 `wants_surrounding_text()` 从「有没有 `key` 脚本」推出真 —— Server 把它们折进 `InputSettings.script_keys` /
 `script_wants_text`（见 apps/windows server 一节的触发条件）。
 
+**脚本窗口**（`window.rs`，`cloudime.window.*`）：脚本能建独立窗口 / 辅助窗口（规则见 `docs/design/script.md`
+「脚本窗口」）。本 crate 只把 Lua 的参数读成**纯数据**：`WindowSpec` / `AuxiliarySpec` + `cloudime_render::Document`
+（元素表 —— 2026-10-17 起本 crate 依赖 `cloudime-render`；这些值都是 `Send` 的，能经命令通道交给 UI 线程），
+操作排进 `Runtime::window_requests`（`Request::Create` / `CreateAuxiliary` / `SetContent` / `Show` / `Hide` /
+`Close` / `Focus`），Server 每次派发后 `take_window_requests` 取走；`has_window_requests` 给「响应为空也要
+继续」的那两拍用。窗口句柄是普通表 + 闭包（`set_content` / `show` / `hide` / `close` / `focus`），`id` 由
+`window_seq` 单调递增；`window` 事件的载荷在 `event_payload` 里拼。坐标一律**点**；限额（512 元素 /
+4096 字符 / 4096² 图 / 8–2048 点）在解析时查，违规当场报 Lua 错（这一次调用中止，窗口保持原样）。
+
 **HTTP**（`http.rs`）：`cloudime.http_get(url, timeout_ms, callback)` 与
 `cloudime.http_post(url, body, { timeout_ms, headers }, callback)` 共用同一条管线
 （`Pending { url, deadline, callback, manifest }` + 一个 `mpsc` 回信通道）。请求在**一次性线程**里跑
@@ -911,33 +920,52 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `sync_input()` 上：`ui::set_mouse_transparent` + 命中测试），所以**每块独立窗口都有**这个特性
   （见下「辅助窗口」那条）。
 - **辅助窗口模板**（`server/src/ui/auxiliary_window_template/`，`AuxiliaryWindowTemplate`）：给资产用的那块**分层面板** ——
-  主题背景 + 圆角 + 阴影都出在一张预乘 RGBA 位图里（`Painter::render_key_map` / `render_panel`），
-  `ui::layered::present` 换成 BGRA 后 `UpdateLayeredWindow` 一次贴上，窗口过程**不处理 `WM_PAINT`**。
-  三个属性 **宽 / 高 / 间隙**（`AuxiliaryWindowSpec`，物理像素）由 `set_spec` 设；没设过时：有内容（键位映射参考）
-  就按版面自己定尺寸（高度按 `key_map_height`：竖排取宿主现在的内容高度、横排取「装 9 个候选项」那档，两者都不低于
-  316 物理像素），没内容才按宿主形状算默认；`set_key_map` 换版面（版本 +1），`show` 按「位置 / 尺寸 / 版面版本 /
-  渲染器代号」判重，没变就不重贴。**焦点**：`new(painter, able_to_get_focus)`、`set_focused` 开关鼠标穿透
-  （`WS_EX_TRANSPARENT`，命中测试读同一个位），没声明过的不接输入（记一条日志）。
+  主题背景 + 圆角 + 阴影都出在一张预乘 RGBA 位图里，`ui::layered::present` 换成 BGRA 后
+  `UpdateLayeredWindow` 一次贴上，窗口过程**不处理 `WM_PAINT`**。
+  画什么由 `Content` 三选一：`Empty`（空面板）/ `KeyMap`（键位映射参考，`set_key_map`）/ `Document`
+  （脚本内容，`set_document`，出图走 `Painter::render_document`，同时把每个元素的命中框（点）与
+  `scale` / 阴影留白记在模板里给鼠标事件用）。三个属性 **宽 / 高 / 间隙**（`AuxiliaryWindowSpec`，物理像素）
+  由 `set_spec` 设；没设过时：键位映射参考按版面自己定尺寸（高度按 `key_map_height`：竖排取宿主现在的内容高度、
+  横排取「装 9 个候选项」那档，两者都不低于 316 物理像素），文档内容按 `Document` 自己的尺寸，空面板才按宿主形状算默认；
+  `set_shadow` 开关阴影，`show` 按「位置 / 尺寸 / 版面版本 / 渲染器代号」判重，没变就不重贴。
+  **焦点**：`new(painter, able_to_get_focus)`、`set_focused` 开关鼠标穿透（`WS_EX_TRANSPARENT`，命中测试读同一个位），
+  没声明过的不接输入（记一条日志）。**鼠标**：`set_events` 装一个出口（脚本辅助窗口用），窗口过程把
+  `WM_MOUSEMOVE` / `WM_MOUSELEAVE` / 左右键抬起变成 `PanelEvent`（内容区点坐标 + 1 起的命中元素；悬停只在换元素时派）；
+  模板用 `thread_local` 的 `REGISTRY`（HWND → `Weak<AuxiliaryWindowTemplate>`，`attach` 登记）在窗口过程里找回自己。
 
 **窗口的两类**（`server/src/ui/`）—— **规则见 [`docs/design/windows.md`](../design/windows.md)**（两类窗口、
 所有者唯一且不转移、桥接 bridging、**焦点 focus**、资产克隆与资产窃取、**渲染 rendering**）。
 这里只记实现落点：
 
 - **独立窗口**（`independent window`）：候选窗口（`candidates/`）、悬浮工具栏（`status/`）、状态切换提示
-  （`status_tip/`）—— 各有一块自己的分层窗与**自己的生命周期**；创建并显示后**总是具备焦点**。焦点不在
-  自己身上时整块让开：自己那块窗鼠标穿透（`ui::set_mouse_transparent` 动 `WS_EX_TRANSPARENT` 一个位），
-  候选窗口的窗口过程在 `WM_NCHITTEST` 里另按 `CandidateWindow::focused()`（= 模板的 `focused()`）回
-  `HTTRANSPARENT`（点不着、滚轮也不是它的），缺省照常 `HTCLIENT`。宿主收起资产走 `template.hide_assets()`
-  （先让资产表自动归还焦点，再把自己那块窗的鼠标开关回位）。
+  （`status_tip/`）、脚本窗口（`script_window/`）—— 各有一块自己的分层窗与**自己的生命周期**；创建并显示后
+  **总是具备焦点**。焦点不在自己身上时整块让开：自己那块窗鼠标穿透（`ui::set_mouse_transparent` 动
+  `WS_EX_TRANSPARENT` 一个位），候选窗口的窗口过程在 `WM_NCHITTEST` 里另按 `CandidateWindow::focused()`
+  （= 模板的 `focused()`）回 `HTTRANSPARENT`（点不着、滚轮也不是它的），缺省照常 `HTCLIENT`。宿主收起资产走
+  `template.hide_assets()`（先让资产表自动归还焦点，再把自己那块窗的鼠标开关回位）。
 - **辅助窗口**（`auxiliary window`）：挂在某块独立窗口上的辅助信息 / 提示窗口，是宿主的**资产**；
   这一层在 `auxiliary/`（`Asset` 资产 trait、`Assets` 宿主名下的资产表、`Bridge` 桥、`Host` 宿主形状、
   `Focus` 焦点在谁身上、`DesignatedAssetToGetFocus` 指定资产获取焦点的 trait）。
   宿主先建好自己那块窗再 `Assets::add`；`Drop` 里先 `Assets::retire` 再 `DestroyWindow` 自己
   （这段顺序由独立窗口模板保证）；显示 / 隐藏由宿主驱动（`Asset::sync` 里经 `Bridge` 向宿主要几何与开关）。
+  `Assets::retire_named(name)` 是脚本 `close` 一件资产用的「放掉这一件」：不在焦点上就只删掉，
+  焦点在它身上就归还给所有者、在后面的姊妹资产身上就把下标前移（`ScriptWindow::retire_asset` 之后补一次
+  `focusing()` 让宿主的鼠标开关跟上）。
+- **脚本窗口**（`script_window/`）：Lua `cloudime.window.*` 建出来的两类窗口。`ScriptWindows` 是 UI 线程上的
+  管理器（`windows` / `auxiliaries` 两张表 + 共用 `SharedPainter` + 一个 `Arc<dyn Fn(ScriptWindowEvent)>` 出口）；
+  `ScriptWindow` 用独立窗口模板 + `Document`（`Painter::render_document` 出图）、`ScriptAuxiliary` 用辅助窗口
+  模板并作为宿主资产（`AssetHandle` 包一层 `Rc`，管理器和资产表各持一份）。脚本的请求由 Server 在每次派发后
+  经 `UiCommand::ScriptWindow` 送上来（`Router::flush_script_windows`，`startup` 早于输出端就存在
+  `pending_script_windows` 里补发）；鼠标事件反向走 `ScriptWindowEvents` → `Work::ScriptWindow` →
+  `Router::handle_script_window_event` 派 `window` 事件（不受 `trigger_condition` 限制）。窗口过程用
+  `thread_local` 的 `REGISTRY`（HWND → `Weak<ScriptWindow>`）找回状态；命中按元素外框、坐标从客户区减掉阴影留白
+  再除 `scale` 换成点；悬停只在换元素时派。`interactive` 映射到模板的 `transparent`，辅助窗口的
+  `interactive` 只是 `able_to_get_focus`，真要接鼠标得脚本 `aux:focus(true)` 走所有者指定。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——
-  `Assets::designate_focus(name)` 按它认目标、`Assets::index_of` 也是它。`Asset::able_to_get_focus`（缺省
+  `Assets::designate_focus(name)` 按它认目标、`Assets::index_of` 也是它；名字返回 `&str` 而不是
+  `&'static str`（脚本建的资产名字是运行期起的 `script-<id>`）。`Asset::able_to_get_focus`（缺省
   `false`）是**创建时**声明的「允许获取焦点」，没声明的 / 没这个名字的都返回 `false`；`return_focus_to_owner()`
   收回。换人时老的收 `unfocusing()`（**失焦**）、新的收 `focusing()`（**聚焦**），`move_focus` 里记一条
   `debug` 日志（`describe` 把持有者说成「所有者」或名字）—— 资产靠这两条通知开关自己的鼠标穿透（辅助窗口模板
@@ -946,9 +974,9 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   是把焦点交还给所有者。**自动归还**两条：`Assets::hide`（收起）与 `Assets::retire`（生命周期末），都是
   「先归还再收起 / 放掉」；`Assets::sync` 里有一句 `debug_assert` 复核「焦点只可能落在所有者、或一件声明过的
   资产上」。⚠️ 这是**逻辑焦点**，谁都不去抢系统的 `SetFocus`（窗口全是 `WS_EX_NOACTIVATE`，抢了会把用户正在
-  打字的应用弄丢）。第一轮只落机制：`Assets::designate_focus` / `Bridge::designate_focus` /
-  `Bridge::return_focus_to_owner` / `DesignatedAssetToGetFocus` 还没有生产调用方，照 `set_spec` 那套先挂
-  `#[allow(dead_code)]` 注明留给后续部分。
+  打字的应用弄丢）。生产调用方从 2026-10-17 起是脚本窗口（`aux:focus(true/false)` 经
+  `DesignatedAssetToGetFocus`）；`Bridge::designate_focus` / `Bridge::return_focus_to_owner` 仍留给「资产自己
+  要求转手」那类用法。
   **收资产不动焦点**：`Assets::add` 只往 `items` 里塞、不碰 `focus` —— 新来的哪怕声明了 `able_to_get_focus`
   也得所有者**指定**才拿得到；**资产克隆 / 窃取**（§5.1 / §5.2）来的就是这条路：特性跟原件一样（克隆件 /
   窃取件自带自己的 `able_to_get_focus`），焦点还留在所有者或姊妹资产身上。两边差别在原件：窃取时原件

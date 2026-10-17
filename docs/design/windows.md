@@ -13,8 +13,8 @@
 
 | 类 | 说明 | 现在的例子 |
 |---|---|---|
-| **独立窗口**（independent window） | 有自己那块窗，也有**自己的生命周期**（UI 线程建、按需显示 / 隐藏、随进程销毁） | 候选窗口、悬浮工具栏、状态切换提示 |
-| **辅助窗口**（auxiliary window） | 挂在某块独立窗口上的辅助信息 / 提示窗口；它是那块独立窗口的**资产**（asset） | 候选窗口的「键位映射参考」 |
+| **独立窗口**（independent window） | 有自己那块窗，也有**自己的生命周期**（UI 线程建、按需显示 / 隐藏、随进程销毁） | 候选窗口、悬浮工具栏、状态切换提示、脚本建的窗口（`cloudime.window.create`） |
+| **辅助窗口**（auxiliary window） | 挂在某块独立窗口上的辅助信息 / 提示窗口；它是那块独立窗口的**资产**（asset） | 候选窗口的「键位映射参考」，脚本建的辅助窗口（`cloudime.window.create_auxiliary`） |
 
 - 每个辅助窗口**有且只有一个所有者**（owner）—— 它的宿主独立窗口；
 - 资产挂在宿主名下的**资产表**里：宿主**先建好自己那块窗，再建资产**；宿主销毁**之前**先把资产放掉。
@@ -213,15 +213,25 @@ pub(super) trait Clonable: Asset {
   窗口过程的 `WM_NCHITTEST` 也按 `focused()` 回 `HTTRANSPARENT`。
   - **辅助窗口模板**（`ui/auxiliary_window_template/`）：资产用的那块**分层面板**（主题背景 + 圆角 + 阴影
     都出一张预乘 RGBA 位图里；宽 / 高 / 间隙三个属性，没设过按宿主形状算默认；`show(宿主内容区矩形, 排布方向)`
-    摆位 —— 宿主右边 / 下边放不下就换左边 / 上边）。出图 `Painter::render_key_map` / `render_panel`，
+    摆位 —— 宿主右边 / 下边放不下就换左边 / 上边）。画什么三选一：**空面板** / **键位映射参考** / **脚本文档**
+    （`Document`，`set_document`）；出图 `Painter::render_panel` / `render_key_map` / `render_document`，
     `layered::present` 一次贴上；窗口过程**不处理 `WM_PAINT`**。`show` 按「位置 / 尺寸 / 版面版本 / 渲染器
     代号」判重，没变就不重贴。**焦点**：`new` 收一个 `able_to_get_focus`，`set_focused` 开关鼠标穿透
-    （`WS_EX_TRANSPARENT` 与命中测试读同一个位，两边不会打架）。
-- **资产这层**（`ui/auxiliary/`）：`Asset`（资产：`name`、声明 `able_to_get_focus`、收 `focusing` / `unfocusing`）、  `Assets`（宿主名下的资产表 + 这一组的**焦点**；`add` 收资产时**不动焦点**，§4 规则 8）、`Bridge`（桥：
+    （`WS_EX_TRANSPARENT` 与命中测试读同一个位，两边不会打架）。**鼠标**：`set_events` 装一个出口，
+    点击 / 悬停 / 离开变成内容区坐标 + 命中元素（脚本辅助窗口用；键位映射参考不装，一律穿透）。
+- **资产这层**（`ui/auxiliary/`）：`Asset`（资产：`name`、声明 `able_to_get_focus`、收 `focusing` / `unfocusing`）、  `Assets`（宿主名下的资产表 + 这一组的**焦点**；`add` 收资产时**不动焦点**，§4 规则 8；`retire_named`
+  放掉指定的一件——脚本 `close` 用）、`Bridge`（桥：
   `designate_focus(name)` 是同一所有者的两件资产之间转手的路，`return_focus_to_owner()` 是把焦点交回去）、
   `Host`（宿主喂给资产的形状：内容区矩形 / 排布方向 / 是不是展开着）、`Focus`（焦点在谁身上，§4）、
   `DesignatedAssetToGetFocus`（指定资产获取焦点）。
-  - **画元素**（`cloudime-render`）：`elements`（六条元素 trait）、`render`（`Render`：一块离屏位图 + 共享的
-    字形管线；候选窗 / 状态条 / 状态提示 / 辅助窗口面板全走它）。
-- 现在只有一件资产：候选窗口的**键位映射参考**（`ui/auxiliary/key_map/`，名字 `key_map`）—— 它**没**声明
-  `able_to_get_focus`，所以眼下整组一直由候选窗口持有焦点。
+- **脚本窗口**（`ui/script_window/`，2026-10-17）：Lua（`cloudime.window.*`）建出来的两类窗口。管理器
+  `ScriptWindows` 拿脚本请求（`WindowRequest`，经 `UiCommand::ScriptWindow` 从工人线程过来）建 / 改 / 收；
+  `ScriptWindow` 用**独立窗口模板**、`ScriptAuxiliary` 用**辅助窗口模板**并作为宿主资产（`Assets::add`）。
+  内容是一份声明式 `Document`，经 `Painter::render_document` 一次出图；鼠标事件经 `ScriptWindowEvents` 送回
+  工人线程派 `window` 事件。规则（API、限额、事件载荷）在 `docs/design/script.md`「脚本窗口」。
+- **画元素**（`cloudime-render`）：`elements`（六条元素 trait）、`render`（`Render`：一块离屏位图 + 共享的
+  字形管线；候选窗 / 状态条 / 状态提示 / 辅助窗口面板 / 脚本窗口全走它）、`document`（脚本内容的元素表 +
+  `Renderer::render_document`：面板 + 元素 + 每个元素的命中框）。
+- 现在有两类资产：候选窗口的**键位映射参考**（`ui/auxiliary/key_map/`，名字 `key_map`；它**没**声明
+  `able_to_get_focus`，所以候选窗那一组一直由候选窗口持有焦点）与**脚本辅助窗口**（名字 `script-<id>`，
+  `interactive = true` 时声明可获取焦点、由脚本 `aux:focus(true)` 走所有者指定）。

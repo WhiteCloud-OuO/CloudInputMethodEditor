@@ -15,6 +15,7 @@
 
 mod canvas;
 mod color;
+mod document;
 mod elements;
 mod error;
 mod fonts;
@@ -30,6 +31,8 @@ mod theme;
 
 #[cfg(target_os = "windows")]
 pub use color::Color;
+/// 脚本窗口 / 面板的内容：**声明式**元素表（display list），由 [`Renderer::render_document`] 一次出图。
+pub use document::{Document, Element, FontSlot, HitRect, PathCommand};
 /// **能画的元素**的 traits：`text` / `svg` / `img` / `line` / `rect`（含圆角与圆）/ `path`。
 pub use elements::{ImageElement, LineElement, PathElement, RectElement, SvgElement, TextElement};
 pub use error::RenderError;
@@ -46,8 +49,8 @@ pub use layout::Layout;
 /// **渲染**：先画进一块内存区域，画完整块交给窗口，内容持久。
 pub use render::Render;
 pub use renderer::{
-    KeyCap, KeyMapLayout, Rendered, RenderedStatus, Renderer, StatusCell, draw_key_map,
-    key_map_cell, key_map_pixel_size, key_map_size,
+    KeyCap, KeyMapLayout, Rendered, RenderedDocument, RenderedStatus, Renderer, StatusCell,
+    draw_key_map, key_map_cell, key_map_pixel_size, key_map_size,
 };
 pub use shadow::Shadow;
 pub use text::{TextPainter, TextSize, TextStyle};

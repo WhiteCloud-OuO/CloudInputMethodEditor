@@ -133,7 +133,8 @@ pub(super) trait Bridge {
 pub(super) trait Asset {
     /// 这件资产的**名字**：同一所有者的名下**不许重名**（[`Assets::add`] 里 `debug_assert` 盯着）。
     /// 跨资产指认（[`Bridge::designate_focus`]）与日志用它 —— 名字要**稳定**，加 / 删别的资产不影响它。
-    fn name(&self) -> &'static str;
+    /// 脚本建的资产名字是运行期起的（`format!("script-{id}")`），所以返回借来的 `&str`。
+    fn name(&self) -> &str;
 
     /// 宿主贴出一帧 / 开关变了之后调：要什么（几何、开关…）都经 `owner` 要，再把自己摆好。
     ///
@@ -207,6 +208,17 @@ impl Assets {
         self.focus.get()
     }
 
+    /// 焦点这会儿是不是在叫 `name` 的那件资产身上（脚本收起它时用：先归还再收起）。
+    pub(super) fn focused_name_is(&self, name: &str) -> bool {
+        match self.focus.get() {
+            Focus::Asset(index) => self
+                .items
+                .get(index)
+                .is_some_and(|asset| asset.name() == name),
+            Focus::Owner => false,
+        }
+    }
+
     /// 把焦点**指定**给名下叫 `name` 的那件资产（`designated_asset_to_get_focus`）。
     /// `false` = 没动 —— 没这个名字、那件没声明 [`Asset::able_to_get_focus`]、或者焦点本来就在它手上。
     // 机制已就位：还没有谁来主动指定（后续部分接入触发时会用上；归还那条已经在走）。
@@ -260,6 +272,24 @@ impl Assets {
     pub(super) fn retire(&mut self) {
         self.return_focus_to_owner();
         self.items.clear();
+    }
+
+    /// 放掉名下叫 `name` 的那一件（脚本 `close`）：焦点落在它身上就先归还；落在后面的姊妹资产身上
+    /// 就把下标跟着前移（焦点不换人）。不重名的前提下其它资产一概不动。
+    pub(super) fn retire_named(&mut self, name: &str) {
+        let Some(index) = self.index_of(name) else {
+            return;
+        };
+        let held = self.focus.get();
+        self.items.remove(index);
+        match held {
+            Focus::Asset(at) if at == index => {
+                // 拿着焦点的那件被放掉了：先归还，焦点不能落在一件已经没了的资产上
+                self.focus.set(Focus::Owner);
+            }
+            Focus::Asset(at) if at > index => self.focus.set(Focus::Asset(at - 1)),
+            _ => {}
+        }
     }
 
     /// 名下叫 `name` 的那件资产在第几位（[`Self::add`] 查重与 [`Self::designate_focus`] 指认都用）。
@@ -716,5 +746,38 @@ mod tests {
         assert_eq!(assets.focus(), Focus::Asset(1), "也没跟着走");
         assert!(!assets.designate_focus("stolen-plain"), "特性照旧：接不住");
         assert_eq!(assets.focus(), Focus::Asset(1));
+    }
+
+    /// 脚本 `close` 掉一件辅助窗口：只放掉那一件。焦点落在后面的姊妹资产身上时下标跟着前移
+    ///（还是同一件拿着），落在被关的那件身上时先归还给所有者。
+    #[test]
+    fn closing_one_asset_leaves_the_others_alone() {
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut assets = Assets::default();
+        assets.add(Box::new(Tracked::new("first", true, events.clone())));
+        assets.add(Box::new(Tracked::new("second", true, events.clone())));
+        assert!(assets.designate_focus("second"));
+        assert!(assets.focused_name_is("second"));
+        assert!(!assets.focused_name_is("first"));
+
+        assets.retire_named("first");
+        assert_eq!(
+            assets.focus(),
+            Focus::Asset(0),
+            "焦点还在 second 身上（下标前移）"
+        );
+        assert!(!assets.designate_focus("first"), "第一件已经没了");
+        assert_eq!(
+            *events.borrow(),
+            ["focus", "drop"],
+            "焦点不动，只放掉第一件"
+        );
+
+        // 关掉正拿着焦点的那件：先归还给所有者
+        assets.retire_named("second");
+        assert_eq!(assets.focus(), Focus::Owner, "拿着焦点的资产一关就归还");
+
+        // 没这个名字：什么也不做
+        assets.retire_named("missing");
     }
 }

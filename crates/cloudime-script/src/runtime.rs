@@ -35,6 +35,7 @@ use std::time::{Duration, Instant};
 use mlua::{Function, Lua, Table};
 
 use crate::http;
+use crate::window;
 
 /// 脚本目录名：**安装目录**（与 `Phrases\`、`WordBank\` 同级）下的这个子目录。
 pub const DIRECTORY: &str = "Scripts";
@@ -477,6 +478,12 @@ pub struct Runtime {
 
     /// 上一次派 `time` 事件的那个本地时间整分（`sys_time` 脚本一天只跑一次那个点）。
     sys_time_last: Rc<RefCell<Option<ClockStamp>>>,
+
+    /// 脚本要建的窗口 / 对窗口的操作（`cloudime.window.*`）：派发 / 回调结束后 Server 取一次。
+    window_requests: Rc<RefCell<Vec<window::Request>>>,
+
+    /// 窗口编号（脚本句柄上的 `id`；UI 线程按它认窗口）。
+    window_seq: Rc<Cell<u32>>,
 }
 
 /// 本地时间的一个整分：`(年, 月, 日, 时, 分)`。
@@ -511,6 +518,8 @@ impl Runtime {
             combination_modifiers: Vec::new(),
             wanted_keys: Vec::new(),
             sys_time_last: Rc::new(RefCell::new(None)),
+            window_requests: Rc::new(RefCell::new(Vec::new())),
+            window_seq: Rc::new(Cell::new(0)),
         };
         if let Err(error) = install_host_api(&runtime) {
             // 装不上就少了 `cloudime` 表，脚本会报 nil：记一条，别让 Server 起不来。
@@ -734,6 +743,20 @@ impl Runtime {
     /// `None` = 没提；`Some(None)` = 回配置里的主题；`Some(Some(名))` = 换到它。
     pub fn take_theme_request(&self) -> Option<Option<String>> {
         self.theme.borrow_mut().take()
+    }
+
+    /// 取一次脚本对窗口的操作（`cloudime.window.*`），取了就清。
+    ///
+    /// 脚本在**工人线程**上产出这些请求，窗口在 **UI 线程**上建 / 改 / 收：Server 每次派发
+    ///（按键、候选、`time`、HTTP 回调、窗口事件）结束后取一次，按顺序转给 UI 线程即可。
+    pub fn take_window_requests(&self) -> Vec<window::Request> {
+        std::mem::take(&mut *self.window_requests.borrow_mut())
+    }
+
+    /// 有没有攒着的窗口操作（`take_window_requests` 取走之前先看它 —— 别让「响应为空」把
+    /// 只动窗口的那一拍提前返回掉）。
+    pub fn has_window_requests(&self) -> bool {
+        !self.window_requests.borrow().is_empty()
     }
 
     /// 有没有清单声明的触发条件是 `trigger` 的脚本：Server 据此决定要不要让 DLL 在没有组句时
@@ -1121,6 +1144,51 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
         )?,
     )?;
     table.set("ui", ui)?;
+    // 脚本窗口：`cloudime.window.create{…}` 建一块独立窗口，`create_auxiliary{ owner = …, … }`
+    // 在它名下挂一件辅助窗口（资产）。这里只产出请求（见 `window` 模块），窗口在 UI 线程上建；
+    // 句柄上的方法把后续操作推进同一条队列，Server 每次派发结束后 `take_window_requests` 取走。
+    let window_table = lua.create_table()?;
+    let create_requests = runtime.window_requests.clone();
+    let create_seq = runtime.window_seq.clone();
+    window_table.set(
+        "create",
+        lua.create_function(move |lua, options: mlua::Table| {
+            let spec = window::parse_window(&options)?;
+            let id = next_window_id(&create_seq);
+            create_requests
+                .borrow_mut()
+                .push(window::Request::Create(id, spec.clone()));
+            window::handle(
+                lua,
+                window::Kind::Independent,
+                id,
+                &spec.name,
+                (Some(spec.width), Some(spec.height)),
+                create_requests.clone(),
+            )
+        })?,
+    )?;
+    let auxiliary_requests = runtime.window_requests.clone();
+    let auxiliary_seq = runtime.window_seq.clone();
+    window_table.set(
+        "create_auxiliary",
+        lua.create_function(move |lua, options: mlua::Table| {
+            let id = next_window_id(&auxiliary_seq);
+            let spec = window::parse_auxiliary(&options, id)?;
+            auxiliary_requests
+                .borrow_mut()
+                .push(window::Request::CreateAuxiliary(id, spec.clone()));
+            window::handle(
+                lua,
+                window::Kind::Auxiliary,
+                id,
+                &spec.name,
+                (spec.width, spec.height),
+                auxiliary_requests.clone(),
+            )
+        })?,
+    )?;
+    table.set("window", window_table)?;
     // 输入框文本：`cloudime.text.all(上限?)` / `cloudime.text.before(上限?)` → `{ text, truncated }`；
     // 这一拍还拿不到（DLL 要读一趟、走个来回）给 `nil`，脚本下一次调用再试。
     // 上限按**显示宽度**算：西文 / 半角 1、中文 / 全角 2；缺省 2^64-1（等于不限）
@@ -1461,6 +1529,13 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     )
     .exec()?;
     Ok(())
+}
+
+/// 下一个窗口编号（从 1 开始）：脚本句柄上的 `id`，UI 线程按它认窗口。
+fn next_window_id(seq: &Cell<u32>) -> u32 {
+    let id = seq.get().wrapping_add(1).max(1);
+    seq.set(id);
+    id
 }
 
 /// 读一个脚本清单（`cloudime.script{…}`）：缺字段 / 类型不对 / 对不上都报错 —— 那个脚本判无效。
@@ -3197,5 +3272,90 @@ mod tests {
         runtime.dispatch("startup", payload, None);
         // 请求没发出去（`http_get` 报错了），所以没有挂着的请求
         assert!(!runtime.has_pending_requests());
+    }
+
+    /// `cloudime.window.*`：脚本只产出请求（窗口在 UI 线程上建），句柄上的方法按调用顺序排队，
+    /// `take_window_requests` 取一次就清。内容里的七类元素都读得出来。
+    #[test]
+    fn window_requests_are_queued_in_order_and_taken_once() {
+        let dir = script_dir("window-api");
+        write_script(
+            &dir,
+            "win.lua",
+            r##"
+            local win = cloudime.window.create{ name = "面板", width = 200, height = 80, interactive = true }
+            win:set_content{
+                { type = "rect", x = 0, y = 0, w = 200, h = 24, radius = 6, color = "#33111111" },
+                { type = "text", x = 8, y = 4, text = "你好", size = 14, color = "#FF222222" },
+                { type = "line", from = { 0, 24 }, to = { 200, 24 }, thickness = 1, color = "#22000000" },
+                { type = "circle", cx = 40, cy = 60, radius = 10, color = "#FF00FF00" },
+                { type = "path", color = "#FF0000FF", commands = { { "M", 0, 0 }, { "L", 10, 0 }, { "Z" } } },
+            }
+            win:show{ x = 10, y = 20 }
+            local aux = cloudime.window.create_auxiliary{ owner = win, width = 120, height = 60 }
+            aux:set_content{ { type = "rect", x = 0, y = 0, w = 120, h = 60, color = "#FFFFFFFF" } }
+            aux:show()
+            aux:focus(true)
+            win:hide()
+            win:close()
+            "##,
+        );
+        let runtime = Runtime::load(&dir, &[]);
+        assert!(runtime.has_window_requests());
+        let requests = runtime.take_window_requests();
+        assert!(!runtime.has_window_requests(), "取了就清");
+        assert_eq!(
+            requests.len(),
+            9,
+            "建 / 内容 / 显示 / 建辅助 / 内容 / 显示 / 焦点 / 收起 / 关"
+        );
+        match &requests[0] {
+            window::Request::Create(id, spec) => {
+                assert_eq!(*id, 1);
+                assert_eq!(spec.name, "面板");
+                assert_eq!((spec.width, spec.height), (200.0, 80.0));
+                assert!(spec.interactive);
+            }
+            other => panic!("第一条该是建独立窗口：{other:?}"),
+        }
+        match &requests[1] {
+            window::Request::SetContent(id, document) => {
+                assert_eq!(*id, 1);
+                assert_eq!(document.elements.len(), 5);
+                assert_eq!((document.width, document.height), (200.0, 80.0));
+            }
+            other => panic!("第二条该是换内容：{other:?}"),
+        }
+        assert!(matches!(
+            &requests[2],
+            window::Request::Show(1, Some((10.0, 20.0)))
+        ));
+        match &requests[3] {
+            window::Request::CreateAuxiliary(id, spec) => {
+                assert_eq!(*id, 2);
+                assert_eq!(spec.owner, 1, "owner 读的是句柄上的 id");
+            }
+            other => panic!("第四条该是建辅助窗口：{other:?}"),
+        }
+        assert!(matches!(&requests[4], window::Request::SetContent(2, _)));
+        assert!(matches!(&requests[5], window::Request::Show(2, None)));
+        assert!(matches!(&requests[6], window::Request::Focus(2, true)));
+        assert!(matches!(&requests[7], window::Request::Hide(1)));
+        assert!(matches!(&requests[8], window::Request::Close(1)));
+    }
+
+    /// 内容写错（缺颜色 / 元素类型不认识）当场报错：这个脚本判无效，别的照常。
+    #[test]
+    fn a_broken_window_content_invalidates_only_that_script() {
+        let dir = script_dir("window-broken");
+        write_script(
+            &dir,
+            "broken.lua",
+            "local win = cloudime.window.create{}\n\
+             win:set_content{ { type = 'rect', x = 0, y = 0, w = 10, h = 10 } }\n",
+        );
+        write_script(&dir, "fine.lua", "loaded = 1\n");
+        let runtime = Runtime::load(&dir, &[]);
+        assert_eq!(runtime.scripts().to_vec(), ["fine.lua"]);
     }
 }
