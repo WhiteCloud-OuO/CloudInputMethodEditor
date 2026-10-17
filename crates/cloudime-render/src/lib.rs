@@ -4,6 +4,10 @@
 //! 字体不扫系统目录，按清单只加载界面字体、中文、日文、emoji 几个文件（[`FontLibrary`]）。
 //! 所有尺寸以「点」为单位写在 [`Theme`] 里，[`Renderer`] 按缩放倍数换成像素；输出是预乘 alpha 的 RGBA 位图。
 //!
+//! **能画的元素**（`docs/design/windows.md` §6）：`text`（[`FontLibrary`] + 字形管线）、`svg`（`svg` 模块）、
+//! `img`（[`decode_image`] / [`load_image`] / [`read_image`] / [`draw_image`]）、`line` / `rect`（含圆角与圆）/
+//! `path`（画布那几笔填充原语，tiny-skia 的路径）。
+//!
 //! 设计与验收见 `docs/design/rendering.md`。
 
 mod canvas;
@@ -11,6 +15,7 @@ mod color;
 mod error;
 mod fonts;
 mod frame;
+mod image;
 mod layout;
 mod renderer;
 mod shadow;
@@ -28,6 +33,7 @@ pub use frame::{
     Auxiliary, Frame, HighlightAnimation, HighlightRect, Preedit, PreeditSegment, PreeditStyle,
     Row, TipSegment, Tone,
 };
+pub use image::{decode_image, draw_image, load_image, read_image};
 pub use layout::Layout;
 pub use renderer::{
     KeyCap, KeyMapLayout, Rendered, RenderedStatus, Renderer, StatusCell, key_map_cell,

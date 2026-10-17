@@ -167,6 +167,17 @@ pub(super) trait Clonable: Asset {
   贴上去的那一帧一直留在窗口上 —— 这就是渲染的**持续性**；
 - 要「擦掉」只有两条路：**贴一帧新的**（覆盖），或者**销毁窗口**。不存在「刷新之后要重画一遍」这回事。
 
+**能画的元素**（绘制与渲染都支持这七类）：
+
+| 元素 | 是什么 | 落在哪儿（实现） |
+|---|---|---|
+| `text` | 文本 | 字形管线：cosmic-text 选字体 / 整形 / 回退，swash 栅格；彩色 emoji 直通 RGBA（`cloudime-render` 的 `text`） |
+| `svg` | SVG 图形 | `usvg` 解析 + `resvg` 光栅化成一整张带 alpha 的位图再叠上，可按 alpha 染色（`svg.rs`） |
+| `img` | 图像（来自**文件**或**文件句柄**） | PNG 解码成预乘 RGBA 位图（`image::decode_image` / `load_image` / `read_image`），按目标矩形双线性缩放画上（`draw_image`） |
+| `line` | 线条 | 细矩形（水平 / 垂直）或细长的**填充路径**（任意角度，带抗锯齿）—— 画布的 `fill_rect` / `fill_path` |
+| `rect` | 矩形（含**圆角矩形**与**圆形**） | `fill_rect` / `fill_round_rect`：圆角用三次贝塞尔近似四分之一圆；**圆** = 边长相等、半径取半边长 |
+| `path` | 路径 | `fill_path`：tiny-skia 的 `Path`（直线 / 三次贝塞尔 / 闭合，按非零环绕填充）—— `round_rect` 就是拿它拼的 |
+
 **为什么不用绘制**：① 逐像素 alpha 与柔和阴影只有 `UpdateLayeredWindow` + 带 alpha 的位图能做，GDI 直接往
 窗口上画没有 alpha 通道；② 候选窗每一帧都在动（高亮滑动、展开过渡），绘制那条路每次都得重画整窗，刷新与
 重画不同步就会闪。哪天真要「临时涂两笔、下一帧自己消失」的东西（调试框之类），再按绘制那条路走，但**不许**

@@ -1,0 +1,165 @@
+//! **图像**（`img`）元素：从**文件**或**文件句柄**读一张 PNG，解码成预乘 RGBA 位图；画的时候按目标矩形缩放叠上去。
+//!
+//! 这是「能画的元素」里的 `img`（见 `docs/design/windows.md` §6）：
+//! `text` 在 `text`、`svg` 在 [`crate::svg`]、`line` / `rect` / `path` 都走画布那几笔填充原语，
+//! 图像这条以前只能叠**已经在内存里**的位图（`Canvas::blend_pixmap`），现在多了「读进来」这一步。
+//!
+//! 解码交给 tiny-skia（`Pixmap::decode_png`，与编码、光栅化同一套，不另引解码库）；眼下只认 PNG。
+
+use std::io::Read;
+use std::path::Path;
+
+use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, Transform};
+
+use crate::error::RenderError;
+
+/// 从**文件**读一张 PNG 并解码。
+pub fn load_image(path: &Path) -> Result<Pixmap, RenderError> {
+    let file = std::fs::File::open(path).map_err(|error| RenderError::InvalidImage {
+        message: format!("打开 {} 失败：{error}", path.display()),
+    })?;
+    read_image(file)
+}
+
+/// 从**文件句柄**读一张 PNG 并解码 —— 任何 `Read` 都行（`File` / `Cursor` / 管道 / 内存里的字节流）。
+pub fn read_image(reader: impl Read) -> Result<Pixmap, RenderError> {
+    let mut bytes = Vec::new();
+    reader
+        .take(MAX_IMAGE_BYTES)
+        .read_to_end(&mut bytes)
+        .map_err(|error| RenderError::InvalidImage {
+            message: format!("读图像失败：{error}"),
+        })?;
+    decode_image(&bytes)
+}
+
+/// 把 PNG 字节解码成预乘 RGBA 位图。
+pub fn decode_image(bytes: &[u8]) -> Result<Pixmap, RenderError> {
+    Pixmap::decode_png(bytes).map_err(|error| RenderError::InvalidImage {
+        message: error.to_string(),
+    })
+}
+
+/// 把一张图按**目标矩形**（像素）缩放画到 `target` 上：左上角 `(x, y)`、宽 `width`、高 `height`。
+/// 超出 `target` 的部分自然裁掉（与别的元素一样，「画得下多少算多少」）。
+///
+/// 缩放用双线性（`FilterQuality::Bilinear`）：界面里的图多是缩放显示的，最近邻会出锯齿。
+pub fn draw_image(target: &mut Pixmap, image: &Pixmap, x: f32, y: f32, width: f32, height: f32) {
+    let (source_width, source_height) = (image.width() as f32, image.height() as f32);
+    if source_width <= 0.0 || source_height <= 0.0 || width <= 0.0 || height <= 0.0 {
+        return;
+    }
+    let transform =
+        Transform::from_translate(x, y).pre_scale(width / source_width, height / source_height);
+    let paint = PixmapPaint {
+        quality: FilterQuality::Bilinear,
+        blend_mode: BlendMode::SourceOver,
+        ..PixmapPaint::default()
+    };
+    target.draw_pixmap(0, 0, image.as_ref(), &paint, transform, None);
+}
+
+/// 读图的上限（防一份坏文件把内存吃光）。
+const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use tiny_skia::PremultipliedColorU8;
+
+    /// 一张 `width`×`height` 的图，每个像素一个颜色（`colors` 按行优先给）。
+    fn pixmap(width: u32, height: u32, colors: &[(u8, u8, u8, u8)]) -> Pixmap {
+        let mut pixmap = Pixmap::new(width, height).expect("位图");
+        for (pixel, &(r, g, b, a)) in pixmap.pixels_mut().iter_mut().zip(colors) {
+            *pixel = PremultipliedColorU8::from_rgba(r, g, b, a).expect("颜色");
+        }
+        pixmap
+    }
+
+    /// 一张 2×2 的彩图：红、绿 / 蓝、白。
+    fn quarters() -> Pixmap {
+        pixmap(
+            2,
+            2,
+            &[
+                (255, 0, 0, 255),
+                (0, 255, 0, 255),
+                (0, 0, 255, 255),
+                (255, 255, 255, 255),
+            ],
+        )
+    }
+
+    /// 编出来再解回去，像素不变（解码走的是 tiny-skia，与截图 / 导出用的是同一套 PNG）。
+    #[test]
+    fn decodes_what_it_encoded() {
+        let source = quarters();
+        let bytes = source.encode_png().expect("编码 PNG");
+        let decoded = decode_image(&bytes).expect("解码 PNG");
+        assert_eq!((decoded.width(), decoded.height()), (2, 2));
+        assert_eq!(decoded.pixels(), source.pixels());
+    }
+
+    /// 文件句柄与文件两条路都能读。
+    #[test]
+    fn reads_from_a_handle_and_from_a_file() {
+        let bytes = quarters().encode_png().expect("编码 PNG");
+
+        let from_handle = read_image(std::io::Cursor::new(bytes.clone())).expect("从句柄解码");
+        assert_eq!(from_handle.pixels(), quarters().pixels());
+
+        let path =
+            std::env::temp_dir().join(format!("cloudime-render-image-{}.png", std::process::id()));
+        std::fs::write(&path, &bytes).expect("写临时文件");
+        let from_file = load_image(&path).expect("从文件解码");
+        let _ = std::fs::remove_file(&path);
+        assert_eq!(from_file.pixels(), quarters().pixels());
+    }
+
+    /// 不是 PNG 就报 `InvalidImage`（不 panic、不画半张）。
+    #[test]
+    fn rejects_garbage() {
+        let error = decode_image(b"not a png").expect_err("坏数据该报错");
+        assert!(matches!(error, RenderError::InvalidImage { .. }), "{error}");
+    }
+
+    /// 1:1 画到指定位置：像素原样；放大用双线性，纯色图放大后整块都是那个颜色（角上不会被混）。
+    #[test]
+    fn draws_an_image_into_the_target_rect() {
+        let mut target = Pixmap::new(6, 6).expect("位图");
+        draw_image(&mut target, &quarters(), 0.0, 0.0, 2.0, 2.0);
+        assert_eq!(
+            target.pixel(0, 0).map(|p| (p.red(), p.green())),
+            Some((255, 0))
+        );
+        assert_eq!(
+            target.pixel(1, 0).map(|p| (p.red(), p.green())),
+            Some((0, 255))
+        );
+        assert_eq!(
+            target.pixel(0, 1).map(|p| (p.red(), p.blue())),
+            Some((0, 255))
+        );
+        assert_eq!(
+            target.pixel(0, 2).map(|p| p.alpha()),
+            Some(0),
+            "画到 2×2 为止"
+        );
+
+        // 纯色 1×1 放大到 4×4：整块都该是它（只差舍入）
+        let solid = pixmap(1, 1, &[(64, 128, 192, 255)]);
+        let mut scaled = Pixmap::new(4, 4).expect("位图");
+        draw_image(&mut scaled, &solid, 0.0, 0.0, 4.0, 4.0);
+        for y in 0..4 {
+            for x in 0..4 {
+                let pixel = scaled.pixel(x, y).expect("像素");
+                assert_eq!(
+                    (pixel.red(), pixel.green(), pixel.blue()),
+                    (64, 128, 192),
+                    "({x}, {y})"
+                );
+            }
+        }
+    }
+}

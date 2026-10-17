@@ -15,4 +15,8 @@ pub enum RenderError {
     /// SVG 图标源码解析不了（不是合法 SVG，或宽高为零）。
     #[error("invalid SVG icon: {message}")]
     InvalidSvg { message: String },
+
+    /// 图像读不出来 / 不是认得的格式（眼下只认 PNG）。
+    #[error("invalid image: {message}")]
+    InvalidImage { message: String },
 }
