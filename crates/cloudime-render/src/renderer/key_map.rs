@@ -193,7 +193,7 @@ pub fn key_map_pixel_size(layout: &KeyMapLayout, cell: f32, scale: f32) -> (f32,
     key_map_size(layout, cell)
 }
 
-/// 把「键位映射参考」画到任何能画元素的目标上（渲染的 [`crate::Render`]、绘制的 [`crate::Paint`]）：
+/// 把「键位映射参考」画到任何能画元素的目标上（眼下只有渲染的 [`crate::Render`]）：
 /// `origin` 是**内容区**左上角（设备像素），`cell` 是格子边长（**点**）。
 ///
 /// 两条路共用这一份版面：格子尺寸、逐排错开、零声母表位置、文字摆位都只在这里算一次；量字走目标自己的
@@ -441,84 +441,6 @@ mod tests {
                 (0..7).map(|_| cap("Z")).collect(),
             ],
             zero_initials: (0..zero).map(|_| cap("AA")).collect(),
-        }
-    }
-
-    /// 绘制这条路（GDI）照同一份版面画：格线、背景、文字都落到内存 DC 的像素上。
-    #[cfg(target_os = "windows")]
-    #[test]
-    fn the_key_map_paints_onto_a_window_dc() {
-        use crate::Paint;
-        use windows::Win32::Graphics::Gdi::{
-            BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection,
-            DIB_RGB_COLORS, DeleteDC, DeleteObject, HBITMAP, HDC, HGDIOBJ, RGBQUAD, SelectObject,
-        };
-
-        /// 32 位 DIB（自上而下）的内存 DC：(DC, 位图, 像素指针)。
-        fn memory_dc(width: i32, height: i32) -> (HDC, HBITMAP, *mut u8) {
-            let header = BITMAPINFOHEADER {
-                biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-                biWidth: width,
-                biHeight: -height,
-                biPlanes: 1,
-                biBitCount: 32,
-                biCompression: BI_RGB.0,
-                ..Default::default()
-            };
-            let info = BITMAPINFO {
-                bmiHeader: header,
-                bmiColors: [RGBQUAD::default()],
-            };
-            let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-            unsafe {
-                let dc = CreateCompatibleDC(None);
-                let bitmap = CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0)
-                    .expect("DIB");
-                SelectObject(dc, HGDIOBJ(bitmap.0));
-                (dc, bitmap, bits.cast::<u8>())
-            }
-        }
-
-        let theme = Theme::new();
-        let layout = KeyMapLayout {
-            rows: vec![vec![KeyCap {
-                key: "Q".to_owned(),
-                initial: "zh".to_owned(),
-                mapping: "ang".to_owned(),
-            }]],
-            zero_initials: Vec::new(),
-        };
-        let cell = 46.0;
-        let (width, height) = key_map_pixel_size(&layout, cell, 1.0);
-        let (dc, bitmap, bits) = memory_dc(width as i32, height as i32);
-        {
-            let mut paint = Paint::new(dc);
-            paint.rect(0.0, 0.0, width, height, theme.colors.background);
-            draw_key_map(&mut paint, &layout, cell, &theme, 1.0, (0.0, 0.0));
-        }
-        // DIB 是 BGRA
-        let pixel = |x: i32, y: i32| unsafe {
-            let at = bits.offset(((y * width as i32 + x) * 4) as isize);
-            (*at, *at.offset(1), *at.offset(2))
-        };
-        // 格子左边那条线在 x = 8（PADDING），里面是背景色
-        let line = pixel(8, 20);
-        let background = pixel(20, 20);
-        assert_ne!(line, background, "格子边框与背景不是同一个颜色");
-        // 格子中间的文字（「Q」「zh」「ang」）应该有暗像素
-        let mut dark = 0;
-        for y in 9..55 {
-            for x in 9..55 {
-                let (b, g, r) = pixel(x, y);
-                if (b as i32 + g as i32 + r as i32) / 3 < 128 {
-                    dark += 1;
-                }
-            }
-        }
-        assert!(dark > 5, "格子里的字画上去了（暗像素 {dark} 个）");
-        unsafe {
-            let _ = DeleteObject(HGDIOBJ(bitmap.0));
-            let _ = DeleteDC(dc);
         }
     }
 

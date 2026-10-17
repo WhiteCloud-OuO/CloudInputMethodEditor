@@ -910,38 +910,14 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `return_focus_to_owner` / `focus`，指定时自己**失焦** `unfocusing`、收回时**聚焦** `focusing`，两边都落到
   `sync_input()` 上：`ui::set_mouse_transparent` + 命中测试），所以**每块独立窗口都有**这个特性
   （见下「辅助窗口」那条）。
-- **辅助窗口模板**（`server/src/ui/auxiliary_window_template/`，`AuxiliaryWindowTemplate`）：给资产用的那块**绘制面板** ——
-  窗口**不是分层的**：`WM_PAINT` 里 `BeginPaint` → `Painter::paint_key_map`（`Paint` / **GDI + GDI+ 混合**：
-  需要抗锯齿的走 GDI+，不透明轴对齐矩形走 GDI）→ `EndPaint`；圆角用 `SetWindowRgn`（`CreateRoundRectRgn`）切。
-  `layered::present` 贴上去 → `SetWindowPos(hWndInsertAfter = 面板)` 排在面板后面），`hide` / `Drop` 一起收。内容不持久（每次 `WM_PAINT` 整块重画）；模板指针挂在 `GWLP_USERDATA`
-  （`show` 挂、`Drop` 清），`show` 按「位置 / 尺寸 / 版面版本 / 渲染器代号」判重（`set_key_map` 把版面版本 +1）。
-  **焦点**：`new(painter, able_to_get_focus)`
-  里收下这件资产创建时声明的「允许获取焦点」（`false` = 永远不接输入，缺省），`focusable()` 读回去给资产声明用；
-  `set_focused(bool)` 由所有者驱动、只动一个位 —— `WS_EX_TRANSPARENT`（窗口过程命中测试也读它，两边同一个来源，
-  不会打架），没焦点就鼠标穿透；没声明过 `able_to_get_focus` 的面板不会被打开输入（记一条日志）。
-  三个属性 **宽 / 高 / 间隙**
-  （`AuxiliaryWindowSpec`，物理像素）由 `set_spec` 设；没设过时：有内容（键位映射参考）就按内容的版面算
-  （`cloudime_render::key_map_size` 给点，模板按 DPI 折成像素；高度按 `key_map_height` 定：
-  竖排取宿主现在的内容高度、横排取「装 9 个候选项」那档，两者都不低于 316 物理像素），
-  没内容才按宿主（候选窗口）的形状算默认
-  （竖排量「装 9 个候选项」的高度、宽取它的 √2 倍；横排量「装 6 个两字候选」的宽、高取它的 √5 倍；间隙 16 逻辑像素）；
-  `set_key_map` 换面板里要画的**版面**（平台那边的 `input_schemes::KeyMapLayout`，模板转成渲染器那份）；
-  `show(宿主内容区矩形, 排布方向)` 按宿主摆位（`place_in`：候选窗中心在屏幕右半边贴左侧、在下半边贴上方，都不看放不放得下）。
-  面板的画法在 `cloudime-render` 的 `renderer/key_map.rs`：四周留白 8 点、格线 1 点（**相邻两格共用一条**：
-  摆位步距 = 边长 − 线宽），第二排比第一排右移半格、第三排再右移半格；零声母表在键盘**下方**隔 `TABLE_GAP`（8 点）、
-  **固定 6 列 × 2 行**（格子与键盘格子一样大）；每格：**左上角**那颗键（浅灰）、**右上角**声母
-  （`zh` / `ch` / `sh`，棕 `#880015`）、中间几行韵母（换行符分开，`ü` 由平台那边换好）——
-  韵母每行**第一颗字母**按 `head_color` 上色（a 红 `#F42020` / o 橙 `#FF8040` / e 绿 `#00A869` /
-  i 蓝 `#48ABF8` / u 紫 `#8D3CE8` / ü 棕 `#880015`），其余字母用普通文字色；每行放不下就截尾。
-  格子边长由**目标高度**定（`key_map_cell`：三排键盘 + 表两行 + 间距 + 两边留白 = 目标高度）—— 高度由
-  模板给（`key_map_height`）：**竖排 = 宿主（候选窗口）现在的内容高度**（两个窗口一样高；候选窗底下多一行
-  译文、多一页页码时它也跟着高 —— 那些行的有无要看译文与页数，量不出来，只能跟着宿主走），
-  横排宿主又扁又宽、按不了，用「候选窗口装 9 个候选项」那档（`Painter::key_map_height_nine` 拿
-  `candidate_size(Vertical, 9)` 折成点）；两种排布都再夹一道**最低高度 `MIN_KEY_MAP_HEIGHT`
-  = 316 物理像素**（折成点再反推格子）—— 候选很少、屏幕缩放小时格子里的字也看得清。
-  窗口**高度恒定**（同一段输入里候选窗高多少它就多高），
-  宽度取「键盘（含错位）」与「零声母表 6 格」里宽的那个。
-  格子里的字号与内边距都按格子**等比**（基准 46 点格子：那颗键 7 点、声母 7 点、韵母 11 点、内边距 3 点）。
+- **辅助窗口模板**（`server/src/ui/auxiliary_window_template/`，`AuxiliaryWindowTemplate`）：给资产用的那块**分层面板** ——
+  主题背景 + 圆角 + 阴影都出在一张预乘 RGBA 位图里（`Painter::render_key_map` / `render_panel`），
+  `ui::layered::present` 换成 BGRA 后 `UpdateLayeredWindow` 一次贴上，窗口过程**不处理 `WM_PAINT`**。
+  三个属性 **宽 / 高 / 间隙**（`AuxiliaryWindowSpec`，物理像素）由 `set_spec` 设；没设过时：有内容（键位映射参考）
+  就按版面自己定尺寸（高度按 `key_map_height`：竖排取宿主现在的内容高度、横排取「装 9 个候选项」那档，两者都不低于
+  316 物理像素），没内容才按宿主形状算默认；`set_key_map` 换版面（版本 +1），`show` 按「位置 / 尺寸 / 版面版本 /
+  渲染器代号」判重，没变就不重贴。**焦点**：`new(painter, able_to_get_focus)`、`set_focused` 开关鼠标穿透
+  （`WS_EX_TRANSPARENT`，命中测试读同一个位），没声明过的不接输入（记一条日志）。
 
 **窗口的两类**（`server/src/ui/`）—— **规则见 [`docs/design/windows.md`](../design/windows.md)**（两类窗口、
 所有者唯一且不转移、桥接 bridging、**焦点 focus**、资产克隆与资产窃取、**绘制 painting / 渲染 rendering**）。
@@ -979,8 +955,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   被销毁、它那一组销毁前按「生命周期末」自动归还焦点；克隆则原件与它那一组**一点不动**。
 - **绘制 / 渲染**（`docs/design/windows.md` §6）：两种画法各是一个结构体、元素各是一条 trait（`cloudime-render`）——
   `elements` 里六条（`TextElement` / `SvgElement` / `ImageElement` / `LineElement` / `RectElement` /
-  `PathElement`），`Render`（离屏位图 + 共享字形管线，`measure` 也走它）与 `Paint`（**GDI + GDI+ 混合**直画窗口 DC）
-  **各实现一遍**（GDI+ 管抗锯齿：线 / 圆角 / 圆 / 路径 / 文字 / 图像；GDI 管不透明的轴对齐矩形）；
+  `PathElement`），唯一的实现是 `Render`（离屏位图 + 共享字形管线，`measure` 也走它）。（曾经还有一份 GDI + GDI+ 的
+  `Paint`，2026-10-17 试完删了 —— 见 `windows.md` §6 的历史注记。）
   **两处缓存**（2026-10-17）：① **阴影层缓存** —— 阴影只跟尺寸 / 圆角 / 模糊 / 偏移 / 颜色 / 缩放有关，跟内容无关，
   `Renderer` 按这个 key 留最多 4 份已经算好的 `Pixmap`（候选窗 / 键位映射 / 状态条 / 提示各一份），命中就整块
   `copy_from_slice`（`Render::blit`，目标这时还是空的）；没缓存时每帧要 3 遍盒式模糊 + 整画布混合，200% 缩放下
@@ -991,13 +967,10 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   改成字节切片 + **SSSE3**（16 字节一组 shuffle，没有就标量），640×600@200% 那块 1.46MB 从 0.46ms 降到 0.06ms；
   ④ **字形合成**（`Canvas::blend_mask`）—— 按覆盖率把颜色预乘成 256 项表（每像素少 4 次乘法）、矩形先裁到画布内、
   再按行切片（不再每像素判边界）；9 行候选整帧 551µs → 501µs。
-  窗口里只准经这些 trait 画。除「键位映射参考」（辅助窗口模板，2026-10-17 起走 `Paint` / GDI + GDI+，见上）之外，
-  自绘的几个窗口**一律用渲染** —— 渲染器把一整帧出成预乘 RGBA 位图
+  窗口里只准经这些 trait 画。自绘的几个窗口**一律用渲染** —— 渲染器把一整帧出成预乘 RGBA 位图
   （就是那块**内存区域**）→ `ui/layered::present` 换通道 → `UpdateLayeredWindow(ULW_ALPHA)` **整块一次**贴上。
   窗口过程**不处理 `WM_PAINT`**、窗口类**不设 `hbrBackground`**、不调 `InvalidateRect`，所以没有「刷新把画布
-  擦掉」的时机：贴上去的那一帧一直在，要变只能**再贴一帧**（重新出图）或**销毁窗口**。直接绘制只用在
-  **键位映射参考**那一块（辅助窗口模板）：没有逐像素 alpha（圆角靠窗口区域切）、没有阴影，半透明的主题色
-  要先 `Theme::flattened` 压平。**能画的元素**：`text`（字形管线）/ `svg`（`svg.rs`：usvg + resvg 光栅化）/ `img`
+  擦掉」的时机：贴上去的那一帧一直在，要变只能**再贴一帧**（重新出图）或**销毁窗口**。**能画的元素**：`text`（字形管线）/ `svg`（`svg.rs`：usvg + resvg 光栅化）/ `img`
   （`image.rs`：PNG 从文件或文件句柄读 + 解码 + 按目标矩形双线性缩放）/ `line`（细矩形或细长填充路径）/
   `rect`（含圆角矩形与圆：`fill_round_rect`，圆 = 半径取半边长）/ `path`（`fill_path`，tiny-skia 的路径）。
 

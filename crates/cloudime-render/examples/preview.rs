@@ -9,7 +9,6 @@ use clap::Parser;
 use cloudime_render::{
     Auxiliary, FontLibrary, Frame, KeyCap, KeyMapLayout, Layout, Preedit, PreeditSegment,
     PreeditStyle, Renderer, Row, Shadow, StatusCell, Theme, TipSegment, Tone, key_map_cell,
-    key_map_pixel_size,
 };
 
 #[derive(Parser)]
@@ -187,133 +186,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         elapsed,
         path.display()
     );
-    // 绘制那条路（`Paint` / GDI）画同一份版面：部署到窗口上长这样（没有阴影、圆角是窗口区域切的）。
-    #[cfg(target_os = "windows")]
-    {
-        // 阴影（渲染）+ 面板（绘制）叠起来的最终样子：阴影单独一块分层窗，垫在面板底下
-        let content = key_map_pixel_size(&key_map, cell, args.scale);
-        let panel_shadow = Shadow {
-            color: theme.colors.shadow,
-            ..Shadow::panel()
-        };
-        if let (Ok(layer), Some(panel)) = (
-            renderer.render_shadow(content, &theme, args.scale, &panel_shadow),
-            paint_key_map_pixmap(&key_map, cell, &theme, args.scale),
-        ) {
-            let mut composed = layer.pixmap.clone();
-            composed.draw_pixmap(
-                layer.content_x as i32,
-                layer.content_y as i32,
-                panel.as_ref(),
-                &tiny_skia::PixmapPaint::default(),
-                tiny_skia::Transform::identity(),
-                None,
-            );
-            let path = args.out.join("key-map-shadowed.png");
-            composed.save_png(&path)?;
-            println!(
-                "{:<28} {:>4}×{:<4}px  {}",
-                "key-map-shadowed",
-                composed.width(),
-                composed.height(),
-                path.display()
-            );
-        }
-        let started = Instant::now();
-        if let Some(pixmap) = paint_key_map_pixmap(&key_map, cell, &theme, args.scale) {
-            let path = args.out.join("key-map-painted.png");
-            pixmap.save_png(&path)?;
-            println!(
-                "{:<28} {:>4}×{:<4}px  {:>8.2?}  {}",
-                "key-map-painted",
-                pixmap.width(),
-                pixmap.height(),
-                started.elapsed(),
-                path.display()
-            );
-        }
-    }
     Ok(())
-}
-
-/// 用**绘制**那条路（`Paint` / GDI）把键位映射参考画进一张内存位图，好跟渲染那张并排比。
-#[cfg(target_os = "windows")]
-fn paint_key_map_pixmap(
-    layout: &KeyMapLayout,
-    cell: f32,
-    theme: &Theme,
-    scale: f32,
-) -> Option<tiny_skia::Pixmap> {
-    use cloudime_render::{Paint, RectElement, draw_key_map, key_map_pixel_size};
-    use windows::Win32::Foundation::RECT;
-    use windows::Win32::Graphics::Gdi::{
-        BI_RGB, BITMAPINFO, BITMAPINFOHEADER, CreateCompatibleDC, CreateDIBSection, DIB_RGB_COLORS,
-        DeleteDC, DeleteObject, HBITMAP, HDC, HGDIOBJ, RGBQUAD, SelectObject,
-    };
-
-    /// 32 位 DIB（自上而下）的内存 DC：(DC, 位图, 像素指针)。
-    fn memory_dc(width: i32, height: i32) -> Option<(HDC, HBITMAP, *mut u8)> {
-        let header = BITMAPINFOHEADER {
-            biSize: std::mem::size_of::<BITMAPINFOHEADER>() as u32,
-            biWidth: width,
-            biHeight: -height,
-            biPlanes: 1,
-            biBitCount: 32,
-            biCompression: BI_RGB.0,
-            ..Default::default()
-        };
-        let info = BITMAPINFO {
-            bmiHeader: header,
-            bmiColors: [RGBQUAD::default()],
-        };
-        let mut bits: *mut std::ffi::c_void = std::ptr::null_mut();
-        unsafe {
-            let dc = CreateCompatibleDC(None);
-            let bitmap =
-                CreateDIBSection(Some(dc), &info, DIB_RGB_COLORS, &mut bits, None, 0).ok()?;
-            SelectObject(dc, HGDIOBJ(bitmap.0));
-            Some((dc, bitmap, bits.cast::<u8>()))
-        }
-    }
-
-    let (width, height) = key_map_pixel_size(layout, cell, scale);
-    let (width, height) = (width.ceil() as i32, height.ceil() as i32);
-    let _ = RECT::default();
-    let (dc, bitmap, bits) = memory_dc(width, height)?;
-    // 哨兵色：占住「窗口里会被 `SetWindowRgn` 切掉」的那几个角，读回来时算透明
-    const SENTINEL: cloudime_render::Color = cloudime_render::Color::rgb(1, 2, 3);
-    {
-        let mut paint = Paint::new(dc);
-        paint.rect(0.0, 0.0, width as f32, height as f32, SENTINEL);
-        // 与窗口一致：底色按圆角铺，四个角留给底下的阴影
-        paint.round_rect(
-            0.0,
-            0.0,
-            width as f32,
-            height as f32,
-            theme.corner_radius * scale,
-            theme.colors.background,
-        );
-        draw_key_map(&mut paint, layout, cell, theme, scale, (0.0, 0.0));
-    }
-    // DIB 是 BGRA；GDI 写进去的 alpha 位不算数（窗口上也忽略它），这里一律当不透明；
-    // 还是哨兵色的像素算透明（那是圆角之外、窗口区域切掉的部分）
-    let mut pixmap = tiny_skia::Pixmap::new(width as u32, height as u32)?;
-    unsafe {
-        let source = std::slice::from_raw_parts(bits, (width * height * 4) as usize);
-        for (dst, src) in pixmap.pixels_mut().iter_mut().zip(source.chunks_exact(4)) {
-            *dst = if (src[0], src[1], src[2]) == (SENTINEL.b, SENTINEL.g, SENTINEL.r) {
-                tiny_skia::PremultipliedColorU8::TRANSPARENT
-            } else {
-                tiny_skia::PremultipliedColorU8::from_rgba(src[2], src[1], src[0], 255)?
-            };
-        }
-    }
-    unsafe {
-        let _ = DeleteObject(HGDIOBJ(bitmap.0));
-        let _ = DeleteDC(dc);
-    }
-    Some(pixmap)
 }
 
 /// 键位映射参考的样例版面：首道双拼（`docs/design/input-schemes.md` §7 那份），零声母取全部 12 项。

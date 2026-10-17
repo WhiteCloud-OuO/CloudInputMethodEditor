@@ -1,14 +1,11 @@
 //! **辅助窗口模板**（`auxiliary_window_template`）：给「辅助窗口」（独立窗口的**资产**，
-//! 见 [`super::auxiliary`]）共用的那块壳子 —— 一块自绘的面板。
+//! 见 [`super::auxiliary`]）共用的那块壳子 —— 一块自绘的**分层面板**。
 //!
-//! 画的是**一块面板**：主题背景色 + 圆角，圆角与候选窗口同源（都是 `theme.corner_radius`）。
+//! 画的是**一块面板**：主题背景色 + 圆角 + 阴影，圆角与候选窗口同源（都是 `theme.corner_radius`）。
+//! 走**渲染**（`docs/design/windows.md` §6）：云朵渲染器把整块（阴影 + 圆角 + 内容）出成预乘 RGBA 位图，
+//! `UpdateLayeredWindow` 一次贴上 —— 贴上去之后窗口刷新不会把它擦掉。
 //!
-//! **这条是绘制**（painting，`docs/design/windows.md` §6）：窗口不是分层的，内容直接画在窗口的 DC 上
-//! （`BeginPaint` → 云朵 `Paint`（GDI）→ `EndPaint`），**不持久** —— 每次显示、每次 `WM_PAINT` 都整块重画。
-//! 换来的：没有阴影边、圆角靠窗口区域切（硬边）、文字走 GDI 的整形；`Render` 那套（离屏位图 + 逐像素
-//! alpha）仍在 `Renderer::render_key_map`，想换回去只要改 [`Self::show`] 的贴图那一步。
-//!
-//! 三个属性：**宽 / 高 / 间隙**（[`AuxiliaryWindowSpec`]，物理像素）。没设过就按内容与宿主的形状来：
+//! //! 三个属性：**宽 / 高 / 间隙**（[`AuxiliaryWindowSpec`]，物理像素）。没设过就按内容与宿主的形状来：
 //!
 //! - **有内容**（眼下只有「键位映射参考」）：格子边长按**目标高度**反推 —— 竖排用宿主（候选窗口）
 //!   **现在的高度**（两个窗口一样高；候选窗底下多一行译文 / 多一页页码时它也跟着高），
@@ -33,17 +30,11 @@
 use std::cell::{Cell, RefCell};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateRoundRectRgn, EndPaint, HDC, InvalidateRect, PAINTSTRUCT, SetWindowRgn,
-    UpdateWindow,
-};
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GWLP_USERDATA, GetWindowLongPtrW, HTCLIENT,
-    HTTRANSPARENT, MA_NOACTIVATE, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
-    SWP_NOZORDER, SWP_SHOWWINDOW, SetWindowLongPtrW, SetWindowPos, ShowWindow, WM_MOUSEACTIVATE,
-    WM_NCHITTEST, WM_PAINT, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE,
+    SW_HIDE, SW_SHOWNA, ShowWindow, WM_MOUSEACTIVATE, WM_NCHITTEST, WNDCLASSEXW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -85,10 +76,6 @@ pub(super) struct AuxiliaryWindowSpec {
 pub(super) struct AuxiliaryWindowTemplate {
     hwnd: HWND,
 
-    /// 阴影窗：单独一块**分层**窗，垫在面板底下。阴影不是窗口内部的元素，所以它留在渲染那条路上
-    /// （逐像素 alpha 才做得出柔和边）；面板自己仍是绘制。
-    shadow: HWND,
-
     /// 创建时声明的「允许获取焦点」（`able_to_get_focus`）：`false`（缺省）时**永远**不接输入。
     focusable: bool,
 
@@ -110,9 +97,6 @@ pub(super) struct AuxiliaryWindowTemplate {
     /// 这次显示摆在哪（内容左上角 + 内容尺寸）；`None` = 没显示。
     placed: Cell<Option<(i32, i32, i32, i32)>>,
 
-    /// `WM_PAINT` 要用的一份：尺寸、格子边长、DPI。
-    paint_state: Cell<Option<PaintState>>,
-
     /// 版面版本：`set_key_map` 每换一次 +1（判断要不要重画）。
     revision: Cell<u64>,
 
@@ -122,19 +106,6 @@ pub(super) struct AuxiliaryWindowTemplate {
 
 /// 上次画出来的那一幅：位置 `(x, y)` + 内容尺寸 + 版面版本 + 渲染器代号。
 type Painted = (i32, i32, i32, i32, u64, u64);
-
-/// 画的时候要用的那几样：每次 [`AuxiliaryWindowTemplate::show`] 记一份。
-#[derive(Debug, Clone, Copy)]
-struct PaintState {
-    /// 内容区尺寸（物理像素）。
-    size: (i32, i32),
-
-    /// 格子边长（**点**）：0 = 没有版面（只画背景）。
-    cell: f32,
-
-    /// 这次用的 DPI。
-    dpi: u32,
-}
 
 impl AuxiliaryWindowTemplate {
     /// 建一个隐藏的模板窗口。`able_to_get_focus` = 这件资产创建时**声明**自己允不允许获取焦点
@@ -149,10 +120,13 @@ impl AuxiliaryWindowTemplate {
             ..Default::default()
         })?;
         // TRANSPARENT：现在还只是一块空面板，鼠标点它等于点在底下的应用上。NOACTIVATE：不抢焦点。
-        // 不是分层窗：内容由 `WM_PAINT` 直接画在窗口 DC 上（绘制），没有逐像素 alpha。
         let hwnd = unsafe {
             CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
+                WS_EX_LAYERED
+                    | WS_EX_TOOLWINDOW
+                    | WS_EX_TOPMOST
+                    | WS_EX_NOACTIVATE
+                    | WS_EX_TRANSPARENT,
                 CLASS_NAME,
                 w!("云朵辅助窗口"),
                 WS_POPUP,
@@ -166,30 +140,8 @@ impl AuxiliaryWindowTemplate {
                 None,
             )?
         };
-        // 阴影窗：分层 + 鼠标穿透（永远不接输入），只由 `UpdateLayeredWindow` 一块位图填
-        let shadow = unsafe {
-            CreateWindowExW(
-                WS_EX_LAYERED
-                    | WS_EX_TRANSPARENT
-                    | WS_EX_TOOLWINDOW
-                    | WS_EX_TOPMOST
-                    | WS_EX_NOACTIVATE,
-                CLASS_NAME,
-                w!("云朵辅助窗口阴影"),
-                WS_POPUP,
-                0,
-                0,
-                0,
-                0,
-                None,
-                None,
-                Some(super::module_handle()),
-                None,
-            )?
-        };
         Ok(Self {
             hwnd,
-            shadow,
             focusable: able_to_get_focus,
             focused: Cell::new(false),
             painter,
@@ -197,7 +149,6 @@ impl AuxiliaryWindowTemplate {
             spec: Cell::new(AuxiliaryWindowSpec::default()),
             key_map: RefCell::new(input_schemes::KeyMapLayout::default()),
             placed: Cell::new(None),
-            paint_state: Cell::new(None),
             revision: Cell::new(0),
             painted: Cell::new(None),
         })
@@ -258,8 +209,8 @@ impl AuxiliaryWindowTemplate {
         let spec = self.spec.get();
         let render_layout = to_render_layout(&self.key_map.borrow());
         let target = key_map_target(candidate, layout, dpi);
-        // 内容尺寸与格子边长：有版面时按版面自己算（与画出来的完全一致），没内容按宿主形状
-        let (cell, default_size, generation) = {
+        // 出图：有版面就画键位映射参考，没有就画一块空面板
+        let (rendered, generation) = {
             let mut painter = self.painter.borrow_mut();
             let Some(painter) = painter.as_mut() else {
                 tracing::warn!("窗口模板：渲染器没起来，不显示");
@@ -267,69 +218,47 @@ impl AuxiliaryWindowTemplate {
                 return;
             };
             let generation = painter.generation();
-            if render_layout.rows.is_empty() {
-                (None, default_size(painter, layout, dpi), generation)
+            let rendered = if render_layout.rows.is_empty() {
+                let (default_width, default_height) = default_size(painter, layout, dpi);
+                let content = (
+                    spec.width.unwrap_or(default_width).max(1),
+                    spec.height.unwrap_or(default_height).max(1),
+                );
+                painter.render_panel(content, dpi)
             } else {
                 let nine_rows = painter.key_map_height_nine(dpi);
                 let cell = key_map_cell(key_map_height(target, nine_rows, dpi));
-                (
-                    Some(cell),
-                    painter.key_map_pixel_size(&render_layout, cell, dpi),
-                    generation,
-                )
-            }
+                painter.render_key_map(&render_layout, cell, dpi)
+            };
+            (rendered, generation)
+        };
+        let Some(rendered) = rendered else {
+            tracing::warn!("窗口模板：渲染器画不出来，不显示");
+            self.hide();
+            return;
         };
         let content = (
-            spec.width.unwrap_or(default_size.0).max(1),
-            spec.height.unwrap_or(default_size.1).max(1),
+            rendered.content_width as i32,
+            rendered.content_height as i32,
         );
         let gap = spec.gap.unwrap_or((DEFAULT_GAP * dpi as i32) / 96);
         let (x, y) = place(candidate, content, gap, layout);
-        // 位置 / 尺寸 / 版面 / 渲染器都没变：窗口里已经是这一幅，不重画
+        // 位置 / 尺寸 / 版面 / 渲染器都没变：窗口里已经是这一幅，不重贴
         let revision = self.revision.get();
         let signature = (x, y, content.0, content.1, revision, generation);
         if self.painted.get() == Some(signature) {
             return;
         }
-        let radius = self
-            .painter
-            .borrow()
-            .as_ref()
-            .map_or(0, |painter| painter.corner_radius(dpi));
-        // 阴影：单独一块分层窗，垫在面板底下（阴影不是窗口内部元素 —— 它仍用渲染的逐像素 alpha）
-        self.present_shadow(content, (x, y), dpi);
-        // 绘制这条路的内容不持久：记下这次要画的东西，`WM_PAINT` 里照它重画
-        self.paint_state.set(Some(PaintState {
-            size: content,
-            cell: cell.unwrap_or(0.0),
-            dpi,
-        }));
-        // `WM_PAINT` 时靠它找回模板（窗口与模板同生共死；只在 UI 线程用）
-        unsafe { SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, self as *const Self as isize) };
-        unsafe {
-            let _ = SetWindowPos(
-                self.hwnd,
-                None,
-                x,
-                y,
-                content.0,
-                content.1,
-                SWP_NOZORDER | SWP_NOACTIVATE,
-            );
-        }
-        // 圆角：绘制没有逐像素 alpha，用窗口区域切（边缘是硬的，也没有阴影）
-        if radius > 0 {
-            let region = unsafe {
-                CreateRoundRectRgn(0, 0, content.0 + 1, content.1 + 1, radius * 2, radius * 2)
-            };
-            if !region.is_invalid() {
-                unsafe { SetWindowRgn(self.hwnd, Some(region), true) };
-            }
+        // 位图四周还有阴影留白，摆的是内容左上角，贴图位置要把留白减掉。
+        let margin = rendered.content_x as i32;
+        if let Err(error) =
+            layered::present(self.hwnd, &rendered.pixmap, (x - margin, y - margin), 255)
+        {
+            tracing::warn!(%error, "窗口模板：贴图失败，不显示");
+            self.hide();
+            return;
         }
         let _ = unsafe { ShowWindow(self.hwnd, SW_SHOWNA) };
-        // 立刻画一帧（`UpdateWindow` 同步走 `WM_PAINT`）：显示出来就是完整的
-        let _ = unsafe { InvalidateRect(Some(self.hwnd), None, false) };
-        let _ = unsafe { UpdateWindow(self.hwnd) };
         self.painted.set(Some(signature));
         // 从「没显示」到「显示」记一条：排查「按了键没看见」时看它就知道摆到哪去了。
         if self.placed.get().is_none() {
@@ -353,58 +282,7 @@ impl AuxiliaryWindowTemplate {
         self.painted.set(None);
         if self.placed.replace(None).is_some() {
             let _ = unsafe { ShowWindow(self.hwnd, SW_HIDE) };
-            let _ = unsafe { ShowWindow(self.shadow, SW_HIDE) };
             tracing::info!("窗口模板已收起");
-        }
-    }
-
-    /// 把阴影层贴到阴影窗上，并让它紧贴面板**下面**（顶层窗里排在面板后面）。
-    ///
-    /// 阴影走渲染（`Painter::render_shadow` 只出阴影、面板留空），面板盖住中间那部分；贴不上去就只显示面板。
-    fn present_shadow(&self, content: (i32, i32), origin: (i32, i32), dpi: u32) {
-        let rendered = self
-            .painter
-            .borrow()
-            .as_ref()
-            .and_then(|painter| painter.render_shadow(content, dpi));
-        let Some(rendered) = rendered else {
-            let _ = unsafe { ShowWindow(self.shadow, SW_HIDE) };
-            return;
-        };
-        let margin = rendered.content_x as i32;
-        if let Err(error) = layered::present(
-            self.shadow,
-            &rendered.pixmap,
-            (origin.0 - margin, origin.1 - margin),
-            255,
-        ) {
-            tracing::warn!(%error, "窗口模板：阴影贴图失败，只显示面板");
-            let _ = unsafe { ShowWindow(self.shadow, SW_HIDE) };
-            return;
-        }
-        // `hWndInsertAfter` = 面板 → 阴影紧贴在面板**下面**（同属置顶层，靠 z 序先后）
-        let _ = unsafe {
-            SetWindowPos(
-                self.shadow,
-                Some(self.hwnd),
-                0,
-                0,
-                0,
-                0,
-                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE | SWP_SHOWWINDOW,
-            )
-        };
-    }
-
-    /// `WM_PAINT`：把整块面板画在 `hdc` 上（绘制这条路每次都要整块重画）。
-    fn paint(&self, hdc: HDC) {
-        let Some(state) = self.paint_state.get() else {
-            return;
-        };
-        let layout = to_render_layout(&self.key_map.borrow());
-        let painter = self.painter.borrow();
-        if let Some(painter) = painter.as_ref() {
-            painter.paint_key_map(hdc, &layout, state.cell, state.dpi, state.size);
         }
     }
 }
@@ -431,12 +309,7 @@ fn default_size(painter: &mut Painter, layout: LayoutMode, dpi: u32) -> (i32, i3
 
 impl Drop for AuxiliaryWindowTemplate {
     fn drop(&mut self) {
-        unsafe {
-            // 先摘掉指针再销毁窗口：别让一次迟到的 `WM_PAINT` 摸到已经没了的模板
-            let _ = SetWindowLongPtrW(self.hwnd, GWLP_USERDATA, 0);
-            let _ = DestroyWindow(self.shadow);
-            let _ = DestroyWindow(self.hwnd);
-        }
+        let _ = unsafe { DestroyWindow(self.hwnd) };
     }
 }
 
@@ -534,23 +407,9 @@ fn place_in(
     }
 }
 
-/// 绘制这条路的内容不持久：每次 `WM_PAINT` 都整块重画（模板指针在 `show` 里挂在 `GWLP_USERDATA`）。
+/// 分层窗口无需 `WM_PAINT`；内容由 [`AuxiliaryWindowTemplate::show`] 出图后整块贴上。
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
-        WM_PAINT => {
-            let mut ps = PAINTSTRUCT::default();
-            let hdc = unsafe { BeginPaint(hwnd, &mut ps) };
-            if !hdc.is_invalid() {
-                let state = unsafe { GetWindowLongPtrW(hwnd, GWLP_USERDATA) }
-                    as *const AuxiliaryWindowTemplate;
-                if !state.is_null() {
-                    // SAFETY: 指针在 `show` 里挂上、`Drop` 里清掉；窗口只活在 UI 线程
-                    unsafe { (*state).paint(hdc) };
-                }
-                let _ = unsafe { EndPaint(hwnd, &ps) };
-            }
-            LRESULT(0)
-        }
         // 没焦点（缺省）时窗口带着 `WS_EX_TRANSPARENT`：鼠标一律穿透到下面的窗口。
         // 命中测试照那个位回答 —— 与 `set_focused` 同一个来源，两边不会打架。
         WM_NCHITTEST => {

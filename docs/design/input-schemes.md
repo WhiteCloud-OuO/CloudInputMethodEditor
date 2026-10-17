@@ -192,8 +192,8 @@ key_map_hotkey = ctrl+f1 ; 上面选 hotkey 时用的组合键
   所以 Server 会把当前这套组合键随 `InputSettings::key_map_modifiers` / `key_map_key` 下发给 DLL，
   由 DLL 在**组句里**专程把这一个键送来；没接管的照旧回 `Passthrough` 重放回应用。
   系统或应用占着同一套组合键时按不出来（设置页那行注里写了）。
-- 窗口本身走**辅助窗口模板**（`server/src/ui/auxiliary_window_template`，圆角与候选窗口同源；这块是**绘制**
-  （GDI + GDI+ 混合），阴影单独一块分层窗垫在底下，见 `docs/design/windows.md` §6）：
+  - 窗口本身走**辅助窗口模板**（`server/src/ui/auxiliary_window_template`，圆角与阴影都与候选窗口同源，
+    见 `docs/design/windows.md` §6）：
   按**候选窗口矩形中心点所在的那半边屏**往另一边摆 —— 竖排时中心在**右半边**就贴**左侧**（否则右侧），
   横排时中心在**下半边**就贴**上方**（否则下方），最后夹进工作区。
 - **候选窗一收它就收**（`always` 那种方式下，候选窗下次弹出会跟着再出现；`hotkey` 那种方式下开关回到关，

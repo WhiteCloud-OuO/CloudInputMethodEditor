@@ -3,7 +3,7 @@
 //!
 //! 元素都经 [`crate::elements`] 的 traits 画，这里只是「渲染」那一侧的实现：内存区域 = tiny-skia 的
 //! `Pixmap`（预乘 RGBA），文字 = [`TextPainter`]（cosmic-text + swash，句柄共享 —— 画的时候还要量字）。
-//! 直画到窗口那一侧见 [`crate::Paint`]。
+//!
 //!
 //! 用法（窗口侧）：`Render::new(w, h, text.clone())` → 经 traits 画完 → `into_pixmap()` 交给
 //! `ui::layered::present` 一次贴上。

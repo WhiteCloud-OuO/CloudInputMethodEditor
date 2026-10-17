@@ -155,7 +155,7 @@ pub(super) trait Clonable: Asset {
 | 持续性 | **没有** —— 窗口一更新 / 刷新，先前画的全没了，得等下一帧再画一遍 | **有** —— 窗口怎么更新 / 刷新都不变，除非那块内存区域被**释放**、或里面的内容被**更新** |
 | 时机 | 每次 `WM_PAINT`（被遮住又露出来、`InvalidateRect`、改大小…）都得重画 | 只有内容变了才出图；贴上去之后窗口自己不会把它擦掉 |
 | 代价 | 每帧重画整窗；刷新与重画不同步就闪 | 出图有成本，但贴图是整块一次，不闪 |
-| 谁在用 | **键位映射参考**（辅助窗口模板，2026-10-17 起试验）+ **系统控件**：状态条图标的悬停提示是 comctl32 的 tooltip（`TTF_SUBCLASS`），系统自己画、自己擦 | 其余**全部**：候选窗口、悬浮工具栏、状态切换提示 |
+| 谁在用 | 只出现在**系统控件**上：状态条图标的悬停提示是 comctl32 的 tooltip（`TTF_SUBCLASS`），系统自己画、自己擦 —— 咱自绘的窗口一处都没有 | **全部**：候选窗口、悬浮工具栏、状态切换提示、辅助窗口面板 |
 
 **规定：独立窗口与辅助窗口一律用渲染。** 云朵渲染器把一整帧（阴影、圆角、渐变、文字、图标）出成一块
 **预乘 RGBA 位图**（就是上面说的内存区域），`ui/layered` 换通道后 `UpdateLayeredWindow` **整块一次**贴上
@@ -167,19 +167,11 @@ pub(super) trait Clonable: Asset {
   贴上去的那一帧一直留在窗口上 —— 这就是渲染的**持续性**；
 - 要「擦掉」只有两条路：**贴一帧新的**（覆盖），或者**销毁窗口**。不存在「刷新之后要重画一遍」这回事。
 
-**例外（2026-10-17 起试验）：辅助窗口模板改用绘制。** 眼下它只服务「键位映射参考」：窗口不是分层的，
-`WM_PAINT` 里 `BeginPaint` → `Paint`（GDI）把整块面板重画 → `EndPaint`。取舍：
-
-- **面板拿不到逐像素 alpha**：圆角用 `SetWindowRgn`（`CreateRoundRectRgn`）切，边缘是硬的；
-  **阴影单独一块分层窗**垫在面板底下 —— 阴影不是窗口内部的元素，仍走渲染（`Renderer::render_shadow`
-  只出阴影、面板留空，`layered::present` 贴上去、`SetWindowPos` 排在面板后面），观感与原来一致；
-- **实现是 GDI + GDI+ 混合**：需要抗锯齿的（线、圆角矩形、圆、路径、文字、图像）走 **GDI+**
-  （`GdipFillPath` / `GdipDrawLine` / `GdipDrawString` / `GdipDrawImageRect`，`SmoothingModeAntiAlias` +
-  `TextRenderingHintAntiAlias`，颜色带 alpha）；只有**不透明的轴对齐矩形**（面板底色、格子边框）仍走 GDI 的
-  `FillRect`（整像素、快）。GDI+ 的 C API 在进程里**只启动一次**（`gdiplus_started`，故意不 `GdiplusShutdown`）；
-- 内容**不持久**：每次 `WM_PAINT` 整块重画。窗口过程靠 `GWLP_USERDATA` 找回模板（`show` 里挂、`Drop` 里清）；
-  `show` 按「位置 / 尺寸 / 版面版本 / 渲染器代号」判重，没变就不重画；
-- `Render` 那条路仍在（`Renderer::render_key_map`），想换回去只要改模板 `show` 的贴图那一步。
+**历史注记（2026-10-17）**：辅助窗口模板曾经改成**绘制**（GDI → 后来 GDI + GDI+ 混合，面板直画窗口 DC、
+阴影另开一块分层窗）。试下来 `Render` 那条路（软件光栅 + 分层贴图）在阴影缓存 / 量宽缓存 / SSSE3 换通道之后
+**已经不比绘制慢**（200% 缩放下键位映射整块 ~1.7ms vs ~1.5ms），而且能拿到抗锯齿圆角、文字与候选窗同一套度量、
+阴影与面板同一张位图 —— 于是又退回渲染，`Paint` 与 GDI+ 依赖一并删掉。要重看那版实现：
+`git log --all --oneline -- crates/cloudime-render/src/paint.rs`。
 
 **能画的元素**（绘制与渲染都支持这七类）：
 
@@ -212,32 +204,32 @@ pub(super) trait Clonable: Asset {
 重画不同步就会闪。哪天真要「临时涂两笔、下一帧自己消失」的东西（调试框之类），再按绘制那条路走，但**不许**
 混进这两类窗口的内容里。
 
-**实现**：两种画法各是一个结构体（`cloudime-render`），元素各是一条 trait（`elements` 模块）：
+**实现**：元素各是一条 trait（`elements` 模块）；渲染那份实现是 `Render`（`cloudime-render`，离屏 tiny-skia
+位图 + cosmic-text）。绘制那份（`Paint`）2026-10-17 试完删了 —— 见下面「历史注记」。
 
-| | 结构体 | 画到哪儿 | 内容 |
+| | 实现 | 画到哪儿 | 内容 |
 |---|---|---|---|
 | 渲染 | `Render` | 一块内存区域（tiny-skia `Pixmap`）→ 交给窗口**整块**贴上 | **持久** |
-| 绘制 | `Paint` | 调用方给的窗口 `HDC`（GDI） | **不持久**，下一帧就没了 |
+| 绘制 | （眼下没有） | 调用方给的窗口 `HDC` | **不持久**，下一帧就没了 |
 
-元素 trait（两边**都实现**；窗口里只准经它们画，别在别处再抄一遍原语）：
+元素 trait（窗口里只准经它们画，别在别处再抄一遍原语）：
 
-- `TextElement::text`、`SvgElement::svg`、`ImageElement::image`、`LineElement::line`、
+- `TextElement::text` / `measure`、`SvgElement::svg`、`ImageElement::image`、`LineElement::line`、
   `RectElement::rect` / `round_rect` / `circle`、`PathElement::path`；
 - `Render` 与量字共用同一套字形管线（`TextPainter` 句柄共享）：**画字的时候顺便量字**（`Render::measure`）；
-- `Paint` 那份是 GDI（`TextOut` / `FillRect` / `RoundRect` / `Ellipse` / `LineTo` / `FillPath` / `AlphaBlend`），
-  不共享字形管线（没有字距微调 / 连字 / 彩色 emoji），抗锯齿也只有 GDI 那档 —— 所以窗口里不用它。
+- 绘制那份曾经是 GDI（后来 GDI + GDI+ 混合）：不共享字形管线、拿不到逐像素 alpha，柔和阴影得另开一层。
 
 **取舍**（2026-10-17 把元素收进 traits 之后）：
 
 - **换来的**：元素只在**一处**定义（线的粗细、圆的贝塞尔、图像的缩放都落在实现里），窗口不再各抄原语；
-  两种画法**同形**（换画法只换结构体，调用代码不动）；可以**按元素测**（`Render` 一篇像素断言、`Paint`
-  一篇内存 DC）；绘制方法不再要 `&mut self`（字形管线共享），调用点的借用约束少了一大截。
+  两种画法**同形**（换画法只换实现，调用代码不动 —— 那次 GDI/GDI+ 试验就靠这个只写了一份 `draw_key_map`）；
+  可以**按元素测**；绘制方法不再要 `&mut self`（字形管线共享），调用点的借用约束少了一大截。
 - **付出的**：① 字形管线成了 `Rc<RefCell<…>>` —— 编译期独占变成**运行期检查**，嵌套借用会 panic
   （眼下的调用都满足「量字与画字不同时持有」；将来若有回调式画法，正确做法是把 painter 显式传参，
   别再加深 `RefCell`）；② 量字有**两条路**：绘制途中用 `render.measure`、排版前置用 `self.measure`，
-  边界是「手上有没有 `Render`」；③ 元素改动要维护**两份实现**。
-- **欠账**：`Paint` 眼下**没有生产调用方**（只有测试）—— 它让「换画法」这句话成真，也是近 400 行要跟着
-  一起改的代码。**在第一个真实用途出现之前，先别给它加新元素**，否则两边会漂。
+  边界是「手上有没有 `Render`」。
+- **教训**：真做过第二份实现（`Paint`），代价是两份光栅器一起维护、两套字体度量会漂；换来的是「用数据
+  决定谁上」—— 结论是分层这条路在性能上并不吃亏，于是又删掉了那份。**没有第二个真实需要之前，别再写第二份。**
 
 ## 7. 实现落点
 
@@ -248,21 +240,17 @@ pub(super) trait Clonable: Asset {
   **失焦 / 聚焦**（`unfocusing` / `focusing`，两边都落到 `sync_input()` 上），并给窗口过程一个 `focused()`：
   焦点不在自己身上时整块让开，自己那块窗鼠标穿透（`WS_EX_TRANSPARENT`，`ui::set_mouse_transparent`），
   窗口过程的 `WM_NCHITTEST` 也按 `focused()` 回 `HTTRANSPARENT`。
-- **辅助窗口模板**（`ui/auxiliary_window_template/`）：资产用的那块**绘制面板**（主题背景 + 圆角；
-  宽 / 高 / 间隙三个属性，没设过按宿主形状算默认；`show(宿主内容区矩形, 排布方向)` 摆位 —— 宿主右边 /
-  下边放不下就换左边 / 上边）。窗口**不是分层窗**：`WM_PAINT` 里 `BeginPaint` → `Painter::paint_key_map`
-  （`Paint` / GDI，调色板先 `Theme::flattened` 压平）→ `EndPaint`；圆角用 `SetWindowRgn` 切。**阴影**是另
-  一块分层窗（`Painter::render_shadow` → `layered::present` → `SetWindowPos` 排在面板后面），不是窗口
-  内部的元素；面板与阴影同生共死（`hide` / `Drop` 一起收）。
-  模板指针挂在窗口的 `GWLP_USERDATA` 上（`show` 挂、`Drop` 清），`show` 按「位置 / 尺寸 / 版面版本 /
-  渲染器代号」判重。**焦点**：`new` 收一个 `able_to_get_focus`，`set_focused` 开关鼠标穿透
-  （`WS_EX_TRANSPARENT` 与命中测试读同一个位，两边不会打架）。
+  - **辅助窗口模板**（`ui/auxiliary_window_template/`）：资产用的那块**分层面板**（主题背景 + 圆角 + 阴影
+    都出一张预乘 RGBA 位图里；宽 / 高 / 间隙三个属性，没设过按宿主形状算默认；`show(宿主内容区矩形, 排布方向)`
+    摆位 —— 宿主右边 / 下边放不下就换左边 / 上边）。出图 `Painter::render_key_map` / `render_panel`，
+    `layered::present` 一次贴上；窗口过程**不处理 `WM_PAINT`**。`show` 按「位置 / 尺寸 / 版面版本 / 渲染器
+    代号」判重，没变就不重贴。**焦点**：`new` 收一个 `able_to_get_focus`，`set_focused` 开关鼠标穿透
+    （`WS_EX_TRANSPARENT` 与命中测试读同一个位，两边不会打架）。
 - **资产这层**（`ui/auxiliary/`）：`Asset`（资产：`name`、声明 `able_to_get_focus`、收 `focusing` / `unfocusing`）、  `Assets`（宿主名下的资产表 + 这一组的**焦点**；`add` 收资产时**不动焦点**，§4 规则 8）、`Bridge`（桥：
   `designate_focus(name)` 是同一所有者的两件资产之间转手的路，`return_focus_to_owner()` 是把焦点交回去）、
   `Host`（宿主喂给资产的形状：内容区矩形 / 排布方向 / 是不是展开着）、`Focus`（焦点在谁身上，§4）、
   `DesignatedAssetToGetFocus`（指定资产获取焦点）。
-- **画元素**（`cloudime-render`）：`elements`（六条元素 trait）、`render`（`Render`：一块离屏位图 + 共享的字形
-  管线）、`paint`（`Paint`：GDI 直画到窗口 DC）。候选窗 / 状态条 / 状态提示走 `Render`；键位映射参考
-  （辅助窗口模板）走 `Paint` —— 两条路共用 `draw_key_map` 那一份版面。
+  - **画元素**（`cloudime-render`）：`elements`（六条元素 trait）、`render`（`Render`：一块离屏位图 + 共享的
+    字形管线；候选窗 / 状态条 / 状态提示 / 辅助窗口面板全走它）。
 - 现在只有一件资产：候选窗口的**键位映射参考**（`ui/auxiliary/key_map/`，名字 `key_map`）—— 它**没**声明
   `able_to_get_focus`，所以眼下整组一直由候选窗口持有焦点。

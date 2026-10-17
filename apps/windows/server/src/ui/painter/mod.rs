@@ -7,10 +7,9 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use cloudime_platform::LayoutMode;
 use cloudime_render::{
-    Color, FontLibrary, Frame, Layout, Paint, Preedit, RectElement, Rendered, RenderedStatus,
-    Renderer, Row, Shadow, StatusCell, Theme, UiFont, system_fonts,
+    Color, FontLibrary, Frame, Layout, Preedit, Rendered, RenderedStatus, Renderer, Row, Shadow,
+    StatusCell, Theme, UiFont, system_fonts,
 };
-use windows::Win32::Graphics::Gdi::HDC;
 
 use crate::dispatch::RenderSettings;
 
@@ -178,72 +177,42 @@ impl Painter {
         Some(rendered)
     }
 
-    /// 只出**阴影**那一层（面板留空）：键位映射参考的面板是绘制，阴影单独一块分层窗垫在底下。
-    pub(super) fn render_shadow(&self, content: (i32, i32), dpi: u32) -> Option<Rendered> {
-        self.renderer
-            .render_shadow(
-                (content.0 as f32, content.1 as f32),
-                &self.theme,
-                scale(dpi),
-                &self.candidate_shadow,
-            )
-            .inspect_err(|error| tracing::warn!(%error, "阴影层渲染失败"))
-            .ok()
-    }
-
-    /// 键位映射参考的内容尺寸（**物理像素**）：与 [`Self::paint_key_map`] 画出来的完全一致。
-    pub(super) fn key_map_pixel_size(
-        &self,
-        layout: &cloudime_render::KeyMapLayout,
-        cell: f32,
-        dpi: u32,
-    ) -> (i32, i32) {
-        let (width, height) = cloudime_render::key_map_pixel_size(layout, cell, scale(dpi));
-        (width.ceil() as i32, height.ceil() as i32)
-    }
-
-    /// 在一块窗口 DC 上**绘制**键位映射参考（`Paint` 那条路）：主题背景 + 版面。
-    ///
-    /// 绘制的内容**不持久** —— 窗口每次收到 `WM_PAINT` 都得把这幅重画一遍（见 `docs/design/windows.md` §6）。
-    pub(super) fn paint_key_map(
-        &self,
-        hdc: HDC,
-        layout: &cloudime_render::KeyMapLayout,
-        cell: f32,
-        dpi: u32,
-        size: (i32, i32),
-    ) {
-        let mut paint = Paint::new(hdc);
-        // 底色按圆角铺（窗口区域也切在同一个圆角上）：四个角留给底下的阴影窗
-        paint.round_rect(
-            0.0,
-            0.0,
-            size.0 as f32,
-            size.1 as f32,
-            self.corner_radius(dpi) as f32,
-            self.theme.colors.background,
-        );
-        if layout.rows.is_empty() {
-            return;
-        }
-        cloudime_render::draw_key_map(
-            &mut paint,
-            layout,
-            cell,
-            &self.theme,
-            scale(dpi),
-            (0.0, 0.0),
-        );
-    }
-
-    /// 面板圆角半径（**物理像素**）：绘制那条路没有逐像素 alpha，用它切窗口区域。
-    pub(super) fn corner_radius(&self, dpi: u32) -> i32 {
-        (self.theme.corner_radius * scale(dpi)).round().max(0.0) as i32
-    }
-
     /// 这一份渲染器是第几次建的（见 [`NEXT_GENERATION`]）。
     pub(super) fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// 画一块空面板（内容区尺寸给死）：给「窗口模板」用（版面还没生成时）。
+    pub(super) fn render_panel(&mut self, content: (i32, i32), dpi: u32) -> Option<Rendered> {
+        self.renderer
+            .render_panel(
+                content.0 as f32,
+                content.1 as f32,
+                &self.theme,
+                scale(dpi),
+                Some(&self.candidate_shadow),
+            )
+            .inspect_err(|error| tracing::warn!(%error, "窗口模板渲染失败"))
+            .ok()
+    }
+
+    /// 画一块「键位映射参考」面板（版面给进来，内容区尺寸由版面自己定）：给「窗口模板」用。
+    pub(super) fn render_key_map(
+        &mut self,
+        layout: &cloudime_render::KeyMapLayout,
+        cell: f32,
+        dpi: u32,
+    ) -> Option<Rendered> {
+        self.renderer
+            .render_key_map(
+                layout,
+                cell,
+                &self.theme,
+                scale(dpi),
+                Some(&self.candidate_shadow),
+            )
+            .inspect_err(|error| tracing::warn!(%error, "辅助窗口渲染失败"))
+            .ok()
     }
 
     /// 「候选窗口装 9 个候选项」那个内容高度（**点**）：键位映射参考的缺省目标高度
