@@ -256,8 +256,94 @@ fn parse_combination_modifiers(text: &str) -> mlua::Result<u8> {
     Ok(mask)
 }
 
+/// 输入法自己占用的组合键（2026-10-17）：**清单里声明这些组合的脚本判无效，Server 也不派发给脚本**。
+///
+/// 分三类：
+/// - 现有的输入法操作：`Ctrl+Enter`（原样上屏）、`Ctrl+反引号`（翻译 Tip）/ `Shift+反引号`（发音）、
+///   `Ctrl+数字`（主键盘 / 小键盘，杀词 / 选词）、`Ctrl+Alt+Space`（中英切换的可选组合）、
+///   `Ctrl+Alt+,` / `Ctrl+Alt+.`（简繁与标点，TSF 保留键）；
+/// - **预留给非全拼模式**：`Ctrl+Alt+V` / `Ctrl+Alt+U` / `Ctrl+Alt+I`（v/u/i 模式，2026-10-17 起）；
+/// - 按「精确匹配」：`Ctrl+Alt+V/U/I` 只要 Ctrl+Alt 按着（带不带 Shift 都算），别的组合键按清单那一套。
+///
+/// `modifiers` 是物理修饰键位图（bit0 ctrl / bit1 alt / bit2 shift / bit3 win），与清单同一位数。
+pub fn is_reserved_combination(modifiers: u8, virtual_key: u32) -> bool {
+    const CTRL: u8 = 0b0001;
+    const ALT: u8 = 0b0010;
+    const SHIFT: u8 = 0b0100;
+    const WIN: u8 = 0b1000;
+
+    // 现有的输入法操作 ------------------------------------------------------
+    if modifiers & CTRL != 0 && modifiers & (ALT | WIN) == 0 {
+        // Ctrl + Enter / 反引号；Ctrl + 主键盘 / 小键盘数字
+        if matches!(virtual_key, 0x0D | 0xC0) {
+            return true;
+        }
+        if (0x30..=0x39).contains(&virtual_key) || (0x60..=0x69).contains(&virtual_key) {
+            return true;
+        }
+    }
+    // Shift + 反引号：发音（不带 Ctrl / Alt / Win）
+    if modifiers == SHIFT && virtual_key == 0xC0 {
+        return true;
+    }
+    // 输入法自己的开关 / TSF 保留键
+    // 中英切换（可选组合）、简繁（Ctrl+Alt+,）、中英标点（Ctrl+Alt+.）
+    if modifiers == CTRL | ALT && matches!(virtual_key, 0x20 | 0xBC | 0xBE) {
+        return true;
+    }
+    // 预留给非全拼模式：v / u / i 模式 --------------------------------
+    // Ctrl+Alt 按着就保留（再带 Shift 也不给脚本）—— 免得以后模式改了才发现撞键。
+    if modifiers & (CTRL | ALT) == CTRL | ALT
+        && modifiers & WIN == 0
+        && matches!(virtual_key, 0x56 | 0x55 | 0x49)
+    {
+        return true;
+    }
+    false
+}
+
+/// 组合键在报错 / 文档里的写法（`ctrl+alt+v`）。
+pub fn combination_name(modifiers: u8, virtual_key: u32) -> String {
+    let mask_name = COMBINATION_MODIFIERS
+        .iter()
+        .find(|(mask, _)| *mask == modifiers)
+        .map(|(_, name)| (*name).to_owned())
+        .unwrap_or_else(|| format!("mask={modifiers:#06b}"));
+    let key = key_display_name(virtual_key);
+    if modifiers == 0 {
+        key
+    } else {
+        format!("{mask_name}+{key}")
+    }
+}
+
+/// 虚拟键码在报错里怎么说（字母 / 数字 / 标点 / 功能键）。
+fn key_display_name(virtual_key: u32) -> String {
+    if let Some((_, name)) = KEY_NAMES.iter().find(|(code, _)| *code == virtual_key) {
+        return (*name).to_owned();
+    }
+    match virtual_key {
+        0x41..=0x5A => ((virtual_key as u8 as char).to_ascii_lowercase()).to_string(),
+        0x30..=0x39 => (virtual_key as u8 as char).to_string(),
+        0xBA => ";".to_owned(),
+        0xBB => "=".to_owned(),
+        0xBC => ",".to_owned(),
+        0xBD => "-".to_owned(),
+        0xBE => ".".to_owned(),
+        0xBF => "/".to_owned(),
+        0xC0 => "`".to_owned(),
+        0xDB => "[".to_owned(),
+        0xDC => "\\".to_owned(),
+        0xDD => "]".to_owned(),
+        0xDE => "'".to_owned(),
+        other => format!("vk={other}"),
+    }
+}
+
 /// 解析清单的 `keys`（键名数组）→ 虚拟键码（去重；至少一个）。
-fn parse_keys(options: &Table) -> mlua::Result<Vec<u32>> {
+///
+/// 命中输入法自己占用的组合（见 [`is_reserved_combination`]）直接报错 —— 这个脚本判无效。
+fn parse_keys(options: &Table, modifiers: u8) -> mlua::Result<Vec<u32>> {
     let names = options.get::<Option<Table>>("keys")?.ok_or_else(|| {
         mlua::Error::RuntimeError(
             "trigger_condition = \"combination_key\" 时清单必须写 keys（键名数组，如 { \"w\" }；可用键名见 lua.md）"
@@ -272,6 +358,13 @@ fn parse_keys(options: &Table) -> mlua::Result<Vec<u32>> {
                 "清单 keys 里的 \"{name}\" 不认识（可用：{KEY_NAME_HELP}）"
             ))
         })?;
+        if is_reserved_combination(modifiers, key) {
+            return Err(mlua::Error::RuntimeError(format!(
+                "清单 keys 里的 \"{name}\"（{}）是输入法自己占用的组合键，脚本不能绑定 \
+                 （Ctrl+Alt+V/U/I 预留给 v/u/i 模式；现有操作见 lua.md「触发条件」）",
+                combination_name(modifiers, key)
+            )));
+        }
         if !keys.contains(&key) {
             keys.push(key);
         }
@@ -1855,7 +1948,8 @@ fn parse_manifest(options: &Table, default_name: &str) -> mlua::Result<Manifest>
                         .to_owned(),
                 )
             })?;
-        (parse_combination_modifiers(&text)?, parse_keys(options)?)
+        let modifiers = parse_combination_modifiers(&text)?;
+        (modifiers, parse_keys(options, modifiers)?)
     } else {
         (0, Vec::new())
     };
@@ -3738,5 +3832,59 @@ mod tests {
             let runtime = Runtime::load(&dir, &[]);
             assert!(runtime.scripts().is_empty(), "应判无效：{source}");
         }
+    }
+
+    /// 输入法自己占用的组合键（含预留给 v/u/i 模式的 `Ctrl+Alt+V/U/I`）：函数判得出来，
+    /// 清单里声明它的脚本判无效；换成没占用的组合就有效。
+    #[test]
+    fn the_imes_own_combos_cannot_be_bound_by_scripts() {
+        for (mask, vk) in [
+            (0b0001, 0x0D), // Ctrl+Enter
+            (0b0001, 0xC0), // Ctrl+`
+            (0b0001, 0x31), // Ctrl+1
+            (0b0001, 0x61), // Ctrl+小键盘 1
+            (0b0100, 0xC0), // Shift+`
+            (0b0011, 0x20), // Ctrl+Alt+Space
+            (0b0011, 0xBC), // Ctrl+Alt+,
+            (0b0011, 0x56), // Ctrl+Alt+V
+            (0b0011, 0x55), // Ctrl+Alt+U
+            (0b0011, 0x49), // Ctrl+Alt+I
+            (0b0111, 0x56), // Ctrl+Alt+Shift+V 也保留
+        ] {
+            assert!(is_reserved_combination(mask, vk), "{mask:#06b}/{vk:#x}");
+        }
+        for (mask, vk) in [
+            (0b0000, 0x0D), // 光 Enter
+            (0b0011, 0x57), // Ctrl+Alt+W 可以用
+            (0b0101, 0x56), // Ctrl+Shift+V 可以用
+            (0b0010, 0x56), // Alt+V
+            (0b0001, 0x56), // Ctrl+V
+        ] {
+            assert!(!is_reserved_combination(mask, vk), "{mask:#06b}/{vk:#x}");
+        }
+
+        // 清单里写 Ctrl+Alt+V → 判无效
+        let dir = script_dir("reserved-combo");
+        std::fs::write(
+            dir.join("bad.lua"),
+            "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'ctrl+alt', keys = { 'v' }, \
+             budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
+             cloudime.on('key', function() return {} end)\n",
+        )
+        .unwrap();
+        let runtime = Runtime::load(&dir, &[]);
+        assert!(runtime.scripts().is_empty(), "Ctrl+Alt+V 预留给 v 模式");
+
+        // 换成 Ctrl+Alt+W 就有效
+        let dir = script_dir("reserved-combo-ok");
+        std::fs::write(
+            dir.join("good.lua"),
+            "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'ctrl+alt', keys = { 'w' }, \
+             budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
+             cloudime.on('key', function() return {} end)\n",
+        )
+        .unwrap();
+        let runtime = Runtime::load(&dir, &[]);
+        assert_eq!(runtime.scripts().to_vec(), ["good.lua"]);
     }
 }

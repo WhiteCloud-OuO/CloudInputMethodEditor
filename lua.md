@@ -144,6 +144,11 @@ end)
   声明了也没用；`AltGr` 就是 `Ctrl+Alt`（打字用），声明 `ctrl+alt` 要当心吃掉它。
 - **单个键**（比如「光按 Enter」）：`combination_modifiers = "none"` + `keys = { "enter" }`。
   `Shift+Enter` / `Ctrl+Enter` 是另外两套组合，没声明就归应用。
+- **输入法自己占用的组合键不能绑**：`Ctrl+Enter`（原样上屏）、`Ctrl+反引号`（翻译 Tip）、
+  `Shift+反引号`（发音）、`Ctrl+数字`（主键盘 / 小键盘）、`Ctrl+Alt+空格`（中英切换，如果开了）、
+  `Ctrl+Alt+,` / `Ctrl+Alt+.`（简繁 / 标点），以及**预留给非全拼 v/u/i 模式**的
+  `Ctrl+Alt+V` / `Ctrl+Alt+U` / `Ctrl+Alt+I`。清单里写了这些组合的脚本**判无效**（日志写明是哪一个）；
+  另外「键位映射参考」那套组合键（设置页选的那一个）在启用时也不会派给脚本。
 - **在 `key` 里返回 `passthrough` 等于本来就会发生的事**；真正有意义的是 `commit`（吃掉这一键、自己上屏）——
   所以只对确实需要的输入框（多行编辑的自动序号之类）生效才好，`Enter` / `Tab` 被吃掉会改变输入框行为。
 
@@ -561,7 +566,7 @@ end
 | `cloudime.text.all()` 返回 `nil` | 刚启动 / 换了输入框之后的第一次调用常见（Server 已请 DLL 读一份，下一次就有）；私密输入框或那个控件读不到光标外的文本也一样 |
 | `cloudime.context` 一直是空串、自动序号没反应 | 这个宿主不把光标**前**的文字给输入法（Windows 11 记事本实测：TSF 上下文按选区 / 组句圈成局部，读不到前面的字）—— 与「整篇读不到」同源；换 Firefox / 多数编辑器就正常 |
 | 候选窗尺寸改了没反应 | 尺寸只在**本次组句**内有效、组句结束就回配置值 |
-| 在游戏里按 `Ctrl` 组合没反应 | 清单里没声明这一组（`combination_modifiers` + `keys`，要精确对上）；声明了的话**组句与否都先到脚本**，不吃就返回 `passthrough = true`。输入法自己占用的四个组合（`Ctrl+数字` / `Ctrl+Enter` / `Ctrl+反引号` / `Shift+反引号`）脚本抢不走 |
+| 在游戏里按 `Ctrl` 组合没反应 | 清单里没声明这一组（`combination_modifiers` + `keys`，要精确对上）；声明了的话**组句与否都先到脚本**，不吃就返回 `passthrough = true`。输入法自己占用的组合脚本抢不走：`Ctrl+数字` / `Ctrl+Enter` / `Ctrl+反引号` / `Shift+反引号` / `Ctrl+Alt+空格` / `Ctrl+Alt+,` `.`，以及预留给 v/u/i 模式的 `Ctrl+Alt+V` / `U` / `I`（写了这些的脚本判无效） |
 | `key` 触发的脚本收不到某个键 | `keys` 里没声明它 / 修饰键对不上（声明的是**精确组合**；单键要 `combination_modifiers = "none"`）；键名拼错时整个脚本判无效，日志里有原因；或那一键被系统 / 外壳先拿走了（`Alt+Tab` 之类） |
 
 ## 12. 示例集

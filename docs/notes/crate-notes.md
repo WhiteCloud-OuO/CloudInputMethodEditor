@@ -739,7 +739,11 @@ Server 只按自己的语义处理 —— 谁先定义谁优先，脚本抢不�
 `focus` 事件由 `ensure_focus` 里 `dispatch_focus_scripts` 派：前台程序**变了**才派（同一程序里换输入框不算），
 载荷 `{ app }`，落地同「没有按键的那一拍」。`ensure_focus` 现在也在 `SyncMode` 里调（前台 DLL 隔几百毫秒报一次，
 切程序之后不用等按键就能派 `focus`）。`cloudime.foreground_app()` 与载荷里的 `app` 读的都是
-`Router::sync_focused_app` 维护的快照。DLL 那边：`would_eat` 命中声明的修饰键集合（`wants_script_key`；
+`Router::sync_focused_app` 维护的快照。**输入法自己占用的组合键**（`Ctrl+Enter` / `Ctrl+反引号` /
+`Ctrl+数字` / `Shift+反引号` / `Ctrl+Alt+空格` / `Ctrl+Alt+,` `.`，以及预留给 v/u/i 模式的
+`Ctrl+Alt+V/U/I`）由 `cloudime_script::is_reserved_combination` 一处定义：清单解析时直接把绑定它们的脚本
+判无效（带 `combination_name` 的人话错误），Server 的 `reserved_combo` 也调它；「键位映射参考」那套
+组合键（按配置）由 `is_key_map_hotkey` 在 `handle_key` 派发脚本之前挡掉。DLL 那边：`would_eat` 命中声明的修饰键集合（`wants_script_key`；
 命中后 Server 再按**具体键**过滤）或声明的键本身（`wants_declared_key`，只认**不带**修饰键的按下）就答「吃」，
 Server 回 Passthrough 时用 `SendInput` `replay_to_app` 把键还回应用（只注键本身，修饰键按用户手上还按着的算），
 并给 `replaying` 打标记让下一次 `OnTestKeyDown` 别重复吃（`is_replay`，别的键先到就作废）。

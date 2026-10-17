@@ -178,13 +178,18 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
   实现在 Server 侧（Windows 剪贴板 API，被别的程序占着时短等重试、仍不行报错），不经 DLL。
   `gettext` 读得到任何程序放进剪贴板的文本（含密码管理器）—— 用户自担，文档里写明。
 - **输入法自己的组合键优先**：`Ctrl + 数字`（主键盘 / 小键盘）、`Ctrl + Enter`、`Ctrl + 反引号`、
-  `Shift + 反引号` 这四类**不派发给脚本**（谁先定义谁优先，脚本抢不走）—— 它们是杀词 / 原样上屏 /
-  翻译 Tip / 发音，被脚本抢了用户就没法用。别的 `Ctrl` 组合（含 `Ctrl+Shift+…`）与所有不带修饰键的键
+  `Shift + 反引号`、`Ctrl + Alt + 空格`（中英切换的可选组合）、`Ctrl + Alt + ,` `.`（TSF 保留键），
+  以及**预留给非全拼 v/u/i 模式**的 `Ctrl + Alt + V` / `U` / `I`（2026-10-17 起，带不带 Shift 都保留）——
+  **这些组合不派发给脚本**（谁先定义谁优先，脚本抢不走），清单里声明它们的脚本直接**判无效**
+  （规则在 `cloudime_script::is_reserved_combination`，Server 的 `reserved_combo` 与清单解析共用同一份）。
+  它们是杀词 / 原样上屏 / 翻译 Tip / 发音 / 模式切换，被脚本抢了用户就没法用；「键位映射参考」那套
+  组合键（设置页选的那一个）在启用时由 `is_key_map_hotkey` 在派发脚本之前挡掉。
+  别的 `Ctrl` 组合（含 `Ctrl+Shift+…`）与所有不带修饰键的键
   都归脚本随便绑（**组句里**一律送；**没组句**时只有存在 `trigger_condition = "combination_key"` 的脚本才送 ——
   Server 把它折进下发给 DLL 的 `InputSettings.script_key_modifiers`（修饰键位图的并集），见 `eats_key` / `wants_script_key`（**精确匹配**：
 声明哪一套就只送哪一套）；**脚本不吃的按键由 DLL 用 `SendInput` 重放回应用**（`replay_to_app`，配 `is_replay` 那个「刚重放、别再吃」的标记）—— `OnTestKeyDown` 一旦答「吃」，光在 `OnKeyDown` 里返回 false 应用是拿不到的；另外**修饰键本身**（Ctrl / Alt / Shift / Win）一律不吃
 （`is_modifier_key`）—— 吃了 `Ctrl` 的 key-down，后面的 `Ctrl+A` 就会被当成普通 `a`；一个这类脚本
-  都没有时这些键原样交给应用，与以前逐字节一致）；简繁与标点那两个（`Ctrl+Alt+,` `.`）是 TSF 保留键，脚本本来就看不到。
+  都没有时这些键原样交给应用，与以前逐字节一致）。
 - **`key` 触发脚本声明具体的键**（`keys`）：Server 把它折进下发给 DLL 的 `InputSettings.script_keys`
   （虚拟键码的 256 位位图 `[u64; 4]`），DLL 在**没组句**时也把命中的键送来问一趟（组句里引擎本来就要所有键，
   但运行时只把「修饰键 + 键」都对得上的那些转给脚本）—— 脚本不吃就**重放回应用**（同组合键那条；**带修饰键的组合立刻注入**，

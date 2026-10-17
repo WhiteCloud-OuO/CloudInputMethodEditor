@@ -41,27 +41,14 @@ fn is_speak_key(event: &KeyEvent) -> bool {
         && event.virtual_key == codes::BACKQUOTE
 }
 
-/// 这一键是不是**输入法自己占用的组合键**：`Ctrl + 数字`（主键盘 / 小键盘）、`Ctrl + Enter`、
-/// `Ctrl + 反引号`、`Shift + 反引号`。
+/// 这一键是不是**输入法自己占用的组合键**（清单里声明这些组合的脚本判无效，Server 也不派发给脚本）。
 ///
-/// 这些是输入法的核心操作（杀词 / 原样上屏 / 翻译 Tip / 发音），脚本一抢用户就用不了了 ——
-/// 用户定的规则是「软件本身的组合键优先」：**这些组合不派发给脚本**，Server 只按自己的语义处理。
-/// 别的 `Ctrl` 组合（含 `Ctrl+Shift+…`）与所有不带修饰键的键都不在这里，脚本随便绑
-/// （见 `docs/design/script.md` 的「按键」一节）。简繁 / 标点那两个（`Ctrl+Alt+,` `.`）是 TSF
-/// 保留键、走状态那条路，脚本本来就看不到，所以不用列进来。
+/// 具体清单在 [`cloudime_script::is_reserved_combination`]（与清单解析共用同一份规则）：
+/// `Ctrl + 数字`（主键盘 / 小键盘）、`Ctrl + Enter`、`Ctrl + 反引号`、`Shift + 反引号`、
+/// `Ctrl + Alt + Space`、`Ctrl + Alt + ,` / `.`，以及**预留给 v/u/i 模式**的
+/// `Ctrl + Alt + V` / `U` / `I`（2026-10-17 起）。
 pub(crate) fn reserved_combo(event: &KeyEvent) -> bool {
-    let modifiers = event.modifiers;
-    if modifiers.ctrl && !modifiers.alt && !modifiers.win {
-        if event.virtual_key == codes::RETURN || event.virtual_key == codes::BACKQUOTE {
-            return true;
-        }
-        // Ctrl + 主键盘 / 小键盘数字：杀词 / 上屏短语与整句
-        if codes::digit_virtual_key(event.virtual_key).is_some() {
-            return true;
-        }
-    }
-    // Shift + 反引号：发音（条件与 `is_speak_key` 一致）
-    is_speak_key(event)
+    cloudime_script::is_reserved_combination(event.modifiers.mask() as u8, event.virtual_key)
 }
 
 impl Router {
@@ -203,20 +190,25 @@ impl Router {
     /// 带 Ctrl 的组合键只有组句时才会由 DLL 送上来（见 tsf 的 `would_eat`）；`Ctrl+Alt` / `Alt+Shift`
     /// 那两套则由 DLL 按 `InputSettings::key_map_modifiers` 专程送这一个键。
     fn key_map_reference(&mut self, event: &KeyEvent) -> Option<Effect> {
-        let hotkey = self.config.key_map_hotkey;
-        if self.config.key_map_reference != KeyMapReference::Hotkey
-            || !self.composing()
-            || event.virtual_key != hotkey.key.virtual_key()
-            || event.modifiers.mask() != hotkey.modifiers.mask()
-        {
+        if !self.is_key_map_hotkey(event) {
             return None;
         }
         self.candidates.auxiliary_toggle();
         tracing::info!(
-            hotkey = %hotkey.value(),
+            hotkey = %self.config.key_map_hotkey.value(),
             "组合键：开关「键位映射参考」（辅助窗口）"
         );
         Some(Effect::Changed(None))
+    }
+
+    /// 这一键是不是「键位映射参考」的组合键（只判断，不执行开关）：
+    /// 它是输入法自己的组合键，**不给脚本**（`handle_key` 派发脚本之前先看它）。
+    pub(crate) fn is_key_map_hotkey(&self, event: &KeyEvent) -> bool {
+        let hotkey = self.config.key_map_hotkey;
+        self.config.key_map_reference == KeyMapReference::Hotkey
+            && self.composing()
+            && event.virtual_key == hotkey.key.virtual_key()
+            && event.modifiers.mask() == hotkey.modifiers.mask()
     }
 
     /// `Shift + 反引号`：念高亮候选的译文（系统语音，异步）。只有**一条**释义就念它；

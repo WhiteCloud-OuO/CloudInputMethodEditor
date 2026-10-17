@@ -150,7 +150,7 @@ impl Router {
         // 脚本先看一眼这一键：返回的表能改这一拍的结果（见 `script`）。
         // **输入法自己占用的组合键（`Ctrl+数字` / `Ctrl+Enter` / `Ctrl+反引号` / `Shift+反引号`）
         // 不派发给脚本** —— 谁先定义谁优先，脚本抢不走（见 `docs/design/script.md`）。
-        let actions = if reserved_combo(&event) {
+        let actions = if reserved_combo(&event) || self.is_key_map_hotkey(&event) {
             ScriptActions::default()
         } else {
             self.script_actions(&event)

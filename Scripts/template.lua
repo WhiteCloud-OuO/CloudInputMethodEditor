@@ -32,6 +32,8 @@ cloudime.script{
     --            win+ctrl / win+alt / win+shift / win+alt+ctrl / win+ctrl+shift
     --    键：单个字母 / 数字 / 标点，或 enter / tab / space / backspace / delete / esc /
     --        left up right down / home / end / pageup / pagedown / f1..f12
+    --    ⚠️ 输入法自己占用的组合不能绑（写了脚本判无效）：Ctrl+Enter / Ctrl+反引号 / Ctrl+数字 /
+    --       Shift+反引号 / Ctrl+Alt+空格 / Ctrl+Alt+, . / Ctrl+Alt+V、U、I（预留给 v/u/i 模式）
     combination_modifiers = "ctrl+alt",
     keys                  = { "j" },
 
