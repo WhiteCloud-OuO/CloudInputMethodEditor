@@ -32,14 +32,15 @@ use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
 use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DefWindowProcW, DestroyWindow, HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE,
-    SW_HIDE, SW_SHOWNA, ShowWindow, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCHITTEST,
-    WM_RBUTTONUP, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP,
+    SW_HIDE, SW_SHOWNA, ShowWindow, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCHITTEST, WM_RBUTTONUP, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
+    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -103,6 +104,7 @@ pub(super) enum PanelAction {
     RightClick,
     Hover,
     Leave,
+    Wheel,
 }
 
 /// 一次面板鼠标事件：坐标是**内容区点**；`element` 是命中的元素（1 起，`None` = 没命中）。
@@ -112,6 +114,7 @@ pub(super) struct PanelEvent {
     pub x: f32,
     pub y: f32,
     pub element: Option<usize>,
+    pub delta: Option<i32>,
 }
 
 /// 面板鼠标事件的出口：脚本辅助窗口用它把点击 / 悬停送回工人线程。
@@ -143,7 +146,7 @@ pub(super) struct AuxiliaryWindowTemplate {
     events: RefCell<Option<PanelEvents>>,
 
     /// 最近一帧每个元素的命中区域（内容区坐标，点）：脚本辅助窗口的鼠标事件用。
-    hits: RefCell<Vec<Option<cloudime_render::HitRect>>>,
+    hits: RefCell<Vec<Option<cloudime_render::HitShape>>>,
 
     /// 鼠标正停在哪个元素上（1 起；`None` = 没停在任何元素上）：悬停事件只在换元素时派。
     hover: Cell<Option<usize>>,
@@ -276,12 +279,16 @@ impl AuxiliaryWindowTemplate {
             .iter()
             .enumerate()
             .rev()
-            .find_map(|(index, hit)| hit.filter(|hit| hit.contains(x, y)).map(|_| index + 1));
+            .find_map(|(index, hit)| {
+                hit.as_ref()
+                    .filter(|hit| hit.contains(x, y))
+                    .map(|_| index + 1)
+            });
         (x, y, element)
     }
 
     /// 把一次鼠标动作交给出口（没装出口就什么也不做）。
-    fn emit(&self, action: PanelAction, client_x: i32, client_y: i32) {
+    fn emit(&self, action: PanelAction, client_x: i32, client_y: i32, delta: Option<i32>) {
         let (x, y, element) = self.hit_at(client_x, client_y);
         if let Some(events) = self.events.borrow().as_ref() {
             events(PanelEvent {
@@ -289,6 +296,7 @@ impl AuxiliaryWindowTemplate {
                 x,
                 y,
                 element,
+                delta,
             });
         }
     }
@@ -301,7 +309,7 @@ impl AuxiliaryWindowTemplate {
             return;
         }
         if element.is_some() {
-            self.emit(PanelAction::Hover, client_x, client_y);
+            self.emit(PanelAction::Hover, client_x, client_y, None);
         }
     }
 
@@ -309,7 +317,7 @@ impl AuxiliaryWindowTemplate {
     fn emit_leave(&self) {
         self.hover.set(None);
         let (x, y) = self.last.get();
-        self.emit(PanelAction::Leave, x, y);
+        self.emit(PanelAction::Leave, x, y, None);
     }
 
     /// 创建时声明的 `able_to_get_focus`。
@@ -600,13 +608,31 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_LBUTTONUP => {
             with_template(hwnd, |template| {
-                template.emit(PanelAction::Click, client_x(lparam), client_y(lparam));
+                template.emit(PanelAction::Click, client_x(lparam), client_y(lparam), None);
             });
             LRESULT(0)
         }
         WM_RBUTTONUP => {
             with_template(hwnd, |template| {
-                template.emit(PanelAction::RightClick, client_x(lparam), client_y(lparam));
+                template.emit(
+                    PanelAction::RightClick,
+                    client_x(lparam),
+                    client_y(lparam),
+                    None,
+                );
+            });
+            LRESULT(0)
+        }
+        // 滚轮的坐标在 `lparam` 里是**屏幕**坐标（与鼠标移动不同），先换算成客户区。
+        WM_MOUSEWHEEL => {
+            let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
+            let mut point = POINT {
+                x: client_x(lparam),
+                y: client_y(lparam),
+            };
+            let _ = unsafe { ScreenToClient(hwnd, &mut point) };
+            with_template(hwnd, |template| {
+                template.emit(PanelAction::Wheel, point.x, point.y, Some(delta));
             });
             LRESULT(0)
         }

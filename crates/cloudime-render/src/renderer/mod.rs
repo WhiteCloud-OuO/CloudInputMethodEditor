@@ -16,7 +16,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::color::Color;
-use crate::document::{self, Document, Element, HitRect};
+use crate::document::{self, Document, Element, HitRect, HitShape};
 use crate::elements::{
     ImageElement, LineElement, PathElement, RectElement, SvgElement, TextElement,
 };
@@ -772,17 +772,17 @@ pub(super) fn truncate_with(
     (ELLIPSIS.to_owned(), true)
 }
 
-/// 画脚本内容里的一个元素，返回它在**内容区**里的包围盒（点）：鼠标命中测试按外框算，不抠形状。
-/// 画不出来（SVG 解析失败 / 空路径）返回 `None`。
+/// 画脚本内容里的一个元素，返回它在**内容区**里的命中区域（点）：能抠形状的按形状算
+///（圆角 / 圆 / 线段 / 路径填充），文字与图像按外框。画不出来（SVG 解析失败 / 空路径）返回 `None`。
 ///
 /// `margin` 是位图四周的阴影留白（像素）：内容区左上角在位图里的位置，所有坐标都要加上它。
-/// 命中框仍然只报**内容区**坐标（与 `Document` 同一套，鼠标事件那边减掉留白再换算）。
+/// 命中区域仍然只报**内容区**坐标（与 `Document` 同一套，鼠标事件那边减掉留白再换算）。
 fn draw_element(
     render: &mut Render,
     element: &Element,
     m: &Metrics,
     margin: f32,
-) -> Option<HitRect> {
+) -> Option<HitShape> {
     let scale = m.scale;
     // 位置要加上内容区在位图里的偏移（阴影留白）；尺寸不用。
     let at = |value: f32| margin + value * scale;
@@ -796,7 +796,7 @@ fn draw_element(
             radius,
             color,
         } => {
-            if *radius > 0.0 {
+            let hit = if *radius > 0.0 {
                 render.round_rect(
                     at(*x),
                     at(*y),
@@ -805,10 +805,18 @@ fn draw_element(
                     len(*radius),
                     *color,
                 );
+                HitShape::RoundRect {
+                    x: *x,
+                    y: *y,
+                    width: *width,
+                    height: *height,
+                    radius: *radius,
+                }
             } else {
                 render.rect(at(*x), at(*y), len(*width), len(*height), *color);
-            }
-            Some(HitRect::new(*x, *y, *width, *height))
+                HitShape::Rect(HitRect::new(*x, *y, *width, *height))
+            };
+            Some(hit)
         }
         Element::Line {
             from,
@@ -822,14 +830,11 @@ fn draw_element(
                 len(*thickness),
                 *color,
             );
-            // 包围盒按「两端点外扩半个线宽」算：斜线也点得着。
-            let half = thickness * 0.5;
-            Some(HitRect::new(
-                from.0.min(to.0) - half,
-                from.1.min(to.1) - half,
-                (to.0 - from.0).abs() + thickness,
-                (to.1 - from.1).abs() + thickness,
-            ))
+            Some(HitShape::Segment {
+                from: *from,
+                to: *to,
+                thickness: *thickness,
+            })
         }
         Element::Circle {
             cx,
@@ -838,12 +843,11 @@ fn draw_element(
             color,
         } => {
             render.circle(at(*cx), at(*cy), len(*radius), *color);
-            Some(HitRect::new(
-                cx - radius,
-                cy - radius,
-                radius * 2.0,
-                radius * 2.0,
-            ))
+            Some(HitShape::Circle {
+                cx: *cx,
+                cy: *cy,
+                radius: *radius,
+            })
         }
         Element::Text {
             x,
@@ -859,7 +863,12 @@ fn draw_element(
             style.family = document::family_for(m.theme, *slot).cloned();
             style.italic = *italic;
             let width = render.text(text, &style, at(*x), at(*y)) / scale;
-            Some(HitRect::new(*x, *y, width, font.line_height / scale))
+            Some(HitShape::Rect(HitRect::new(
+                *x,
+                *y,
+                width,
+                font.line_height / scale,
+            )))
         }
         Element::Svg {
             x,
@@ -869,7 +878,7 @@ fn draw_element(
             tint,
         } => {
             render.svg(source, at(*x), at(*y), len(*size), *tint).ok()?;
-            Some(HitRect::new(*x, *y, *size, *size))
+            Some(HitShape::Rect(HitRect::new(*x, *y, *size, *size)))
         }
         Element::Image {
             x,
@@ -879,18 +888,14 @@ fn draw_element(
             image,
         } => {
             render.image(image, at(*x), at(*y), len(*width), len(*height));
-            Some(HitRect::new(*x, *y, *width, *height))
+            Some(HitShape::Rect(HitRect::new(*x, *y, *width, *height)))
         }
         Element::Path { commands, color } => {
             let path = document::build_path(commands, scale, margin)?;
-            let bounds = path.bounds();
             render.path(&path, *color);
-            Some(HitRect::new(
-                (bounds.x() - margin) / scale,
-                (bounds.y() - margin) / scale,
-                bounds.width() / scale,
-                bounds.height() / scale,
-            ))
+            Some(HitShape::Path {
+                contours: document::path_contours(commands),
+            })
         }
     }
 }
@@ -1192,7 +1197,7 @@ mod tests {
     #[test]
     fn a_document_paints_its_elements_and_reports_hit_boxes() {
         use crate::color::Color;
-        use crate::document::{Document, Element, FontSlot, HitRect};
+        use crate::document::{Document, Element, FontSlot, HitRect, HitShape};
 
         // 没有系统字体的环境（CI 容器）跳过
         let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
@@ -1246,10 +1251,13 @@ mod tests {
         assert_eq!(rendered.hits.len(), 2);
         assert_eq!(
             rendered.hits[0],
-            Some(HitRect::new(0.0, 0.0, 120.0, 20.0)),
-            "矩形按外框给命中区域"
+            Some(HitShape::Rect(HitRect::new(0.0, 0.0, 120.0, 20.0))),
+            "直角矩形按外框给命中区域"
         );
-        let text = rendered.hits[1].expect("文字有命中框");
+        let text = match rendered.hits[1] {
+            Some(HitShape::Rect(rect)) => rect,
+            ref other => panic!("文字该是外框：{other:?}"),
+        };
         assert_eq!(text.x, 4.0);
         assert!(text.width > 0.0, "文字宽度是量出来的：{text:?}");
     }

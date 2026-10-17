@@ -159,7 +159,7 @@ end)
 | `key` | 一次按键、**引擎处理之前**（只有 `combination_key` / `key` 脚本收） | 见[动作表](#5-返回值动作表)全部项；`passthrough` / `commit` 只有这一拍认 |
 | `candidates` | **引擎排完之后**（每次重排；只有 `candidate_context` 脚本收） | `order` / `display` / `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 给了只记日志 |
 | `time` | 到清单里 `trigger_time` 那个点（本地时间 `HH:MM`；只有 `sys_time` 脚本收） | `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 给了只记日志。载荷同 `cloudime.get_time()`，另加 `app`（那一刻前台程序） |
-| `window` | 脚本窗口上的鼠标动作（`click` / `right_click` / `hover` / `leave`） | 同 `candidates`：`notice` / `adjust` / `online` / `theme`；窗口要 `interactive`（辅助窗口还要 `aux:focus(true)`）才接鼠标 |
+| `window` | 脚本窗口上的鼠标 / 滚轮 / 焦点动作（`click` / `right_click` / `hover` / `leave` / `wheel` / `focus` / `blur`） | 同 `candidates`：`notice` / `adjust` / `online` / `theme`；窗口要 `interactive`（辅助窗口还要 `aux:focus(true)`）才接鼠标 |
 | 异步回调 | HTTP 结果回来那一拍（**所有脚本**） | 同 `candidates`；`passthrough` / `commit` 给了只记日志 |
 
 多个脚本按 `(priority, 文件名)` 顺序合并，**后面返回的盖前面的**（表里没写的项不动）。
@@ -396,7 +396,7 @@ aux:show()
 | `win:show{ x = …, y = … }` | 显示；坐标是**内容区左上角**的屏幕坐标（点）。不写就沿用上次的位置，没有过就摆在光标右下 |
 | `win:hide()` | 收起（不销毁） |
 | `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
-| `aux:focus(true / false)` | 只对辅助窗口有意义：把逻辑焦点指定给它 / 交还给宿主 |
+| `win:focus(true / false)` | 独立窗口：拿 / 放**键盘焦点**（之后 `key` 载荷里带 `window` / `window_id`）；辅助窗口：把逻辑焦点指定给它 / 交还给宿主 |
 
 **元素表**（坐标 / 尺寸都是点，超出内容区的部分被裁掉）：
 
@@ -412,32 +412,52 @@ aux:show()
 
 颜色写 `"#RRGGBB"` / `"#AARRGGBB"` / `"#RGB"`，或 `{ r = …, g = …, b = …, a = … }`（0–255）。
 
+**命中按形状**：圆角矩形抠掉四个角、圆按边界、线段按粗细、路径按非零环绕填充；文字 / 图像 / SVG 按外框。
+`img` 按路径**缓存**解码结果（最多 8 张 / 32M 像素，文件改过下一次 `set_content` 生效），同一张图不用反复解码。
+
 **限额**（超了当场报 Lua 错误，窗口保持原样）：一份内容最多 512 个元素；一段文字最多 4096 字符；
 图片不超过 4096 × 4096；内容区尺寸夹到 8–2048 点。
 
-**鼠标事件**（`interactive = true` 的窗口才会收到）：
+**鼠标 / 滚轮 / 拖动 / 键盘**（`interactive = true` 的窗口才会收到）：
 
 ```lua
 cloudime.on("window", function(event)
     -- event.window / event.id      哪块窗口（名字 / 编号）
-    -- event.action                 "click" / "right_click" / "hover" / "leave"
+    -- event.action                 "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur"
     -- event.x / event.y            内容区坐标（点）
     -- event.element               命中的元素（内容数组里 1 起的下标；没命中是 nil）
-    if event.action == "click" then
+    -- event.delta                 滚轮量（一格 ±120，正数往上；只有 wheel 有）
+    if event.action == "wheel" then
+        count = math.max(0, count + event.delta // 120)
+        win:set_content{ { type = "text", x = 8, y = 8, text = "计到 " .. count } }
+    elseif event.action == "click" then
         win:set_content{ { type = "text", x = 8, y = 8, text = "点到了 " .. tostring(event.element) } }
     end
 end)
 ```
 
 - `click` / `right_click` 在按键抬起时派；`hover` 只在停到**另一个元素**上时派一次；`leave` 是鼠标离开窗口。
-- 命中按元素**外框**算（后画的在上面）。
+- **拖动**：按住左键在窗口上拖就移动整块窗口（超过 4 像素才算拖，拖过就不算点击），辅助窗口跟着摆；
+  拖到另一块 DPI 不同的显示器上会按新 DPI 重画。
+- **键盘焦点**：点一下窗口（或 `win:focus()`）它就拿到键盘焦点，`window` 事件收到 `focus`；
+  点别的窗口 / 收起 / 关闭时收到 `blur`。拿到焦点期间 `key` 载荷多两个字段 `window` / `window_id`：
+
+  ```lua
+  cloudime.on("key", function(event)
+      if event.window_id ~= win.id then return end    -- 不是这块面板的键
+      if event.vk == 0x1B then win:hide() end         -- Esc 收起
+  end)
+  ```
+
+  ⚠️ 窗口不抢系统的键盘焦点：能收到哪些键由清单决定（`trigger_condition = "key"` 的 `keys`、或
+  `combination_key` 的那套组合键），**不是**有焦点就能拿到所有键；窗口里也没有文本输入框。
 - `window` 事件**不看清单的 `trigger_condition`**（与 `startup`、HTTP 回调一样，所有脚本都能收）。
 - 辅助窗口默认鼠标穿透：`create_auxiliary{ interactive = true }` 之后还要 `aux:focus(true)` 才真正接鼠标
   （焦点一组里只有一个：给了它，宿主那块窗就让开）。
 - 返回值按「没有按键的那一拍」处理：`notice` / `online` / `theme` / `adjust` 认，`passthrough` / `commit` 忽略。
 
-窗口活到 `close` 或输入法服务退出；`hide` 不销毁。**还没有**键盘输入、拖动、滚轮，
-命中也不抠圆角 / 圆 / 路径的形状（都按外框）。
+窗口活到 `close` 或输入法服务退出；`hide` 不销毁。**还没有**窗口内的文本输入 / 组句、拖元素（滑块之类）；
+拖动只移动整块窗口。
 
 ## 7. 标准库与运行环境
 

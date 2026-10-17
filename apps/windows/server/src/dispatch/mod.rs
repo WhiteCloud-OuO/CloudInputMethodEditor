@@ -111,6 +111,10 @@ pub struct Router {
     /// 输出端装好之前攒下的窗口操作。
     pending_script_windows: Vec<cloudime_script::WindowRequest>,
 
+    /// 现在拿着**键盘焦点**的脚本窗口（`id` + 名字）：`key` 载荷据此带上 `window` / `window_id`。
+    /// 由 UI 线程的 `focus` / `blur` 事件维护（点窗口、`win:focus()`、收起 / 关掉）。
+    focused_script_window: Option<(cloudime_script::WindowId, String)>,
+
     /// 全局输入法状态（中文 / 英文 / 禁用），所有应用共用。DLL 切了报来，激活 / 获焦 / 轮询时取走。
     mode: InputMode,
 
@@ -255,6 +259,7 @@ impl Router {
             script_windows: Box::new(NoopScriptWindowSink),
             script_windows_ready: false,
             pending_script_windows: Vec::new(),
+            focused_script_window: None,
             mode: InputMode::default(),
             ime_active: false,
             in_text_input: false,

@@ -6,7 +6,8 @@
 -- 用到的能力（完整说明见安装目录的 lua.md）：
 --   * `cloudime.window.create{…}`：建一块独立窗口（`interactive = true` 才接鼠标）；
 --   * `win:set_content{…}`：换一整份内容（矩形 / 文字 / SVG / 图片……），坐标与尺寸都是点；
---   * `cloudime.on("window", …)`：窗口上的点击 / 悬停事件（`event.action` / `event.element`）；
+--   * `cloudime.on("window", …)`：窗口上的点击 / 悬停 / 滚轮 / 焦点事件；
+--   * 拖动：按住左键在面板上拖就移动整块窗口（这张脚本不用写代码）；
 --   * `win:show{ x, y }` / `win:hide()`：显示与收起（窗口不会因为收起而销毁）。
 --
 -- 窗口内容变了就整份重送（`draw()`），不需要自己记「哪一块脏了」。
@@ -68,5 +69,9 @@ cloudime.on("window", function(event)
     if event.action == "click" and event.element ~= nil then
         count = count + 1
         draw()                            -- 改完立刻看得见
+    elseif event.action == "wheel" then
+        -- 滚轮一格 ±120：在面板上滚一滚也能加减
+        count = math.max(0, count + event.delta // 120)
+        draw()
     end
 end)

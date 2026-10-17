@@ -17,18 +17,22 @@ use std::rc::{Rc, Weak};
 use std::sync::Arc;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
-use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     GetCursorPos, HTCLIENT, HTTRANSPARENT, IDC_ARROW, LoadCursorW, MA_NOACTIVATE, SW_HIDE,
-    SW_SHOWNA, ShowWindow, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_NCHITTEST,
-    WM_RBUTTONUP,
+    SW_SHOWNA, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, ShowWindow,
+    WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCHITTEST, WM_RBUTTONUP,
 };
 use windows::core::{PCWSTR, Result, w};
 
 use cloudime_platform::LayoutMode;
-use cloudime_render::{Document, HitRect};
+use cloudime_render::{Document, HitShape};
 use cloudime_script::{
     AuxiliarySpec, ScriptWindowEvent, WindowAction, WindowId, WindowRequest, WindowSpec,
 };
@@ -161,6 +165,8 @@ impl ScriptWindows {
 
     fn close(&mut self, id: WindowId) {
         if let Some(window) = self.windows.remove(&id) {
+            // 关掉的窗口如果正拿着键盘焦点：先告诉工人线程（`key` 载荷不别再带它）
+            window.notify_blur();
             tracing::info!(id, name = %window.name, "脚本独立窗口已关（名下资产一起放掉）");
             // 名下资产是它自己的资产表里放着的：`ScriptWindow` 一 `Drop`，模板先 `retire` 再销毁。
             self.auxiliaries.retain(|_, aux| aux.owner != id);
@@ -175,8 +181,16 @@ impl ScriptWindows {
         }
     }
 
-    /// 把焦点指定给某件脚本辅助窗口 / 交还给宿主（`aux:focus(true/false)`）。
+    /// 键盘焦点（独立窗口）或逻辑焦点（辅助窗口，经宿主指定）。
     fn focus(&self, id: WindowId, focus: bool) {
+        if let Some(window) = self.windows.get(&id) {
+            if focus {
+                window.notify_focus();
+            } else {
+                window.notify_blur();
+            }
+            return;
+        }
         let Some(aux) = self.auxiliaries.get(&id) else {
             tracing::warn!(id, "脚本辅助窗口：focus 时找不到这块窗口");
             return;
@@ -207,8 +221,19 @@ impl ScriptWindows {
     }
 }
 
-/// 脚本窗口上一次贴上去的那一幅：位置 + 内容尺寸 + 内容版本 + 渲染器代号。
-type Painted = ((i32, i32), (i32, i32), u64, u64);
+/// 脚本窗口上一次贴上去的那一幅：位置 + 内容尺寸 + 内容版本 + DPI + 渲染器代号。
+type Painted = ((i32, i32), (i32, i32), u64, u64, u64);
+
+/// 拖动状态：按下时的光标屏幕坐标 + 窗口左上角（物理像素）+ 有没有超过阈值。
+#[derive(Debug, Clone, Copy)]
+struct Drag {
+    start_cursor: (i32, i32),
+    start_window: (i32, i32),
+    moved: bool,
+}
+
+/// 一次拖动要移动超过多少像素才算「拖」而不是「点」。
+const DRAG_THRESHOLD: i32 = 4;
 
 /// 一块脚本独立窗口。
 pub(super) struct ScriptWindow {
@@ -241,10 +266,13 @@ pub(super) struct ScriptWindow {
     painted: Cell<Option<Painted>>,
 
     /// 最近一帧每个元素的命中区域（内容区坐标，点）。
-    hits: RefCell<Vec<Option<HitRect>>>,
+    hits: RefCell<Vec<Option<HitShape>>>,
 
     /// 鼠标正停在哪个元素上（1 起）。
     hover: Cell<Option<usize>>,
+
+    /// 拖动中：按下时的光标屏幕坐标 + 窗口左上角 + 有没有超过阈值。
+    drag: Cell<Option<Drag>>,
 
     /// 最后一次收到的客户区坐标。
     last: Cell<(i32, i32)>,
@@ -290,10 +318,11 @@ impl ScriptWindow {
             painted: Cell::new(None),
             hits: RefCell::new(Vec::new()),
             hover: Cell::new(None),
+            drag: Cell::new(None),
             last: Cell::new((0, 0)),
             scale: Cell::new(1.0),
             margin: Cell::new(0),
-            dpi: Cell::new(unsafe { GetDpiForSystem() }.max(96)),
+            dpi: Cell::new(system_dpi()),
         });
         REGISTRY.with(|map| {
             map.borrow_mut()
@@ -320,19 +349,32 @@ impl ScriptWindow {
 
     /// 显示：`position` 是内容区左上角的屏幕坐标（点）；`None` = 上次的位置 / 光标旁。
     fn show(&self, position: Option<(f32, f32)>) {
-        let dpi = self.dpi.get().max(1);
-        let position = position
-            .map(|(x, y)| points_to_pixels(x, y, dpi))
-            .or(self.position.get())
-            .unwrap_or_else(|| default_position(dpi));
+        let (position, dpi) = match position {
+            Some((x, y)) => resolve_point(x, y, self.dpi.get()),
+            None => match self.position.get() {
+                // 上次的位置是物理像素：直接问那个显示器现在多少 DPI（用户可能把显示器挪了）
+                Some(position) => (
+                    position,
+                    monitor::dpi_near(POINT {
+                        x: position.0,
+                        y: position.1,
+                    })
+                    .unwrap_or(self.dpi.get())
+                    .max(1),
+                ),
+                None => default_position(),
+            },
+        };
+        self.dpi.set(dpi.max(1));
         self.render_and_present(position);
         if !self.shown.replace(true) {
-            tracing::info!(id = self.id, name = %self.name, x = position.0, y = position.1,
+            tracing::info!(id = self.id, name = %self.name, x = position.0, y = position.1, dpi,
                 "脚本独立窗口已显示");
         }
         self.sync_assets();
     }
 
+    /// 内容换了 / 刚显示：按 `self.dpi` 出图并贴上。
     fn render_and_present(&self, position: (i32, i32)) {
         let dpi = self.dpi.get().max(1);
         let rendered = {
@@ -357,7 +399,13 @@ impl ScriptWindow {
             rendered.rendered.content_width as i32,
             rendered.rendered.content_height as i32,
         );
-        let signature = (position, content, self.revision.get(), generation);
+        let signature = (
+            position,
+            content,
+            self.revision.get(),
+            dpi as u64,
+            generation,
+        );
         if self.painted.get() == Some(signature) && self.shown.get() {
             return;
         }
@@ -381,6 +429,25 @@ impl ScriptWindow {
         let _ = unsafe { ShowWindow(self.hwnd(), SW_SHOWNA) };
     }
 
+    /// 拖到另一块显示器之后：DPI 变了就按新 DPI 重画（点 → 像素的换算跟着换）。
+    fn refresh_after_move(&self) {
+        let Some(position) = self.position.get() else {
+            return;
+        };
+        let dpi = monitor::dpi_near(POINT {
+            x: position.0,
+            y: position.1,
+        })
+        .unwrap_or(self.dpi.get())
+        .max(1);
+        if dpi == self.dpi.get() {
+            return;
+        }
+        self.dpi.set(dpi);
+        self.render_and_present(position);
+        self.sync_assets();
+    }
+
     fn hide(&self) {
         self.painted.set(None);
         self.hits.borrow_mut().clear();
@@ -389,6 +456,8 @@ impl ScriptWindow {
             let _ = unsafe { ShowWindow(self.hwnd(), SW_HIDE) };
             tracing::info!(id = self.id, name = %self.name, "脚本独立窗口已收起");
         }
+        // 收起时键盘焦点也放掉（焦点不留在看不见的窗口上）
+        self.notify_blur();
         // 收起时焦点先回到自己身上（§4 规则 7：焦点不留在看不见的资产上），再收起名下的资产
         self.template.borrow().return_focus_to_owner();
         self.sync_assets();
@@ -427,6 +496,16 @@ impl ScriptWindow {
     }
 
     fn emit(&self, action: WindowAction, client_x: i32, client_y: i32) {
+        self.emit_with_delta(action, client_x, client_y, None);
+    }
+
+    fn emit_with_delta(
+        &self,
+        action: WindowAction,
+        client_x: i32,
+        client_y: i32,
+        delta: Option<i32>,
+    ) {
         let (x, y, element) = self.hit_at(client_x, client_y);
         (self.events)(ScriptWindowEvent {
             window: self.id,
@@ -435,6 +514,7 @@ impl ScriptWindow {
             x,
             y,
             element,
+            delta,
         });
     }
 
@@ -453,6 +533,71 @@ impl ScriptWindow {
         self.hover.set(None);
         let (x, y) = self.last.get();
         self.emit(WindowAction::Leave, x, y);
+    }
+
+    /// 这块窗口拿到了键盘焦点（点它 / `win:focus()`）：告诉工人线程，`key` 载荷据此带上 `window`。
+    fn notify_focus(&self) {
+        let (x, y) = self.last.get();
+        self.emit(WindowAction::Focus, x, y);
+    }
+
+    /// 键盘焦点离开（点了别的窗口 / 收起 / 销毁 / `win:focus(false)`）。
+    fn notify_blur(&self) {
+        let (x, y) = self.last.get();
+        self.emit(WindowAction::Blur, x, y);
+    }
+
+    /// 左键按下：记住起点，等移动超过阈值再算「拖」。
+    fn begin_drag(&self) {
+        let mut point = POINT::default();
+        let _ = unsafe { GetCursorPos(&mut point) };
+        let (x, y) = self.position.get().unwrap_or((0, 0));
+        let margin = self.margin.get();
+        self.drag.set(Some(Drag {
+            start_cursor: (point.x, point.y),
+            start_window: (x - margin, y - margin),
+            moved: false,
+        }));
+        let _ = unsafe { SetCapture(self.hwnd()) };
+        // 点一下就算拿到键盘焦点（脚本可以据此处理按键）
+        self.notify_focus();
+    }
+
+    /// 左键按着移动：超过阈值就把窗口挪过去（名下资产跟着重新摆）。
+    fn drag_to(&self) {
+        let Some(mut drag) = self.drag.get() else {
+            return;
+        };
+        let mut point = POINT::default();
+        let _ = unsafe { GetCursorPos(&mut point) };
+        let dx = point.x - drag.start_cursor.0;
+        let dy = point.y - drag.start_cursor.1;
+        if !drag.moved && dx.abs().max(dy.abs()) < DRAG_THRESHOLD {
+            return;
+        }
+        drag.moved = true;
+        self.drag.set(Some(drag));
+        let (x, y) = (drag.start_window.0 + dx, drag.start_window.1 + dy);
+        let _ = unsafe {
+            SetWindowPos(
+                self.hwnd(),
+                None,
+                x,
+                y,
+                0,
+                0,
+                SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+            )
+        };
+        let margin = self.margin.get();
+        self.position.set(Some((x + margin, y + margin)));
+        self.sync_assets();
+    }
+
+    /// 左键抬起：返回「刚才是不是拖过」（拖过就不算点击）。
+    fn end_drag(&self) -> bool {
+        let _ = unsafe { ReleaseCapture() };
+        self.drag.take().map(|drag| drag.moved).unwrap_or(false)
     }
 }
 
@@ -563,10 +708,12 @@ impl ScriptAuxiliary {
                     PanelAction::RightClick => WindowAction::RightClick,
                     PanelAction::Hover => WindowAction::Hover,
                     PanelAction::Leave => WindowAction::Leave,
+                    PanelAction::Wheel => WindowAction::Wheel,
                 },
                 x: panel.x,
                 y: panel.y,
                 element: panel.element,
+                delta: panel.delta,
             });
         }));
         Ok(Self {
@@ -659,11 +806,12 @@ impl Asset for AssetHandle {
 }
 
 /// 命中测试：从**最后画的**（最上面）往下找，第一个装下这个点的元素就是它。
-fn element_at(hits: &[Option<HitRect>], x: f32, y: f32) -> Option<usize> {
-    hits.iter()
-        .enumerate()
-        .rev()
-        .find_map(|(index, hit)| hit.filter(|hit| hit.contains(x, y)).map(|_| index + 1))
+fn element_at(hits: &[Option<HitShape>], x: f32, y: f32) -> Option<usize> {
+    hits.iter().enumerate().rev().find_map(|(index, hit)| {
+        hit.as_ref()
+            .filter(|hit| hit.contains(x, y))
+            .map(|_| index + 1)
+    })
 }
 
 /// 点 → 物理像素。
@@ -677,14 +825,44 @@ fn points(value: f32, dpi: u32) -> i32 {
     (value * dpi.max(1) as f32 / 96.0).round() as i32
 }
 
-/// `show()` 没给位置、也没有上次的位置：摆在光标右下 16 点。
-fn default_position(dpi: u32) -> (i32, i32) {
+/// 系统 DPI（拿不到就按 100%）。
+fn system_dpi() -> u32 {
+    unsafe { GetDpiForSystem() }.max(96)
+}
+
+/// 脚本给的屏幕坐标（点）→ 物理像素 + 那块显示器的 DPI。
+///
+/// 混合 DPI 下「点」没有全局意义：先按当前 DPI 猜一次落点，问那个显示器多少 DPI，再按它重算；
+/// 落点跨到另一块显示器时最多再迭代两次（两块不同 DPI 的屏交界处）。
+fn resolve_point(x: f32, y: f32, initial_dpi: u32) -> ((i32, i32), u32) {
+    let mut dpi = initial_dpi.max(1);
+    let mut position = points_to_pixels(x, y, dpi);
+    for _ in 0..2 {
+        let Some(next) = monitor::dpi_near(POINT {
+            x: position.0,
+            y: position.1,
+        }) else {
+            break;
+        };
+        let next = next.max(1);
+        if next == dpi {
+            break;
+        }
+        dpi = next;
+        position = points_to_pixels(x, y, dpi);
+    }
+    (position, dpi)
+}
+
+/// `show()` 没给位置、也没有上次的位置：摆在光标右下 16 点（按光标所在显示器的 DPI）。
+fn default_position() -> ((i32, i32), u32) {
     let mut point = POINT::default();
     if unsafe { GetCursorPos(&mut point) }.is_ok() {
-        let offset = (16 * dpi.max(1) as i32) / 96;
-        (point.x + offset, point.y + offset)
+        let dpi = monitor::dpi_near(point).unwrap_or_else(system_dpi).max(1);
+        let offset = (16 * dpi as i32) / 96;
+        ((point.x + offset, point.y + offset), dpi)
     } else {
-        (100, 100)
+        ((100, 100), system_dpi())
     }
 }
 
@@ -728,10 +906,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             })
         }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        // 左键按下：开始记拖动起点；同时算这块窗口拿到键盘焦点。
+        WM_LBUTTONDOWN => {
+            with_window(hwnd, ScriptWindow::begin_drag);
+            LRESULT(0)
+        }
         WM_MOUSEMOVE => {
             track_leave(hwnd);
             with_window(hwnd, |window| {
-                window.emit_move(client_x(lparam), client_y(lparam));
+                if window.drag.get().is_some() {
+                    window.drag_to();
+                } else {
+                    window.emit_move(client_x(lparam), client_y(lparam));
+                }
             });
             LRESULT(0)
         }
@@ -739,15 +926,38 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             with_window(hwnd, ScriptWindow::emit_leave);
             LRESULT(0)
         }
+        // 拖过就不是点击（阈值在 `drag_to` 里判）。
         WM_LBUTTONUP => {
             with_window(hwnd, |window| {
-                window.emit(WindowAction::Click, client_x(lparam), client_y(lparam));
+                if window.end_drag() {
+                    // 拖到另一块显示器：DPI 变了就按新 DPI 重画
+                    window.refresh_after_move();
+                } else {
+                    window.emit(WindowAction::Click, client_x(lparam), client_y(lparam));
+                }
             });
             LRESULT(0)
         }
         WM_RBUTTONUP => {
             with_window(hwnd, |window| {
                 window.emit(WindowAction::RightClick, client_x(lparam), client_y(lparam));
+            });
+            LRESULT(0)
+        }
+        WM_CAPTURECHANGED => {
+            with_window(hwnd, |window| window.drag.set(None));
+            LRESULT(0)
+        }
+        // 滚轮的坐标在 `lparam` 里是屏幕坐标，先换算成客户区；`delta` 在 `wparam` 高 16 位。
+        WM_MOUSEWHEEL => {
+            let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
+            let mut point = POINT {
+                x: client_x(lparam),
+                y: client_y(lparam),
+            };
+            let _ = unsafe { ScreenToClient(hwnd, &mut point) };
+            with_window(hwnd, |window| {
+                window.emit_with_delta(WindowAction::Wheel, point.x, point.y, Some(delta));
             });
             LRESULT(0)
         }
@@ -760,13 +970,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 #[cfg(test)]
 mod tests {
     use super::*;
+    use cloudime_render::HitRect;
 
     /// 命中测试从最上面那个元素往下找：后画的盖住先画的。
     #[test]
     fn the_topmost_element_wins_the_hit_test() {
         let hits = vec![
-            Some(HitRect::new(0.0, 0.0, 100.0, 100.0)),
-            Some(HitRect::new(10.0, 10.0, 20.0, 20.0)),
+            Some(HitShape::Rect(HitRect::new(0.0, 0.0, 100.0, 100.0))),
+            Some(HitShape::Rect(HitRect::new(10.0, 10.0, 20.0, 20.0))),
             None,
         ];
         assert_eq!(element_at(&hits, 50.0, 50.0), Some(1));

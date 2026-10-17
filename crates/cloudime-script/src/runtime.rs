@@ -484,6 +484,9 @@ pub struct Runtime {
 
     /// 窗口编号（脚本句柄上的 `id`；UI 线程按它认窗口）。
     window_seq: Rc<Cell<u32>>,
+
+    /// 脚本窗口内容里的图像缓存（按路径判新旧）：同一张图不用每次 `set_content` 都重新解码。
+    image_cache: Rc<RefCell<window::ImageCache>>,
 }
 
 /// 本地时间的一个整分：`(年, 月, 日, 时, 分)`。
@@ -520,6 +523,7 @@ impl Runtime {
             sys_time_last: Rc::new(RefCell::new(None)),
             window_requests: Rc::new(RefCell::new(Vec::new())),
             window_seq: Rc::new(Cell::new(0)),
+            image_cache: Rc::new(RefCell::new(window::ImageCache::default())),
         };
         if let Err(error) = install_host_api(&runtime) {
             // 装不上就少了 `cloudime` 表，脚本会报 nil：记一条，别让 Server 起不来。
@@ -1150,6 +1154,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     let window_table = lua.create_table()?;
     let create_requests = runtime.window_requests.clone();
     let create_seq = runtime.window_seq.clone();
+    let create_images = runtime.image_cache.clone();
     window_table.set(
         "create",
         lua.create_function(move |lua, options: mlua::Table| {
@@ -1165,11 +1170,13 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 &spec.name,
                 (Some(spec.width), Some(spec.height)),
                 create_requests.clone(),
+                create_images.clone(),
             )
         })?,
     )?;
     let auxiliary_requests = runtime.window_requests.clone();
     let auxiliary_seq = runtime.window_seq.clone();
+    let auxiliary_images = runtime.image_cache.clone();
     window_table.set(
         "create_auxiliary",
         lua.create_function(move |lua, options: mlua::Table| {
@@ -1185,6 +1192,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 &spec.name,
                 (spec.width, spec.height),
                 auxiliary_requests.clone(),
+                auxiliary_images.clone(),
             )
         })?,
     )?;

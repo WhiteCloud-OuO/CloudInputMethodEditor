@@ -381,6 +381,7 @@ impl Router {
             self.composed.is_some(),
             &self.highlighted_text(),
             event,
+            self.focused_script_window.as_ref(),
         ) {
             Ok(payload) => payload,
             Err(error) => {
@@ -767,6 +768,21 @@ impl Router {
     /// 事件当然归它）。处理函数里通常调 `win:set_content{…}`，攒下的操作由 [`Self::flush_script_windows`]
     /// 在同一拍转回 UI 线程。
     pub fn handle_script_window_event(&mut self, event: cloudime_script::ScriptWindowEvent) {
+        // 焦点先记下来：`key` 载荷要用（`window` / `window_id`）
+        match event.action {
+            cloudime_script::WindowAction::Focus => {
+                self.focused_script_window = Some((event.window, event.name.clone()));
+            }
+            cloudime_script::WindowAction::Blur
+                if self
+                    .focused_script_window
+                    .as_ref()
+                    .is_some_and(|(id, _)| *id == event.window) =>
+            {
+                self.focused_script_window = None;
+            }
+            _ => {}
+        }
         if !self.scripts.has_handlers("window") {
             return;
         }
@@ -821,7 +837,8 @@ fn position(index: u32, count: usize) -> Option<usize> {
 }
 
 /// 一次按键在脚本那边的样子（`app` 是宿主应用名 —— 脚本据此按应用分支，比如游戏里放行按键；
-/// `highlight` 是这一刻**高亮候选的文本**，脚本想自己翻它时用，没有候选时是空串）。
+/// `highlight` 是这一刻**高亮候选的文本**，脚本想自己翻它时用，没有候选时是空串；
+/// `script_window` 是这会儿拿着键盘焦点的脚本窗口 —— 有它时载荷里多带 `window` / `window_id`）。
 fn key_payload(
     lua: &mlua::Lua,
     app: Option<&str>,
@@ -829,6 +846,7 @@ fn key_payload(
     composing: bool,
     highlight: &str,
     event: &KeyEvent,
+    script_window: Option<&(cloudime_script::WindowId, String)>,
 ) -> mlua::Result<mlua::Table> {
     let modifiers = event.modifiers;
     let payload = lua.create_table()?;
@@ -844,6 +862,10 @@ fn key_payload(
     payload.set("composing", composing)?;
     payload.set("mode", mode_key(mode))?;
     payload.set("highlight", highlight)?;
+    if let Some((id, name)) = script_window {
+        payload.set("window", name.clone())?;
+        payload.set("window_id", *id)?;
+    }
     Ok(payload)
 }
 

@@ -2,7 +2,7 @@
 
 use tiny_skia::Pixmap;
 
-use crate::document::HitRect;
+use crate::document::HitShape;
 use crate::frame::HighlightRect;
 
 pub struct Rendered {
@@ -37,11 +37,12 @@ impl Rendered {
     }
 }
 
-/// 脚本内容出图的结果：位图 + 每个元素在内容区里的包围盒（点，与 `Document::elements` 同序）。
+/// 脚本内容出图的结果：位图 + 每个元素在内容区里的命中区域（点，与 `Document::elements` 同序）。
 pub struct RenderedDocument {
     /// 位图（含阴影边）与内容区位置。
     pub rendered: Rendered,
 
-    /// 每个元素的可命中区域；画不出来 / 没有面积的元素是 `None`。
-    pub hits: Vec<Option<HitRect>>,
+    /// 每个元素的可命中区域（按形状：圆角 / 圆 / 线段 / 路径填充都抠出来）；
+    /// 画不出来 / 没有面积的元素是 `None`。
+    pub hits: Vec<Option<HitShape>>,
 }

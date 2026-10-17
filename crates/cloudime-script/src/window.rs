@@ -8,10 +8,12 @@
 //! `Renderer::render_document` 一次出图 —— 这样脚本再怎么写也卡不住 UI 线程，反过来也一样。
 
 use std::cell::RefCell;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 use std::rc::Rc;
+use std::sync::Arc;
+use std::time::SystemTime;
 
-use cloudime_render::{Color, Document, Element, FontSlot, PathCommand, load_image};
+use cloudime_render::{Color, Document, Element, FontSlot, PathCommand, Pixmap, load_image};
 
 use crate::mlua;
 
@@ -30,6 +32,88 @@ const MAX_TEXT: usize = 4096;
 
 /// 图像解码后的像素数上限（约 4096 × 4096）：脚本给的图不该把整块内存吃掉。
 const MAX_IMAGE_PIXELS: u32 = 16 * 1024 * 1024;
+
+/// 图像缓存最多留几张（按最近使用排序，超了丢最久没用的）。
+const MAX_CACHED_IMAGES: usize = 8;
+
+/// 图像缓存里所有位图加起来最多多少像素（约 32M，128MB 的 RGBA）。
+const MAX_CACHED_PIXELS: u64 = 32 * 1024 * 1024;
+
+/// 图像缓存：路径 → 解码好的位图（`Arc` 与内容共享，不复制像素）。
+///
+/// 每次 `set_content` 都会重新读元素表，但同一张图不需要重新解码：按**文件长度 + 修改时间**
+/// 判断要不要重读，没变就直接复用。文件换了（用户改图）下次 `set_content` 就能看到新图。
+#[derive(Default)]
+pub(crate) struct ImageCache {
+    /// 最近用过的排在前面（最简单的 LRU）。
+    entries: Vec<CachedImage>,
+
+    /// 这些位图加起来多少像素。
+    pixels: u64,
+}
+
+struct CachedImage {
+    path: PathBuf,
+    len: u64,
+    modified: Option<SystemTime>,
+    image: Arc<Pixmap>,
+}
+
+impl ImageCache {
+    /// 读一张图（缓存命中就不解码）。路径按 Server 的工作目录（安装目录）解析。
+    fn load(&mut self, path: &Path) -> mlua::Result<Arc<Pixmap>> {
+        let metadata = std::fs::metadata(path).map_err(|error| {
+            mlua::Error::RuntimeError(format!("读不了图像 {}：{error}", path.display()))
+        })?;
+        let len = metadata.len();
+        let modified = metadata.modified().ok();
+        if let Some(index) = self.entries.iter().position(|entry| entry.path == path) {
+            let same = self.entries[index].len == len && self.entries[index].modified == modified;
+            if same {
+                let entry = self.entries.remove(index);
+                let image = entry.image.clone();
+                self.entries.insert(0, entry);
+                return Ok(image);
+            }
+            let stale = self.entries.remove(index);
+            self.pixels -= cached_pixels(&stale.image);
+        }
+        let image = load_image(path).map_err(|error| {
+            mlua::Error::RuntimeError(format!("读不了图像 {}：{error}", path.display()))
+        })?;
+        let pixels = u64::from(image.width()) * u64::from(image.height());
+        if pixels > u64::from(MAX_IMAGE_PIXELS) {
+            return Err(mlua::Error::RuntimeError(format!(
+                "图像 {} 太大（{} × {}，上限 4096 × 4096）",
+                path.display(),
+                image.width(),
+                image.height()
+            )));
+        }
+        let image = Arc::new(image);
+        self.entries.insert(
+            0,
+            CachedImage {
+                path: path.to_path_buf(),
+                len,
+                modified,
+                image: image.clone(),
+            },
+        );
+        self.pixels += pixels;
+        while self.entries.len() > MAX_CACHED_IMAGES || self.pixels > MAX_CACHED_PIXELS {
+            let Some(old) = self.entries.pop() else {
+                break;
+            };
+            self.pixels -= cached_pixels(&old.image);
+        }
+        Ok(image)
+    }
+}
+
+fn cached_pixels(image: &Pixmap) -> u64 {
+    u64::from(image.width()) * u64::from(image.height())
+}
 
 /// 独立窗口的创建参数（尺寸是**点**）。
 #[derive(Debug, Clone)]
@@ -96,7 +180,7 @@ pub enum Request {
     /// 销毁（独立窗口连名下资产一起放掉）。
     Close(WindowId),
 
-    /// 把逻辑焦点指定给这件辅助窗口 / 交还给宿主。
+    /// 把逻辑焦点指定给这件辅助窗口 / 交还给宿主；独立窗口则是拿 / 放键盘焦点。
     Focus(WindowId, bool),
 }
 
@@ -127,6 +211,7 @@ pub(crate) fn handle(
     name: &str,
     size: (Option<f32>, Option<f32>),
     requests: Rc<RefCell<Vec<Request>>>,
+    images: Rc<RefCell<ImageCache>>,
 ) -> mlua::Result<mlua::Table> {
     let handle = lua.create_table()?;
     handle.set("id", id)?;
@@ -136,10 +221,15 @@ pub(crate) fn handle(
     handle.set("height", size.1)?;
 
     let content_requests = requests.clone();
+    let content_images = images.clone();
     handle.set(
         "set_content",
         lua.create_function(move |_, (this, content): (mlua::Table, mlua::Table)| {
-            let document = parse_document(&content, fallback_size(&this))?;
+            let document = parse_document(
+                &content,
+                fallback_size(&this),
+                &mut content_images.borrow_mut(),
+            )?;
             content_requests
                 .borrow_mut()
                 .push(Request::SetContent(id, document));
@@ -177,16 +267,12 @@ pub(crate) fn handle(
         })?,
     )?;
 
-    // `focus` 只对辅助窗口有意义：独立窗口本身就是它那一组的所有者，不缺焦点。
+    // `focus`：独立窗口 = 拿键盘焦点（`key` 载荷里会带 `window`）；辅助窗口 = 把逻辑焦点指定给它 /
+    // 交还给宿主（所有权在宿主，资产自己说了不算）。
     let focus_requests = requests;
     handle.set(
         "focus",
         lua.create_function(move |_, (_this, focus): (mlua::Table, Option<bool>)| {
-            if kind != Kind::Auxiliary {
-                return Err(mlua::Error::RuntimeError(
-                    "focus 只对辅助窗口有意义（独立窗口自己就是所有者）".to_owned(),
-                ));
-            }
             focus_requests
                 .borrow_mut()
                 .push(Request::Focus(id, focus.unwrap_or(true)));
@@ -260,6 +346,7 @@ fn fallback_size(handle: &mlua::Table) -> (Option<f32>, Option<f32>) {
 fn parse_document(
     content: &mlua::Table,
     fallback: (Option<f32>, Option<f32>),
+    images: &mut ImageCache,
 ) -> mlua::Result<Document> {
     let width = content
         .get::<Option<f32>>("width")?
@@ -286,7 +373,7 @@ fn parse_document(
                 "一份内容最多 {MAX_ELEMENTS} 个元素"
             )));
         }
-        elements.push(parse_element(&table)?);
+        elements.push(parse_element(&table, images)?);
     }
     Ok(Document {
         width,
@@ -296,7 +383,7 @@ fn parse_document(
 }
 
 /// 一个元素：按 `type` 分派到七类里的一类。
-fn parse_element(table: &mlua::Table) -> mlua::Result<Element> {
+fn parse_element(table: &mlua::Table, images: &mut ImageCache) -> mlua::Result<Element> {
     let kind: String = table.get("type").map_err(|_| {
         mlua::Error::RuntimeError(
             "元素缺 type（可用：rect / circle / line / text / svg / img / path）".to_owned(),
@@ -367,23 +454,12 @@ fn parse_element(table: &mlua::Table) -> mlua::Result<Element> {
             let path: String = table.get("path").map_err(|_| {
                 mlua::Error::RuntimeError("img 元素缺 path（PNG 文件路径）".to_owned())
             })?;
-            let image = load_image(Path::new(&path)).map_err(|error| {
-                mlua::Error::RuntimeError(format!("读不了图像 {path}：{error}"))
-            })?;
-            let pixels = u64::from(image.width()) * u64::from(image.height());
-            if pixels > u64::from(MAX_IMAGE_PIXELS) {
-                return Err(mlua::Error::RuntimeError(format!(
-                    "图像 {path} 太大（{} × {}，上限 4096 × 4096）",
-                    image.width(),
-                    image.height()
-                )));
-            }
             Ok(Element::Image {
                 x: number(table, "x", 0.0)?,
                 y: number(table, "y", 0.0)?,
                 width: positive(table, "w", "width")?,
                 height: positive(table, "h", "height")?,
-                image,
+                image: images.load(Path::new(&path))?,
             })
         }
         "path" => {
@@ -574,10 +650,10 @@ fn parse_hex_color(text: &str) -> Option<Color> {
     }
 }
 
-/// 脚本窗口上的鼠标动作：UI 线程判定，工人线程再派给脚本（`cloudime.on("window", …)`）。
+/// 脚本窗口上的鼠标 / 键盘动作：UI 线程判定，工人线程再派给脚本（`cloudime.on("window", …)`）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WindowAction {
-    /// 左键单击（按下又抬起，且还落在同一块窗里）。
+    /// 左键单击（按下又抬起，且没拖动过）。
     Click,
 
     /// 右键单击。
@@ -588,6 +664,15 @@ pub enum WindowAction {
 
     /// 鼠标离开了窗口。
     Leave,
+
+    /// 滚轮：`event.delta` 是滚动量（一格 = ±120，正数往上 / 往远离用户的方向）。
+    Wheel,
+
+    /// 这块窗口拿到了**键盘焦点**（点它、或脚本 `win:focus()`）。
+    Focus,
+
+    /// 键盘焦点离开（点了别的窗口、收起 / 销毁、或脚本 `win:focus(false)`）。
+    Blur,
 }
 
 impl WindowAction {
@@ -598,11 +683,14 @@ impl WindowAction {
             Self::RightClick => "right_click",
             Self::Hover => "hover",
             Self::Leave => "leave",
+            Self::Wheel => "wheel",
+            Self::Focus => "focus",
+            Self::Blur => "blur",
         }
     }
 }
 
-/// 一次窗口鼠标事件：UI 线程 → 工人线程（经 `Work` 通道）。
+/// 一次窗口鼠标 / 键盘事件：UI 线程 → 工人线程（经 `Work` 通道）。
 #[derive(Debug, Clone)]
 pub struct ScriptWindowEvent {
     /// 哪一块窗口（`cloudime.window.create` 给的编号）。
@@ -614,7 +702,7 @@ pub struct ScriptWindowEvent {
     /// 发生了什么。
     pub action: WindowAction,
 
-    /// 内容区坐标（点）；`Leave` 时是离开前的最后位置。
+    /// 内容区坐标（点）；`Leave` / `Focus` / `Blur` 时是最后一次的位置。
     pub x: f32,
 
     /// 内容区坐标（点）。
@@ -622,9 +710,12 @@ pub struct ScriptWindowEvent {
 
     /// 命中的元素（内容是 1 起的数组，这里也是 1 起）；`Leave` / 没命中时是 `None`。
     pub element: Option<usize>,
+
+    /// 滚轮量（只有 `Wheel` 有）。
+    pub delta: Option<i32>,
 }
 
-/// 事件的载荷：`{ window = 名字, id = 编号, action = …, x, y, element }`。
+/// 事件的载荷：`{ window = 名字, id = 编号, action = …, x, y, element, delta }`。
 pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result<mlua::Table> {
     let payload = lua.create_table()?;
     payload.set("window", event.name.clone())?;
@@ -633,6 +724,7 @@ pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result
     payload.set("x", event.x)?;
     payload.set("y", event.y)?;
     payload.set("element", event.element)?;
+    payload.set("delta", event.delta)?;
     Ok(payload)
 }
 
@@ -652,5 +744,26 @@ mod tests {
         );
         assert_eq!(parse_hex_color("#12345"), None);
         assert_eq!(parse_hex_color("gggggg"), None);
+    }
+
+    /// 图像缓存：同一份文件不重复解码（拿到同一个 `Arc`）；文件改过就重读。
+    #[test]
+    fn the_image_cache_reuses_unchanged_files_and_notices_rewrites() {
+        let dir = std::env::temp_dir().join("cloudime-script-image-cache");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("icon.png");
+        Pixmap::new(4, 4).unwrap().save_png(&path).unwrap();
+
+        let mut cache = ImageCache::default();
+        let first = cache.load(&path).expect("读得出来");
+        let second = cache.load(&path).expect("读得出来");
+        assert!(Arc::ptr_eq(&first, &second), "没改过就复用同一张位图");
+
+        // 文件改了（尺寸变了）：必须重读，并把旧的那份从缓存里换掉
+        Pixmap::new(5, 5).unwrap().save_png(&path).unwrap();
+        let third = cache.load(&path).expect("读得出来");
+        assert!(!Arc::ptr_eq(&first, &third), "文件变了要重读");
+        assert_eq!((third.width(), third.height()), (5, 5));
     }
 }

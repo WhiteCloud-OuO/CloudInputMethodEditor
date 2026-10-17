@@ -228,7 +228,7 @@ local aux = cloudime.window.create_auxiliary{
 | `win:show{ x = …, y = … }` | 显示；`x` / `y` 是内容区左上角的**屏幕坐标（点）**，不写 = 上次的位置 / 光标右下 16 点 |
 | `win:hide()` | 收起（不销毁；内容留着，再 `show` 原样回来） |
 | `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
-| `aux:focus(true/false)` | 把逻辑焦点指定给这件辅助窗口 / 交还给宿主（只对辅助窗口有意义） |
+| `win:focus(true/false)` | 独立窗口：拿 / 放**键盘焦点**（`key` 载荷里会带 `window`）；辅助窗口：把逻辑焦点指定给它 / 交还给宿主 |
 
 - 辅助窗口**默认不接鼠标**：`interactive = true` 只是「能」拿焦点，真要它接还得 `aux:focus(true)`
   （§4 的规矩：只有所有者能指定）。宿主被收起时名下资产跟着收起，`win:show()` 时自己回来。
@@ -267,9 +267,13 @@ win:set_content{
 - 颜色：`"#RRGGBB"` / `"#AARRGGBB"` / `"#RGB"`，或 `{ r = …, g = …, b = …, a = … }`（0–255，`a` 缺省 255）。
 - **限额**（当场报错，这一次调用中止、窗口保持原样）：一份内容最多 **512** 个元素；一段文字最多 **4096** 字符；
   图像解码后不超过 **4096 × 4096**（约 1600 万像素）；内容区尺寸夹到 **8–2048 点**。
-- `img` 每次 `set_content` 都会重新读文件解码（没有缓存）—— 别在「每按一键」的路径上反复送大图。
+- **图像缓存**（2026-10-17）：`img` 按路径缓存解码结果（比较文件长度 + 修改时间），同一张图在多份内容里共享
+  同一块位图、不重复解码。最多留 **8 张 / 32M 像素**（超了丢最久没用的）；文件改过之后**下一次** `set_content`
+  就会用新图。相对路径按 Server 的工作目录（安装目录）算。
+- **混合 DPI**（2026-10-17）：`show{ x, y }` 的点坐标先按当前显示器 DPI 猜一个落点、问出那块显示器真正的 DPI
+  再换算；窗口拖到另一块 DPI 不同的屏上会按新 DPI 重画（内容尺寸跟着变），名下的辅助窗口一起重新摆。
 
-### 鼠标事件（`cloudime.on("window", …)`）
+### 鼠标、滚轮、拖动（`cloudime.on("window", …)`）
 
 `interactive` 的窗口把鼠标动作派给脚本：
 
@@ -277,18 +281,38 @@ win:set_content{
 cloudime.on("window", function(event)
     -- event.window   建窗口时给的名字
     -- event.id       窗口编号
-    -- event.action   "click" / "right_click" / "hover" / "leave"
+    -- event.action   "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur"
     -- event.x, event.y   内容区坐标（点）
     -- event.element  命中的元素（内容是 1 起的数组，这里也是 1 起；没命中是 nil）
-    if event.action == "click" and event.element == 1 then
+    -- event.delta    滚轮量（一格 ±120，正数往上；只有 wheel 有）
+    if event.action == "wheel" then
+        count = math.max(0, count + event.delta // 120)
         win:set_content{ … }
     end
 end)
 ```
 
 - `click` / `right_click` 在**左键 / 右键抬起**时派；`hover` 只在**停到另一个元素**上时派一次
-  （同一元素里挪不重复派）；`leave` 在鼠标离开窗口时派。
-- 命中按元素的**外框**算（不抠形状；后画的盖住先画的）。
+  （同一元素里挪不重复派）；`leave` 在鼠标离开窗口时派；`wheel` 带 `delta`。
+- **命中按形状**（2026-10-17）：圆角矩形抠掉四个角、圆按边界、线段按粗细、路径按非零环绕填充判断；
+  文字 / 图像 / SVG 仍按外框。后画的盖住先画的。
+- **拖动**：在窗口上按住左键拖动就移动整块窗口（超过 4 像素才算拖，拖过就不派 `click`），
+  名下的辅助窗口跟着重新摆；拖到另一块 DPI 不同的显示器上会按新 DPI 重画。
+  辅助窗口本身不能拖（摆位归宿主）。
+- **键盘焦点**：点一下（或 `win:focus()`）这块窗口就拿到键盘焦点（`window` 事件收到 `focus`），
+  点 / 收起 / 关掉时就收到 `blur`。拿到焦点期间，**`key` 载荷多带两个字段**：`window`（名字）与
+  `window_id`（编号），脚本据此把按键分给「哪块面板」：
+
+  ```lua
+  cloudime.on("key", function(event)
+      if event.window_id ~= win.id then return end
+      if event.vk == 0x1B then win:hide() end      -- Esc
+  end)
+  ```
+
+  ⚠️ 窗口**不抢系统的键盘焦点**（`WS_EX_NOACTIVATE`）：能收到哪些键由清单决定 —— `trigger_condition = "key"`
+  声明的 `keys`（没组句也送）、或 `combination_key` 声明的那套组合键；**不是**「有焦点就能拿到所有按键」。
+  窗口里没有文本输入框，也不做组句。
 - `window` 事件**不受清单 `trigger_condition` 的限制**（与 `startup`、HTTP 回调一样）：窗口是脚本自己建的，
   事件当然归它。
 - 处理函数的返回值按「没有按键的那一拍」处理：认 `notice` / `online` / `theme` / `adjust`，
@@ -303,10 +327,10 @@ end)
 
 ### 还没做
 
-- **键盘输入 / 拖动 / 滚轮**：现在只派点击与悬停，窗口不接键盘、也不能拖。
-- 命中按形状（圆角 / 圆 / 路径现在都按外框）。
-- 图像按路径缓存、按文件句柄读。
-- 多显示器**混合 DPI** 下的位置换算（现在按系统 DPI 折点）。
+- 窗口内的**文本输入 / 输入法组句**（`cloudime.window` 只做展示与交互面板）。
+- 拖动**元素**（滑块、列表滚动）：现在拖动只移动整块窗口。
+- 键盘不是「有焦点就拿到所有键」：受清单声明与 DLL 的送键规则限制（见上）。
+- 按文件句柄读图（只有路径）；图像缓存靠下一次 `set_content` 发现文件变化，不监听文件系统。
 
 ## 调用链路：一次按键走一遍
 

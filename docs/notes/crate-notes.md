@@ -505,6 +505,8 @@ LuaJIT 源码随 crate 编译进二进制，装机包不依赖机器上装的 Lu
 继续」的那两拍用。窗口句柄是普通表 + 闭包（`set_content` / `show` / `hide` / `close` / `focus`），`id` 由
 `window_seq` 单调递增；`window` 事件的载荷在 `event_payload` 里拼。坐标一律**点**；限额（512 元素 /
 4096 字符 / 4096² 图 / 8–2048 点）在解析时查，违规当场报 Lua 错（这一次调用中止，窗口保持原样）。
+`img` 元素走 `ImageCache`（`Runtime::image_cache`）：按「文件长度 + 修改时间」判新旧，命中就复用同一个
+`Arc<Pixmap>`（`Element::Image` 存 `Arc`，多份内容共享像素、不复制），最多 8 张 / 32M 像素，超了丢最久没用的。
 
 **HTTP**（`http.rs`）：`cloudime.http_get(url, timeout_ms, callback)` 与
 `cloudime.http_post(url, body, { timeout_ms, headers }, callback)` 共用同一条管线
@@ -958,9 +960,20 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   经 `UiCommand::ScriptWindow` 送上来（`Router::flush_script_windows`，`startup` 早于输出端就存在
   `pending_script_windows` 里补发）；鼠标事件反向走 `ScriptWindowEvents` → `Work::ScriptWindow` →
   `Router::handle_script_window_event` 派 `window` 事件（不受 `trigger_condition` 限制）。窗口过程用
-  `thread_local` 的 `REGISTRY`（HWND → `Weak<ScriptWindow>`）找回状态；命中按元素外框、坐标从客户区减掉阴影留白
-  再除 `scale` 换成点；悬停只在换元素时派。`interactive` 映射到模板的 `transparent`，辅助窗口的
-  `interactive` 只是 `able_to_get_focus`，真要接鼠标得脚本 `aux:focus(true)` 走所有者指定。
+  `thread_local` 的 `REGISTRY`（HWND → `Weak<ScriptWindow>`）找回状态；坐标从客户区减掉阴影留白再除 `scale`
+  换成点；悬停只在换元素时派。**命中按形状**（2026-10-17）：`RenderedDocument.hits` 是 `Vec<Option<HitShape>>`
+  （`Rect` / `RoundRect` / `Circle` / `Segment` / `Path`），路径命中用扁平化后的轮廓做**非零环绕**判定
+  （`document::path_contours`，二次 / 三次贝塞尔按 0.25 点递归细分）—— 文字 / 图像 / SVG 仍是外框。
+  **拖动**：`WM_LBUTTONDOWN` 记起点、`SetCapture`；`WM_MOUSEMOVE` 超过 4 像素就 `SetWindowPos` 挪整块窗
+  （`position` 跟着改、名下资产 `sync` 重摆），抬起时拖过就不派 `click`；`WM_CAPTURECHANGED` 清拖动状态。
+  **滚轮**：`WM_MOUSEWHEEL` 的 `lparam` 是**屏幕**坐标，先 `ScreenToClient` 再派 `wheel`（`delta` 在 `wparam` 高 16 位）。
+  **键盘焦点**：左键按下 / `win:focus()` 发一个 `focus` 事件，收起 / `close` / `focus(false)` 发 `blur`；
+  `Router` 记 `focused_script_window`，`key` 载荷据此多带 `window` / `window_id`（窗口不抢系统焦点，
+  能收到哪些键由清单 `keys` / `combination_keys` 决定）。**混合 DPI**：`show` 的点坐标先按当前 DPI 猜落点、
+  问目标显示器 DPI 再重算（`resolve_point`，最多迭代两次），签名里带 DPI，拖到另一块屏后
+  `refresh_after_move` 按新 DPI 重画。
+  `interactive` 映射到模板的 `transparent`，辅助窗口的 `interactive` 只是 `able_to_get_focus`，真要接鼠标
+  得脚本 `aux:focus(true)` 走所有者指定。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——
