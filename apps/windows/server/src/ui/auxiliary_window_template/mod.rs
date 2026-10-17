@@ -271,8 +271,9 @@ impl AuxiliaryWindowTemplate {
     fn hit_at(&self, client_x: i32, client_y: i32) -> (f32, f32, Option<usize>) {
         let scale = self.scale.get().max(0.01);
         let margin = self.margin.get();
-        let x = (client_x + margin) as f32 / scale;
-        let y = (client_y + margin) as f32 / scale;
+        // 窗口左上角 = 内容左上角 - 留白；客户区 0 点在位图 0 点，所以内容像素 = 客户区 - 留白
+        let x = (client_x - margin) as f32 / scale;
+        let y = (client_y - margin) as f32 / scale;
         let element = self
             .hits
             .borrow()

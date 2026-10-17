@@ -70,8 +70,8 @@ cloudime.on("window", function(event)
         count = count + 1
         draw()                            -- 改完立刻看得见
     elseif event.action == "wheel" then
-        -- 滚轮一格 ±120：在面板上滚一滚也能加减
-        count = math.max(0, count + event.delta // 120)
+        -- 滚轮一格 ±120：在面板上滚一滚也能加减（Lua 5.1 没有整除运算符，用 math.floor）
+        count = math.max(0, count + math.floor(event.delta / 120))
         draw()
     end
 end)

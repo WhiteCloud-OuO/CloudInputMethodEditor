@@ -224,12 +224,11 @@ impl ScriptWindows {
 /// 脚本窗口上一次贴上去的那一幅：位置 + 内容尺寸 + 内容版本 + DPI + 渲染器代号。
 type Painted = ((i32, i32), (i32, i32), u64, u64, u64);
 
-/// 拖动状态：按下时的光标屏幕坐标 + 窗口左上角（物理像素）+ 有没有超过阈值。
+/// 拖动状态：按下时的光标屏幕坐标 + 窗口左上角（物理像素）。
 #[derive(Debug, Clone, Copy)]
 struct Drag {
     start_cursor: (i32, i32),
     start_window: (i32, i32),
-    moved: bool,
 }
 
 /// 一次拖动要移动超过多少像素才算「拖」而不是「点」。
@@ -271,8 +270,12 @@ pub(super) struct ScriptWindow {
     /// 鼠标正停在哪个元素上（1 起）。
     hover: Cell<Option<usize>>,
 
-    /// 拖动中：按下时的光标屏幕坐标 + 窗口左上角 + 有没有超过阈值。
+    /// 拖动中：按下时的光标屏幕坐标 + 窗口左上角。
     drag: Cell<Option<Drag>>,
+
+    /// 这一次按下之后有没有真拖动过（系统可能在 `WM_LBUTTONUP` 之前就撤掉捕获，
+    /// 所以「拖过就不算点击」得单独记）。
+    moved_since_press: Cell<bool>,
 
     /// 最后一次收到的客户区坐标。
     last: Cell<(i32, i32)>,
@@ -319,6 +322,7 @@ impl ScriptWindow {
             hits: RefCell::new(Vec::new()),
             hover: Cell::new(None),
             drag: Cell::new(None),
+            moved_since_press: Cell::new(false),
             last: Cell::new((0, 0)),
             scale: Cell::new(1.0),
             margin: Cell::new(0),
@@ -488,10 +492,7 @@ impl ScriptWindow {
 
     /// 客户区坐标 → 内容区坐标（点）+ 命中的元素（1 起）。
     fn hit_at(&self, client_x: i32, client_y: i32) -> (f32, f32, Option<usize>) {
-        let scale = self.scale.get().max(0.01);
-        let margin = self.margin.get();
-        let x = (client_x + margin) as f32 / scale;
-        let y = (client_y + margin) as f32 / scale;
+        let (x, y) = content_point(client_x, client_y, self.margin.get(), self.scale.get());
         (x, y, element_at(&self.hits.borrow(), x, y))
     }
 
@@ -556,8 +557,8 @@ impl ScriptWindow {
         self.drag.set(Some(Drag {
             start_cursor: (point.x, point.y),
             start_window: (x - margin, y - margin),
-            moved: false,
         }));
+        self.moved_since_press.set(false);
         let _ = unsafe { SetCapture(self.hwnd()) };
         // 点一下就算拿到键盘焦点（脚本可以据此处理按键）
         self.notify_focus();
@@ -565,18 +566,17 @@ impl ScriptWindow {
 
     /// 左键按着移动：超过阈值就把窗口挪过去（名下资产跟着重新摆）。
     fn drag_to(&self) {
-        let Some(mut drag) = self.drag.get() else {
+        let Some(drag) = self.drag.get() else {
             return;
         };
         let mut point = POINT::default();
         let _ = unsafe { GetCursorPos(&mut point) };
         let dx = point.x - drag.start_cursor.0;
         let dy = point.y - drag.start_cursor.1;
-        if !drag.moved && dx.abs().max(dy.abs()) < DRAG_THRESHOLD {
+        if !self.moved_since_press.get() && dx.abs().max(dy.abs()) < DRAG_THRESHOLD {
             return;
         }
-        drag.moved = true;
-        self.drag.set(Some(drag));
+        self.moved_since_press.set(true);
         let (x, y) = (drag.start_window.0 + dx, drag.start_window.1 + dy);
         let _ = unsafe {
             SetWindowPos(
@@ -595,9 +595,13 @@ impl ScriptWindow {
     }
 
     /// 左键抬起：返回「刚才是不是拖过」（拖过就不算点击）。
+    ///
+    /// 系统有时会在 `WM_LBUTTONUP` **之前**就撤掉捕获并送来 `WM_CAPTURECHANGED`（那时 `drag` 已经清了），
+    /// 所以「拖过没有」记在 [`Self::moved_since_press`] 里，不跟着 `drag` 走。
     fn end_drag(&self) -> bool {
+        self.drag.set(None);
         let _ = unsafe { ReleaseCapture() };
-        self.drag.take().map(|drag| drag.moved).unwrap_or(false)
+        self.moved_since_press.get()
     }
 }
 
@@ -814,6 +818,18 @@ fn element_at(hits: &[Option<HitShape>], x: f32, y: f32) -> Option<usize> {
     })
 }
 
+/// 客户区坐标 → 内容区坐标（点）。
+///
+/// 窗口左上角 = **内容左上角 − 阴影留白**；客户区 0 点对应位图 0 点，所以内容像素 = 客户区 − 留白
+/// （别加反了：加反会差出两倍留白，真机上表现为「点哪儿都偏一截」）。
+fn content_point(client_x: i32, client_y: i32, margin: i32, scale: f32) -> (f32, f32) {
+    let scale = scale.max(0.01);
+    (
+        (client_x - margin) as f32 / scale,
+        (client_y - margin) as f32 / scale,
+    )
+}
+
 /// 点 → 物理像素。
 fn points_to_pixels(x: f32, y: f32, dpi: u32) -> (i32, i32) {
     let scale = dpi.max(1) as f32 / 96.0;
@@ -991,5 +1007,17 @@ mod tests {
         assert_eq!(points_to_pixels(10.0, 20.0, 96), (10, 20));
         assert_eq!(points_to_pixels(10.0, 20.0, 192), (20, 40));
         assert_eq!(points_to_pixels(10.5, 20.5, 96), (11, 21));
+    }
+
+    /// 客户区 → 内容区要**减掉**阴影留白：客户区 `(留白, 留白)` 才是内容 `(0, 0)`。
+    #[test]
+    fn client_coordinates_subtract_the_shadow_margin() {
+        assert_eq!(content_point(30, 30, 30, 1.0), (0.0, 0.0));
+        assert_eq!(content_point(90, 100, 30, 1.0), (60.0, 70.0));
+        assert_eq!(
+            content_point(60, 60, 30, 2.0),
+            (15.0, 15.0),
+            "高 DPI 再除倍数"
+        );
     }
 }

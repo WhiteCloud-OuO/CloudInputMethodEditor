@@ -766,4 +766,26 @@ mod tests {
         assert!(!Arc::ptr_eq(&first, &third), "文件变了要重读");
         assert_eq!((third.width(), third.height()), (5, 5));
     }
+
+    /// `window` 事件的载荷：滚轮量、命中元素、动作名都带上了。
+    #[test]
+    fn the_window_event_payload_carries_delta_and_element() {
+        let lua = mlua::Lua::new();
+        let event = ScriptWindowEvent {
+            window: 3,
+            name: "面板".to_owned(),
+            action: WindowAction::Wheel,
+            x: 12.5,
+            y: 8.0,
+            element: Some(2),
+            delta: Some(120),
+        };
+        let payload = event_payload(&lua, &event).unwrap();
+        assert_eq!(payload.get::<String>("action").unwrap(), "wheel");
+        assert_eq!(payload.get::<String>("window").unwrap(), "面板");
+        assert_eq!(payload.get::<u32>("id").unwrap(), 3);
+        assert_eq!(payload.get::<i32>("delta").unwrap(), 120);
+        assert_eq!(payload.get::<usize>("element").unwrap(), 2);
+        assert_eq!(payload.get::<f32>("x").unwrap(), 12.5);
+    }
 }

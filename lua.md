@@ -428,7 +428,7 @@ cloudime.on("window", function(event)
     -- event.element               命中的元素（内容数组里 1 起的下标；没命中是 nil）
     -- event.delta                 滚轮量（一格 ±120，正数往上；只有 wheel 有）
     if event.action == "wheel" then
-        count = math.max(0, count + event.delta // 120)
+        count = math.max(0, count + math.floor(event.delta / 120))
         win:set_content{ { type = "text", x = 8, y = 8, text = "计到 " .. count } }
     elseif event.action == "click" then
         win:set_content{ { type = "text", x = 8, y = 8, text = "点到了 " .. tostring(event.element) } }

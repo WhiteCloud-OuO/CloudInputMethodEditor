@@ -968,3 +968,34 @@ fn kind_key(kind: CandidateKind) -> &'static str {
         CandidateKind::Sentence => "sentence",
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use cloudime_platform::protocol::KeyModifiers;
+
+    /// 有脚本窗口拿着键盘焦点时，`key` 载荷多带 `window` / `window_id`；没有就不带（`nil`）。
+    #[test]
+    fn the_key_payload_carries_the_focused_script_window() {
+        let lua = mlua::Lua::new();
+        let event = KeyEvent::new(0x1B, None, KeyModifiers::default());
+        let payload = key_payload(
+            &lua,
+            Some("notepad.exe"),
+            InputMode::Chinese,
+            false,
+            "",
+            &event,
+            Some(&(7, "面板".to_owned())),
+        )
+        .unwrap();
+        assert_eq!(payload.get::<String>("window").unwrap(), "面板");
+        assert_eq!(payload.get::<u32>("window_id").unwrap(), 7);
+
+        let payload = key_payload(&lua, None, InputMode::Chinese, false, "", &event, None).unwrap();
+        assert!(
+            payload.get::<Option<String>>("window").unwrap().is_none(),
+            "没有焦点窗口时是 nil"
+        );
+    }
+}
