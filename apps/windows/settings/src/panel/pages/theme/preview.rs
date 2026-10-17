@@ -38,7 +38,7 @@ const TIP: [&str; 4] = [TOOLBAR[0], TOOLBAR[1], TOOLBAR[2], TOOLBAR[3]];
 
 /// 三块预览并排。
 pub(super) fn view(file: &ThemeFile, config: &CandidateConfig) -> View {
-    let Some(mut renderer) = renderer(config) else {
+    let Some(renderer) = renderer(config) else {
         return note(
             "预览需要云朵渲染器，但字体库没加载起来（已记日志）；改颜色仍会保存到主题文件。",
         );
@@ -254,7 +254,7 @@ mod tests {
     #[test]
     fn the_preview_renders_png_bitmaps() {
         let config = CandidateConfig::default();
-        let Some(mut renderer) = renderer(&config) else {
+        let Some(renderer) = renderer(&config) else {
             return;
         };
         let theme = theme(&ThemeFile::default(), &config);

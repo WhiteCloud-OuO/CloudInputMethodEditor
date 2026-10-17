@@ -52,7 +52,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
         library.ui_family()
     );
     println!("已加载字族：{}", library.families().join(" / "));
-    let mut renderer = Renderer::new(library);
+    let renderer = Renderer::new(library);
     if args.measure {
         for text in [
             "int. hello · int. hi",

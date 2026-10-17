@@ -11,9 +11,10 @@
 //! - 零声母表在键盘**右侧**隔 [`TABLE_GAP`] 点：**固定 3 行**（跟键盘一样高）、列按项数往上取，
 //!   `[Shengmu]` 最多 12 项就是 4 列。所以窗口**高度恒定**（三排键盘那点高），随方案变的只有宽度。
 
-use crate::canvas::Canvas;
 use crate::color::Color;
+use crate::elements::{RectElement, TextElement};
 use crate::error::RenderError;
+use crate::render::Render;
 use crate::renderer::{Metrics, Renderer};
 use crate::shadow::Shadow;
 use crate::text::TextStyle;
@@ -172,7 +173,7 @@ impl Renderer {
     /// `cell` 是键盘格子的边长（点）—— 由调用方按目标高度算好（[`key_map_cell`]），竖排取
     /// 「候选窗口装 9 个候选项」的高度、横排用同一个值。内容区尺寸见 [`key_map_size`]。
     pub fn render_key_map(
-        &mut self,
+        &self,
         layout: &KeyMapLayout,
         cell: f32,
         theme: &Theme,
@@ -185,7 +186,7 @@ impl Renderer {
         // 边叠在一起，看着像 2 点）。取整后画布尺寸也按像素算，与画的完全一致。
         let cell = metrics.px(cell).round().max(1.0);
         let (width, height) = key_map_size(layout, cell);
-        let (mut canvas, margin) = Self::panel_canvas(width, height, theme, scale, shadow)?;
+        let (mut render, margin) = self.panel_canvas(width, height, theme, scale, shadow)?;
         // 相邻两格共用一条线：步距 = 边长 − 线宽
         let pitch = KeyMapLayout::pitch(cell);
         let stagger = KeyMapLayout::stagger(cell).round();
@@ -197,7 +198,7 @@ impl Renderer {
             for (column, cap) in caps.iter().enumerate() {
                 let x = row_left + column as f32 * pitch;
                 let y = top + row as f32 * pitch;
-                self.draw_key_cap(&mut canvas, cap, &styles, &metrics, (x, y, cell, cell));
+                self.draw_key_cap(&mut render, cap, &styles, &metrics, (x, y, cell, cell));
             }
         }
         // 零声母表：键盘**下方**、隔 [`TABLE_GAP`]，6 列 × 最多 2 行；格子矮一点、宽一点（放「按键=韵母」一行）
@@ -212,7 +213,7 @@ impl Renderer {
                 let y =
                     table_top + (index / TABLE_COLUMNS) as f32 * KeyMapLayout::pitch(zero_height);
                 self.draw_zero_cap(
-                    &mut canvas,
+                    &mut render,
                     cap,
                     &styles,
                     &metrics,
@@ -220,21 +221,21 @@ impl Renderer {
                 );
             }
         }
-        Ok(Self::panel_rendered(canvas, margin, (width, height), scale))
+        Ok(Self::panel_rendered(render, margin, (width, height), scale))
     }
 
     /// 画零声母表的一格：**一行**「按键=韵母」（`AY=ang`）居中，韵母开头的字母照 [`head_color`] 上色。
     fn draw_zero_cap(
-        &mut self,
-        canvas: &mut Canvas,
+        &self,
+        render: &mut Render,
         cap: &KeyCap,
         styles: &KeyMapStyles,
         metrics: &Metrics,
         (x, y, width, height): (f32, f32, f32, f32),
     ) {
         let line = metrics.px(LINE).max(1.0);
-        canvas.fill_rect(x, y, width, height, styles.line);
-        canvas.fill_rect(
+        render.rect(x, y, width, height, styles.line);
+        render.rect(
             x + line,
             y + line,
             (width - line * 2.0).max(0.0),
@@ -253,16 +254,16 @@ impl Renderer {
         } else {
             styles.mapping.clone()
         };
-        let prefix_width = self.measure(&prefix, &styles.mapping).width;
-        let head_width = self.measure(&head.to_string(), &head_style).width;
-        let rest_width = self.measure(rest, &styles.mapping).width;
+        let prefix_width = render.measure(&prefix, &styles.mapping).width;
+        let head_width = render.measure(&head.to_string(), &head_style).width;
+        let rest_width = render.measure(rest, &styles.mapping).width;
         let mut text_x = x + (width - prefix_width - head_width - rest_width) / 2.0;
         let text_y = y + (height - styles.mapping.line_height) / 2.0;
-        self.draw_text(canvas, &prefix, &styles.mapping, text_x, text_y);
+        render.text(&prefix, &styles.mapping, text_x, text_y);
         text_x += prefix_width;
-        self.draw_text(canvas, &head.to_string(), &head_style, text_x, text_y);
+        render.text(&head.to_string(), &head_style, text_x, text_y);
         text_x += head_width;
-        self.draw_text(canvas, rest, &styles.mapping, text_x, text_y);
+        render.text(rest, &styles.mapping, text_x, text_y);
     }
 
     /// 画一格：一格宽的边框，**左上角**那颗键、**右上角**的声母（棕色）、中间几行韵母
@@ -270,8 +271,8 @@ impl Renderer {
     ///
     /// 相邻格之间**共用**这条线：调用方把两格摆成相差「边长 − 线宽」，各自画出来正好重叠在一条上。
     fn draw_key_cap(
-        &mut self,
-        canvas: &mut Canvas,
+        &self,
+        render: &mut Render,
         cap: &KeyCap,
         styles: &KeyMapStyles,
         metrics: &Metrics,
@@ -279,8 +280,8 @@ impl Renderer {
     ) {
         let line = metrics.px(LINE).max(1.0);
         // 边框：先铺一层格线色，再把里面挖成背景色
-        canvas.fill_rect(x, y, width, height, styles.line);
-        canvas.fill_rect(
+        render.rect(x, y, width, height, styles.line);
+        render.rect(
             x + line,
             y + line,
             (width - line * 2.0).max(0.0),
@@ -290,13 +291,12 @@ impl Renderer {
         let inset = metrics.px(width * CELL_INSET_RATIO);
         // 左上角那颗键
         if !cap.key.is_empty() {
-            self.draw_text(canvas, &cap.key, &styles.key, x + inset, y + inset);
+            render.text(&cap.key, &styles.key, x + inset, y + inset);
         }
         // 右上角的声母（棕色，右对齐）
         if !cap.initial.is_empty() {
-            let initial_width = self.measure(&cap.initial, &styles.initial).width;
-            self.draw_text(
-                canvas,
+            let initial_width = render.measure(&cap.initial, &styles.initial).width;
+            render.text(
                 &cap.initial,
                 &styles.initial,
                 x + width - inset - initial_width,
@@ -322,17 +322,17 @@ impl Renderer {
                 .filter(|_| head_color(head).is_some())
                 .map(|_| styles.head_style(metrics, head))
                 .unwrap_or_else(|| styles.mapping.clone());
-            let head_width = self.measure(&head.to_string(), &head_style).width;
-            let rest_width = self.measure(rest, &styles.mapping).width;
+            let head_width = render.measure(&head.to_string(), &head_style).width;
+            let rest_width = render.measure(rest, &styles.mapping).width;
             let text_x = x + (width - head_width - rest_width) / 2.0;
-            self.draw_text(canvas, &head.to_string(), &head_style, text_x, text_y);
-            self.draw_text(canvas, rest, &styles.mapping, text_x + head_width, text_y);
+            render.text(&head.to_string(), &head_style, text_x, text_y);
+            render.text(rest, &styles.mapping, text_x + head_width, text_y);
             text_y += line_height;
         }
     }
 
     /// 一格里的韵母：**按换行符拆行**（一个键多个义时一义一行），每行放不下就截尾。
-    fn mapping_lines(&mut self, text: &str, style: &TextStyle, budget: f32) -> Vec<String> {
+    fn mapping_lines(&self, text: &str, style: &TextStyle, budget: f32) -> Vec<String> {
         text.lines()
             .filter(|line| !line.is_empty())
             .map(|line| self.truncate(line, style, budget).0)

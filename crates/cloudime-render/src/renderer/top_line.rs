@@ -1,12 +1,13 @@
 //! 顶部拼音行：各段按样式画、自己画光标、右侧临时状态。
 
 use super::{CARET_WIDTH, Metrics, Renderer, STATUS_GAP};
-use crate::canvas::Canvas;
+use crate::elements::{RectElement, TextElement};
 use crate::frame::{Frame, Preedit, PreeditStyle};
+use crate::render::Render;
 
 impl Renderer {
     /// 顶部拼音行（含右侧状态）需要的宽高；没有这一行时都是 0。
-    pub(super) fn top_line_size(&mut self, frame: &Frame, m: &Metrics) -> (f32, f32) {
+    pub(super) fn top_line_size(&self, frame: &Frame, m: &Metrics) -> (f32, f32) {
         if !frame.has_top_line() {
             return (0.0, 0.0);
         }
@@ -27,8 +28,8 @@ impl Renderer {
 
     /// 返回占用高度。`left` 是内容区左边。
     pub(super) fn draw_top_line(
-        &mut self,
-        canvas: &mut Canvas,
+        &self,
+        render: &mut Render,
         frame: &Frame,
         m: &Metrics,
         left: f32,
@@ -41,7 +42,7 @@ impl Renderer {
         let top = y + m.row_padding();
         let mut x = left + m.padding();
         if let Some(preedit) = &frame.preedit {
-            x += self.draw_preedit(canvas, m, preedit, x, top, line_height);
+            x += self.draw_preedit(render, m, preedit, x, top, line_height);
             if frame.status.is_some() {
                 x += m.px(STATUS_GAP);
             }
@@ -49,15 +50,15 @@ impl Renderer {
         // 临时状态：灰字。
         if let Some(status) = &frame.status {
             let style = m.annotation_style(m.theme.colors.gloss);
-            self.draw_text(canvas, status, &style, x, top);
+            render.text(status, &style, x, top);
         }
         line_height + m.row_padding() * 2.0
     }
 
     /// 画拼音行的各段与光标，返回占用宽度（含光标）。
     fn draw_preedit(
-        &mut self,
-        canvas: &mut Canvas,
+        &self,
+        render: &mut Render,
         m: &Metrics,
         preedit: &Preedit,
         x: f32,
@@ -70,11 +71,13 @@ impl Renderer {
                 PreeditStyle::Typed | PreeditStyle::Rest => m.pinyin_style(m.theme.colors.pinyin),
                 PreeditStyle::Struck => m.pinyin_style(m.theme.colors.pinyin).struck(),
             };
-            cursor_x += self.draw_text(canvas, &segment.text, &style, cursor_x, top);
+            cursor_x += render.text(&segment.text, &style, cursor_x, top);
         }
         let measure_style = m.pinyin_style(m.theme.colors.pinyin);
-        let caret_x = x + self.measure(&preedit.before_cursor(), &measure_style).width;
-        canvas.fill_rect(
+        let caret_x = x + render
+            .measure(&preedit.before_cursor(), &measure_style)
+            .width;
+        render.rect(
             caret_x,
             top,
             m.px(CARET_WIDTH),

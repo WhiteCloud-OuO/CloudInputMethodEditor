@@ -2,8 +2,9 @@
 
 use super::item::Item;
 use super::{HIGHLIGHT_INSET, INDEX_GAP, Metrics, Renderer, highlight_rect};
-use crate::canvas::Canvas;
+use crate::elements::TextElement;
 use crate::frame::{Frame, HighlightRect, Row};
+use crate::render::Render;
 
 /// 一项的内容宽度：序号 + 候选词 +（有辅助码时）一个空格 + 码 +（有角标时）间隔 + 角标。
 /// `badge_gap` 是候选词与角标之间的间隔（横排用两个候选字宽，见 `Renderer::horizontal_badge_gap`）。
@@ -17,7 +18,7 @@ fn item_width(item: &Item, m: &Metrics, badge_gap: f32) -> f32 {
 }
 
 impl Renderer {
-    pub(super) fn horizontal_size(&mut self, frame: &Frame, m: &Metrics) -> (f32, f32) {
+    pub(super) fn horizontal_size(&self, frame: &Frame, m: &Metrics) -> (f32, f32) {
         if frame.rows.is_empty() {
             return (0.0, 0.0);
         }
@@ -43,7 +44,7 @@ impl Renderer {
     }
 
     /// 横排时高亮候选的译文行尺寸；高亮候选没有译文时为 `None`。
-    fn highlighted_annotation_size(&mut self, frame: &Frame, m: &Metrics) -> Option<(f32, f32)> {
+    fn highlighted_annotation_size(&self, frame: &Frame, m: &Metrics) -> Option<(f32, f32)> {
         let row = frame.rows.get(frame.highlighted?)?;
         if row.annotation.is_empty() {
             return None;
@@ -58,7 +59,7 @@ impl Renderer {
     }
 
     /// 横排各项的尺寸与统一行高。
-    fn items(&mut self, rows: &[Row], m: &Metrics) -> (Vec<Item>, f32) {
+    fn items(&self, rows: &[Row], m: &Metrics) -> (Vec<Item>, f32) {
         let mut row_height: f32 = 0.0;
         let text_style = m.text_style();
         let index_style = m.index_style(false);
@@ -82,8 +83,8 @@ impl Renderer {
     }
 
     pub(super) fn draw_horizontal(
-        &mut self,
-        canvas: &mut Canvas,
+        &self,
+        render: &mut Render,
         frame: &Frame,
         m: &Metrics,
         left: f32,
@@ -117,20 +118,19 @@ impl Renderer {
             })
             .collect();
         if let Some(rect) = highlight_rect(frame, &rects) {
-            self.fill_highlight(canvas, m, rect, left);
+            self.fill_highlight(render, m, rect, left);
         }
         let mut x = left + m.padding() + inset;
         for (i, (row, item)) in frame.rows.iter().zip(&items).enumerate() {
             let width = item_width(item, m, badge_gap);
-            self.draw_text(
-                canvas,
+            render.text(
                 &row.index,
                 &m.index_style(frame.highlighted == Some(i)),
                 x,
                 top + m.index_offset(text_height),
             );
             self.draw_word(
-                canvas,
+                render,
                 m,
                 row,
                 x + item.index_width + m.px(INDEX_GAP),
@@ -140,11 +140,11 @@ impl Renderer {
             // 辅助码紧跟候选词、中间隔一个空格（宽度已经算进 `item.auxiliary_width` 里）
             let auxiliary_x = x + item.index_width + m.px(INDEX_GAP) + item.text_width;
             let auxiliary_x = auxiliary_x + self.space_width(m);
-            self.draw_auxiliary(canvas, m, row.auxiliary.as_ref(), auxiliary_x, top);
+            self.draw_auxiliary(render, m, row.auxiliary.as_ref(), auxiliary_x, top);
             // 角标紧跟在候选文字后面，中间留 `badge_gap`（两个候选字宽）。
             // 它离格右边缘的距离 = 上面 `item_width` 里那一段减去角标宽度，画在这里正好对上。
             self.draw_badge(
-                canvas,
+                render,
                 m,
                 row.badge.as_deref(),
                 x + width - item.badge_width,
@@ -164,7 +164,7 @@ impl Renderer {
             let annotation_top = y + row_height + m.row_padding() / 2.0;
             for (segment, tone) in &row.annotation {
                 let style = m.annotation_style(m.tone_color(*tone));
-                x += self.draw_text(canvas, segment, &style, x, annotation_top);
+                x += render.text(segment, &style, x, annotation_top);
             }
         }
         // 没有译文时保持原来的基准（`top` 已经含一个行内留白，与竖排 / 矩阵一致，
@@ -174,7 +174,7 @@ impl Renderer {
         } else {
             top + row_height
         };
-        self.draw_info(canvas, frame, m, left, info_top, content_width);
+        self.draw_info(render, frame, m, left, info_top, content_width);
         rects
     }
 }

@@ -8,22 +8,32 @@
 //! `img`（[`decode_image`] / [`load_image`] / [`read_image`] / [`draw_image`]）、`line` / `rect`（含圆角与圆）/
 //! `path`（画布那几笔填充原语，tiny-skia 的路径）。
 //!
+//! **两种画法各一个结构体**：`Render`（渲染：离屏位图，整块贴给窗口，内容持久）与 `Paint`
+//! （绘制：GDI 直画窗口 DC，内容不持久），元素各是一条 trait（`elements`）。窗口里的每一笔都经它们画。
+//!
 //! 设计与验收见 `docs/design/rendering.md`。
 
 mod canvas;
 mod color;
+mod elements;
 mod error;
 mod fonts;
 mod frame;
 mod image;
 mod layout;
+mod render;
 mod renderer;
 mod shadow;
 mod svg;
 mod text;
 mod theme;
 
+#[cfg(target_os = "windows")]
+mod paint;
+
 pub use color::Color;
+/// **能画的元素**的 traits：`text` / `svg` / `img` / `line` / `rect`（含圆角与圆）/ `path`。
+pub use elements::{ImageElement, LineElement, PathElement, RectElement, SvgElement, TextElement};
 pub use error::RenderError;
 /// Windows 的字体登记：按字族名找文件、列字族名（设置页用）。
 #[cfg(target_os = "windows")]
@@ -35,11 +45,17 @@ pub use frame::{
 };
 pub use image::{decode_image, draw_image, load_image, read_image};
 pub use layout::Layout;
+/// **绘制**：直接画在窗口 DC 上，内容不持久（窗口的 DC 由调用方给）。
+#[cfg(target_os = "windows")]
+pub use paint::Paint;
+/// **渲染**：先画进一块内存区域，画完整块交给窗口，内容持久。
+pub use render::Render;
 pub use renderer::{
     KeyCap, KeyMapLayout, Rendered, RenderedStatus, Renderer, StatusCell, key_map_cell,
     key_map_size,
 };
 pub use shadow::Shadow;
+pub use text::{TextPainter, TextSize, TextStyle};
 pub use theme::{FontSpec, Palette, Theme};
 
 /// 让 `tiny_skia::Pixmap` 的使用方不用再单独依赖 tiny-skia。

@@ -2,11 +2,12 @@
 
 use super::columns::Columns;
 use super::{BADGE_GAP, Metrics, Renderer, highlight_rect};
-use crate::canvas::Canvas;
+use crate::elements::TextElement;
 use crate::frame::{Frame, HighlightRect, Row};
+use crate::render::Render;
 
 impl Renderer {
-    pub(super) fn vertical_size(&mut self, frame: &Frame, m: &Metrics) -> (f32, f32) {
+    pub(super) fn vertical_size(&self, frame: &Frame, m: &Metrics) -> (f32, f32) {
         let columns = self.columns(&frame.rows, m);
         let mut width = columns.index_width + m.column_gap() + columns.text_width;
         if columns.annotation_width > 0.0 {
@@ -23,7 +24,7 @@ impl Renderer {
         (width, height)
     }
 
-    fn columns(&mut self, rows: &[Row], m: &Metrics) -> Columns {
+    fn columns(&self, rows: &[Row], m: &Metrics) -> Columns {
         let mut columns = Columns {
             index_width: 0.0,
             text_width: 0.0,
@@ -55,8 +56,8 @@ impl Renderer {
     }
 
     pub(super) fn draw_vertical(
-        &mut self,
-        canvas: &mut Canvas,
+        &self,
+        render: &mut Render,
         frame: &Frame,
         m: &Metrics,
         left: f32,
@@ -83,32 +84,31 @@ impl Renderer {
             })
             .collect();
         if let Some(rect) = highlight_rect(frame, &rects) {
-            self.fill_highlight(canvas, m, rect, left);
+            self.fill_highlight(render, m, rect, left);
         }
         for (i, row) in frame.rows.iter().enumerate() {
             let top = y + columns.row_height * i as f32 + m.row_padding();
             let small_offset = m.small_offset(text_height);
-            self.draw_text(
-                canvas,
+            render.text(
                 &row.index,
                 &m.index_style(frame.highlighted == Some(i)),
                 left + m.padding(),
                 top + m.index_offset(text_height),
             );
-            self.draw_word(canvas, m, row, text_x, top, frame.highlighted == Some(i));
+            self.draw_word(render, m, row, text_x, top, frame.highlighted == Some(i));
             // 辅助码紧跟候选词，中间隔一个空格（那一列已经把宽度留出来了）
-            let text_width = self.measure(&row.text, &m.text_style()).width;
+            let text_width = render.measure(&row.text, &m.text_style()).width;
             let auxiliary_x = text_x + text_width + self.space_width(m);
-            self.draw_auxiliary(canvas, m, row.auxiliary.as_ref(), auxiliary_x, top);
+            self.draw_auxiliary(render, m, row.auxiliary.as_ref(), auxiliary_x, top);
             let mut x = annotation_x;
             for (segment, tone) in &row.annotation {
                 let style = m.annotation_style(m.tone_color(*tone));
-                x += self.draw_text(canvas, segment, &style, x, top + small_offset);
+                x += render.text(segment, &style, x, top + small_offset);
             }
             // 竖排的角标在自己的那一列里，右对齐、与格右边缘留 `BADGE_GAP`（与横排的规则不同）
             let badge_width = self.badge_width(row.badge.as_deref(), m);
             self.draw_badge(
-                canvas,
+                render,
                 m,
                 row.badge.as_deref(),
                 badge_right - m.px(BADGE_GAP) - badge_width,
@@ -117,7 +117,7 @@ impl Renderer {
         }
         // 底部信息区：本地 Tip / 页码那一行，下面可能还有在线翻译那一行
         self.draw_info(
-            canvas,
+            render,
             frame,
             m,
             left,

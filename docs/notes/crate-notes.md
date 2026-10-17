@@ -973,7 +973,10 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   也得所有者**指定**才拿得到；**资产克隆 / 窃取**（§5.1 / §5.2）来的就是这条路：特性跟原件一样（克隆件 /
   窃取件自带自己的 `able_to_get_focus`），焦点还留在所有者或姊妹资产身上。两边差别在原件：窃取时原件
   被销毁、它那一组销毁前按「生命周期末」自动归还焦点；克隆则原件与它那一组**一点不动**。
-- **绘制 / 渲染**（`docs/design/windows.md` §6）：自绘的几个窗口**一律用渲染** —— 渲染器把一整帧出成预乘 RGBA 位图
+- **绘制 / 渲染**（`docs/design/windows.md` §6）：两种画法各是一个结构体、元素各是一条 trait（`cloudime-render`）——
+  `elements` 里六条（`TextElement` / `SvgElement` / `ImageElement` / `LineElement` / `RectElement` /
+  `PathElement`），`Render`（离屏位图 + 共享字形管线，`measure` 也走它）与 `Paint`（GDI 直画窗口 DC）**各实现一遍**；
+  窗口里只准经这些 trait 画。自绘的几个窗口**一律用渲染** —— 渲染器把一整帧出成预乘 RGBA 位图
   （就是那块**内存区域**）→ `ui/layered::present` 换通道 → `UpdateLayeredWindow(ULW_ALPHA)` **整块一次**贴上。
   窗口过程**不处理 `WM_PAINT`**、窗口类**不设 `hbrBackground`**、不调 `InvalidateRect`，所以没有「刷新把画布
   擦掉」的时机：贴上去的那一帧一直在，要变只能**再贴一帧**（重新出图）或**销毁窗口**。直接绘制（GDI 往窗口

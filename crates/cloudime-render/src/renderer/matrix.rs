@@ -6,8 +6,9 @@ use super::{
     BADGE_GAP, HIGHLIGHT_INSET, INDEX_GAP, Layout, Metrics, Renderer, VERTICAL_CELL_MIN_EMS,
     highlight_rect,
 };
-use crate::canvas::Canvas;
+use crate::elements::TextElement;
 use crate::frame::{Frame, HighlightRect};
+use crate::render::Render;
 use crate::text::TextStyle;
 
 /// 帧没给列宽时，一格里候选词最多多宽（按候选字号的倍数）。
@@ -44,7 +45,7 @@ impl Cells {
 }
 
 impl Renderer {
-    pub(super) fn matrix_size(&mut self, frame: &Frame, m: &Metrics, layout: Layout) -> (f32, f32) {
+    pub(super) fn matrix_size(&self, frame: &Frame, m: &Metrics, layout: Layout) -> (f32, f32) {
         if frame.rows.is_empty() {
             return (0.0, 0.0);
         }
@@ -59,8 +60,8 @@ impl Renderer {
 
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_matrix(
-        &mut self,
-        canvas: &mut Canvas,
+        &self,
+        render: &mut Render,
         frame: &Frame,
         m: &Metrics,
         layout: Layout,
@@ -92,7 +93,7 @@ impl Renderer {
             })
             .collect();
         if let Some(rect) = highlight_rect(frame, &rects) {
-            self.fill_highlight(canvas, m, rect, left);
+            self.fill_highlight(render, m, rect, left);
         }
         for (i, row) in frame.rows.iter().enumerate() {
             let (text, _) = &cells.texts[i];
@@ -104,8 +105,7 @@ impl Renderer {
             let top = row_y + m.row_padding();
             let cell_width = cells.column_widths[i % columns];
             if !row.index.is_empty() {
-                self.draw_text(
-                    canvas,
+                render.text(
                     &row.index,
                     &m.index_style(frame.highlighted == Some(i)),
                     x,
@@ -115,16 +115,16 @@ impl Renderer {
             let mut shown = row.clone();
             shown.text.clone_from(text);
             let text_x = x + cells.index_width + m.px(INDEX_GAP);
-            self.draw_word(canvas, m, &shown, text_x, top, frame.highlighted == Some(i));
+            self.draw_word(render, m, &shown, text_x, top, frame.highlighted == Some(i));
             // 辅助码紧跟候选词（截断过的那份）、中间隔一个空格
-            let shown_width = self.measure(&shown.text, &m.text_style()).width;
+            let shown_width = render.measure(&shown.text, &m.text_style()).width;
             let auxiliary_x = text_x + shown_width + self.space_width(m);
-            self.draw_auxiliary(canvas, m, row.auxiliary.as_ref(), auxiliary_x, top);
+            self.draw_auxiliary(render, m, row.auxiliary.as_ref(), auxiliary_x, top);
             // 展开态：角标贴在**格右边缘**（往里让 `BADGE_GAP`）——与收起横排的
             // 「文字后面跟 2 个字宽」不同，展开是格子对齐，角标各自靠右。
             let badge_width = self.badge_width(row.badge.as_deref(), m);
             self.draw_badge(
-                canvas,
+                render,
                 m,
                 row.badge.as_deref(),
                 x + cell_width - m.px(BADGE_GAP) - badge_width,
@@ -136,7 +136,7 @@ impl Renderer {
         // 底部那一行的基准与竖排 / 横排保持一致（都是「最后一行的底边 + 一个行内留白」）：
         // 展开 / 收起切换时 Tip 不会上下跳。
         let info_top = y + cells.row_height * grid_rows as f32 + m.row_padding();
-        self.draw_info(canvas, frame, m, left, info_top, content_width);
+        self.draw_info(render, frame, m, left, info_top, content_width);
         rects
     }
 
@@ -147,7 +147,7 @@ impl Renderer {
     /// 单格封顶 [`MAX_CELL_EMS`]。
     /// **横排另有两档**（都是按候选字宽算的，见 `Renderer::char_width`）：候选词与角标之间的最小间隔
     /// 是 2 个字宽；每格最小宽度是 6 个字宽 + 角标宽度（角标不能把候选词挤没）。
-    fn matrix_cells(&mut self, frame: &Frame, m: &Metrics, layout: Layout) -> Cells {
+    fn matrix_cells(&self, frame: &Frame, m: &Metrics, layout: Layout) -> Cells {
         let text_style = m.text_style();
         let columns = frame.columns.max(1);
         let em = m.px(m.theme.text_font.size);
@@ -224,12 +224,7 @@ impl Renderer {
 
 impl Renderer {
     /// `text` 宽度超过 `max_width` 就从末尾去字、补上「…」直到放得下；返回显示文字与是否截断过。
-    pub(super) fn truncate(
-        &mut self,
-        text: &str,
-        style: &TextStyle,
-        max_width: f32,
-    ) -> (String, bool) {
+    pub(super) fn truncate(&self, text: &str, style: &TextStyle, max_width: f32) -> (String, bool) {
         if text.is_empty() || self.measure(text, style).width <= max_width {
             return (text.to_owned(), false);
         }

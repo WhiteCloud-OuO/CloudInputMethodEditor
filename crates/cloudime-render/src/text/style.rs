@@ -4,7 +4,7 @@ use crate::color::Color;
 use crate::theme::FontSpec;
 
 #[derive(Debug, Clone, PartialEq)]
-pub(crate) struct TextStyle {
+pub struct TextStyle {
     /// 字号（像素）。
     pub size: f32,
 

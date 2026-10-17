@@ -198,6 +198,21 @@ pub(super) trait Clonable: Asset {
 重画不同步就会闪。哪天真要「临时涂两笔、下一帧自己消失」的东西（调试框之类），再按绘制那条路走，但**不许**
 混进这两类窗口的内容里。
 
+**实现**：两种画法各是一个结构体（`cloudime-render`），元素各是一条 trait（`elements` 模块）：
+
+| | 结构体 | 画到哪儿 | 内容 |
+|---|---|---|---|
+| 渲染 | `Render` | 一块内存区域（tiny-skia `Pixmap`）→ 交给窗口**整块**贴上 | **持久** |
+| 绘制 | `Paint` | 调用方给的窗口 `HDC`（GDI） | **不持久**，下一帧就没了 |
+
+元素 trait（两边**都实现**；窗口里只准经它们画，别在别处再抄一遍原语）：
+
+- `TextElement::text`、`SvgElement::svg`、`ImageElement::image`、`LineElement::line`、
+  `RectElement::rect` / `round_rect` / `circle`、`PathElement::path`；
+- `Render` 与量字共用同一套字形管线（`TextPainter` 句柄共享）：**画字的时候顺便量字**（`Render::measure`）；
+- `Paint` 那份是 GDI（`TextOut` / `FillRect` / `RoundRect` / `Ellipse` / `LineTo` / `FillPath` / `AlphaBlend`），
+  不共享字形管线（没有字距微调 / 连字 / 彩色 emoji），抗锯齿也只有 GDI 那档 —— 所以窗口里不用它。
+
 ## 7. 实现落点
 
 - **独立窗口模板**（`ui/independent_window_template/`）：注册窗口类 + 建一块**分层、置顶、不抢焦点**的弹出窗
@@ -211,10 +226,12 @@ pub(super) trait Clonable: Asset {
   宽 / 高 / 间隙三个属性，没设过按宿主形状算默认；`set_lines` 填几行文字；`show(宿主内容区矩形, 排布方向)`
   贴宿主摆位 —— 宿主右边 / 下边放不下就换左边 / 上边）。**焦点**：`new` 收一个 `able_to_get_focus`，
   `set_focused` 开关鼠标穿透（`WS_EX_TRANSPARENT` 与命中测试读同一个位，两边不会打架）。
-- **资产这层**（`ui/auxiliary/`）：`Asset`（资产：`name`、声明 `able_to_get_focus`、收 `focusing` / `unfocusing`）、
-  `Assets`（宿主名下的资产表 + 这一组的**焦点**；`add` 收资产时**不动焦点**，§4 规则 8）、`Bridge`（桥：
+- **资产这层**（`ui/auxiliary/`）：`Asset`（资产：`name`、声明 `able_to_get_focus`、收 `focusing` / `unfocusing`）、  `Assets`（宿主名下的资产表 + 这一组的**焦点**；`add` 收资产时**不动焦点**，§4 规则 8）、`Bridge`（桥：
   `designate_focus(name)` 是同一所有者的两件资产之间转手的路，`return_focus_to_owner()` 是把焦点交回去）、
   `Host`（宿主喂给资产的形状：内容区矩形 / 排布方向 / 是不是展开着）、`Focus`（焦点在谁身上，§4）、
   `DesignatedAssetToGetFocus`（指定资产获取焦点）。
+- **画元素**（`cloudime-render`）：`elements`（六条元素 trait）、`render`（`Render`：一块离屏位图 + 共享的字形
+  管线，自绘窗口的每一笔都经它）、`paint`（`Paint`：GDI 直画到窗口 DC，眼下没有窗口用）。渲染器内部
+  （候选窗 / 键位映射参考 / 状态条）已经**全走 `Render` 的 trait**，不再直接碰画布原语。
 - 现在只有一件资产：候选窗口的**键位映射参考**（`ui/auxiliary/key_map/`，名字 `key_map`）—— 它**没**声明
   `able_to_get_focus`，所以眼下整组一直由候选窗口持有焦点。

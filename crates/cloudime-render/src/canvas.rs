@@ -67,6 +67,52 @@ impl Canvas {
         );
     }
 
+    /// 一条粗 `thickness` 的线（任意角度）：拿一个细长的四边形填出来，带抗锯齿。
+    pub(crate) fn line(&mut self, from: (f32, f32), to: (f32, f32), thickness: f32, color: Color) {
+        let (x1, y1) = from;
+        let (x2, y2) = to;
+        let half = (thickness / 2.0).max(0.0);
+        let (dx, dy) = (x2 - x1, y2 - y1);
+        let length = (dx * dx + dy * dy).sqrt();
+        if length <= f32::EPSILON || half <= 0.0 {
+            return;
+        }
+        let (nx, ny) = (-dy / length * half, dx / length * half);
+        let mut builder = PathBuilder::new();
+        builder.move_to(x1 + nx, y1 + ny);
+        builder.line_to(x2 + nx, y2 + ny);
+        builder.line_to(x2 - nx, y2 - ny);
+        builder.line_to(x1 - nx, y1 - ny);
+        builder.close();
+        if let Some(path) = builder.finish() {
+            self.fill_path(&path, color, BlendMode::SourceOver);
+        }
+    }
+
+    /// 圆：四段三次贝塞尔近似（控制点系数与圆角矩形同一套）。
+    pub(crate) fn circle(&mut self, cx: f32, cy: f32, radius: f32, color: Color) {
+        if radius <= 0.0 {
+            return;
+        }
+        const KAPPA: f32 = 0.552_284_8;
+        let k = radius * KAPPA;
+        let mut builder = PathBuilder::new();
+        builder.move_to(cx + radius, cy);
+        builder.cubic_to(cx + radius, cy + k, cx + k, cy + radius, cx, cy + radius);
+        builder.cubic_to(cx - k, cy + radius, cx - radius, cy + k, cx - radius, cy);
+        builder.cubic_to(cx - radius, cy - k, cx - k, cy - radius, cx, cy - radius);
+        builder.cubic_to(cx + k, cy - radius, cx + radius, cy - k, cx + radius, cy);
+        builder.close();
+        if let Some(path) = builder.finish() {
+            self.fill_path(&path, color, BlendMode::SourceOver);
+        }
+    }
+
+    /// 底下的位图（图像元素要往上画）。
+    pub(crate) fn pixmap_mut(&mut self) -> &mut Pixmap {
+        &mut self.pixmap
+    }
+
     /// 把另一张位图整张叠上来（左上角对齐到 `(x, y)`）。
     pub(crate) fn blend_pixmap(&mut self, x: i32, y: i32, other: &Pixmap) {
         let width = other.width();

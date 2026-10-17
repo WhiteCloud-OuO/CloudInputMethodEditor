@@ -12,12 +12,16 @@ mod status;
 mod top_line;
 mod vertical;
 
-use crate::canvas::Canvas;
+use std::cell::RefCell;
+use std::rc::Rc;
+
 use crate::color::Color;
+use crate::elements::{RectElement, TextElement};
 use crate::error::RenderError;
 use crate::fonts::FontLibrary;
 use crate::frame::{Auxiliary, Frame, HighlightRect, Row, TipSegment, Tone};
 use crate::layout::Layout;
+use crate::render::Render;
 use crate::shadow::Shadow;
 use crate::text::{TextPainter, TextSize, TextStyle};
 use crate::theme::{FontSpec, Theme};
@@ -66,8 +70,8 @@ const VERTICAL_CELL_MIN_EMS: f32 = 2.0;
 const OPTICAL_SIZE: f32 = 17.0;
 
 pub struct Renderer {
-    /// 文字测绘。
-    text: TextPainter,
+    /// 文字测绘（渲染与量字共用一个句柄：画的时候还要量字）。
+    text: Rc<RefCell<TextPainter>>,
 }
 
 /// 一次渲染期间的上下文：主题按倍数换算后的像素值。
@@ -181,12 +185,14 @@ impl Renderer {
     pub fn new(library: FontLibrary) -> Self {
         let mut text = TextPainter::new(library);
         text.set_optical_size(Some(OPTICAL_SIZE));
-        Self { text }
+        Self {
+            text: Rc::new(RefCell::new(text)),
+        }
     }
 
     /// 画一帧。`scale` 是点 → 像素的倍数（Retina 为 2）；带 `shadow` 时位图四周留出阴影的边。
     pub fn render(
-        &mut self,
+        &self,
         frame: &Frame,
         layout: Layout,
         theme: &Theme,
@@ -198,15 +204,15 @@ impl Renderer {
         let margin = shadow.map_or(0.0, |s| metrics.px(s.margin()));
         let width = (content_width + margin * 2.0).ceil();
         let height = (content_height + margin * 2.0).ceil();
-        let mut canvas = Canvas::new(width as u32, height as u32)?;
+        let mut render = Render::new(width as u32, height as u32, self.text.clone())?;
         let radius = metrics.corner_radius();
         if let Some(shadow) = shadow
             && let Some(content) =
                 tiny_skia::Rect::from_xywh(margin, margin, content_width, content_height)
         {
-            shadow.paint(&mut canvas, content, radius, scale);
+            shadow.paint(&mut render, content, radius, scale);
         }
-        canvas.fill_round_rect(
+        render.round_rect(
             margin,
             margin,
             content_width,
@@ -215,11 +221,11 @@ impl Renderer {
             theme.colors.background,
         );
         let mut y = margin + metrics.padding();
-        y += self.draw_top_line(&mut canvas, frame, &metrics, margin, y);
+        y += self.draw_top_line(&mut render, frame, &metrics, margin, y);
         let highlight_rects = if frame.columns > 0 {
             // 展开「更多候选项」：竖排 / 横排都走矩阵，一行 `columns` 格、按行优先铺开。
             self.draw_matrix(
-                &mut canvas,
+                &mut render,
                 frame,
                 &metrics,
                 layout,
@@ -230,15 +236,15 @@ impl Renderer {
         } else {
             match layout {
                 Layout::Vertical => {
-                    self.draw_vertical(&mut canvas, frame, &metrics, margin, y, content_width)
+                    self.draw_vertical(&mut render, frame, &metrics, margin, y, content_width)
                 }
                 Layout::Horizontal => {
-                    self.draw_horizontal(&mut canvas, frame, &metrics, margin, y, content_width)
+                    self.draw_horizontal(&mut render, frame, &metrics, margin, y, content_width)
                 }
             }
         };
         Ok(Rendered {
-            pixmap: canvas.into_pixmap(),
+            pixmap: render.into_pixmap(),
             content_x: margin as u32,
             content_y: margin as u32,
             content_width: content_width.ceil() as u32,
@@ -253,7 +259,7 @@ impl Renderer {
     /// 给「辅助窗口模板」（`server` 的 `auxiliary_window_template`）按候选窗口的形状算默认大小用：
     /// 拿一个「9 个两字候选」的帧去量竖排高度、拿「6 个两字候选」的帧去量横排宽度。
     pub fn measure_frame(
-        &mut self,
+        &self,
         frame: &Frame,
         layout: Layout,
         theme: &Theme,
@@ -268,17 +274,17 @@ impl Renderer {
     ///
     /// 给「辅助窗口模板」（`server` 的 `auxiliary_window_template`）用 —— 往里面画什么由用它的那件资产自己定。
     pub fn render_panel(
-        &mut self,
+        &self,
         content_width: f32,
         content_height: f32,
         theme: &Theme,
         scale: f32,
         shadow: Option<&Shadow>,
     ) -> Result<Rendered, RenderError> {
-        let (canvas, margin) =
-            Self::panel_canvas(content_width, content_height, theme, scale, shadow)?;
+        let (render, margin) =
+            self.panel_canvas(content_width, content_height, theme, scale, shadow)?;
         Ok(Self::panel_rendered(
-            canvas,
+            render,
             margin,
             (content_width, content_height),
             scale,
@@ -287,25 +293,26 @@ impl Renderer {
 
     /// 面板类窗口的画布与内容区留白（阴影边）：[`Self::render_panel`] / [`Self::render_key_map`] 共用。
     fn panel_canvas(
+        &self,
         content_width: f32,
         content_height: f32,
         theme: &Theme,
         scale: f32,
         shadow: Option<&Shadow>,
-    ) -> Result<(Canvas, f32), RenderError> {
+    ) -> Result<(Render, f32), RenderError> {
         let metrics = Metrics { theme, scale };
         let margin = shadow.map_or(0.0, |s| metrics.px(s.margin()));
         let width = (content_width + margin * 2.0).ceil();
         let height = (content_height + margin * 2.0).ceil();
-        let mut canvas = Canvas::new(width as u32, height as u32)?;
+        let mut render = Render::new(width as u32, height as u32, self.text.clone())?;
         let radius = metrics.corner_radius();
         if let Some(shadow) = shadow
             && let Some(content) =
                 tiny_skia::Rect::from_xywh(margin, margin, content_width, content_height)
         {
-            shadow.paint(&mut canvas, content, radius, scale);
+            shadow.paint(&mut render, content, radius, scale);
         }
-        canvas.fill_round_rect(
+        render.round_rect(
             margin,
             margin,
             content_width,
@@ -313,13 +320,13 @@ impl Renderer {
             radius,
             theme.colors.background,
         );
-        Ok((canvas, margin))
+        Ok((render, margin))
     }
 
     /// 画布 + 内容区尺寸 → [`Rendered`]。
-    fn panel_rendered(canvas: Canvas, margin: f32, content: (f32, f32), scale: f32) -> Rendered {
+    fn panel_rendered(render: Render, margin: f32, content: (f32, f32), scale: f32) -> Rendered {
         Rendered {
-            pixmap: canvas.into_pixmap(),
+            pixmap: render.into_pixmap(),
             content_x: margin as u32,
             content_y: margin as u32,
             content_width: content.0.ceil() as u32,
@@ -330,34 +337,31 @@ impl Renderer {
     }
 
     /// 量一段文字在 `size` 点字号下的宽度（点），与原生排版的数值对照用。
-    pub fn measure_points(&mut self, text: &str, size: f32) -> f32 {
+    pub fn measure_points(&self, text: &str, size: f32) -> f32 {
         let style = TextStyle::new(FontSpec::new(size, size), size, Color::rgb(0, 0, 0), 1.0);
-        self.text.measure(text, &style).width
+        self.text.borrow_mut().measure(text, &style).width
     }
 
     /// 量一段文字在某个字体（字族 + 字号）下的宽高，单位**点**；与真正画出来走同一套整形 / 回退链，
     /// 重量按正常（不加粗）。`family` 是 `None` 就用界面字体（与 [`Theme`] 里那几项一致）。
     ///
     /// 给上层用：脚本的 `cloudime.ui.measure` 拿它算「窗口要多宽才装得下这段译文」。
-    pub fn measure_font(
-        &mut self,
-        text: &str,
-        font: &FontSpec,
-        family: Option<&String>,
-    ) -> (f32, f32) {
+    pub fn measure_font(&self, text: &str, font: &FontSpec, family: Option<&String>) -> (f32, f32) {
         let style = TextStyle::new(*font, font.size, Color::rgb(0, 0, 0), 1.0).with_family(family);
-        let size = self.text.measure(text, &style);
+        let size = self.text.borrow_mut().measure(text, &style);
         (size.width, size.height)
     }
 
     /// 每个字形用到的字族名，验证回退链用。
-    pub fn trace_families(&mut self, text: &str, theme: &Theme) -> Vec<String> {
+    pub fn trace_families(&self, text: &str, theme: &Theme) -> Vec<String> {
         let metrics = Metrics { theme, scale: 1.0 };
-        self.text.trace_families(text, &metrics.text_style())
+        self.text
+            .borrow_mut()
+            .trace_families(text, &metrics.text_style())
     }
 
     /// 内容需要的像素宽高（不含阴影边）。
-    fn preferred_size(&mut self, frame: &Frame, layout: Layout, m: &Metrics) -> (f32, f32) {
+    fn preferred_size(&self, frame: &Frame, layout: Layout, m: &Metrics) -> (f32, f32) {
         let (top_width, top_height) = self.top_line_size(frame, m);
         let (body_width, body_height) = if frame.columns > 0 {
             self.matrix_size(frame, m, layout)
@@ -378,26 +382,14 @@ impl Renderer {
         (width, top_height + body_height + m.padding() * 2.0)
     }
 
-    pub(super) fn measure(&mut self, text: &str, style: &TextStyle) -> TextSize {
-        self.text.measure(text, style)
-    }
-
-    /// 画一段文字（`x` 左边、`y` 行框顶边），返回它的宽度。
-    pub(super) fn draw_text(
-        &mut self,
-        canvas: &mut Canvas,
-        text: &str,
-        style: &TextStyle,
-        x: f32,
-        y: f32,
-    ) -> f32 {
-        self.text.draw(canvas, text, style, x, y)
+    pub(super) fn measure(&self, text: &str, style: &TextStyle) -> TextSize {
+        self.text.borrow_mut().measure(text, style)
     }
 
     /// 候选词本体。`highlighted` 是高亮的那一条，用另一个颜色。
     fn draw_word(
-        &mut self,
-        canvas: &mut Canvas,
+        &self,
+        render: &mut Render,
         m: &Metrics,
         row: &Row,
         x: f32,
@@ -412,61 +404,60 @@ impl Renderer {
         let style = m
             .style(m.theme.text_font, color)
             .with_family(m.theme.text_family.as_ref());
-        self.draw_text(canvas, &row.text, &style, x, top);
+        render.text(&row.text, &style, x, top);
     }
 
     /// 来源角标的宽度（点）；没有角标为 0。
-    pub(super) fn badge_width(&mut self, badge: Option<&str>, m: &Metrics) -> f32 {
+    pub(super) fn badge_width(&self, badge: Option<&str>, m: &Metrics) -> f32 {
         badge.map_or(0.0, |text| self.measure(text, &m.badge_style()).width)
     }
 
     /// 候选词与辅助码之间那**一个空格**的宽度（点）——`[XH]` 前面隔的就是它。
-    pub(super) fn space_width(&mut self, m: &Metrics) -> f32 {
+    pub(super) fn space_width(&self, m: &Metrics) -> f32 {
         self.measure(" ", &m.text_style()).width
     }
 
     /// 辅助码那一段的宽度（点）：**一个空格 + `[` + 已敲的几位 + 还差的几位 + `]`**；没有为 0。
-    pub(super) fn auxiliary_width(&mut self, auxiliary: Option<&Auxiliary>, m: &Metrics) -> f32 {
+    pub(super) fn auxiliary_width(&self, auxiliary: Option<&Auxiliary>, m: &Metrics) -> f32 {
         let Some(auxiliary) = auxiliary else {
             return 0.0;
         };
         let style = m.badge_style();
-        let bracket = |this: &mut Self| {
-            this.measure(AUXILIARY_OPEN, &style).width + this.measure(AUXILIARY_CLOSE, &style).width
-        };
+        let bracket = self.measure(AUXILIARY_OPEN, &style).width
+            + self.measure(AUXILIARY_CLOSE, &style).width;
         self.space_width(m)
-            + bracket(self)
+            + bracket
             + self.measure(&auxiliary.typed, &style).width
             + self.measure(&auxiliary.rest, &style).width
     }
 
     /// 一个候选字的宽度（点）。用来按「字宽」定间距 / 最小宽度：取一个汉字量，
     /// 楷体 / 雅黑下一个汉字就是一个 em，横排的候选里也以汉字为主。
-    pub(super) fn char_width(&mut self, m: &Metrics) -> f32 {
+    pub(super) fn char_width(&self, m: &Metrics) -> f32 {
         self.measure(SINGLE_CHAR, &m.text_style()).width
     }
 
     /// 横排里候选词与来源角标之间的**最小**间隔：两个候选字宽（比原来的 4pt 宽得多，角标不贴词）。
     /// 竖排的角标在自己的列里，仍用 [`BADGE_GAP`]。
-    pub(super) fn horizontal_badge_gap(&mut self, m: &Metrics) -> f32 {
+    pub(super) fn horizontal_badge_gap(&self, m: &Metrics) -> f32 {
         HORIZONTAL_BADGE_GAP_EMS * self.char_width(m)
     }
 
     /// 横排展开成网格时每格的**最小**宽度：6 个候选字 + 角标宽度（角标不能把候选词挤没）。
-    pub(super) fn horizontal_min_cell_width(&mut self, m: &Metrics, badge_width: f32) -> f32 {
+    pub(super) fn horizontal_min_cell_width(&self, m: &Metrics, badge_width: f32) -> f32 {
         HORIZONTAL_CELL_MIN_EMS * self.char_width(m) + badge_width
     }
 
     /// 一个角标字的宽度（点）。竖排展开的最小宽度按它算：**不管这一屏有没有角标都算进去**。
-    pub(super) fn badge_char_width(&mut self, m: &Metrics) -> f32 {
+    pub(super) fn badge_char_width(&self, m: &Metrics) -> f32 {
         self.measure(BADGE_CHAR, &m.badge_style()).width
     }
 
     /// 把来源角标画在 `left` 处（调用方定它在哪：竖排是「格右边缘往里让 `BADGE_GAP`」，
     /// 横排是「候选文字右边再加 2 个字宽」），与序号一样垂直居中。
     pub(super) fn draw_badge(
-        &mut self,
-        canvas: &mut Canvas,
+        &self,
+        render: &mut Render,
         m: &Metrics,
         badge: Option<&str>,
         left: f32,
@@ -477,21 +468,15 @@ impl Renderer {
         };
         let style = m.badge_style();
         let text_height = m.px(m.theme.text_font.line_height);
-        self.draw_text(
-            canvas,
-            text,
-            &style,
-            left,
-            top + m.index_offset(text_height),
-        );
+        render.text(text, &style, left, top + m.index_offset(text_height));
     }
 
     /// 把辅助码画在 `left` 处 —— 调用方给的是「候选词右边再加一个空格」那个位置
     /// （即 `text_x + 候选词宽度 + `[`Self::space_width`]），字体与颜色跟来源角标一致。
     /// 两头补 `[` `]`（不参与下划线），**已经敲上的那几位画下划线**（表示这段码已经打上去了）。
     pub(super) fn draw_auxiliary(
-        &mut self,
-        canvas: &mut Canvas,
+        &self,
+        render: &mut Render,
         m: &Metrics,
         auxiliary: Option<&Auxiliary>,
         left: f32,
@@ -514,20 +499,14 @@ impl Renderer {
             if segment.is_empty() {
                 continue;
             }
-            x += self.draw_text(canvas, segment, style, x, top);
+            x += render.text(segment, style, x, top);
         }
     }
 
     /// 画高亮条。`rect` 用内容区坐标；`origin` 是内容区左上角在画布里的像素坐标，画前搬过去。
-    fn fill_highlight(
-        &mut self,
-        canvas: &mut Canvas,
-        m: &Metrics,
-        rect: HighlightRect,
-        origin: f32,
-    ) {
+    fn fill_highlight(&self, render: &mut Render, m: &Metrics, rect: HighlightRect, origin: f32) {
         let rect = rect.translated(origin, origin);
-        canvas.fill_round_rect(
+        render.round_rect(
             rect.left,
             rect.top,
             rect.width(),
@@ -538,7 +517,7 @@ impl Renderer {
     }
 
     /// 底部那一行（左侧翻译 Tip、右侧页码）要多高；两样都没有就是 `0`。
-    pub(super) fn bottom_line_height(&mut self, frame: &Frame, m: &Metrics) -> f32 {
+    pub(super) fn bottom_line_height(&self, frame: &Frame, m: &Metrics) -> f32 {
         if frame.tip.is_none() && frame.footer.is_none() {
             return 0.0;
         }
@@ -551,7 +530,7 @@ impl Renderer {
 
     /// 底部「信息区」要多高：本地 Tip / 页码那一行，加上它下面那几行在线翻译（有才加）。
     /// 脚本体里写了换行（`\n`）就按几行算 —— 一屏最高多少行由脚本自己限。
-    pub(super) fn info_height(&mut self, frame: &Frame, m: &Metrics) -> f32 {
+    pub(super) fn info_height(&self, frame: &Frame, m: &Metrics) -> f32 {
         let bottom = self.bottom_line_height(frame, m);
         let Some(segments) = frame.online.as_deref() else {
             return bottom;
@@ -562,8 +541,8 @@ impl Renderer {
 
     /// 画底部信息区：`y` 是本地 Tip / 页码那一行的顶边，在线翻译那一块紧贴在它下面（可能有几行）。
     pub(super) fn draw_info(
-        &mut self,
-        canvas: &mut Canvas,
+        &self,
+        render: &mut Render,
         frame: &Frame,
         m: &Metrics,
         left: f32,
@@ -571,7 +550,7 @@ impl Renderer {
         content_width: f32,
     ) {
         let bottom = self.bottom_line_height(frame, m);
-        self.draw_bottom_line(canvas, frame, m, left, y, content_width);
+        self.draw_bottom_line(render, frame, m, left, y, content_width);
         let Some(segments) = frame.online.as_deref() else {
             return;
         };
@@ -580,7 +559,7 @@ impl Renderer {
         let line_height = m.px(m.theme.translate_font.line_height);
         for (i, line) in online_lines(segments).into_iter().enumerate() {
             self.draw_segments(
-                canvas,
+                render,
                 &line,
                 m,
                 left + m.padding(),
@@ -593,8 +572,8 @@ impl Renderer {
     /// 画底部那一行：`y` 是行框顶边（内容区坐标），`content_width` 是内容区宽度。
     /// 页码靠右、翻译 Tip 靠左，放不下就把 Tip 截断。
     pub(super) fn draw_bottom_line(
-        &mut self,
-        canvas: &mut Canvas,
+        &self,
+        render: &mut Render,
         frame: &Frame,
         m: &Metrics,
         left: f32,
@@ -605,21 +584,21 @@ impl Renderer {
         let mut budget = right - left - m.padding() * 2.0;
         if let Some(footer) = frame.footer.as_deref() {
             let style = m.footer_style();
-            let size = self.measure(footer, &style);
-            self.draw_text(canvas, footer, &style, right - size.width, y);
+            let size = render.measure(footer, &style);
+            render.text(footer, &style, right - size.width, y);
             budget -= size.width + m.column_gap();
         }
         let Some(segments) = frame.tip.as_deref() else {
             return;
         };
-        self.draw_segments(canvas, segments, m, left + m.padding(), y, budget);
+        self.draw_segments(render, segments, m, left + m.padding(), y, budget);
     }
 
     /// 从左往右一段一段画字（翻译 Tip / 在线翻译共用）：`x` 是左端、`y` 是行框顶边，
     /// `budget` 是还剩多少宽度（点），放不下就把这一段截断。
     fn draw_segments(
-        &mut self,
-        canvas: &mut Canvas,
+        &self,
+        render: &mut Render,
         segments: &[TipSegment],
         m: &Metrics,
         x: f32,
@@ -634,7 +613,7 @@ impl Renderer {
             }
             let style = m.translate_style(m.tone_color(segment.tone), segment.italic);
             let (shown, _) = self.truncate(&segment.text, &style, budget);
-            let used = self.draw_text(canvas, &shown, &style, x, y);
+            let used = render.text(&shown, &style, x, y);
             x += used;
             budget -= used;
         }
@@ -773,7 +752,7 @@ mod tests {
     /// 窗口模板要的**空面板**：内容区尺寸就是要的那个（不跟内容走），且尺寸与位图一致。
     #[test]
     fn a_panel_keeps_the_size_it_was_given() {
-        let Some(mut renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
             return;
         };
         let out = renderer
@@ -787,7 +766,7 @@ mod tests {
     /// （窗口模板的默认大小按这两条算）。
     #[test]
     fn measuring_a_frame_follows_the_row_count() {
-        let Some(mut renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
             return;
         };
         let theme = Theme::new();
@@ -812,11 +791,11 @@ mod tests {
     #[test]
     fn online_newlines_make_the_window_taller() {
         // 没有系统字体的环境（CI 容器）跳过
-        let Some(mut renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
             return;
         };
         let theme = Theme::new();
-        let mut height = |online: &str| {
+        let height = |online: &str| {
             let frame = Frame {
                 online: Some(vec![TipSegment::new(online, Tone::Online, false)]),
                 ..Frame::default()
@@ -843,7 +822,7 @@ mod tests {
     /// 换行是真画出来的：两行「M」的字形分别落在墨迹范围的上下两半。
     #[test]
     fn online_newlines_actually_paint_two_lines() {
-        let Some(mut renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
             return;
         };
         let frame = Frame {

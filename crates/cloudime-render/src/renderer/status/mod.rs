@@ -8,11 +8,11 @@ pub use cell::StatusCell;
 pub use rendered::RenderedStatus;
 
 use super::{Metrics, Rendered, Renderer};
-use crate::canvas::Canvas;
 use crate::color::Color;
+use crate::elements::{RectElement, SvgElement};
 use crate::error::RenderError;
+use crate::render::Render;
 use crate::shadow::Shadow;
-use crate::svg::draw_svg;
 use crate::theme::Theme;
 
 /// 图标按钮外接方框的边长（点）。
@@ -45,15 +45,15 @@ impl Renderer {
         let margin = shadow.map_or(0.0, |s| metrics.px(s.margin()));
         let width = (content_width + margin * 2.0).ceil();
         let height = (content_height + margin * 2.0).ceil();
-        let mut canvas = Canvas::new(width as u32, height as u32)?;
+        let mut render = Render::new(width as u32, height as u32, self.text.clone())?;
         let radius = metrics.corner_radius();
         if let Some(shadow) = shadow
             && let Some(content) =
                 tiny_skia::Rect::from_xywh(margin, margin, content_width, content_height)
         {
-            shadow.paint(&mut canvas, content, radius, scale);
+            shadow.paint(&mut render, content, radius, scale);
         }
-        canvas.fill_round_rect(
+        render.round_rect(
             margin,
             margin,
             content_width,
@@ -65,14 +65,14 @@ impl Renderer {
         let mut left = margin + gap;
         let mut edges = Vec::with_capacity(cells.len());
         for cell in cells {
-            draw_svg(&mut canvas, cell.svg(), left, top, size, Some(icon))?;
+            render.svg(cell.svg(), left, top, size, Some(icon))?;
             left += size;
             edges.push(left - margin);
             left += gap;
         }
         Ok(RenderedStatus {
             rendered: Rendered {
-                pixmap: canvas.into_pixmap(),
+                pixmap: render.into_pixmap(),
                 content_x: margin as u32,
                 content_y: margin as u32,
                 content_width: content_width as u32,

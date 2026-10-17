@@ -6,6 +6,7 @@ use tiny_skia::Rect;
 
 use crate::canvas::Canvas;
 use crate::color::Color;
+use crate::render::Render;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Shadow {
@@ -34,9 +35,11 @@ impl Shadow {
         self.blur * 2.0 + self.offset_y
     }
 
-    /// 在 `canvas` 上给 `content` 这块圆角内容画阴影；坐标都是像素。
-    pub(crate) fn paint(&self, canvas: &mut Canvas, content: Rect, radius: f32, scale: f32) {
-        let (w, h) = (canvas.width(), canvas.height());
+    /// 在 `render`（目标那块内存区域）上给 `content` 这块圆角内容画阴影；坐标都是像素。
+    ///
+    /// 遮罩自己在一块临时 `Canvas` 上画（像素层，不算元素），模糊完再整体 `blend_mask` 上去。
+    pub(crate) fn paint(&self, render: &mut Render, content: Rect, radius: f32, scale: f32) {
+        let (w, h) = (render.width(), render.height());
         let Ok(mut mask_canvas) = Canvas::new(w, h) else {
             return;
         };
@@ -60,7 +63,7 @@ impl Shadow {
             box_blur_horizontal(&mut mask, w as usize, h as usize, radius_px);
             box_blur_vertical(&mut mask, w as usize, h as usize, radius_px);
         }
-        canvas.blend_mask(0, 0, w, h, &mask, self.color);
+        render.blend_mask(0, 0, w, h, &mask, self.color);
     }
 }
 

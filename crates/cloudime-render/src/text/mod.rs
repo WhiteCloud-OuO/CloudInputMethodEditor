@@ -10,10 +10,10 @@ use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping, SwashCache, Swash
 
 use crate::canvas::Canvas;
 use crate::fonts::{FontLibrary, Trak, UI_FAMILY};
-pub(crate) use size::TextSize;
-pub(crate) use style::TextStyle;
+pub use size::TextSize;
+pub use style::TextStyle;
 
-pub(crate) struct TextPainter {
+pub struct TextPainter {
     /// 字体库与回退链。
     font_system: FontSystem,
 
