@@ -1,6 +1,11 @@
 //! Server 进程内的 UI 线程：候选窗口与悬浮状态条都在这条线程上自绘（普通置顶窗会被商店 / 任务栏搜索
 //! 这些高 z-band 宿主盖住，只有本进程配合 uiAccess 签名才能盖过）。
 //!
+//! 两类窗口**一律用渲染**（`docs/design/windows.md` §6）：云朵渲染器把一整帧出成预乘 RGBA 位图（那块
+//! 「内存区域」），[`layered`] 换通道后 `UpdateLayeredWindow` 整块一次贴上。窗口过程**不做直接绘制** ——
+//! 不处理 `WM_PAINT`、窗口类没有背景刷、也没有 `InvalidateRect`：贴上去的那一帧会一直留在窗口上，
+//! 只有再贴一帧新的才会变。
+//!
 //! HWND 线程亲和：Router 在工人线程上产出内容，经通道 + `PostThreadMessageW` 唤醒交给 UI 线程应用。
 //! 线程句柄是 [`UiHandle`]，命令在 [`command`]，分层窗口合成在 [`layered`]，两块窗口共用的渲染器在 [`painter`]。
 //! 两类窗口各有一个**模板**：独立窗口用 [`independent_window_template`]（自己那块窗 + 名下资产），

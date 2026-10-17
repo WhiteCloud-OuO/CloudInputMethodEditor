@@ -162,7 +162,8 @@ struct Transition {
     started: Instant,
 }
 
-/// 候选窗口。内容经 `UpdateLayeredWindow` 一次贴上，窗口过程只额外处理滑动定时器。
+/// 候选窗口。内容经 `UpdateLayeredWindow` 一次贴上（**渲染**，不做直接绘制 —— 见
+/// `docs/design/windows.md` §6），窗口过程只额外处理滑动定时器。
 ///
 /// 它是一块**独立窗口**（见 [`super::independent_window_template`]）：自己那块窗与**名下的资产**
 /// （辅助窗口，眼下是键位映射参考）都交给 [`IndependentWindowTemplate`] 管。
