@@ -968,6 +968,10 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   打字的应用弄丢）。第一轮只落机制：`Assets::designate_focus` / `Bridge::designate_focus` /
   `Bridge::return_focus_to_owner` / `DesignatedAssetToGetFocus` 还没有生产调用方，照 `set_spec` 那套先挂
   `#[allow(dead_code)]` 注明留给后续部分。
+  **收资产不动焦点**：`Assets::add` 只往 `items` 里塞、不碰 `focus` —— 新来的哪怕声明了 `able_to_get_focus`
+  也得所有者**指定**才拿得到；**资产窃取**（§5.2：克隆 + 原件销毁）来的就是这条路：特性跟原件一样（克隆件
+  自带自己的 `able_to_get_focus`），焦点还留在所有者或姊妹资产身上；原件那边被销毁前按「生命周期末」
+  自动归还焦点。
 
 **辅助窗口**（`server/src/ui/auxiliary/`）：眼下只一件资产 —— 候选窗口的**键位映射参考**
 （`key_map/`，`KeyMapWindow`）：用**辅助窗口模板**搭的实窗，把当前方案的键位映射画成一张**键盘**给新手对着敲

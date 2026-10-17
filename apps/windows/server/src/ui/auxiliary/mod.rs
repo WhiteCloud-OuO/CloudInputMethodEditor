@@ -187,6 +187,10 @@ pub(super) struct Assets {
 impl Assets {
     /// 收下一份资产（所有权就落在这儿了）。**必须**在宿主自己那块窗建好之后调。
     ///
+    /// **不动焦点**：新收进来的资产哪怕声明了 [`Asset::able_to_get_focus`]，也**不会自己拿到焦点** ——
+    /// 焦点还在原持有者（所有者、或者同一所有者名下的某件姊妹资产）身上，要它拿还是得所有者**指定**
+    /// （`docs/design/windows.md` §4 规则 8）。资产窃取（克隆 + 原件销毁）走的就是这条。
+    ///
     /// 名字重了在 debug 下直接叫出来 —— [`Self::designate_focus`] 按名字指认，重名就指不准了。
     pub(super) fn add(&mut self, asset: Box<dyn Asset>) {
         debug_assert!(
@@ -673,5 +677,40 @@ mod tests {
         // 驱动那一拍：A1 自己把焦点让给同一所有者名下的 A2
         assets.sync(&Owner(&assets));
         assert_eq!(assets.focus(), Focus::Asset(1), "焦点转到了 A2");
+    }
+
+    /// §4 规则 8：**资产窃取**来的资产与原件具备同样的特性（能不能获得焦点照旧），但**不会第一时间拿到
+    /// 焦点** —— 焦点仍在它的所有者、或同一所有者名下的某件姊妹资产身上。
+    #[test]
+    fn a_stolen_asset_keeps_its_capability_but_never_takes_the_focus() {
+        // 先有一件能获得焦点的姊妹资产，并且它正拿着焦点
+        let events = Rc::new(RefCell::new(Vec::new()));
+        let mut assets = Assets::default();
+        assets.add(Box::new(Tracked::new("sibling", true, events.clone())));
+        assert!(assets.designate_focus("sibling"));
+        assert_eq!(assets.focus(), Focus::Asset(0));
+
+        // 「窃取」进来一件：克隆自别的所有者名下、本来能获得焦点的原件
+        assets.add(Box::new(Tracked::new("stolen", true, events.clone())));
+        assert_eq!(
+            assets.focus(),
+            Focus::Asset(0),
+            "焦点还在姊妹资产身上，没跟着新来的走"
+        );
+        assert_eq!(*events.borrow(), ["focus"], "新来的没聚焦、也没让别人失焦");
+
+        // 特性照旧：它**能**拿到焦点（只是要所有者指定）
+        assert!(assets.designate_focus("stolen"));
+        assert_eq!(assets.focus(), Focus::Asset(1));
+
+        // 另一件窃取来的、原本就不能获得焦点的：同样不动焦点，也照样接不住
+        assets.add(Box::new(Tracked::new(
+            "stolen-plain",
+            false,
+            events.clone(),
+        )));
+        assert_eq!(assets.focus(), Focus::Asset(1), "也没跟着走");
+        assert!(!assets.designate_focus("stolen-plain"), "特性照旧：接不住");
+        assert_eq!(assets.focus(), Focus::Asset(1));
     }
 }
