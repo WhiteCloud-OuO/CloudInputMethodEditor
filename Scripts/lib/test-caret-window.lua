@@ -6,8 +6,8 @@
 --   * 上方放不下（会超出显示器工作区）就改到光标下方 30 点；
 --   * 右上角 20 × 20、圆角 3 的区域里画 `Images\SVG\打叉.svg`，点它关闭并销毁窗口；
 --   * 鼠标不在这个区域里：叉是黑色、没有底色；移进去：底色变成 `#FFFF3300`、叉变成白色（模拟关闭按钮）；
---   * 窗口自身的背景 / 圆角 / 阴影都不让输入法画（`background = false`、`shadow = false`），
---     全部由这份脚本的元素表决定；输入法只提供窗口与渲染接口。
+--   * 窗口背景 / 圆角由脚本画（`background = false`），颜色取自 `cloudime.get_theme()` 的当前主题；
+--     阴影与候选窗同一套（`shadow` 缺省开启）。
 -- F3 只负责创建：窗口已经开着时再按不会关它。
 --
 -- 用到的接口：
@@ -49,7 +49,20 @@ local function svg_path()
     return close_svg
 end
 
+-- 当前主题的候选窗配色（`cloudime.get_theme()`）；没接上主题时用浅色兜底。
+local function palette()
+    local theme = cloudime.get_theme()
+    local candidate = theme and theme.candidate or {}
+    return {
+        background = candidate.background or "#FFFFFFFF",
+        text       = candidate.text or "#FF222222",
+        muted      = candidate.page_number or "#FF888888",
+        accent     = candidate.extra or "#FF4A90E2",
+    }
+end
+
 local function draw()
+    local color = palette()
     local content = {
         width = WIDTH,
         height = HEIGHT,
@@ -61,13 +74,13 @@ local function draw()
             { name = "close", x = BUTTON_X, y = BUTTON_Y,
               w = BUTTON, h = BUTTON, radius = 3, drag = false },
         },
-        -- 窗口外观全在这里：`create` 用了 background = false，输入法不画面板，背景由脚本自己画。
+        -- 窗口背景由脚本画（`create` 用了 background = false）；颜色跟随当前主题。
         { type = "rect", x = 0, y = 0, w = WIDTH, h = HEIGHT, radius = PANEL_RADIUS,
-          color = "#FFFFFFFF" },
-        { type = "text", x = MARGIN + 8, y = 18, text = "光标窗口", size = 16, color = "#FF4A90E2" },
-        { type = "text", x = MARGIN + 8, y = 44, text = "180 × 140", size = 12, color = "#FF888888" },
+          color = color.background },
+        { type = "text", x = MARGIN + 8, y = 18, text = "光标窗口", size = 16, color = color.accent },
+        { type = "text", x = MARGIN + 8, y = 44, text = "180 × 140", size = 12, color = color.muted },
         { type = "text", x = MARGIN + 8, y = 66, text = "Ctrl+Alt+F3 只创建", size = 12,
-          color = "#FF888888" },
+          color = color.muted },
     }
     -- 鼠标在关闭区域里才画按钮底色；先画它、再画叉（叉在上面）。
     if hovering then
@@ -128,7 +141,7 @@ cloudime.on("caret", function(pos)
         height      = HEIGHT,
         interactive = true,
         background  = false,   -- 面板底色 / 圆角由上面的 draw() 自己画
-        shadow      = false,   -- 阴影也关掉：这扇窗的每个像素都由脚本决定
+        shadow      = true,    -- 与候选窗同一套阴影（缺省就是 true）
     }
     draw()
     place(pos)

@@ -202,7 +202,7 @@ static THEME_CACHE: std::sync::Mutex<
 > = std::sync::Mutex::new(None);
 
 /// 读当前主题文件（用户目录优先）；找不到 / 读不动就用缺省主题。
-fn load_theme(name: &str) -> cloudime_platform::ThemeFile {
+pub(super) fn load_theme(name: &str) -> cloudime_platform::ThemeFile {
     let root = cloudime_platform::resources::bundled_root();
     let Some(entry) = cloudime_platform::find_theme(root.as_deref(), name) else {
         return cloudime_platform::ThemeFile::default();

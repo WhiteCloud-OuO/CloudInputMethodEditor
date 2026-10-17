@@ -564,6 +564,10 @@ impl MeasureFont {
 /// `cloudime.ui.measure` 背后的量尺：由 Server 装（[`Runtime::set_measure`]），单位是**点**。
 pub type MeasureHook = Rc<dyn Fn(&str, MeasureFont) -> Option<(f32, f32)>>;
 
+/// `cloudime.get_theme()` 背后的主题：由 Server 装（[`Runtime::set_theme_hook`]），每次调用现读当前主题。
+/// 表形如 `{ candidate = { … }, bar = { … }, tip = { … } }`，颜色是 `#AARRGGBB`。
+pub type ThemeHook = Rc<dyn Fn(&Lua) -> mlua::Result<Table>>;
+
 /// `cloudime.text.*` 要哪一段文本。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum TextRange {
@@ -708,6 +712,9 @@ pub struct Runtime {
     /// 量尺（`cloudime.ui.measure`）：Server 用 [`Runtime::set_measure`] 装进来。
     measure: Rc<RefCell<Option<MeasureHook>>>,
 
+    /// 当前主题（`cloudime.get_theme()`）：Server 用 [`Runtime::set_theme_hook`] 装进来。
+    theme_hook: Rc<RefCell<Option<ThemeHook>>>,
+
     /// 取输入框文本的接口（`cloudime.text.*`）：Server 用 [`Runtime::set_text_hook`] 装进来。
     text_hook: Rc<RefCell<Option<TextHook>>>,
 
@@ -770,6 +777,7 @@ impl Runtime {
             theme: Rc::new(RefCell::new(None)),
             viewport: Rc::new(RefCell::new(None)),
             measure: Rc::new(RefCell::new(None)),
+            theme_hook: Rc::new(RefCell::new(None)),
             text_hook: Rc::new(RefCell::new(None)),
             clipboard_set: Rc::new(RefCell::new(None)),
             clipboard_get: Rc::new(RefCell::new(None)),
@@ -1142,6 +1150,12 @@ impl Runtime {
         *self.measure.borrow_mut() = Some(hook);
     }
 
+    /// 装「当前主题」（`cloudime.get_theme()`）：Server 每次调用现读当前生效的主题，
+    /// 返回 `{ candidate = { … }, bar = { … }, tip = { … } }`（颜色是 `#AARRGGBB`）。
+    pub fn set_theme_hook(&self, hook: ThemeHook) {
+        *self.theme_hook.borrow_mut() = Some(hook);
+    }
+
     /// 有没有挂着的异步请求（HTTP）。调用方据此决定要不要收结果、要不要拼候选载荷。
     pub fn has_pending_requests(&self) -> bool {
         !self.requests.pending.borrow().is_empty()
@@ -1487,6 +1501,19 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
         )?,
     )?;
     table.set("ui", ui)?;
+    // 当前主题（`cloudime.get_theme()`）：Server 装进来的钩子每次现读，颜色都是 `#AARRGGBB`。
+    // 没有装（测试 / 加载期）给 `nil`，脚本自己回退。
+    let theme_state = runtime.theme_hook.clone();
+    table.set(
+        "get_theme",
+        lua.create_function(move |lua, ()| {
+            let hook = theme_state.borrow().clone();
+            match hook {
+                Some(hook) => Ok(mlua::Value::Table(hook(lua)?)),
+                None => Ok(mlua::Value::Nil),
+            }
+        })?,
+    )?;
     // 脚本窗口：`cloudime.window.create{…}` 建一块独立窗口，`create_auxiliary{ owner = …, … }`
     // 在它名下挂一件辅助窗口（资产）。这里只产出请求（见 `window` 模块），窗口在 UI 线程上建；
     // 句柄上的方法把后续操作推进同一条队列，Server 每次派发结束后 `take_window_requests` 取走。

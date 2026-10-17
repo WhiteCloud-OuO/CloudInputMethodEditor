@@ -183,6 +183,9 @@ pub struct Router {
     /// （[`Router::set_script_config`]）。存的是 `Config` 的一份拷贝，所以脚本拿到的总是当前那份。
     script_config: Rc<RefCell<cloudime_platform::Config>>,
 
+    /// 当前生效的主题名（`script_theme` 优先，否则 `curr_theme`）：`cloudime.get_theme()` 现读用。
+    script_theme_name: Rc<RefCell<String>>,
+
     /// 脚本 `cloudime.foreground_app()` 读的「当前前台应用」快照：焦点一变就 [`Router::sync_focused_app`] 刷新。
     focused_app_snapshot: Rc<RefCell<Option<String>>>,
 
@@ -243,6 +246,12 @@ impl Router {
         engine.set_punctuation_mapping(config.punctuation_mapping.clone());
         // 本进程启动时配置里的主题：脚本 `apply_theme(false)` 回退到它
         let theme_at_startup = config.curr_theme.clone();
+        let script_theme_name = Rc::new(RefCell::new(
+            config
+                .script_theme
+                .clone()
+                .unwrap_or_else(|| config.curr_theme.clone()),
+        ));
         let mut router = Self {
             engine,
             config: RouterConfig {
@@ -298,12 +307,21 @@ impl Router {
             document,
             scripts,
             script_config: Rc::new(RefCell::new(cloudime_platform::Config::default())),
+            script_theme_name,
             focused_app_snapshot: Rc::new(RefCell::new(None)),
         };
         // 脚本的 `cloudime.get_curr_config()`：读上面那份快照（`set_script_config` / 热加载时刷新）
         router.scripts.set_config_hook({
             let snapshot = router.script_config.clone();
             Rc::new(move |lua| script::config_table(lua, &snapshot.borrow()))
+        });
+        // 脚本的 `cloudime.get_theme()`：每次现按当前主题名读一遍主题文件，颜色是 `#AARRGGBB`
+        router.scripts.set_theme_hook({
+            let name = router.script_theme_name.clone();
+            Rc::new(move |lua| {
+                let theme = config::load_theme(&name.borrow());
+                script::theme_table(lua, &theme)
+            })
         });
         // 脚本的 `cloudime.foreground_app()`：读「当前前台应用」快照（焦点一变就刷新）
         router.scripts.set_app_hook({

@@ -188,6 +188,12 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
   `svg` 元素因此可以写 `path` 直接读文件（见元素表），不必让脚本把 SVG 文本抄进 Lua。
   `Runtime::load` 从脚本目录的上一级取安装目录，加载期就能用；Server 建 Router 时再用
   `bundled_root()` 校正一次。
+- **主题颜色**：`cloudime.get_theme()` 每次现读当前生效的主题（`script_theme` 优先，否则 `curr_theme`；
+  换主题后跟着变），返回 `{ candidate = { … }, bar = { … }, tip = { … } }`，颜色是 `#AARRGGBB`。
+  字段与主题文件一一对应（`candidate` 15 项 / `bar` 3 项 / `tip` 3 项），可以直接喂给元素的
+  `color` / `tint`。加载期钩子还没接上时是 `nil`，事件派发时一定有。
+  **阴影**：`create{ shadow = true }`（缺省）与候选窗同一套阴影；`background = false` 只关面板填充，
+  不影响阴影，两者可以自由组合。
 - **输入法自己的组合键优先**：`Ctrl + 数字`（主键盘 / 小键盘）、`Ctrl + Enter`、`Ctrl + 反引号`、
   `Shift + 反引号`、`Ctrl + Alt + 空格`（中英切换的可选组合）、`Ctrl + Alt + ,` `.`（TSF 保留键），
   以及**预留给非全拼 v/u/i 模式**的 `Ctrl + Alt + V` / `U` / `I`（2026-10-17 起，带不带 Shift 都保留）——

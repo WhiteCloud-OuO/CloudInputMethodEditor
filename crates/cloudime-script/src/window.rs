@@ -1046,6 +1046,16 @@ pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result
 mod tests {
     use super::*;
 
+    /// 建窗口的缺省：面板底色（`background`）与阴影（`shadow`）都开着，与候选窗一致。
+    #[test]
+    fn windows_default_to_panel_background_and_shadow() {
+        let lua = mlua::Lua::new();
+        let options = lua.load("return {}").eval::<mlua::Table>().unwrap();
+        let spec = parse_window(&options).unwrap();
+        assert!(spec.background);
+        assert!(spec.shadow);
+    }
+
     /// 颜色三种写法（`#RGB` / `#RRGGBB` / `#AARRGGBB`）与非法写法。
     #[test]
     fn hex_colors_cover_the_three_lengths() {

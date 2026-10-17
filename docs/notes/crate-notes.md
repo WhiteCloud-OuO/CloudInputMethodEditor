@@ -1015,6 +1015,13 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   取安装目录，Server 再用 `bundled_root()` 校正；`cloudime.install_dir()` / `install_path()` 给绝对路径，
   `canonicalize` 后必须仍在安装目录内。`svg` 元素新增 `path`（读文件文本，最多 2 MB），配合
   `install_path` 就能直接画随包的 `Images\SVG\*.svg`，不用把 SVG 抄进 Lua。
+- **主题颜色**（2026-10-17）：`Runtime::set_theme_hook` 由 Server 装（`Router::new`），
+  `cloudime.get_theme()` 每次现读：钩子拿 `Router.script_theme_name`（`script_theme` 优先，否则
+  `curr_theme`）→ `config::load_theme`（带文件 mtime 缓存）→ `script::theme_table` 转成
+  `{ candidate, bar, tip }` 三组 `#AARRGGBB` 字符串。换主题（`switch_script_theme` / 热加载
+  `apply_config`）时同步 `script_theme_name`。`get_theme()` 在加载期还没有钩子，给 `nil`。
+  `create` 的 `shadow` 缺省 **true**（与候选窗同一套阴影），与 `background`（面板填充）互不影响：
+  `background = false, shadow = true` 就是「脚本画底色、输入法画阴影」。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

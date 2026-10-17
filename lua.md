@@ -277,6 +277,7 @@ cloudime.on(事件名, function(载荷) … end)   -- 登记处理函数，只�
 | `cloudime.caret()` | 请求一次**光标位置**：DLL 在下一次按键处理完之后量插入点，结果以 **`caret` 事件**送来（不是返回值，见下） |
 | `cloudime.install_dir()` | 安装目录的绝对路径（`Scripts\` / `Images\` 的上一级）；测试 / 没有安装目录时给 `nil` |
 | `cloudime.install_path(相对路径)` | 安装目录里的文件绝对路径（如 `"Images/SVG/打叉.svg"`）；文件不存在给 `nil`，`..` 跑出安装目录**报错** |
+| `cloudime.get_theme()` | 当前生效主题的颜色表（`{ candidate = { … }, bar = { … }, tip = { … } }`，颜色是 `#AARRGGBB`）；详见下面「主题颜色」 |
 | `cloudime.get_time()` | 当前**本地时间** → `{ year, month, day, hour, minute, second, weekday, unix }`；`weekday` 1 = 周一 … 7 = 周日，`unix` 是 Unix 秒（标准库的 `os.date` / `os.time` 也能用，这一份是不依赖标准库的稳定形状） |
 | `cloudime.get_curr_config()` | 当前**配置**的一张表：**键名与 `config.toml` 一致**、分节同名（`candidate` / `input` / `general` / `theme` / `translate` / `status_bar` / `debugging` / `script` / `word_bank` / `phrase` / `update`）；`theme` 那一节多一个 `available`（可选主题名列表）。每次调用读的都是**当前**那份（配置热加载后跟着变） |
 | `cloudime.foreground_app()` | 当前**前台程序**的 exe 名（如 `"notepad.exe"`）；没聚焦任何程序给 `nil`。**随时可问**，不必等事件 —— 事件载荷里的 `app` 也是同一个值（`key` / `candidates` / `time` / 回调都带） |
@@ -332,6 +333,30 @@ end)
 - 这些值已经是**点**，可以直接喂给 `win:show{ x, y }`（不用自己乘 DPI）。
 - `cloudime.install_dir()` 给安装目录绝对路径；`cloudime.install_path("Images/SVG/打叉.svg")` 给它下面
   文件的绝对路径（文件不存在给 `nil`，跑到安装目录外**报错**）。`svg` 元素的 `path` 可以直接吃这个结果。
+
+### 主题颜色
+
+`cloudime.get_theme()` 每次调用都读**当前生效**的主题（`cloudime.apply_theme` 换过也跟上），返回：
+
+```lua
+{
+    candidate = { background, highlight, shadow, pinyin, pinyin_caret,
+                  highlight_text, text, highlight_index, index, page_number,
+                  badge, translate_meta, translate_learned, translate_fresh, extra },
+    bar = { background, icon, shadow },
+    tip = { background, icon, shadow },
+}
+```
+
+颜色都是 `#AARRGGBB` 字符串，可以直接用到元素的 `color` / `tint` / 区域颜色上：
+
+```lua
+local theme = cloudime.get_theme()
+local background = theme and theme.candidate.background or "#FFFFFFFF"
+local text       = theme and theme.candidate.text or "#FF222222"
+```
+
+加载脚本的那一刻 Server 还没接上主题钩子，可能给 `nil`；在 `startup` / `key` / `window` 等事件里调用总是有的。
 
 ### HTTP（异步，时限必给）
 

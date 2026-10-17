@@ -68,6 +68,19 @@ fn the_caret_window_script_draws_and_closes_itself() {
     std::fs::copy(&source, dir.join("test-caret-window.lua")).unwrap();
     let runtime = Runtime::load(&dir, &[]);
     runtime.set_install_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    // 当前主题：脚本用 `cloudime.get_theme()` 取色（这里只给用到的几项）。
+    runtime.set_theme_hook(std::rc::Rc::new(
+        |lua: &mlua::Lua| -> mlua::Result<mlua::Table> {
+            let candidate = lua.create_table()?;
+            candidate.set("background", "#FF123456")?;
+            candidate.set("text", "#FFABCDEF")?;
+            candidate.set("page_number", "#FF888888")?;
+            candidate.set("extra", "#FF0000FF")?;
+            let theme = lua.create_table()?;
+            theme.set("candidate", candidate)?;
+            Ok(theme)
+        },
+    ));
     assert!(runtime.scripts().iter().any(|name| name == "光标窗口测试"));
 
     // Ctrl+Alt+F3：脚本请求光标位置。
@@ -108,7 +121,7 @@ fn the_caret_window_script_draws_and_closes_itself() {
         .find_map(|request| match request {
             WindowRequest::Create(id, spec) => {
                 assert!(!spec.background, "面板底色 / 圆角由脚本自己画");
-                assert!(!spec.shadow, "阴影也关掉，窗口外观全归脚本");
+                assert!(spec.shadow, "阴影与候选窗同一套（缺省开启）");
                 Some(*id)
             }
             _ => None,
@@ -124,11 +137,14 @@ fn the_caret_window_script_draws_and_closes_itself() {
     assert_eq!(show, (100.0, 30.0), "光标上方 30 点（200 - 30 - 140）");
 
     let document = content_of(&requests, id);
-    // 背景由脚本自己画：第一块是整窗圆角矩形。
+    // 背景由脚本自己画：第一块是整窗圆角矩形，颜色来自 `cloudime.get_theme()`。
     assert!(matches!(
         &document.elements[0],
-        Element::Rect { x, y, width, height, .. }
-            if x.abs() < 0.01 && y.abs() < 0.01 && (*width - 180.0).abs() < 0.01 && (*height - 140.0).abs() < 0.01
+        Element::Rect { x, y, width, height, color, .. }
+            if x.abs() < 0.01 && y.abs() < 0.01
+                && (*width - 180.0).abs() < 0.01
+                && (*height - 140.0).abs() < 0.01
+                && *color == Color::rgba(0x12, 0x34, 0x56, 0xFF)
     ));
     assert!(
         document.elements.iter().any(|element| matches!(

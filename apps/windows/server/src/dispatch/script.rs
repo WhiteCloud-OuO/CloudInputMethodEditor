@@ -564,6 +564,15 @@ impl Router {
         }
     }
 
+    /// 当前主题名变了（`script_theme` / `curr_theme`）：`cloudime.get_theme()` 的钩子按它现读文件。
+    pub(super) fn refresh_theme_name(&self) {
+        *self.script_theme_name.borrow_mut() = self
+            .config
+            .script_theme
+            .clone()
+            .unwrap_or_else(|| self.config.curr_theme.clone());
+    }
+
     /// 脚本换主题（`cloudime.apply_theme(...)` 与动作表的 `theme`）：**写进配置 `[theme] curr_theme`
     /// 并立刻重启输入法服务**（与设置页「应用主题」同一套语义 —— 重启才一定换上、选择也留了下来）。
     /// `None` = 没提，`Clear` = 回本进程启动时配置里那份。名字找不到时不写配置、不重启，只本次按缺省画。
@@ -613,6 +622,7 @@ impl Router {
                     // 名字找不到：不写配置、不重启（免得下次启动按缺省画），只本次按缺省画并记一条
                     tracing::warn!(%name, "脚本要的主题不存在，按缺省主题画");
                     self.config.script_theme = next;
+                    self.refresh_theme_name();
                     let settings = self.config.render_settings();
                     self.candidates.configure(settings);
                     self.reconcile_status();
@@ -630,6 +640,7 @@ impl Router {
             super::status::spawn_replacement_server();
             self.restart_pending = true;
         }
+        self.refresh_theme_name();
         let settings = self.config.render_settings();
         self.candidates.configure(settings);
         self.reconcile_status();
@@ -959,6 +970,56 @@ fn key_payload(
 
 /// 脚本 `cloudime.get_curr_config()` 看到的那张表：**整份配置**（键名与 `config.toml` 一致，
 /// 分节同名），再给 `theme` 补一个 `available`（可选主题名列表 —— 这项不在配置文件里）。
+pub(super) fn theme_table(
+    lua: &mlua::Lua,
+    theme: &cloudime_platform::ThemeFile,
+) -> mlua::Result<mlua::Table> {
+    let candidate = lua.create_table()?;
+    for (name, color) in [
+        ("background", theme.candidate.background),
+        ("highlight", theme.candidate.highlight),
+        ("shadow", theme.candidate.shadow),
+        ("pinyin", theme.candidate.pinyin),
+        ("pinyin_caret", theme.candidate.pinyin_caret),
+        ("highlight_text", theme.candidate.highlight_text),
+        ("text", theme.candidate.text),
+        ("highlight_index", theme.candidate.highlight_index),
+        ("index", theme.candidate.index),
+        ("page_number", theme.candidate.page_number),
+        ("badge", theme.candidate.badge),
+        ("translate_meta", theme.candidate.translate_meta),
+        ("translate_learned", theme.candidate.translate_learned),
+        ("translate_fresh", theme.candidate.translate_fresh),
+        ("extra", theme.candidate.extra),
+    ] {
+        candidate.set(name, color.hex())?;
+    }
+
+    let bar = lua.create_table()?;
+    for (name, color) in [
+        ("background", theme.bar.background),
+        ("icon", theme.bar.icon),
+        ("shadow", theme.bar.shadow),
+    ] {
+        bar.set(name, color.hex())?;
+    }
+
+    let tip = lua.create_table()?;
+    for (name, color) in [
+        ("background", theme.tip.background),
+        ("icon", theme.tip.icon),
+        ("shadow", theme.tip.shadow),
+    ] {
+        tip.set(name, color.hex())?;
+    }
+
+    let table = lua.create_table()?;
+    table.set("candidate", candidate)?;
+    table.set("bar", bar)?;
+    table.set("tip", tip)?;
+    Ok(table)
+}
+
 pub(super) fn config_table(lua: &mlua::Lua, config: &Config) -> mlua::Result<mlua::Table> {
     let table = lua.create_table()?;
     if let serde_json::Value::Object(sections) =
@@ -1064,6 +1125,21 @@ fn kind_key(kind: CandidateKind) -> &'static str {
 mod tests {
     use super::*;
     use cloudime_platform::protocol::KeyModifiers;
+
+    /// `cloudime.get_theme()` 的表就是主题文件的三组色，颜色统一 `#AARRGGBB`。
+    #[test]
+    fn the_theme_table_mirrors_the_theme_file_colors() {
+        let lua = mlua::Lua::new();
+        let table = theme_table(&lua, &cloudime_platform::ThemeFile::default()).unwrap();
+        let candidate: mlua::Table = table.get("candidate").unwrap();
+        assert_eq!(candidate.get::<String>("background").unwrap(), "#FFFFFFFF");
+        assert_eq!(candidate.get::<String>("page_number").unwrap(), "#FF888888");
+        assert_eq!(candidate.get::<String>("extra").unwrap(), "#FF0F6CBD");
+        let bar: mlua::Table = table.get("bar").unwrap();
+        assert_eq!(bar.get::<String>("icon").unwrap(), "#FF231F20");
+        let tip: mlua::Table = table.get("tip").unwrap();
+        assert_eq!(tip.get::<String>("background").unwrap(), "#FFFFFFFF");
+    }
 
     /// 有脚本窗口拿着键盘焦点时，`key` 载荷多带 `window` / `window_id`；没有就不带（`nil`）。
     #[test]

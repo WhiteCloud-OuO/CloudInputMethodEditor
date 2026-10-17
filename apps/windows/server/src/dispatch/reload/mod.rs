@@ -178,6 +178,7 @@ impl Router {
         self.config.full_width_punctuation = full_width_punctuation;
         self.config.english_full_width_punctuation = english_full_width_punctuation;
         self.config.full_width_chars = full_width_chars;
+        self.refresh_theme_name();
         // 「辅助窗口」的显示方式跟着新配置走（`use_input_scheme.cfg` 的 `key_map_reference`）：
         // 换成「始终跟随候选窗口」时这会儿就把资产带上，不用等下一次组句。
         self.candidates
