@@ -981,6 +981,12 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `elements` 里六条（`TextElement` / `SvgElement` / `ImageElement` / `LineElement` / `RectElement` /
   `PathElement`），`Render`（离屏位图 + 共享字形管线，`measure` 也走它）与 `Paint`（**GDI + GDI+ 混合**直画窗口 DC）
   **各实现一遍**（GDI+ 管抗锯齿：线 / 圆角 / 圆 / 路径 / 文字 / 图像；GDI 管不透明的轴对齐矩形）；
+  **两处缓存**（2026-10-17）：① **阴影层缓存** —— 阴影只跟尺寸 / 圆角 / 模糊 / 偏移 / 颜色 / 缩放有关，跟内容无关，
+  `Renderer` 按这个 key 留最多 4 份已经算好的 `Pixmap`（候选窗 / 键位映射 / 状态条 / 提示各一份），命中就整块
+  `copy_from_slice`（`Render::blit`，目标这时还是空的）；没缓存时每帧要 3 遍盒式模糊 + 整画布混合，200% 缩放下
+  一次 10.4ms、占整帧九成，缓存后 11.3ms → 0.74ms。② **量宽缓存** —— `TextPainter::measure` 把
+  (文字, 字族, 字号, 行高, 斜体) → 宽度存进 `HashMap`（512 条封顶），布局阶段同一段字一次出帧会被量两三遍，
+  命中后 `measure_frame` 35µs → 1.2µs，整帧内容再省 ~20%。
   窗口里只准经这些 trait 画。除「键位映射参考」（辅助窗口模板，2026-10-17 起走 `Paint` / GDI + GDI+，见上）之外，
   自绘的几个窗口**一律用渲染** —— 渲染器把一整帧出成预乘 RGBA 位图
   （就是那块**内存区域**）→ `ui/layered::present` 换通道 → `UpdateLayeredWindow(ULW_ALPHA)` **整块一次**贴上。

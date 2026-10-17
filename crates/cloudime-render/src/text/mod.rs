@@ -20,6 +20,9 @@ pub struct TextPainter {
     /// 字形位图缓存（按字体、字号、亚像素位移）。
     cache: SwashCache,
 
+    /// 量过的宽度：同一段字 / 同一套样式在布局阶段会被量好几遍（一次出帧至少两遍），存下来省整形。
+    widths: HashMap<WidthKey, TextSize>,
+
     /// 复用的单行缓冲。
     buffer: Buffer,
 
@@ -40,6 +43,7 @@ impl TextPainter {
             buffer,
             tracking: HashMap::new(),
             gamma_tables: HashMap::new(),
+            widths: HashMap::new(),
         }
     }
 
@@ -51,6 +55,20 @@ impl TextPainter {
 
     /// 一段文字的宽高（像素）。高度就是行高。
     pub(crate) fn measure(&mut self, text: &str, style: &TextStyle) -> TextSize {
+        let key = WidthKey::new(text, style);
+        if let Some(size) = self.widths.get(&key) {
+            return *size;
+        }
+        let size = self.measure_uncached(text, style);
+        if self.widths.len() >= WIDTH_CACHE_ENTRIES {
+            self.widths.clear();
+        }
+        self.widths.insert(key, size);
+        size
+    }
+
+    /// 真去整形 + 量（[`Self::measure`] 的缓存没命中时走这里）。
+    fn measure_uncached(&mut self, text: &str, style: &TextStyle) -> TextSize {
         self.shape(text, style);
         let mut width = 0.0_f32;
         for run in self.buffer.layout_runs() {
@@ -161,6 +179,31 @@ impl TextPainter {
         self.buffer.shape_until_scroll(&mut self.font_system, false);
     }
 }
+
+/// 量宽缓存的键：只放会影响宽度的东西（颜色不影响排版）。
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+struct WidthKey {
+    text: String,
+    family: Option<String>,
+    size: u32,
+    line_height: u32,
+    italic: bool,
+}
+
+impl WidthKey {
+    fn new(text: &str, style: &TextStyle) -> Self {
+        Self {
+            text: text.to_owned(),
+            family: style.family.clone(),
+            size: style.size.to_bits(),
+            line_height: style.line_height.to_bits(),
+            italic: style.italic,
+        }
+    }
+}
+
+/// 量宽缓存留多少条（超过就整张清掉，别让它无限长）。
+const WIDTH_CACHE_ENTRIES: usize = 512;
 
 /// 某张字体在这个字号下每个字形要加的间距（像素）；第一次用到时解析它的 `trak` 表。
 fn tracking_px(

@@ -62,17 +62,12 @@ impl Render {
         self.text.borrow_mut().measure(text, style)
     }
 
-    /// 把一张 8 位覆盖率遮罩（阴影、字形）按 `color` 叠上来 —— 只给合成用（`shadow`）。
-    pub(crate) fn blend_mask(
-        &mut self,
-        x: i32,
-        y: i32,
-        width: u32,
-        height: u32,
-        data: &[u8],
-        color: Color,
-    ) {
-        self.canvas.blend_mask(x, y, width, height, data, color);
+    /// 把一整块位图**直接拷**过来（调用方保证目标这块还是空的；要 source-over 用 [`ImageElement::image`]）。
+    pub(crate) fn blit(&mut self, layer: &Pixmap) {
+        let target = self.canvas.pixmap_mut();
+        if target.width() == layer.width() && target.height() == layer.height() {
+            target.data_mut().copy_from_slice(layer.data());
+        }
     }
 }
 

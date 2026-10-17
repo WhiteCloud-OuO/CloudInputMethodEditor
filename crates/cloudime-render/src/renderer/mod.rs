@@ -74,6 +74,53 @@ const OPTICAL_SIZE: f32 = 17.0;
 pub struct Renderer {
     /// 文字测绘（渲染与量字共用一个句柄：画的时候还要量字）。
     text: Rc<RefCell<TextPainter>>,
+
+    /// 阴影层缓存（最多 [`SHADOW_CACHE_ENTRIES`] 份）：阴影只跟尺寸 / 圆角 / 参数有关，跟内容无关。
+    shadows: RefCell<Vec<(ShadowKey, tiny_skia::Pixmap)>>,
+}
+
+/// 阴影层缓存留几份（候选窗 / 键位映射参考 / 状态条 / 状态提示各一份就够）。
+const SHADOW_CACHE_ENTRIES: usize = 4;
+
+/// 阴影层的「同不同样」：画布尺寸 + 内容矩形 + 圆角 + 缩放 + 阴影参数。
+#[derive(Debug, Clone, Copy, PartialEq)]
+struct ShadowKey {
+    width: u32,
+    height: u32,
+    x: u32,
+    y: u32,
+    content_width: u32,
+    content_height: u32,
+    radius: u32,
+    scale: u32,
+    blur: u32,
+    offset: u32,
+    color: Color,
+}
+
+impl ShadowKey {
+    fn new(
+        width: u32,
+        height: u32,
+        content: tiny_skia::Rect,
+        radius: f32,
+        scale: f32,
+        shadow: &Shadow,
+    ) -> Self {
+        Self {
+            width,
+            height,
+            x: content.x().to_bits(),
+            y: content.y().to_bits(),
+            content_width: content.width().to_bits(),
+            content_height: content.height().to_bits(),
+            radius: radius.to_bits(),
+            scale: scale.to_bits(),
+            blur: shadow.blur.to_bits(),
+            offset: shadow.offset_y.to_bits(),
+            color: shadow.color,
+        }
+    }
 }
 
 /// 一次渲染期间的上下文：主题按倍数换算后的像素值。
@@ -189,6 +236,7 @@ impl Renderer {
         text.set_optical_size(Some(OPTICAL_SIZE));
         Self {
             text: Rc::new(RefCell::new(text)),
+            shadows: RefCell::new(Vec::new()),
         }
     }
 
@@ -212,7 +260,7 @@ impl Renderer {
             && let Some(content) =
                 tiny_skia::Rect::from_xywh(margin, margin, content_width, content_height)
         {
-            shadow.paint(&mut render, content, radius, scale);
+            self.paint_shadow(&mut render, content, radius, scale, shadow);
         }
         render.round_rect(
             margin,
@@ -310,9 +358,51 @@ impl Renderer {
         let height = (content.1 + margin * 2.0).ceil();
         let mut render = Render::new(width as u32, height as u32, self.text.clone())?;
         if let Some(rect) = tiny_skia::Rect::from_xywh(margin, margin, content.0, content.1) {
-            shadow.paint(&mut render, rect, metrics.corner_radius(), scale);
+            self.paint_shadow(&mut render, rect, metrics.corner_radius(), scale, shadow);
         }
         Ok(Self::panel_rendered(render, margin, content, scale))
+    }
+
+    /// 在一块**空画布**上铺阴影层：同样的尺寸 / 参数直接复用上次算好的那一层。
+    ///
+    /// 阴影只跟「内容矩形 + 圆角 + 模糊 / 偏移 / 颜色 + 缩放」有关，跟候选词是什么无关；
+    /// 每次出帧重算的话 3 遍盒式模糊 + 整画布混合要 2.5–10ms（占整帧九成），缓存后只剩一次整块拷贝。
+    fn paint_shadow(
+        &self,
+        render: &mut Render,
+        content: tiny_skia::Rect,
+        radius: f32,
+        scale: f32,
+        shadow: &Shadow,
+    ) {
+        let key = ShadowKey::new(
+            render.width(),
+            render.height(),
+            content,
+            radius,
+            scale,
+            shadow,
+        );
+        if let Some(index) = self
+            .shadows
+            .borrow()
+            .iter()
+            .position(|(cached, _)| *cached == key)
+        {
+            let layers = self.shadows.borrow();
+            render.blit(&layers[index].1);
+            return;
+        }
+        let Some(layer) = shadow.layer(render.width(), render.height(), content, radius, scale)
+        else {
+            return;
+        };
+        render.blit(&layer);
+        let mut layers = self.shadows.borrow_mut();
+        if layers.len() >= SHADOW_CACHE_ENTRIES {
+            layers.remove(0);
+        }
+        layers.push((key, layer));
     }
 
     /// 面板类窗口的画布与内容区留白（阴影边）：[`Self::render_panel`] / [`Self::render_key_map`] 共用。
@@ -334,7 +424,7 @@ impl Renderer {
             && let Some(content) =
                 tiny_skia::Rect::from_xywh(margin, margin, content_width, content_height)
         {
-            shadow.paint(&mut render, content, radius, scale);
+            self.paint_shadow(&mut render, content, radius, scale, shadow);
         }
         render.round_rect(
             margin,

@@ -51,7 +51,7 @@ impl Renderer {
             && let Some(content) =
                 tiny_skia::Rect::from_xywh(margin, margin, content_width, content_height)
         {
-            shadow.paint(&mut render, content, radius, scale);
+            self.paint_shadow(&mut render, content, radius, scale, shadow);
         }
         render.round_rect(
             margin,

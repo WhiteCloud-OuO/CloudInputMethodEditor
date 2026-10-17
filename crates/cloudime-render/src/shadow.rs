@@ -2,11 +2,10 @@
 //!
 //! Windows 的分层窗口没有系统阴影，阴影在这里手画；参数照调研期 macOS 弹出面板的系统阴影调。
 
-use tiny_skia::Rect;
+use tiny_skia::{Pixmap, Rect};
 
 use crate::canvas::Canvas;
 use crate::color::Color;
-use crate::render::Render;
 
 #[derive(Debug, Clone, Copy, PartialEq)]
 pub struct Shadow {
@@ -35,14 +34,19 @@ impl Shadow {
         self.blur * 2.0 + self.offset_y
     }
 
-    /// 在 `render`（目标那块内存区域）上给 `content` 这块圆角内容画阴影；坐标都是像素。
+    /// 只算**阴影那一层**（`width`×`height` 的整块位图，内容区那块也在里面，会被面板盖住）。
     ///
-    /// 遮罩自己在一块临时 `Canvas` 上画（像素层，不算元素），模糊完再整体 `blend_mask` 上去。
-    pub(crate) fn paint(&self, render: &mut Render, content: Rect, radius: f32, scale: f32) {
-        let (w, h) = (render.width(), render.height());
-        let Ok(mut mask_canvas) = Canvas::new(w, h) else {
-            return;
-        };
+    /// 它与内容无关，只跟尺寸 / 圆角 / 参数有关 —— 渲染器按这个 key 缓存，一屏只算一次。
+    pub(crate) fn layer(
+        &self,
+        width: u32,
+        height: u32,
+        content: Rect,
+        radius: f32,
+        scale: f32,
+    ) -> Option<Pixmap> {
+        let (w, h) = (width, height);
+        let mut mask_canvas = Canvas::new(w, h).ok()?;
         let dy = self.offset_y * scale;
         mask_canvas.fill_round_rect(
             content.x(),
@@ -63,7 +67,9 @@ impl Shadow {
             box_blur_horizontal(&mut mask, w as usize, h as usize, radius_px);
             box_blur_vertical(&mut mask, w as usize, h as usize, radius_px);
         }
-        render.blend_mask(0, 0, w, h, &mask, self.color);
+        let mut layer = Canvas::new(w, h).ok()?;
+        layer.blend_mask(0, 0, w, h, &mask, self.color);
+        Some(layer.into_pixmap())
     }
 }
 
