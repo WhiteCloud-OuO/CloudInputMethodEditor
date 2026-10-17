@@ -15,9 +15,10 @@
 cloudime.script{
     name                  = "脚本窗口示例",
     description           = "Ctrl+Alt+W：开关一块可点的面板（点了多少下）",
-    api                   = 1,
+    api                   = 2,
     trigger_condition     = "combination_key",
-    combination_modifiers = "ctrl+alt",    -- 只收 Ctrl+Alt 的组合；W 在下面自己认
+    combination_modifiers = "ctrl+alt",    -- 只收 Ctrl+Alt 的组合
+    keys                  = { "w" },       -- 具体键：W
     timeout               = 200,
     sync                  = true,
     handover              = "return",

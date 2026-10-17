@@ -640,7 +640,7 @@ fn a_script_can_resize_the_candidate_window() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("size.lua"),
-        "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', budget = 1000000, timeout = 10000, \
+        "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', keys = { 'z' }, budget = 1000000, timeout = 10000, \
          sync = false, handover = 'callback', on_error = false }\n\
          cloudime.on('key', function(event)\n\
              if event.ctrl and event.vk == 90 then cloudime.candidate.set_page_size(6) end\n\
@@ -724,7 +724,7 @@ fn a_script_can_switch_the_theme() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("theme.lua"),
-        "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', budget = 1000000, timeout = 10000, \
+        "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', keys = { 'z', 'x', 'c' }, budget = 1000000, timeout = 10000, \
          sync = false, handover = 'callback', on_error = false }\n\
          cloudime.on('key', function(event)\n\
              if event.ctrl and event.vk == 90 then cloudime.apply_theme('Panic') end\n\
@@ -763,7 +763,7 @@ fn a_script_theme_waits_until_the_candidate_window_closes() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("theme.lua"),
-        "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', budget = 1000000, \
+        "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', keys = { 'z' }, budget = 1000000, \
          timeout = 10000, sync = false, handover = 'callback', on_error = false }\n\
          cloudime.on('key', function(event)\n\
              if event.ctrl and event.vk == 90 then cloudime.apply_theme('Panic') end\n\
@@ -1438,7 +1438,7 @@ fn script_window_requests_reach_the_ui_sink_in_order() {
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(
         dir.join("win.lua"),
-        "cloudime.script{ api = 1, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', \
+        "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'none', keys = { 'w' }, \
          budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
          local win\n\
          cloudime.on('startup', function()\n\

@@ -18,9 +18,10 @@
 cloudime.script{
     name                  = "按前台程序换主题",
     description           = "Alt+Shift+K：记事本用 Panic 主题，别的程序用 Default",
-    api                   = 1,
+    api                   = 2,
     trigger_condition     = "combination_key",
-    combination_modifiers = "alt+shift",   -- 只收 Alt+Shift 的组合；`K` 在下面自己认
+    combination_modifiers = "alt+shift",   -- 只收 Alt+Shift 的组合
+    keys                  = { "k" },       -- 具体键：K
     timeout               = 200,           -- 纯本地判断，很快
     sync                  = true,          -- 同步：算完就返回
     handover              = "return",      -- 必须与 sync 一致
@@ -30,11 +31,7 @@ cloudime.script{
 }
 
 cloudime.on("key", function(event)
-    -- 只认 K（虚拟键码 0x4B）。Alt+Shift 那一套已经由清单筛过，这里再保险一层：
-    -- 顺便挡住 Caps Lock 或别的键混进来的情况。
-    if event.vk ~= 0x4B then
-        return
-    end
+    -- 清单已经按 Alt+Shift+K 筛过；这里不用再看 vk 了。
 
     -- 这一拍的前台程序（载荷里就有；取不到时再问一次）
     local app = event.app or cloudime.foreground_app()

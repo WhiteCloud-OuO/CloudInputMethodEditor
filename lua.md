@@ -13,7 +13,7 @@
 | [`Scripts/template.lua`](Scripts/template.lua) | 「新建脚本」用的模板（只有清单骨架） |
 | [`Scripts/lib/example-niutrans.lua`](Scripts/lib/example-niutrans.lua) | 完整示例：小牛翻译（签名、表单编码、折行、多行显示） |
 | [`Scripts/lib/example-theme-by-app.lua`](Scripts/lib/example-theme-by-app.lua) | 示例：按前台程序换主题（组合键触发 + `cloudime.foreground_app()` / `cloudime.apply_theme()`） |
-| [`Scripts/lib/example-auto-number.lua`](Scripts/lib/example-auto-number.lua) | 示例：自动序号（`key` 触发 + `cloudime.text.before()` + `commit`「换行 + 下一条序号」） |
+| [`Scripts/lib/example-auto-number.lua`](Scripts/lib/example-auto-number.lua) | 示例：自动序号（`combination_key` + `none` 单键 + `cloudime.context` + `commit`「换行 + 下一条序号」） |
 | [`Scripts/lib/example-window.lua`](Scripts/lib/example-window.lua) | 示例：脚本窗口（`cloudime.window.create` + `set_content` + `window` 点击事件） |
 
 ## 目录
@@ -74,11 +74,13 @@
 ```lua
 cloudime.script{
     name        = "我的脚本",
-    description = "打 `;` 出「云朵输入法」",
-    api         = 1,
+    description = "Ctrl+Alt+J 出「云朵输入法」",
+    api         = 2,
+    trigger_condition     = "combination_key",
+    combination_modifiers = "ctrl+alt",   -- 要哪一套修饰键（"none" = 不按）
+    keys        = { "j" },                -- 具体键
     budget      = 200000,          -- 单次调用的指令数上限（只能收窄）
     timeout     = 200,             -- 单次调用的墙钟上限（毫秒）
-    apps        = { },             -- 空 = 所有应用
     sync        = true,            -- 同步：处理函数算完就返回
     handover    = "return",        -- 必须与 sync 一致
     on_error    = function(event, message)
@@ -87,11 +89,9 @@ cloudime.script{
     priority    = 0,
 }
 
--- 打 `;` 出「云朵输入法」
-cloudime.on("key", function(event)
-    if event.char == ";" then
-        return { commit = "云朵输入法", notice = "脚本上屏" }
-    end
+-- Ctrl+Alt+J 上屏「云朵输入法」（清单已经把键筛过了）
+cloudime.on("key", function()
+    return { commit = "云朵输入法", notice = "脚本上屏" }
 end)
 ```
 
@@ -105,17 +105,19 @@ end)
 
 | 字段 | 必写 | 类型 | 语义 |
 |---|---|---|---|
-| `api` | **是** | 整数 | 面向的脚本 API 版本，现在只有 `1`。不认识 → 无效 |
-| `trigger_condition` | **是** | 字符串 | **由什么触发**，四选一：`"combination_key"` 组合键（收 `key`）/ `"key"` 具体的键（收 `key`，见 `keys`）/ `"sys_time"` 系统时间（收 `time`）/ `"candidate_context"` 候选窗里的内容（收 `candidates`）。写别的 → 无效 |
-| `trigger_time` | `trigger_condition = "sys_time"` 时**是** | 字符串 | 本地时间 `"HH:MM"`（24 小时制）：每天到那个点收一次 `time` |
-| `combination_modifiers` | `trigger_condition = "combination_key"` 时**是** | 字符串 | 要哪一套**修饰键**，10 选一：`"ctrl"` / `"ctrl+alt"` / `"ctrl+shift"` / `"alt+shift"` / `"alt"` / `"win+ctrl"` / `"win+alt"` / `"win+shift"` / `"win+alt+ctrl"` / `"win+ctrl+shift"`（`+` 连接的顺序随意）。写别的 → 无效 |
-| `keys` | `trigger_condition = "key"` 时**是** | 字符串数组 | 要哪几个键：`"enter"` / `"tab"` / `"space"` / `"backspace"` / `"delete"` / `"esc"` / `"left"` / `"up"` / `"right"` / `"down"` / `"home"` / `"end"` / `"pageup"` / `"pagedown"` / `"f1"`…`"f12"`。可写多个；去重、忽略大小写与首尾空白。有一个不认识 → 整个脚本无效 |
+| `api` | **是** | 整数 | 面向的脚本 API 版本，现在只有 `2`。不认识 → 无效（`1` 是触发条件改版前的旧版，已不再接受） |
+| `trigger_condition` | **是** | 字符串 | **由什么触发**，五选一：`"combination_key"` 按下组合键（收 `key`）；`"time_range"` 某个时间段（收 `time`，每段只触发一次）；`"candidate_context"` 候选窗口出现且拼音串等于指定内容（收 `candidates`）；`"focus_app"` 编辑光标位于指定程序（收 `focus`）；`"manual"` 手动触发（i 模式预留，永不自动派发）。写别的 → 无效 |
+| `combination_modifiers` | `combination_key` 时**是** | 字符串 | 要哪一套**修饰键**，11 选一：`"none"`（不按修饰键，单键）/ `"ctrl"` / `"ctrl+alt"` / `"ctrl+shift"` / `"alt+shift"` / `"alt"` / `"win+ctrl"` / `"win+alt"` / `"win+shift"` / `"win+alt+ctrl"` / `"win+ctrl+shift"`（`+` 连接的顺序随意）。**精确匹配**，多按一个修饰键就不算 |
+| `keys` | `combination_key` 时**是** | 字符串数组 | 要哪几个键：`"enter"` / `"tab"` / `"space"` / `"backspace"` / `"delete"` / `"esc"` / `"left"` / `"up"` / `"right"` / `"down"` / `"home"` / `"end"` / `"pageup"` / `"pagedown"` / `"f1"`…`"f12"`，或单个字母 / 数字 / 标点（`a`–`z`、`0`–`9`、`` ` - = [ ] \ ; ' , . / ``）。可写多个；去重、忽略大小写与首尾空白。有一个不认识 → 整个脚本无效 |
+| `time_range` | `time_range` 时**是** | 表 | `{ from = "20:00", to = "06:00" }`（本地时间，左闭右开；`from > to` 表示跨夜）。**每个时间段窗口只触发一次** |
+| `candidate_pinyin` | `candidate_context` 时**是** | 字符串 | 候选窗口出现且拼音串等于它才触发；比较时忽略 `'` 与空白、不区分大小写（`Ni'Hao` = `nihao`） |
+| `needs_context` | 否 | 布尔 | `true` = 每次派发前刷新 `cloudime.context`（按键前多读一次光标前文）；读前文的脚本要写它 |
 | `sync` | **是** | 布尔 | `true` = 同步（处理函数算完就返回）；`false` = 只用异步回调（配 `http_get` / `http_post`） |
 | `handover` | **是** | 字符串 | `"return"` / `"callback"`，**必须与 `sync` 一致**（`true`↔`"return"`、`false`↔`"callback"`） |
 | `timeout` | **是** | 整数 | 单次调用的**墙钟上限**（毫秒，`1`–`60000`）：同步处理函数与异步回调都按它算，到点中止这一次 |
 | `on_error` | **是** | 函数 / `false` | 形式 `function(event, message)`：这个脚本出错时调它。写 `false` = 不处理，直接中止这一次 |
 | `budget` | 否 | 整数 | 单次调用的**指令数**上限；缺省用全局 `100000000`（一亿）。**只能收窄不能放宽**（写大了按全局走并记一条日志） |
-| `apps` | 否 | 字符串数组 | 只在哪些应用里跑（**exe 文件名**，大小写不敏感，如 `"notepad.exe"`）。空 / 不写 = 所有应用 |
+| `apps` | `focus_app` 时**是**；其余可选 | 字符串数组 | 光标在哪些程序里触发（`focus_app`）；其它触发条件下是「只在哪些应用里跑」（**exe 文件名**，大小写不敏感，如 `"notepad.exe"`）。空 / 不写 = 所有应用 / 不触发 |
 | `name` | 否 | 字符串 | 日志与设置页里点名用；缺省 = 文件名 |
 | `description` | 否 | 字符串 | 设置页列表里的一句话介绍（**扫文本**取出来，不执行脚本）；缺省显示文件名 |
 | `priority` | 否 | 整数 | 多个脚本要改同一项时：大的盖小的；同值按文件名顺序 |
@@ -128,24 +130,20 @@ end)
 - **持久状态写数据目录**（`%APPDATA%\CloudIME\` 下），别写安装目录 —— 普通用户写不进去，
   而且**升级 / 卸载会删掉安装目录整棵**（`Scripts\` 里的脚本也会没，记得备份）。
 - **不许长时间占住工人线程**：唯一允许的「等」是两个**异步** HTTP（时限必给）。
-- `apps` 只过滤 `key` / `candidates` / `time`（都按当时聚焦的程序）；`startup` 早于任何应用、异步回调在请求发出时就已经判过。
+- `apps` 除了当 `focus_app` 的触发条件，还会过滤 `key` / `candidates` / `time`（都按当时聚焦的程序）；
+  `startup` 早于任何应用、异步回调在请求发出时就已经判过。
 - **一个脚本只有一个触发条件**（清单的 `trigger_condition`）：Server 只把对应的事件派给它 ——
-  `combination_key` / `key` 收 `key`、`sys_time` 收 `time`、`candidate_context` 收 `candidates`；
-  `startup` 与 HTTP 回调不受它限制。
-- **组合键脚本要声明修饰键**（`combination_modifiers`）：只把你声明的那一套送上来 ——
-  组句与否都一样，`ctrl` 与 `ctrl+shift` 是两套。输入法为此让 DLL 在没组句时也把命中的组合键送来问一趟
-  （脚本不吃就**重放回应用**：DLL 用 `SendInput` 注入同一个键，见 `replay_to_app`）；修饰键**本身**
-  （`Ctrl` / `Alt` / `Shift` / `Win`）不会被动，照常归应用；没有任何组合键脚本时这条不生效。`key` 载荷里的 `ctrl` / `alt` / `shift` / `win`
-  就是那一刻按着的修饰键（`win` 是 Win 键）。
+  `combination_key` 收 `key`、`candidate_context` 收 `candidates`、`focus_app` 收 `focus`、
+  `time_range` 收 `time`，`manual` 一个都不收；`startup` / `window` / HTTP 回调不受它限制。
+- **组合键脚本**（`combination_key`）：修饰键 + 键都要声明，**精确匹配**（`ctrl` 与 `ctrl+shift`
+  是两套）。**不管候选窗口开没开都收**：输入法让 DLL 在没组句时也走 TSF 的按键路径先问一趟 Server
+  （脚本不吃就**重放回应用**，见 `replay_to_app`）；修饰键**本身**（`Ctrl` / `Alt` / `Shift` / `Win`）
+  不会被动。`key` 载荷里的 `ctrl` / `alt` / `shift` / `win` 就是那一刻按着的修饰键。
   ⚠️ `Alt+Tab` / `Alt+F4` / `Win+L` / `Win+D` 这类**系统 / 外壳自己会处理的**组合，输入法根本收不到，
   声明了也没用；`AltGr` 就是 `Ctrl+Alt`（打字用），声明 `ctrl+alt` 要当心吃掉它。
-- **`key` 触发脚本要声明具体的键**（`keys`）：只把你声明的那几个键送上来 —— **没组句也一样**（输入法为此让
-  DLL 把命中的键先问一趟 Server，脚本不吃就**重放回应用**）。**声明的是「键本身」，不认修饰键**：
-  `keys = { "enter" }` 只收**光按回车**那一下，`Shift+Enter` / `Ctrl+Enter` / `Alt+Enter` 这类组合
-  **没组句时原样归应用**（要组合键请用 `trigger_condition = "combination_key"` + `combination_modifiers`）。
-  不声明就一个键都收不到；没有任何 `key` 脚本时这条不生效。**声明之外的键不会到脚本手里**（组句里 Server
-  虽然会把所有按键派出去，但只有你声明的那些会转给 `key` 脚本）。
-  ⚠️ 在 `key` 里返回 `passthrough` 等于本来就会发生的事；真正有意义的是 `commit`（吃掉这一键、自己上屏）——
+- **单个键**（比如「光按 Enter」）：`combination_modifiers = "none"` + `keys = { "enter" }`。
+  `Shift+Enter` / `Ctrl+Enter` 是另外两套组合，没声明就归应用。
+- **在 `key` 里返回 `passthrough` 等于本来就会发生的事**；真正有意义的是 `commit`（吃掉这一键、自己上屏）——
   所以只对确实需要的输入框（多行编辑的自动序号之类）生效才好，`Enter` / `Tab` 被吃掉会改变输入框行为。
 
 ## 4. 事件与载荷
@@ -156,9 +154,10 @@ end)
 | 事件 | 什么时候调 | 能改什么 |
 |---|---|---|
 | `startup` | 全部脚本加载完（**所有脚本**都收） | 只做自己的准备（开文件、发首个请求）。**返回值会被丢掉** |
-| `key` | 一次按键、**引擎处理之前**（只有 `combination_key` / `key` 脚本收） | 见[动作表](#5-返回值动作表)全部项；`passthrough` / `commit` 只有这一拍认 |
-| `candidates` | **引擎排完之后**（每次重排；只有 `candidate_context` 脚本收） | `order` / `display` / `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 给了只记日志 |
-| `time` | 到清单里 `trigger_time` 那个点（本地时间 `HH:MM`；只有 `sys_time` 脚本收） | `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 给了只记日志。载荷同 `cloudime.get_time()`，另加 `app`（那一刻前台程序） |
+| `key` | 一次按键、**引擎处理之前**（只有 `combination_key` 脚本收，且修饰键 + 键要对得上清单） | 见[动作表](#5-返回值动作表)全部项；`passthrough` / `commit` 只有这一拍认 |
+| `candidates` | **引擎排完之后**（只有 `candidate_context` 脚本收；拼音串要对得上清单的 `candidate_pinyin`） | `order` / `display` / `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 给了只记日志 |
+| `focus` | 焦点**切进**清单 `apps` 里的程序（只有 `focus_app` 脚本收；同一程序里换输入框不重复派） | `notice` / `adjust` / `online` / `theme`；载荷 `{ app }` |
+| `time` | 本地时间第一次进入清单 `time_range` 那个时间段（只有 `time_range` 脚本收；**每段只触发一次**） | `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 给了只记日志。载荷同 `cloudime.get_time()`，另加 `app`（那一刻前台程序） |
 | `window` | 脚本窗口上的鼠标 / 滚轮 / 焦点动作（`click` / `right_click` / `hover` / `leave` / `wheel` / `focus` / `blur`） | 同 `candidates`：`notice` / `adjust` / `online` / `theme`；窗口要 `interactive`（辅助窗口还要 `aux:focus(true)`）才接鼠标 |
 | 异步回调 | HTTP 结果回来那一拍（**所有脚本**） | 同 `candidates`；`passthrough` / `commit` 给了只记日志 |
 
@@ -177,11 +176,11 @@ end)
 | `mode` | 字符串 | `"chinese"` / `"english"` / `"disabled"` |
 | `highlight` | 字符串 | 这一刻**高亮候选的文本**（按键那一刻窗口里高亮的那条；没有候选时是空串）—— 想自己翻它就用它 |
 
-`key` 触发脚本大多不在组句里：这类脚本要读光标前文就用 **`cloudime.context`**（不是 `cloudime.text.*`）——
-有 `key` 脚本时输入法在**没组句的每个按键之前**现刷一份，所以你按 `Enter` 时它已经包含**上一次按键**的结果
-（刚敲的 `1.` 就在里面）—— 自动序号那类脚本靠的就是这个。**能不能读到取决于宿主**：Windows 11 记事本不给
-光标前的文字，那里 `cloudime.context` 一直是空串（见[第 11 节](#11-调试与排错)）。`cloudime.text.*` 那份整篇快照
-只随**组句**更新，`key` 脚本一般用不上（可能 `nil` 或偏旧）。
+**组合键脚本**大多不在组句里：这类脚本要读光标前文就用 **`cloudime.context`**（不是 `cloudime.text.*`）——
+清单写了 `needs_context = true` 时输入法在**没组句的每个按键之前**现刷一份，所以你按 `Enter` 时它已经包含
+**上一次按键**的结果（刚敲的 `1.` 就在里面）—— 自动序号那类脚本靠的就是这个。**能不能读到取决于宿主**：
+Windows 11 记事本不给光标前的文字，那里 `cloudime.context` 一直是空串（见[第 11 节](#11-调试与排错)）。
+`cloudime.text.*` 那份整篇快照只随**组句**更新，组合键脚本一般用不上（可能 `nil` 或偏旧）。
 ⚠️ **脚本自己刚上屏的那一行，紧接着读回来可能少最后一个字符**（宿主差异，Firefox 实测）—— 靠它判断
 「上一行是不是序号」时要能容忍；`Scripts/lib/example-auto-number.lua` 记着自己刚写的序号来补全。
 
@@ -289,9 +288,9 @@ cloudime.on(事件名, function(载荷) … end)   -- 登记处理函数，只�
   起组句那一键的编辑会话里、晚于按键本身，所以**起组句那一键**的脚本拿到的还是上一份。**组句结束不清快照**：
   同一段组句从第二键起、以及**下一段组句的第一键**都能拿到，而**下一段组句起始又会把新的一份送上来** ——
   快照跟着文档走（刚上屏的字也在里面；当前还没上屏的拼音不在）。
-  **`key` 触发脚本**（一般不在组句里）读前文请用 **`cloudime.context`**：没组句时每个按键之前现刷一份，
-  读到的是**上一次按键之后**的光标前文；`cloudime.text.*` 这份整篇快照仍只随**组句起始**更新（`key` 脚本
-  一般拿不到）。
+  **组合键脚本**（一般不在组句里）读前文请用 **`cloudime.context`**：清单写了 `needs_context = true` 时
+  没组句的每个按键之前现刷一份，读到的是**上一次按键之后**的光标前文；`cloudime.text.*` 这份整篇快照仍只随
+  **组句起始**更新（组合键脚本一般拿不到）。
 - **读不到的地方永远 `nil`**：密码框与声明了私密的输入框（浏览器无痕窗口就是）、不支持读光标外范围的控件，
   以及**只把输入框暴露成「局部上下文」的宿主**（Windows 11 记事本实测：它的 TSF 上下文按选区 / 组句
   圈成局部，整篇读不到，这时一律 `nil`）。整篇最多 20 万个 UTF-16 单元（约 10 万汉字，写死不可配）；
@@ -449,8 +448,8 @@ end)
   end)
   ```
 
-  ⚠️ 窗口不抢系统的键盘焦点：能收到哪些键由清单决定（`trigger_condition = "key"` 的 `keys`、或
-  `combination_key` 的那套组合键），**不是**有焦点就能拿到所有键；窗口里也没有文本输入框。
+  ⚠️ 窗口不抢系统的键盘焦点：能收到哪些键由清单决定（`combination_key` 的 `combination_modifiers` +
+  `keys` 那一组），**不是**有焦点就能拿到所有键；窗口里也没有文本输入框。
 - `window` 事件**不看清单的 `trigger_condition`**（与 `startup`、HTTP 回调一样，所有脚本都能收）。
 - 辅助窗口默认鼠标穿透：`create_auxiliary{ interactive = true }` 之后还要 `aux:focus(true)` 才真正接鼠标
   （焦点一组里只有一个：给了它，宿主那块窗就让开）。
@@ -561,8 +560,8 @@ end
 | `cloudime.text.all()` 返回 `nil` | 刚启动 / 换了输入框之后的第一次调用常见（Server 已请 DLL 读一份，下一次就有）；私密输入框或那个控件读不到光标外的文本也一样 |
 | `cloudime.context` 一直是空串、自动序号没反应 | 这个宿主不把光标**前**的文字给输入法（Windows 11 记事本实测：TSF 上下文按选区 / 组句圈成局部，读不到前面的字）—— 与「整篇读不到」同源；换 Firefox / 多数编辑器就正常 |
 | 候选窗尺寸改了没反应 | 尺寸只在**本次组句**内有效、组句结束就回配置值 |
-| 在游戏里按 `Ctrl` 组合没反应 | **组句里**那些键先到脚本：要放行就返回 `passthrough = true`；没在组句时带 `Ctrl` 的键不问脚本、原样归应用。输入法自己占用的四个组合（`Ctrl+数字` / `Ctrl+Enter` / `Ctrl+反引号` / `Shift+反引号`）脚本抢不走 |
-| `key` 触发的脚本收不到某个键 | `keys` 里没声明它（键名拼错时整个脚本判无效，日志里有原因）；或那一键被系统 / 外壳先拿走了（`Alt+Tab` 之类） |
+| 在游戏里按 `Ctrl` 组合没反应 | 清单里没声明这一组（`combination_modifiers` + `keys`，要精确对上）；声明了的话**组句与否都先到脚本**，不吃就返回 `passthrough = true`。输入法自己占用的四个组合（`Ctrl+数字` / `Ctrl+Enter` / `Ctrl+反引号` / `Shift+反引号`）脚本抢不走 |
+| `key` 触发的脚本收不到某个键 | `keys` 里没声明它 / 修饰键对不上（声明的是**精确组合**；单键要 `combination_modifiers = "none"`）；键名拼错时整个脚本判无效，日志里有原因；或那一键被系统 / 外壳先拿走了（`Alt+Tab` 之类） |
 
 ## 12. 示例集
 
@@ -789,7 +788,7 @@ end)
 两个要点：`Ctrl+A` **只在组句里**到得了脚本（不然应用自己的「全选」就被抢了）；第一次调用可能是 `nil`
 （刚启动 / 换了输入框），按提示再按一次即可。
 
-### 12.13 自动序号（`key` 触发 + 光标前文 + `commit`）
+### 12.13 自动序号（`combination_key` 单键 + 光标前文 + `commit`）
 
 在 `1.` / `一、` 后面敲回车，自动接下一条的序号（像 Word）。完整版（含中文数字 `一、`→`二、`）见
 [`Scripts/lib/example-auto-number.lua`](Scripts/lib/example-auto-number.lua)。
@@ -797,9 +796,11 @@ end)
 ```lua
 cloudime.script{
     name              = "自动序号",
-    api               = 1,
-    trigger_condition = "key",
+    api               = 2,
+    trigger_condition = "combination_key",
+    combination_modifiers = "none",   -- 不按修饰键：光按 Enter
     keys              = { "enter" },
+    needs_context     = true,         -- 读光标前文（判断上一行的序号）
     timeout           = 200,
     sync              = true,
     handover          = "return",
@@ -807,9 +808,6 @@ cloudime.script{
 }
 
 cloudime.on("key", function(event)
-    if event.vk ~= 0x0D then                 -- 只认 Enter
-        return
-    end
     local line = cloudime.context:match("[^\r\n]*$")   -- 光标前那一行
     local digits, tail = line:match("^(%d+)%.(%s*)$")
     if digits then
@@ -824,11 +822,13 @@ end)
 
 ## 13. 版本与边界
 
-- **API 版本是 `1`**（清单里的 `api`）。将来改了不兼容的地方会加新版本号，
-  老脚本会因为 `api` 不认识被判无效（而不是悄悄行为不对）。
+- **API 版本是 `2`**（清单里的 `api`）。2026-10-17 的触发条件改版（五种触发：组合键 / 时间段 /
+  候选窗拼音 / 光标所在程序 / 手动）把 `api` 升到了 `2`：写 `api = 1` 的旧脚本会被判无效
+  （而不是悄悄按别的方式工作）—— 旧的 `key` / `sys_time` 请改成 `combination_key`（单键用
+  `combination_modifiers = "none"`）/ `time_range`。将来不兼容的改动还会继续升版本号。
 - **不做热重载**：改脚本 → 重启输入法服务。
 - **还没做的**（设计文档里记着）：惰性 Lua 状态（没脚本时不建状态）、
   改组句里「已选文本」的内容、把翻译 Tip 交给脚本写（现在是内置的本地词典 Tip + 独立的 `online` 行）、
-  脚本窗口的键盘输入 / 拖动 / 滚轮（`cloudime.window` 现在只有点击与悬停）。
+  脚本窗口里的文本输入 / 组句（窗口本身已经支持点击 / 滚轮 / 拖动 / 键盘焦点）。
 - **没有脚本时不付代价**：`Scripts\` 不存在或里面没有真脚本时，按键路径上一次查表就返回，
   行为与「没有脚本功能」时逐字节一致。

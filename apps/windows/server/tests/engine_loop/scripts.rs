@@ -22,16 +22,30 @@ fn write_script(
     name: &str,
     body: impl AsRef<str>,
 ) -> std::io::Result<()> {
+    // 默认触发：**所有普通键**（不按修饰键）+ 读光标前文。测试里敲的字母 / 数字 / 回车都能进脚本。
+    write_script_with(
+        dir,
+        name,
+        "trigger_condition = 'combination_key', combination_modifiers = 'none', needs_context = true, \
+         keys = { 'a','b','c','d','e','f','g','h','i','j','k','l','m','n','o','p','q','r','s','t','u','v','w','x','y','z',\
+                   '0','1','2','3','4','5','6','7','8','9',\
+                   'enter','tab','esc','space','backspace','delete','left','right','up','down','home','end','pageup','pagedown' }",
+        body,
+    )
+}
+
+/// 指定触发条件（清单里与触发有关的那一段），其余公共字段由这里补。
+fn write_script_with(
+    dir: impl AsRef<std::path::Path>,
+    name: &str,
+    trigger: &str,
+    body: impl AsRef<str>,
+) -> std::io::Result<()> {
     let body = body.as_ref();
-    let trigger = if body.contains("on('candidates'") || body.contains("on(\"candidates\"") {
-        "candidate_context"
-    } else {
-        "combination_key"
-    };
     std::fs::write(
         dir.as_ref().join(name),
         format!(
-            "cloudime.script{{ api = 1, trigger_condition = '{trigger}', combination_modifiers = 'ctrl', \
+            "cloudime.script{{ api = 2, {trigger}, \
              budget = 1000000, timeout = 10000, sync = false, handover = 'callback', on_error = false }}\n{body}"
         ),
     )
@@ -182,9 +196,10 @@ fn a_script_can_show_a_notice() {
 #[test]
 fn the_ime_keeps_its_own_combos() {
     let dir = script_dir("reserved-combos");
-    write_script(
+    write_script_with(
         &dir,
         "grab.lua",
+        "trigger_condition = 'combination_key', combination_modifiers = 'ctrl', keys = { 'z' }",
         "cloudime.on('key', function() return { notice = '脚本被调了' } end)\n",
     )
     .unwrap();
@@ -238,9 +253,10 @@ fn the_ime_keeps_its_own_combos() {
 fn a_script_can_ask_for_a_repaint_from_a_callback() {
     let dir = script_dir("redraw");
     let address = one_shot_server("ok");
-    write_script(
+    write_script_with(
         &dir,
         "ask.lua",
+        "trigger_condition = 'candidate_context', candidate_pinyin = 'ni'",
         format!(
             "cloudime.on('startup', function()\n\
                  cloudime.http_get([[{address}]], 5000, function(result)\n\
@@ -256,19 +272,15 @@ fn a_script_can_ask_for_a_repaint_from_a_callback() {
     .unwrap();
 
     let mut router = router_with(config_with_scripts(dir));
-    // 打一段组句：每敲一个键都会重排一次（`candidates` 跟着跑），所以这里先跑到「第 2 次排版」
+    // `candidate_context` 按拼音串触发：敲到 `ni` 时脚本第一次跑
     let (_, _, frame) = press(&mut router, letter('n'));
-    assert_eq!(frame.notice.as_deref(), Some("第 1 次排版"));
+    assert!(frame.notice.is_none(), "拼音还没到 `ni`，脚本不该被调");
     let (_, _, frame) = press(&mut router, letter('i'));
-    assert_eq!(
-        frame.notice.as_deref(),
-        Some("第 2 次排版"),
-        "敲键本来就会重排一次"
-    );
+    assert_eq!(frame.notice.as_deref(), Some("第 1 次排版"));
 
     // 等 HTTP 结果回来，驱动 tick：回调只要了重画（没返回动作表），Server 也该重新排版一次
     let started = std::time::Instant::now();
-    let want = "第 3 次排版";
+    let want = "第 2 次排版";
     let mut seen = None;
     while started.elapsed() < std::time::Duration::from_secs(5) {
         std::thread::sleep(std::time::Duration::from_millis(20));
@@ -349,9 +361,10 @@ fn a_script_can_reorder_the_candidates() {
     assert!(plain.len() > 2, "样例词库该给出多个候选：{plain:?}");
 
     let dir = script_dir("order");
-    write_script(
+    write_script_with(
         &dir,
         "reorder.lua",
+        "trigger_condition = 'candidate_context', candidate_pinyin = 'n'",
         "cloudime.on('candidates', function(list)\n\
              return { order = { 2, 1 } }\n\
          end)\n",
@@ -370,9 +383,10 @@ fn a_script_can_reorder_the_candidates() {
 #[test]
 fn a_script_can_change_the_candidate_display() {
     let dir = script_dir("display");
-    write_script(
+    write_script_with(
         &dir,
         "label.lua",
+        "trigger_condition = 'candidate_context', candidate_pinyin = 'n'",
         "cloudime.on('candidates', function(list)\n\
              return { display = { [1] = '①脚本显示' } }\n\
          end)\n",
@@ -428,7 +442,7 @@ fn a_key_script_reads_the_surrounding_text_without_composing() {
     std::fs::write(
         dir.join("auto.lua"),
         format!(
-            "cloudime.script{{ api = 1, trigger_condition = 'key', keys = {{ 'enter' }}, \
+            "cloudime.script{{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'none', keys = {{ 'enter' }}, needs_context = true, \
              budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }}\n\
              cloudime.on('key', function()\n\
                  local file = io.open([[{log}]], 'a')\n\
@@ -597,9 +611,10 @@ fn a_script_can_boost_and_demote_words() {
 fn a_script_http_result_lands_on_a_later_tick() {
     let dir = script_dir("http");
     let address = one_shot_server("ok");
-    write_script(
+    write_script_with(
         &dir,
         "translate.lua",
+        "trigger_condition = 'candidate_context', candidate_pinyin = 'ni'",
         format!(
             "cloudime.on('startup', function()\n\
                  cloudime.http_get([[{address}]], 5000, function(result)\n\
@@ -652,9 +667,10 @@ fn the_payloads_carry_the_app_name() {
         ),
     )
     .unwrap();
-    write_script(
+    write_script_with(
         &dir,
         "list.lua",
+        "trigger_condition = 'candidate_context', candidate_pinyin = 'n'",
         format!(
             "local path = [[{log}]]\n\
              local function note(text)\n\
@@ -683,7 +699,11 @@ fn the_payloads_carry_the_app_name() {
 #[test]
 fn the_candidates_payload_carries_pinyin_and_weight() {
     let dir = script_dir("numbers");
-    write_script(&dir, "read.lua", "local seen = false\n\
+    write_script_with(
+        &dir,
+        "read.lua",
+        "trigger_condition = 'candidate_context', candidate_pinyin = 'k'",
+        "local seen = false\n\
          cloudime.on('candidates', function(list)\n\
              if seen or not list[1] then return end\n\
              seen = true\n\
@@ -700,4 +720,39 @@ fn the_candidates_payload_carries_pinyin_and_weight() {
     assert!(!parts[0].is_empty() && !parts[1].is_empty(), "{notice}");
     let weight: f64 = parts[2].parse().unwrap_or_default();
     assert!(weight > 0.0, "{notice}");
+}
+
+/// `focus_app`：焦点切进清单里的程序时派 `focus`；同一程序里再按键不重复派。
+#[test]
+fn a_focus_app_script_runs_when_the_caret_enters_the_program() {
+    let dir = script_dir("focus-app");
+    let log = dir.join("focus.txt");
+    write_script_with(
+        &dir,
+        "focus.lua",
+        "trigger_condition = 'focus_app', apps = { 'notepad.exe' }",
+        format!(
+            "cloudime.on('focus', function(event)\n\
+                 local file = io.open([[{log}]], 'a')\n\
+                 file:write('focus:' .. tostring(event.app) .. '\\n')\n\
+                 file:close()\n\
+             end)\n",
+            log = log.display()
+        ),
+    )
+    .unwrap();
+
+    let mut router = router_in(config_with_scripts(dir), Some("notepad.exe".to_owned()));
+    press(&mut router, letter('n'));
+    press(&mut router, letter('i'));
+    let written = std::fs::read_to_string(&log).unwrap();
+    assert_eq!(
+        written
+            .lines()
+            .filter(|line| line.starts_with("focus:"))
+            .count(),
+        1,
+        "同一程序里只派一次：{written}"
+    );
+    assert!(written.contains("focus:notepad.exe"), "{written}");
 }

@@ -312,7 +312,7 @@ v15 之后给 `Candidate` 加了 `display`（候选里显示的内容，上屏�
 老 DLL 只读候选条数、不读内容，行为不变，所以没有 +1。
 再往后 +1 的三次：**v16** 给 `ServerMessage::Update` 加了 `commit`（鼠标点候选窗上屏，`Frame` 顺带加 `columns`）；
 **v17** 给 `ClientMessage::SyncMode` 加了 `in_text_input` / `caps`（状态切换提示）；
-**v18** 给 `InputSettings` 加了 `script_key_modifiers`（组合键脚本在清单里声明的 `combination_modifiers` 的并集：修饰键位图的第 N 位置位 = 那一套组合键要送上来）；同一版还加了 `script_keys`（`trigger_condition = "key"` 脚本声明的键：虚拟键码的 256 位位图 `[u64; 4]`，这样 `InputSettings` 仍是 `Copy`，DLL 据此在没组句时也把这些键送来）与 `script_wants_text`（有 `key` 脚本时为真，DLL 每个按键前现读一份光标前文送上来）。三者都带 `serde(default)`，老 DLL 不读也不受影响，所以没有再次 +1。
+**v18** 给 `InputSettings` 加了 `script_key_modifiers`（组合键脚本在清单里声明的 `combination_modifiers` 的并集：修饰键位图的第 N 位置位 = 那一套组合键要送上来）；同一版还加了 `script_keys`（脚本 `keys` 声明的键：虚拟键码的 256 位位图 `[u64; 4]`，这样 `InputSettings` 仍是 `Copy`，DLL 据此在没组句时也把这些键送来）与 `script_wants_text`（有脚本写 `needs_context = true` 时为真，DLL 每个按键前现读一份光标前文送上来）。三者都带 `serde(default)`，老 DLL 不读也不受影响，所以没有再次 +1。
 
 **v19** 给 `InputSettings` 加了 `key_map_modifiers` / `key_map_key` —— 「键位映射参考」在「按下组合键时」那种显示方式下用的那**一个**组合键
 （修饰键位图 + 虚拟键码，`input_schemes::KeyMapModifiers::mask()` / `KeyMapKey::virtual_key()`）。
@@ -722,26 +722,25 @@ Server 只按自己的语义处理 —— 谁先定义谁优先，脚本抢不�
 动作语义合并后落到当前这一屏，再 `reconcile_candidates` 重画。这一拍**没有按键**，所以 `passthrough` / `commit`
 从语义上无从谈起：给了就记一条日志忽略；`order` / `display` / `notice` / `adjust` / `online` 照常生效。
 
-**触发条件**（清单必填的 `trigger_condition`）：`combination_key` / `key` / `sys_time` / `candidate_context`，
-`sys_time` 还要 `trigger_time`（本地 `"HH:MM"`）；`combination_key` 还要 `combination_modifiers`（要哪一套修饰键，
-10 选一：`ctrl` / `ctrl+alt` / `ctrl+shift` / `alt+shift` / `alt` / `win+ctrl` / `win+alt` / `win+shift` /
-`win+alt+ctrl` / `win+ctrl+shift`，位图 bit0 ctrl / bit1 alt / bit2 shift / bit3 win）；`key` 还要 `keys`
-（具体的键，26 个键名 → 虚拟键码，`KEY_NAMES` 表，必填、去重、有一个不认识整个脚本判无效）。`runtime.rs::parse_manifest`
-里解析，`Manifest::accepts` 按它过滤事件 —— `startup` 谁都收，`key` / `candidates` / `time` 只给对应的那一种
-（`key` 两种触发条件都收 `key`；`key` 触发还要**对得上清单声明的 `keys`**：组句里 Server 会把所有按键派出去
-给引擎，但运行时只把声明的那些转给 `key` 脚本；`time` 还要对得上 `trigger_time` 的**当前本地整分**）。`Runtime::wanted_keys()` 汇总出
-声明的虚拟键码（`wanted_keys` 供 Server 折成 `InputSettings.script_keys` 位图），`wants_surrounding_text()`
-从「有没有 `key` 脚本」推出 `InputSettings.script_wants_text`。Server 这边两处用它：`RouterConfig::from` 不收，
-`input_settings()` 里 `combination_key_masks()` 折成 `InputSettings.script_key_modifiers`、`config::script_key_bits()`
-把 `wanted_keys()` 折成 `script_keys`（虚拟键码的 256 位位图；DLL 据此在没组句时也送这些键，
-**只认不带修饰键的那些按下** —— 组合键归应用，见 `wants_declared_key`）；
-`Router::tick` 里 `poll_script_time()` 先问 `Runtime::sys_time_due()`（本地整分去重，没有 `sys_time` 脚本时
-一次都不花），到点就 `dispatch("time", time_payload(focused_app()), …)` 并按「没有按键的那一拍」落地
-（`apply_common_actions` + 重画；载荷同 `get_time()` 另加 `app`）。`cloudime.foreground_app()` 与那个 `app`
-读的都是 `Router::sync_focused_app` 维护的快照（焦点一变就刷新：`ensure_focus` 与两处断开焦点）。
-DLL 那边：`would_eat` 命中声明的修饰键（`wants_script_key`）或声明的键**本身**（`wants_declared_key`，
-只认**不带** Ctrl / Alt / Shift / Win 的那些按下 —— 组合键原样归应用）就答「吃」，
-Server 回 Passthrough 时用 `SendInput` `replay_to_app` 把键还回应用（`SendInput` 只注键本身，修饰键按用户手上还按着的算），
+**触发条件**（清单必填，2026-10-17 起 `api = 2` 只有五种）：
+`combination_key`（`combination_modifiers` + `keys`，修饰键可以 `none` = 单键）、
+`time_range`（`{ from = "20:00", to = "06:00" }`，本地时间、左闭右开、跨夜也行，**每个时间段窗口每个脚本只触发一次**）、
+`candidate_context`（`candidate_pinyin`，比较前去掉 `'` / 空白并转小写）、
+`focus_app`（`apps` 必填）、`manual`（i 模式预留，永不自动派发）。
+`runtime.rs::parse_manifest` 解析（键名见 `parse_key_name`：`KEY_NAMES` 里的功能键 + 单个字母 / 数字 / 标点），
+`Manifest::accepts(event, key, pinyin)` 过滤：`startup` / `window` 谁都收；`key` 要 `(虚拟键码, 修饰键位图)`
+与清单**精确**对上（组句里 Server 会把所有按键派出去，运行时只转对得上的）；`candidates` 要规范化后的
+拼音串相等（载荷里的 `pinyin` 由 `engine.raw_preedit().text` 来）；`time` 要落在时间段里；`focus` 只给 `focus_app`。
+`Runtime::wanted_keys()` 汇总所有组合键（`InputSettings.script_keys` 位图），
+`combination_key_masks()` 折出带修饰键的那几套（`InputSettings.script_key_modifiers`；`none` 不占位），
+`wants_surrounding_text()` 改看清单的 `needs_context`（不再由触发条件推）。
+`Router::tick` 的 `poll_script_time()` 用 `Runtime::time_due()`：遍历 `time` 处理函数、按
+`Manifest::mark_time_due`（本地时间 → 窗口开始那天，`Cell` 记住触发过没有）―― 一个窗口只派一次。
+`focus` 事件由 `ensure_focus` 里 `dispatch_focus_scripts` 派：前台程序**变了**才派（同一程序里换输入框不算），
+载荷 `{ app }`，落地同「没有按键的那一拍」。`cloudime.foreground_app()` 与载荷里的 `app` 读的都是
+`Router::sync_focused_app` 维护的快照。DLL 那边：`would_eat` 命中声明的修饰键集合（`wants_script_key`；
+命中后 Server 再按**具体键**过滤）或声明的键本身（`wants_declared_key`，只认**不带**修饰键的按下）就答「吃」，
+Server 回 Passthrough 时用 `SendInput` `replay_to_app` 把键还回应用（只注键本身，修饰键按用户手上还按着的算），
 并给 `replaying` 打标记让下一次 `OnTestKeyDown` 别重复吃（`is_replay`，别的键先到就作废）。
 **为什么要排除带修饰键的键**（2026-10-10 真机：OpenCode 里 `Shift+Enter` 不换行）：
 `keys = { "enter" }` 连 `Shift+Enter` 一起吃掉，Server 没接管后重放，而带修饰键走的是下面的**立刻注入** ——
@@ -969,7 +968,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   **滚轮**：`WM_MOUSEWHEEL` 的 `lparam` 是**屏幕**坐标，先 `ScreenToClient` 再派 `wheel`（`delta` 在 `wparam` 高 16 位）。
   **键盘焦点**：左键按下 / `win:focus()` 发一个 `focus` 事件，收起 / `close` / `focus(false)` 发 `blur`；
   `Router` 记 `focused_script_window`，`key` 载荷据此多带 `window` / `window_id`（窗口不抢系统焦点，
-  能收到哪些键由清单 `keys` / `combination_keys` 决定）。**混合 DPI**：`show` 的点坐标先按当前 DPI 猜落点、
+  能收到哪些键由清单 `combination_modifiers` + `keys` 决定）。**混合 DPI**：`show` 的点坐标先按当前 DPI 猜落点、
   问目标显示器 DPI 再重算（`resolve_point`，最多迭代两次），签名里带 DPI，拖到另一块屏后
   `refresh_after_move` 按新 DPI 重画。
   `interactive` 映射到模板的 `transparent`，辅助窗口的 `interactive` 只是 `able_to_get_focus`，真要接鼠标
@@ -1106,8 +1105,9 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 TSF 那边 `key_sink::would_eat` / `eats_key` 在**组句里**（候选窗显示着）把带 Ctrl（不带 Alt / Win）的组合先送进 Server 问一趟
 （以前是个白名单：数字 / 回车 / 反引号 / T）—— 脚本才绑得上任意 `Ctrl` 组合；没人绑时 Server 回
 `Passthrough`，按键照旧交给应用。**没在组句时**默认一律归应用（`Ctrl+A` / `Ctrl+C` 这类快捷键不能被输入法吃掉），
-只有脚本声明过的那几套修饰键（`combination_key`，DLL 的 `wants_script_key`）与那几个具体的键本身（`key`，
-DLL 的 `wants_declared_key`，**不带修饰键时**）才先问一趟（见「用户脚本」一节的触发条件）。`Alt` / `Win` 不碰
+只有脚本声明过的那几套修饰键（`combination_key` 的 `combination_modifiers`，DLL 的 `wants_script_key`）与那几个具体的键本身
+（`combination_key` 的 `keys`；DLL 的 `wants_declared_key` 只认**不带修饰键时**按下的那些）才先问一趟
+（见「用户脚本」一节的触发条件）。`Alt` / `Win` 不碰
 （AltGr = Ctrl+Alt、Win 是系统键，都在外壳那一层）。
 随包在安装目录 `Scripts\lib\` 下给两样东西做这件事：`md5.lua`（纯 Lua MD5，只依赖 LuaJIT 的 `bit`，
 拿 RFC 1321 向量回归）与 `example-niutrans.lua`（完整示例）；`lib\` 是子目录，加载器不认，所以不会被执行。

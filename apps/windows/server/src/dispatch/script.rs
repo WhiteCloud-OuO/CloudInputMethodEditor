@@ -405,9 +405,11 @@ impl Router {
         };
         let page_size = layout.page_size();
         let candidates = layout.local().to_vec();
+        let pinyin = self.engine.raw_preedit().text;
         let payload = match candidates_payload(
             self.scripts.lua(),
             self.focused_app(),
+            &pinyin,
             &candidates,
             &self.candidate_weights,
         ) {
@@ -657,13 +659,13 @@ impl Router {
         }
     }
 
-    /// `sys_time` 脚本到点了：派一次 `time`（载荷与 `cloudime.get_time()` 同一张表），把脚本要改的
+    /// `time_range` 脚本到点了：派一次 `time`（载荷与 `cloudime.get_time()` 同一张表），把脚本要改的
     /// 落到当前这一屏上再重画。
     ///
-    /// 「到点」按**本地时间的整分**去重（`Runtime::sys_time_due`，同一天同一分钟只跑一次；
-    /// `Manifest::accepts` 再逐脚本核对 `trigger_time`）。一个 `sys_time` 脚本都没有时一次都不花。
+    /// 「到点」由 `Runtime::time_due` 按**时间段窗口**去重（每个窗口每个脚本只跑一次；
+    /// `Manifest::accepts` 再逐脚本核对当前时间在不在它的时间段里）。一个 `time_range` 脚本都没有时一次都不花。
     pub(super) fn poll_script_time(&mut self) {
-        if !self.scripts.sys_time_due() {
+        if !self.scripts.time_due() {
             return;
         }
         let payload = match self.scripts.time_payload(self.focused_app()) {
@@ -799,6 +801,40 @@ impl Router {
         self.flush_script_windows();
     }
 
+    /// 焦点切进某个程序了：给 `focus_app` 脚本派一次 `focus`（载荷 `{ app }`）。
+    ///
+    /// 应用没变就不派（同一程序里换输入框不算）；`apps` 对不上的脚本由派发那一层过滤。
+    pub(super) fn dispatch_focus_scripts(&mut self) {
+        let app = self.focused_app().map(str::to_owned);
+        if app == self.last_script_focus_app {
+            return;
+        }
+        self.last_script_focus_app = app.clone();
+        let Some(app) = app else {
+            return;
+        };
+        if !self.scripts.has_handlers("focus") {
+            return;
+        }
+        let payload = match self.scripts.lua().create_table() {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::warn!(%error, "建 `focus` 事件载荷失败");
+                return;
+            }
+        };
+        if let Err(error) = payload.set("app", app.as_str()) {
+            tracing::warn!(%error, "写 `focus` 事件载荷失败");
+            return;
+        }
+        let actions = self.with_script_actions("focus", payload, Some(&app));
+        // 没有按键的那一拍：`passthrough` / `commit` 由 `apply_common_actions` 记日志忽略
+        self.apply_common_actions(&actions);
+        // 焦点这一拍没有「重算」的事：脚本在 focus 里要的 redraw 清掉（下一次按键自然会重排）
+        self.scripts.take_redraw_request();
+        self.flush_script_windows();
+    }
+
     /// 把脚本这一拍攒下的窗口操作按顺序转给 UI 线程（`cloudime.window.*`）。
     ///
     /// 脚本在工人线程产出请求、窗口在 UI 线程上建：这条队伍是单向的，不会等回话。
@@ -816,13 +852,17 @@ impl Router {
     /// 现在这一屏候选在脚本那边的样子（没在组句 / 一个候选都没有时 `None`）。
     fn current_candidates_payload(&self) -> Option<mlua::Table> {
         match &self.composed {
-            Some(Composed::Candidates { layout, .. }) if !layout.is_empty() => candidates_payload(
-                self.scripts.lua(),
-                self.focused_app(),
-                layout.local(),
-                &self.candidate_weights,
-            )
-            .ok(),
+            Some(Composed::Candidates { layout, .. }) if !layout.is_empty() => {
+                let pinyin = self.engine.raw_preedit().text;
+                candidates_payload(
+                    self.scripts.lua(),
+                    self.focused_app(),
+                    &pinyin,
+                    layout.local(),
+                    &self.candidate_weights,
+                )
+                .ok()
+            }
             _ => None,
         }
     }
@@ -925,16 +965,19 @@ fn json_value(lua: &mlua::Lua, value: &serde_json::Value) -> mlua::Result<mlua::
     })
 }
 
-/// 一屏候选在脚本那边的样子：1 起的数组，另有 `app` 字段说明这是哪个应用；每项
-/// `{ text, display, pinyin, weight, kind }`（`weight` 是 Core 的排名权重，快捷候选没有这一项）。
+/// 一屏候选在脚本那边的样子：1 起的数组，另有 `app`（哪个应用）与 `pinyin`（这一次组句的拼音串，
+/// 候选窗触发按它比对）两个字段；每项 `{ text, display, pinyin, weight, kind }`
+///（`weight` 是 Core 的排名权重，快捷候选没有这一项）。
 fn candidates_payload(
     lua: &mlua::Lua,
     app: Option<&str>,
+    pinyin: &str,
     candidates: &[Candidate],
     weights: &HashMap<String, f64>,
 ) -> mlua::Result<mlua::Table> {
     let payload = lua.create_table()?;
     payload.set("app", app)?;
+    payload.set("pinyin", pinyin)?;
     for (index, candidate) in candidates.iter().enumerate() {
         let entry = lua.create_table()?;
         entry.set("text", candidate.text.clone())?;

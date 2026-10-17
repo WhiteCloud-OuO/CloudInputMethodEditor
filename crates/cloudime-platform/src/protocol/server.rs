@@ -48,13 +48,13 @@ pub struct InputSettings {
     #[serde(default)]
     pub script_key_modifiers: u16,
 
-    /// 脚本声明的那些键（清单 `trigger_condition = "key"` 的 `keys`）：按虚拟键码占的位图
+    /// 脚本声明的那些键（清单 `combination_key` 的 `keys`）：按虚拟键码占的位图
     /// （第 `vk / 64` 个 `u64` 的第 `vk % 64` 位）。DLL 据此在**没组句时**也把这些键送来问一趟 ——
     /// 脚本不吃就回 Passthrough、按键重放回应用。全 0 = 没有这类脚本，按键路径与以前逐字节一致。
     #[serde(default)]
     pub script_keys: [u64; 4],
 
-    /// 有脚本要「按键那一刻的光标前文」（`trigger_condition = "key"`）：DLL 据此在**每个按键之前**
+    /// 有脚本要「按键那一刻的光标前文」（清单 `needs_context = true`）：DLL 据此在**每个按键之前**
     /// 现读一份光标前文送上来（`ClientMessage::Surrounding`），脚本的 `cloudime.text.*` 读到的就是它。
     /// `false` = 没有这类脚本，不读、不送。
     #[serde(default)]

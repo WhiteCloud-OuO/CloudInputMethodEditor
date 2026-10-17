@@ -30,6 +30,8 @@ impl Router {
             self.engine.set_private(private);
             // 换了个会话（焦点 / 输入框变了）：上一份文本快照作废，等 DLL 重读
             self.document.clear();
+            // `focus_app` 脚本：应用真的变了才派 `focus`
+            self.dispatch_focus_scripts();
         }
     }
 

@@ -4,8 +4,9 @@
 -- `Scripts\` 下、重启输入法服务（设置 → 脚本 → 「重启输入法服务」，或任务栏「中 / 英」图标右键）。
 --
 -- 用到的能力（完整说明见安装目录的 lua.md）：
---   * 清单 `trigger_condition = "key"` + `keys = { "enter" }`：没组句也收得到回车（脚本不吃就重放回去）。
---   * `cloudime.context`：光标前文 —— 这类脚本每次按键前都会现刷一份，所以按回车时它已经是
+--   * 清单 `trigger_condition = "combination_key"` + `combination_modifiers = "none"` +
+--     `keys = { "enter" }`：不按修饰键的单个键；没组句也收得到回车（脚本不吃就重放回去）。
+--   * `needs_context = true`：每次派发前刷新 `cloudime.context`（光标前文）—— 按回车时它已经是
 --     刚敲完那一行的样子。
 --   * 动作 `commit`：吃掉这一键、直接上屏这段文本 —— 回车必须由脚本自己吃，把「换行 + 新序号」一次写出去。
 --
@@ -14,9 +15,11 @@
 cloudime.script{
     name              = "自动序号",
     description       = "在 1. / 一、 后面敲回车时，自动写出下一条的序号",
-    api               = 1,
-    trigger_condition = "key",
+    api               = 2,
+    trigger_condition = "combination_key",
+    combination_modifiers = "none",  -- 不按修饰键：光按 Enter
     keys              = { "enter" },
+    needs_context     = true,        -- 读光标前文（判断上一行的序号）
     timeout           = 200,        -- 纯本地判断，很快
     sync              = true,       -- 同步：算完就返回
     handover          = "return",   -- 必须与 sync 一致

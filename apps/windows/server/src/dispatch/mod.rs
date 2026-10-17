@@ -115,6 +115,9 @@ pub struct Router {
     /// 由 UI 线程的 `focus` / `blur` 事件维护（点窗口、`win:focus()`、收起 / 关掉）。
     focused_script_window: Option<(cloudime_script::WindowId, String)>,
 
+    /// 上一次给 `focus_app` 脚本派发时的前台程序：只有应用真的变了才派 `focus`（同一程序里换输入框不算）。
+    last_script_focus_app: Option<String>,
+
     /// 全局输入法状态（中文 / 英文 / 禁用），所有应用共用。DLL 切了报来，激活 / 获焦 / 轮询时取走。
     mode: InputMode,
 
@@ -260,6 +263,7 @@ impl Router {
             script_windows_ready: false,
             pending_script_windows: Vec::new(),
             focused_script_window: None,
+            last_script_focus_app: None,
             mode: InputMode::default(),
             ime_active: false,
             in_text_input: false,
