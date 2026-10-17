@@ -156,7 +156,7 @@ end)
 | `startup` | 全部脚本加载完（**所有脚本**都收） | 只做自己的准备（开文件、发首个请求）。**返回值会被丢掉** |
 | `key` | 一次按键、**引擎处理之前**（只有 `combination_key` 脚本收，且修饰键 + 键要对得上清单） | 见[动作表](#5-返回值动作表)全部项；`passthrough` / `commit` 只有这一拍认 |
 | `candidates` | **引擎排完之后**（只有 `candidate_context` 脚本收；拼音串要对得上清单的 `candidate_pinyin`） | `order` / `display` / `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 给了只记日志 |
-| `focus` | 焦点**切进**清单 `apps` 里的程序（只有 `focus_app` 脚本收；同一程序里换输入框不重复派） | `notice` / `adjust` / `online` / `theme`；载荷 `{ app }` |
+| `focus` | 焦点**切进**清单 `apps` 里的程序（前台程序报 `SyncMode` / 第一次按键时更新；同一程序里换输入框不重复派） | `notice` / `adjust` / `online` / `theme`；载荷 `{ app }` |
 | `time` | 本地时间第一次进入清单 `time_range` 那个时间段（只有 `time_range` 脚本收；**每段只触发一次**） | `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 给了只记日志。载荷同 `cloudime.get_time()`，另加 `app`（那一刻前台程序） |
 | `window` | 脚本窗口上的鼠标 / 滚轮 / 焦点动作（`click` / `right_click` / `hover` / `leave` / `wheel` / `focus` / `blur`） | 同 `candidates`：`notice` / `adjust` / `online` / `theme`；窗口要 `interactive`（辅助窗口还要 `aux:focus(true)`）才接鼠标 |
 | 异步回调 | HTTP 结果回来那一拍（**所有脚本**） | 同 `candidates`；`passthrough` / `commit` 给了只记日志 |

@@ -121,7 +121,7 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
 | `startup` | 全部脚本加载完 | 只做自己的准备（开文件、发首个请求）；返回值按「没有按键的那一拍」处理 |
 | `key` | 一次按键、**引擎处理之前** | 只有**组合键对得上清单**（`combination_modifiers` + `keys`）的脚本才收 —— 组句与否都一样；看这一键与当时状态（载荷里有 `vk` / `ctrl` / `window` 与高亮候选文本 `highlight`）；`passthrough`（不吃、交给应用）、`commit`（吃掉并上屏）、`notice`、`adjust`、`order` / `display`（下一屏生效）、`online`（候选窗底部那一行；`Ctrl + 反引号` 会把它当一条译文上屏，见 `docs/design/online-translate.md`）、`theme`（换主题：写进配置 `[theme] curr_theme` 并重启输入法服务，`false` 回本进程启动时那份） |
 | `candidates` | **引擎排完之后**（`recompose`） | 只有**拼音串等于清单 `candidate_pinyin`** 的脚本才收；看这一屏候选（含 `pinyin` 与 Core 的 `weight`）；`order`（临时接管顺序）、`display`（改显示）、`notice`、`adjust`、`online`、`theme`；`passthrough` / `commit` 不认 |
-| `focus` | 焦点**切进**清单 `apps` 里的某个程序（`ensure_focus`） | 同「没有按键的那一拍」：`notice` / `adjust` / `online` / `theme`；载荷 `{ app }`。同一程序里换输入框不重复派 |
+| `focus` | 焦点**切进**清单 `apps` 里的某个程序（前台 DLL 的 `SyncMode` 与首次按键都会更新焦点） | 同「没有按键的那一拍」：`notice` / `adjust` / `online` / `theme`；载荷 `{ app }`。同一程序里换输入框不重复派 |
 | 异步回调 | 结果回来那一拍 `tick`（`http_get` / `http_post`） | 同 `candidates`：`order` / `display` / `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 不认 |
 | `time` | 本地时间**第一次**落进清单 `time_range` 那个时间段（跨夜按「昨晚开的窗口」算） | 同「没有按键的那一拍」：`notice` / `adjust` / `online` / `theme`；载荷同 `cloudime.get_time()` 另加 `app`。**每个时间段窗口只派一次** |
 

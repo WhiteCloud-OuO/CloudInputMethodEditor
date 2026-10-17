@@ -100,6 +100,9 @@ impl Router {
                 in_text_input,
                 caps,
             } => {
+                // 前台应用的 DLL 每隔几百毫秒问一次：借这一拍把焦点跟上来（`focus_app` 脚本据此
+                // 在切程序之后不用等按键就能收到 `focus`）
+                self.ensure_focus(session);
                 self.handle_ime_active();
                 // 顺路记下焦点状态：状态切换提示据此决定弹不弹、以及「中 / 英」按钮画不画「A」。
                 self.in_text_input = in_text_input;

@@ -737,7 +737,8 @@ Server 只按自己的语义处理 —— 谁先定义谁优先，脚本抢不�
 `Router::tick` 的 `poll_script_time()` 用 `Runtime::time_due()`：遍历 `time` 处理函数、按
 `Manifest::mark_time_due`（本地时间 → 窗口开始那天，`Cell` 记住触发过没有）―― 一个窗口只派一次。
 `focus` 事件由 `ensure_focus` 里 `dispatch_focus_scripts` 派：前台程序**变了**才派（同一程序里换输入框不算），
-载荷 `{ app }`，落地同「没有按键的那一拍」。`cloudime.foreground_app()` 与载荷里的 `app` 读的都是
+载荷 `{ app }`，落地同「没有按键的那一拍」。`ensure_focus` 现在也在 `SyncMode` 里调（前台 DLL 隔几百毫秒报一次，
+切程序之后不用等按键就能派 `focus`）。`cloudime.foreground_app()` 与载荷里的 `app` 读的都是
 `Router::sync_focused_app` 维护的快照。DLL 那边：`would_eat` 命中声明的修饰键集合（`wants_script_key`；
 命中后 Server 再按**具体键**过滤）或声明的键本身（`wants_declared_key`，只认**不带**修饰键的按下）就答「吃」，
 Server 回 Passthrough 时用 `SendInput` `replay_to_app` 把键还回应用（只注键本身，修饰键按用户手上还按着的算），
