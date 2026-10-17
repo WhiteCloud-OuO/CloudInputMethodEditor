@@ -2456,7 +2456,7 @@ mod tests {
     /// 窗口开着时再按 F3 不关它。
     #[test]
     fn the_caret_window_test_script_creates_then_closes_on_the_close_region() {
-        use cloudime_render::Element;
+        use cloudime_render::{Color, Element};
 
         const SCRIPT: &str = include_str!("../../../Scripts/lib/test-caret-window.lua");
         let dir = script_dir("caret-window");
@@ -2539,6 +2539,78 @@ mod tests {
                 )),
             "F3 只创建，不销毁"
         );
+
+        // 没悬停：叉是黑色，按钮没有底色。
+        let svg_tint = |document: &cloudime_render::Document| {
+            document
+                .elements
+                .iter()
+                .find_map(|element| match element {
+                    Element::Svg { tint, .. } => Some(*tint),
+                    _ => None,
+                })
+                .flatten()
+        };
+        let button_rect = |document: &cloudime_render::Document| {
+            document.elements.iter().any(|element| {
+                matches!(
+                    element,
+                    Element::Rect { x, y, width, height, radius, .. }
+                        if (*x - 152.0).abs() < 0.01
+                            && (*y - 8.0).abs() < 0.01
+                            && (*width - 20.0).abs() < 0.01
+                            && (*height - 20.0).abs() < 0.01
+                            && (*radius - 3.0).abs() < 0.01
+                )
+            })
+        };
+        assert_eq!(svg_tint(document), Some(Color::rgba(0, 0, 0, 255)));
+        assert!(!button_rect(document), "没悬停时不画按钮底色");
+
+        // 鼠标进 close 区域：先画圆角矩形（#FFFF3300），再把叉染成白色。
+        let hover_close = runtime.lua().create_table().unwrap();
+        hover_close.set("id", id).unwrap();
+        hover_close.set("action", "hover").unwrap();
+        hover_close.set("region", "close").unwrap();
+        runtime.dispatch("window", hover_close, None);
+        let hovered = runtime.take_window_requests();
+        let hovered = hovered
+            .iter()
+            .find_map(|request| match request {
+                window::Request::SetContent(shown, document) if *shown == id => Some(document),
+                _ => None,
+            })
+            .expect("悬停时重画了内容");
+        assert!(button_rect(hovered), "悬停时画按钮底色");
+        assert!(
+            hovered.elements.iter().any(|element| matches!(
+                element,
+                Element::Rect { color, .. } if *color == Color::rgba(255, 51, 0, 255)
+            )),
+            "按钮底色是 #FFFF3300"
+        );
+        assert_eq!(
+            svg_tint(hovered),
+            Some(Color::rgba(255, 255, 255, 255)),
+            "悬停时叉是白色"
+        );
+
+        // 鼠标回到 body：底色收起、叉恢复黑色。
+        let hover_body = runtime.lua().create_table().unwrap();
+        hover_body.set("id", id).unwrap();
+        hover_body.set("action", "hover").unwrap();
+        hover_body.set("region", "body").unwrap();
+        runtime.dispatch("window", hover_body, None);
+        let left = runtime.take_window_requests();
+        let left = left
+            .iter()
+            .find_map(|request| match request {
+                window::Request::SetContent(shown, document) if *shown == id => Some(document),
+                _ => None,
+            })
+            .expect("离开按钮时重画了内容");
+        assert!(!button_rect(left), "离开按钮后底色收起");
+        assert_eq!(svg_tint(left), Some(Color::rgba(0, 0, 0, 255)));
 
         // 点右上角关闭区域：销毁窗口。
         let event = runtime.lua().create_table().unwrap();

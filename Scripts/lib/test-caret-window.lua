@@ -4,7 +4,8 @@
 -- 在任意文本编辑器里按 **Ctrl + Alt + F3**：
 --   * 光标上方 30 点摆一块 180 × 140 的独立窗口；
 --   * 上方放不下（会超出显示器工作区）就改到光标下方 30 点；
---   * 右上角 20 × 20、圆角 3 的区域里画 `Images\SVG\打叉.svg`，点它关闭并销毁窗口。
+--   * 右上角 20 × 20、圆角 3 的区域里画 `Images\SVG\打叉.svg`，点它关闭并销毁窗口；
+--   * 鼠标不在这个区域里：叉是黑色、没有底色；移进去：底色变成 `#FFFF3300`、叉变成白色（模拟关闭按钮）。
 -- F3 只负责创建：窗口已经开着时再按不会关它。
 --
 -- 用到的接口：
@@ -35,6 +36,7 @@ local BUTTON_Y = MARGIN
 
 local win = nil
 local waiting = false
+local hovering = false
 local close_svg = nil
 
 local function svg_path()
@@ -45,10 +47,13 @@ local function svg_path()
 end
 
 local function draw()
-    win:set_content{
+    local content = {
         width = WIDTH,
         height = HEIGHT,
         regions = {
+            -- 铺满整个内容区：鼠标从关闭区域挪到窗口别处时也能收到 hover（好把按钮底色收起来）。
+            -- 后写的 close 盖住它。
+            { name = "body", x = 0, y = 0, w = WIDTH, h = HEIGHT },
             -- 右上角的关闭区域：圆角矩形，按住它不拖窗口（点一下才是关闭）
             { name = "close", x = BUTTON_X, y = BUTTON_Y,
               w = BUTTON, h = BUTTON, radius = 3, drag = false },
@@ -57,8 +62,19 @@ local function draw()
         { type = "text", x = MARGIN + 8, y = 44, text = "180 × 140", size = 12, color = "#FF888888" },
         { type = "text", x = MARGIN + 8, y = 66, text = "Ctrl+Alt+F3 只创建", size = 12,
           color = "#FF888888" },
-        { type = "svg", x = BUTTON_X, y = BUTTON_Y, size = BUTTON, path = svg_path() },
     }
+    -- 鼠标在关闭区域里才画按钮底色；先画它、再画叉（叉在上面）。
+    if hovering then
+        content[#content + 1] = {
+            type = "rect", x = BUTTON_X, y = BUTTON_Y, w = BUTTON, h = BUTTON,
+            radius = 3, color = "#FFFF3300",
+        }
+    end
+    content[#content + 1] = {
+        type = "svg", x = BUTTON_X, y = BUTTON_Y, size = BUTTON, path = svg_path(),
+        tint = hovering and "#FFFFFFFF" or "#FF000000",
+    }
+    win:set_content(content)
 end
 
 -- 按光标矩形摆窗口：优先上方 30，放不下就下方 30；再夹在当前显示器工作区里。
@@ -99,6 +115,7 @@ cloudime.on("caret", function(pos)
         cloudime.log("光标窗口测试：找不到 Images/SVG/打叉.svg")
         return
     end
+    hovering = false
     win = cloudime.window.create{
         name        = "光标窗口测试",
         width       = WIDTH,
@@ -110,11 +127,24 @@ cloudime.on("caret", function(pos)
 end)
 
 cloudime.on("window", function(event)
-    if event.action ~= "click" then
+    if not win or event.id ~= win.id then
         return
     end
-    if win and event.id == win.id and event.region == "close" then
+    if event.action == "hover" then
+        -- body 区域铺满窗口，鼠标离开 close 时这里也会收到一次 hover
+        local inside = event.region == "close"
+        if inside ~= hovering then
+            hovering = inside
+            draw()
+        end
+    elseif event.action == "leave" then
+        if hovering then
+            hovering = false
+            draw()
+        end
+    elseif event.action == "click" and event.region == "close" then
         win:close()
         win = nil
+        hovering = false
     end
 end)
