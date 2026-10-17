@@ -226,9 +226,14 @@ impl Painter {
         if layout.rows.is_empty() {
             return;
         }
-        // GDI 没有 alpha：调色板先按面板底色压平（渲染那条路不需要）
-        let theme = self.theme.flattened();
-        cloudime_render::draw_key_map(&mut paint, layout, cell, &theme, scale(dpi), (0.0, 0.0));
+        cloudime_render::draw_key_map(
+            &mut paint,
+            layout,
+            cell,
+            &self.theme,
+            scale(dpi),
+            (0.0, 0.0),
+        );
     }
 
     /// 面板圆角半径（**物理像素**）：绘制那条路没有逐像素 alpha，用它切窗口区域。

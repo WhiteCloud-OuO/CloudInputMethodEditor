@@ -173,9 +173,10 @@ pub(super) trait Clonable: Asset {
 - **面板拿不到逐像素 alpha**：圆角用 `SetWindowRgn`（`CreateRoundRectRgn`）切，边缘是硬的；
   **阴影单独一块分层窗**垫在面板底下 —— 阴影不是窗口内部的元素，仍走渲染（`Renderer::render_shadow`
   只出阴影、面板留空，`layered::present` 贴上去、`SetWindowPos` 排在面板后面），观感与原来一致；
-- **文字走 GDI 的字形管线**（`TextOut`）：没有字距微调 / 连字 / 彩色 emoji，字号比 cosmic-text 略小；
-- 半透明的主题色（如 `text` = 黑 216）要先按背景**压平**（`Theme::flattened`），否则 GDI 忽略 alpha、
-  画出来会比渲染深；
+- **实现是 GDI + GDI+ 混合**：需要抗锯齿的（线、圆角矩形、圆、路径、文字、图像）走 **GDI+**
+  （`GdipFillPath` / `GdipDrawLine` / `GdipDrawString` / `GdipDrawImageRect`，`SmoothingModeAntiAlias` +
+  `TextRenderingHintAntiAlias`，颜色带 alpha）；只有**不透明的轴对齐矩形**（面板底色、格子边框）仍走 GDI 的
+  `FillRect`（整像素、快）。GDI+ 的 C API 在进程里**只启动一次**（`gdiplus_started`，故意不 `GdiplusShutdown`）；
 - 内容**不持久**：每次 `WM_PAINT` 整块重画。窗口过程靠 `GWLP_USERDATA` 找回模板（`show` 里挂、`Drop` 里清）；
   `show` 按「位置 / 尺寸 / 版面版本 / 渲染器代号」判重，没变就不重画；
 - `Render` 那条路仍在（`Renderer::render_key_map`），想换回去只要改模板 `show` 的贴图那一步。

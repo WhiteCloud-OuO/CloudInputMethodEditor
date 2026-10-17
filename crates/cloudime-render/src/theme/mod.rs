@@ -64,16 +64,6 @@ pub struct Theme {
 }
 
 impl Theme {
-    /// **绘制**用的一份：调色板按背景压平（见 [`Palette::flattened`]），其余照旧。
-    ///
-    /// GDI 没有 alpha 通道；`Render` 那条路不需要它（叠色由 tiny-skia 做）。
-    pub fn flattened(&self) -> Self {
-        Self {
-            colors: self.colors.flattened(),
-            ..self.clone()
-        }
-    }
-
     /// 缺省主题，对齐调研期 macOS 上量的系统外观；候选窗的三项字体由壳按配置覆盖
     /// （[`Theme::set_fonts`]），这里的值也是覆盖不到时的落点。
     pub fn new() -> Self {

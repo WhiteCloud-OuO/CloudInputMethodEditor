@@ -31,24 +31,6 @@ impl Color {
         }
     }
 
-    /// 按自己的 alpha 叠在 `background` 上（source-over），得到**不透明**色。
-    ///
-    /// 给「绘制」那条路用：GDI 没有 alpha 通道，半透明的字色 / 线色得先跟底色混好，画出来才跟渲染一致。
-    pub fn over(self, background: Color) -> Color {
-        if self.a == 255 {
-            return self;
-        }
-        let alpha = f32::from(self.a) / 255.0;
-        let mix = |source: u8, back: u8| {
-            (f32::from(source) * alpha + f32::from(back) * (1.0 - alpha)).round() as u8
-        };
-        Color::rgb(
-            mix(self.r, background.r),
-            mix(self.g, background.g),
-            mix(self.b, background.b),
-        )
-    }
-
     pub(crate) fn to_skia(self) -> tiny_skia::Color {
         tiny_skia::Color::from_rgba8(self.r, self.g, self.b, self.a)
     }

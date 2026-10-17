@@ -911,9 +911,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `sync_input()` 上：`ui::set_mouse_transparent` + 命中测试），所以**每块独立窗口都有**这个特性
   （见下「辅助窗口」那条）。
 - **辅助窗口模板**（`server/src/ui/auxiliary_window_template/`，`AuxiliaryWindowTemplate`）：给资产用的那块**绘制面板** ——
-  窗口**不是分层的**：`WM_PAINT` 里 `BeginPaint` → `Painter::paint_key_map`（`Paint` / GDI，调色板先
-  `Theme::flattened` 压平，否则半透明的字色会画得过深）→ `EndPaint`；圆角用 `SetWindowRgn`（`CreateRoundRectRgn`）切，
-  字号 / 抗锯齿走 GDI 那档。**阴影**不归面板：另有一块分层窗（`Painter::render_shadow` 只出阴影、面板留空 →
+  窗口**不是分层的**：`WM_PAINT` 里 `BeginPaint` → `Painter::paint_key_map`（`Paint` / **GDI + GDI+ 混合**：
+  需要抗锯齿的走 GDI+，不透明轴对齐矩形走 GDI）→ `EndPaint`；圆角用 `SetWindowRgn`（`CreateRoundRectRgn`）切。
   `layered::present` 贴上去 → `SetWindowPos(hWndInsertAfter = 面板)` 排在面板后面），`hide` / `Drop` 一起收。内容不持久（每次 `WM_PAINT` 整块重画）；模板指针挂在 `GWLP_USERDATA`
   （`show` 挂、`Drop` 清），`show` 按「位置 / 尺寸 / 版面版本 / 渲染器代号」判重（`set_key_map` 把版面版本 +1）。
   **焦点**：`new(painter, able_to_get_focus)`
@@ -980,8 +979,9 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   被销毁、它那一组销毁前按「生命周期末」自动归还焦点；克隆则原件与它那一组**一点不动**。
 - **绘制 / 渲染**（`docs/design/windows.md` §6）：两种画法各是一个结构体、元素各是一条 trait（`cloudime-render`）——
   `elements` 里六条（`TextElement` / `SvgElement` / `ImageElement` / `LineElement` / `RectElement` /
-  `PathElement`），`Render`（离屏位图 + 共享字形管线，`measure` 也走它）与 `Paint`（GDI 直画窗口 DC）**各实现一遍**；
-  窗口里只准经这些 trait 画。除「键位映射参考」（辅助窗口模板，2026-10-17 起走 `Paint` / GDI，见上）之外，
+  `PathElement`），`Render`（离屏位图 + 共享字形管线，`measure` 也走它）与 `Paint`（**GDI + GDI+ 混合**直画窗口 DC）
+  **各实现一遍**（GDI+ 管抗锯齿：线 / 圆角 / 圆 / 路径 / 文字 / 图像；GDI 管不透明的轴对齐矩形）；
+  窗口里只准经这些 trait 画。除「键位映射参考」（辅助窗口模板，2026-10-17 起走 `Paint` / GDI + GDI+，见上）之外，
   自绘的几个窗口**一律用渲染** —— 渲染器把一整帧出成预乘 RGBA 位图
   （就是那块**内存区域**）→ `ui/layered::present` 换通道 → `UpdateLayeredWindow(ULW_ALPHA)` **整块一次**贴上。
   窗口过程**不处理 `WM_PAINT`**、窗口类**不设 `hbrBackground`**、不调 `InvalidateRect`，所以没有「刷新把画布

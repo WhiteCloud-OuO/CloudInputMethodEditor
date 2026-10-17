@@ -294,14 +294,7 @@ fn paint_key_map_pixmap(
             theme.corner_radius * scale,
             theme.colors.background,
         );
-        draw_key_map(
-            &mut paint,
-            layout,
-            cell,
-            &theme.flattened(),
-            scale,
-            (0.0, 0.0),
-        );
+        draw_key_map(&mut paint, layout, cell, theme, scale, (0.0, 0.0));
     }
     // DIB 是 BGRA；GDI 写进去的 alpha 位不算数（窗口上也忽略它），这里一律当不透明；
     // 还是哨兵色的像素算透明（那是圆角之外、窗口区域切掉的部分）

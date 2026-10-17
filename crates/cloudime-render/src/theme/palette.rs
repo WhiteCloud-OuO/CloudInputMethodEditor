@@ -85,40 +85,6 @@ pub struct Palette {
 }
 
 impl Palette {
-    /// **绘制**用的一份：把带 alpha 的颜色按 `background` 压平成不透明色。
-    ///
-    /// GDI 没有 alpha 通道（`COLORREF` 里没那一位），半透明的字色 / 线色不压平就会画成实心，
-    /// 跟渲染出来的深浅对不上。
-    pub fn flattened(&self) -> Self {
-        let background = self.background;
-        Self {
-            background,
-            highlight: self.highlight.over(background),
-            shadow: self.shadow.over(background),
-            pinyin: self.pinyin.over(background),
-            pinyin_caret: self.pinyin_caret.over(background),
-            highlight_text: self.highlight_text.over(background),
-            text: self.text.over(background),
-            highlight_index: self.highlight_index.over(background),
-            index: self.index.over(background),
-            footer: self.footer.over(background),
-            badge: self.badge.over(background),
-            translate_meta: self.translate_meta.over(background),
-            translate_fresh: self.translate_fresh.over(background),
-            translate_learned: self.translate_learned.over(background),
-            extra: self.extra.over(background),
-            bar_background: self.bar_background.over(background),
-            bar_icon: self.bar_icon.over(background),
-            bar_shadow: self.bar_shadow.over(background),
-            tip_background: self.tip_background.over(background),
-            tip_icon: self.tip_icon.over(background),
-            tip_shadow: self.tip_shadow.over(background),
-            gloss: self.gloss.over(background),
-            pos: self.pos.over(background),
-            fresh: self.fresh.over(background),
-        }
-    }
-
     pub const fn new() -> Self {
         Self {
             background: Color::rgb(255, 255, 255),
