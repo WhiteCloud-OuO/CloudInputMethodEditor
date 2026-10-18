@@ -1109,6 +1109,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `Element::TextBox.h_scroll` / `v_scroll`，渲染器按可见性扣文本区并画 8 点厚、4 点间隙的滚动条。
   内部滚动条不进 `regions`：`begin_text_box_press` 按控件内坐标判滑块 / 轨道，拖动用
   `EM_SETSCROLLPOS`，点轨道翻页，滚轮在宿主里按页高 1/4 滚动；`WM_TEXT_SCROLL` 通知脚本窗刷新滑块。
+  非拖拽改值（点轨道 / 滚轮，包括文本区内的滚轮）和独立滚动条一样用 140 ms ease-out 动画：
+  `text_scroll_anims` 按 `(路径, 轴向)` 存，定时器逐帧回写 RichEdit 并更新滑块；拖动开始会取消对应动画。
   文本 API / `text_changed` / `key_pressed` / `focused` / `unfocused` 与 `text_edit` 共用；
   不支持 `passkey` 和 SVG，内部滚动条不派 `value_changed`。嵌套宿主能建、能编辑，但嵌套控件的
   内部滚动条命中目前只按顶层元素路径处理。

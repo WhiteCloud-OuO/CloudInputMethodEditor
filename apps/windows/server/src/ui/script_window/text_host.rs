@@ -77,6 +77,9 @@ pub(super) const WM_TEXT_FOCUS: u32 = WM_APP + 0x4C;
 /// 宿主 → 脚本窗口：多行编辑框的滚动位置 / 可见范围变了，请刷新内部滚动条。
 pub(super) const WM_TEXT_SCROLL: u32 = WM_APP + 0x4D;
 
+/// 宿主 → 脚本窗口：多行编辑框收到滚轮（`lparam` 为带符号的 delta）。
+pub(super) const WM_TEXT_WHEEL: u32 = WM_APP + 0x4E;
+
 /// 多行编辑框的滚动范围（像素）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct ScrollInfo {
@@ -572,16 +575,6 @@ impl TextHostWindow {
         self.notify_scroll();
     }
 
-    /// 按像素增量滚动；没有可滚范围时不动。
-    pub(super) fn scroll_by(&self, dx: i32, dy: i32) {
-        let (h, v) = self.scroll_info();
-        let x = (h.pos + dx).clamp(h.min, h.max.max(h.min));
-        let y = (v.pos + dy).clamp(v.min, v.max.max(v.min));
-        if x != h.pos || y != v.pos {
-            self.set_scroll(x, y);
-        }
-    }
-
     fn notify_scroll(&self) {
         unsafe {
             let _ = PostMessageW(
@@ -589,6 +582,17 @@ impl TextHostWindow {
                 WM_TEXT_SCROLL,
                 WPARAM(self.hwnd.0 as usize),
                 LPARAM(0),
+            );
+        }
+    }
+
+    fn notify_wheel(&self, delta: i32) {
+        unsafe {
+            let _ = PostMessageW(
+                Some(self.owner),
+                WM_TEXT_WHEEL,
+                WPARAM(self.hwnd.0 as usize),
+                LPARAM(delta as isize),
             );
         }
     }
@@ -1477,13 +1481,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     // 悬停移动只保留给宿主判断光标；不再转给 RichEdit，免得它每次移动都失效重绘。
     if msg == WM_MOUSEWHEEL && with_host(hwnd, |host| host.multiline).unwrap_or(false) {
         let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
-        let step = with_host(hwnd, |host| {
-            let (_, vertical) = host.scroll_info();
-            (vertical.page / 4).max(host.line_height * 2).max(8)
-        })
-        .unwrap_or(24);
-        let dy = if delta > 0 { -step } else { step };
-        with_host(hwnd, |host| host.scroll_by(0, dy));
+        with_host(hwnd, |host| host.notify_wheel(delta));
         return LRESULT(0);
     }
     if msg == WM_MOUSEMOVE && (wparam.0 as u32 & 0x0001) == 0 {

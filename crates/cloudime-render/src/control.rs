@@ -269,7 +269,7 @@ pub enum ButtonShape {
 }
 
 /// **滚动条**：整条背景胶囊 + 可拖动的滑块胶囊；区域就是背景形状。
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum ScrollAxis {
     Horizontal,
     Vertical,

@@ -51,6 +51,7 @@ use cloudime_script::{
 };
 use text_host::{
     ScrollInfo, TextHostWindow, WM_TEXT_CHANGED, WM_TEXT_FOCUS, WM_TEXT_KEY, WM_TEXT_SCROLL,
+    WM_TEXT_WHEEL,
 };
 
 mod text_host;
@@ -373,6 +374,13 @@ struct ScrollAnimation {
     start: Instant,
 }
 
+/// `text_box` 内部滚动条的非拖拽动画（像素）。
+struct TextScrollAnimation {
+    from: i32,
+    to: i32,
+    start: Instant,
+}
+
 /// 一次拖动要移动超过多少像素才算「拖」而不是「点」。
 const DRAG_THRESHOLD: i32 = 4;
 
@@ -440,6 +448,9 @@ pub(super) struct ScriptWindow {
     /// 滚动条过渡动画（元素下标 → 起止值 / 开始时间）。
     scroll_anims: RefCell<HashMap<usize, ScrollAnimation>>,
 
+    /// `text_box` 内部滚动条过渡动画（元素路径 + 轴向）。
+    text_scroll_anims: RefCell<HashMap<(Vec<usize>, ScrollAxis), TextScrollAnimation>>,
+
     /// 动画定时器（0 = 没启动）。
     scroll_anim_timer: Cell<usize>,
 
@@ -500,6 +511,7 @@ impl ScriptWindow {
             scrollbar_drag: Cell::new(None),
             text_scroll_drag: RefCell::new(None),
             scroll_anims: RefCell::new(HashMap::new()),
+            text_scroll_anims: RefCell::new(HashMap::new()),
             scroll_anim_timer: Cell::new(0),
             moved_since_press: Cell::new(false),
             last: Cell::new((0, 0)),
@@ -529,6 +541,7 @@ impl ScriptWindow {
         self.scrollbar_drag.set(None);
         *self.text_scroll_drag.borrow_mut() = None;
         self.scroll_anims.borrow_mut().clear();
+        self.text_scroll_anims.borrow_mut().clear();
         self.stop_scroll_anim_timer();
         self.last_click.set(None);
         self.rebuild_text_edits();
@@ -1001,6 +1014,39 @@ impl ScriptWindow {
         }
     }
 
+    /// 多行编辑框文本区里的滚轮：交给内部滚动条动画，而不是直接跳。
+    fn text_wheel(&self, host_hwnd: HWND, delta: i32) {
+        let path = {
+            let edits = self.text_edits.borrow();
+            let Some(edit) = edits.iter().find(|edit| edit.host.hwnd() == host_hwnd) else {
+                return;
+            };
+            edit.path.clone()
+        };
+        let target = {
+            let document = self.document.borrow();
+            let Some(Element::TextBox(edit)) = document.element_at_path(&path) else {
+                return;
+            };
+            let axis = if edit.v_scroll.visible {
+                ScrollAxis::Vertical
+            } else if edit.h_scroll.visible && !edit.auto_line_wrap {
+                ScrollAxis::Horizontal
+            } else {
+                return;
+            };
+            let scroll = edit.scroll(axis);
+            let step = (scroll.page.max(16) / 4).max(8);
+            let target = if delta > 0 {
+                scroll.value.saturating_sub(step).max(scroll.min)
+            } else {
+                scroll.value.saturating_add(step).min(scroll.max)
+            };
+            (axis, target)
+        };
+        self.animate_text_box_scroll(&path, target.0, target.1);
+    }
+
     /// 命中下标若是扁平按钮，返回它。
     fn button_index(&self, element: Option<usize>) -> Option<usize> {
         // `element_at` / 事件载荷里的 `element` 是 **1 起** 的；`hits` / `document.elements` 是 0 起。
@@ -1081,14 +1127,22 @@ impl ScriptWindow {
         Some(scroll.min + (ratio as f64 * (scroll.max - scroll.min) as f64).round() as u64)
     }
 
-    fn set_text_box_scroll(&self, path: &[usize], axis: ScrollAxis, value: u64) {
-        let Some(host) = self
-            .text_edits
+    fn text_box_host(&self, path: &[usize]) -> Option<Rc<TextHostWindow>> {
+        self.text_edits
             .borrow()
             .iter()
             .find(|edit| edit.path == path)
             .map(|edit| edit.host.clone())
-        else {
+    }
+
+    /// 立即把文本滚动到指定位置（拖拽和动画收尾用）。
+    fn set_text_box_scroll(&self, path: &[usize], axis: ScrollAxis, value: u64) {
+        self.cancel_text_box_animation(path, axis);
+        self.set_text_box_scroll_immediate(path, axis, value);
+    }
+
+    fn set_text_box_scroll_immediate(&self, path: &[usize], axis: ScrollAxis, value: u64) {
+        let Some(host) = self.text_box_host(path) else {
             return;
         };
         let (h, v) = host.scroll_info();
@@ -1099,6 +1153,54 @@ impl ScriptWindow {
         host.set_scroll(x, y);
         self.refresh_text_box_scroll(path, &host);
         self.repaint();
+    }
+
+    fn text_box_scroll_current(&self, path: &[usize], axis: ScrollAxis) -> Option<i32> {
+        let document = self.document.borrow();
+        let Some(Element::TextBox(edit)) = document.element_at_path(path) else {
+            return None;
+        };
+        Some(edit.scroll(axis).value.min(i32::MAX as u64) as i32)
+    }
+
+    /// 非拖拽改值：和独立滚动条一样用 140ms ease-out 过渡。
+    fn animate_text_box_scroll(&self, path: &[usize], axis: ScrollAxis, target: u64) {
+        let Some(current) = self.text_box_scroll_current(path, axis) else {
+            return;
+        };
+        let target = target.min(i32::MAX as u64) as i32;
+        let key = (path.to_vec(), axis);
+        let logical = self
+            .text_scroll_anims
+            .borrow()
+            .get(&key)
+            .map(|anim| anim.to)
+            .unwrap_or(current);
+        if logical == target {
+            return;
+        }
+        if current == target {
+            self.cancel_text_box_animation(path, axis);
+            self.set_text_box_scroll_immediate(path, axis, target as u64);
+            return;
+        }
+        self.text_scroll_anims.borrow_mut().insert(
+            key,
+            TextScrollAnimation {
+                from: current,
+                to: target,
+                start: Instant::now(),
+            },
+        );
+        self.ensure_scroll_anim_timer();
+    }
+
+    fn cancel_text_box_animation(&self, path: &[usize], axis: ScrollAxis) {
+        let key = (path.to_vec(), axis);
+        self.text_scroll_anims.borrow_mut().remove(&key);
+        if self.scroll_anims.borrow().is_empty() && self.text_scroll_anims.borrow().is_empty() {
+            self.stop_scroll_anim_timer();
+        }
     }
 
     fn begin_text_box_press(&self, client_x: i32, client_y: i32) -> bool {
@@ -1143,7 +1245,7 @@ impl ScriptWindow {
                 }
             };
             drop(document);
-            self.set_text_box_scroll(&path, axis, target);
+            self.animate_text_box_scroll(&path, axis, target);
         }
         true
     }
@@ -1220,9 +1322,8 @@ impl ScriptWindow {
     fn cancel_scroll_animation(&self, index: usize) {
         let mut anims = self.scroll_anims.borrow_mut();
         anims.remove(&index);
-        let empty = anims.is_empty();
         drop(anims);
-        if empty {
+        if self.scroll_anims.borrow().is_empty() && self.text_scroll_anims.borrow().is_empty() {
             self.stop_scroll_anim_timer();
         }
     }
@@ -1285,14 +1386,59 @@ impl ScriptWindow {
             for index in finished {
                 anims.remove(&index);
             }
-            if anims.is_empty() {
-                drop(anims);
-                self.stop_scroll_anim_timer();
-            }
         }
-        if changed {
+        let text_changed = self.step_text_scroll_animations(now);
+        if changed || text_changed {
             self.repaint();
         }
+        if self.scroll_anims.borrow().is_empty() && self.text_scroll_anims.borrow().is_empty() {
+            self.stop_scroll_anim_timer();
+        }
+    }
+
+    /// 推进 `text_box` 内部滚动条动画；返回这一帧是否改了显示值。
+    fn step_text_scroll_animations(&self, now: Instant) -> bool {
+        let mut finished = Vec::new();
+        let mut changed = false;
+        {
+            let mut anims = self.text_scroll_anims.borrow_mut();
+            for ((path, axis), anim) in anims.iter() {
+                let elapsed = now.duration_since(anim.start).as_millis() as u64;
+                let progress = (elapsed as f64 / SCROLL_ANIM_MS as f64).min(1.0);
+                let eased = 1.0 - (1.0 - progress).powi(3);
+                let delta = anim.to as i128 - anim.from as i128;
+                let value = (anim.from as i128 + (delta as f64 * eased).round() as i128)
+                    .clamp(0, i32::MAX as i128) as i32;
+                let Some(host) = self.text_box_host(path) else {
+                    finished.push((path.clone(), *axis));
+                    continue;
+                };
+                let (h, v) = host.scroll_info();
+                let (x, y) = match axis {
+                    ScrollAxis::Horizontal => (value, v.pos),
+                    ScrollAxis::Vertical => (h.pos, value),
+                };
+                host.set_scroll(x, y);
+                let mut document = self.document.borrow_mut();
+                if let Some(Element::TextBox(edit)) = document.element_at_path_mut(path) {
+                    let scroll = match axis {
+                        ScrollAxis::Horizontal => &mut edit.h_scroll,
+                        ScrollAxis::Vertical => &mut edit.v_scroll,
+                    };
+                    if scroll.value != value as u64 {
+                        scroll.value = value as u64;
+                        changed = true;
+                    }
+                }
+                if progress >= 1.0 {
+                    finished.push((path.clone(), *axis));
+                }
+            }
+            for key in finished {
+                anims.remove(&key);
+            }
+        }
+        changed
     }
 
     fn emit_scrollbar_value(&self, index: usize, value: u64, x: f32, y: f32) {
@@ -1443,7 +1589,7 @@ impl ScriptWindow {
             };
             (vec![index], axis, target)
         };
-        self.set_text_box_scroll(&path, axis, target);
+        self.animate_text_box_scroll(&path, axis, target);
         true
     }
 
@@ -1721,6 +1867,7 @@ impl ScriptWindow {
         self.scrollbar_drag.set(None);
         *self.text_scroll_drag.borrow_mut() = None;
         self.scroll_anims.borrow_mut().clear();
+        self.text_scroll_anims.borrow_mut().clear();
         self.stop_scroll_anim_timer();
         self.reset_button_states();
         for edit in self.text_edits.borrow().iter() {
@@ -2456,6 +2603,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_TEXT_SCROLL => {
             let host = HWND(wparam.0 as *mut _);
             with_window(hwnd, |window| window.text_scrolled(host));
+            LRESULT(0)
+        }
+        WM_TEXT_WHEEL => {
+            let host = HWND(wparam.0 as *mut _);
+            let delta = lparam.0 as i32;
+            with_window(hwnd, |window| window.text_wheel(host, delta));
             LRESULT(0)
         }
         // 拖过就不是点击（阈值在 `drag_to` 里判）。
