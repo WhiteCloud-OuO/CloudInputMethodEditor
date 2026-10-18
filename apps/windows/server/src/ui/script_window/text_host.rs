@@ -15,13 +15,15 @@ use std::sync::OnceLock;
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetDC, HBRUSH, HDC, HGDIOBJ,
-    InvalidateRect, PAINTSTRUCT, ReleaseDC, SYS_COLOR_INDEX, SetBkColor, SetTextColor,
+    InvalidateRect, PAINTSTRUCT, ReleaseDC, SYS_COLOR_INDEX, SelectObject, SetBkColor,
+    SetTextColor,
 };
 use windows::Win32::System::Com::DVASPECT_CONTENT;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::UI::Controls::RichEdit::{
     CFM_CHARSET, CFM_COLOR, CFM_FACE, CFM_SIZE, CHARFORMATW, ITextHost, ITextHost_Impl,
-    ITextServices, PARAFORMAT, TXTBACK_TRANSPARENT, TXTBACKSTYLE,
+    ITextServices, PARAFORMAT, TXTBACK_TRANSPARENT, TXTBACKSTYLE, TXTBIT_RICHTEXT,
+    TXTBIT_SAVESELECTION, TXTBIT_VIEWINSETCHANGE,
 };
 use windows::Win32::UI::Input::Ime::{HIMC, ImmGetContext, ImmReleaseContext};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
@@ -108,8 +110,10 @@ impl TextHostWindow {
         }?;
         let font = create_font(family, size, dpi);
         let brush = unsafe { CreateSolidBrush(background) };
+        let line_height = ((size * dpi as f32 / 72.0).ceil() as i32).max(1);
         let host: ITextHost = TextHost {
             hwnd,
+            line_height,
             char_format: char_format(family, size, text_color),
             para_format: PARAFORMAT {
                 cbSize: size_of::<PARAFORMAT>() as u32,
@@ -152,7 +156,6 @@ impl TextHostWindow {
             return Err(Error::from(hr));
         }
         let services: ITextServices = unsafe { ITextServices::from_raw(services_ptr) };
-        let line_height = ((size * dpi as f32 / 72.0).ceil() as i32).max(1);
         let tsf = match tsf::TsfContext::create(hwnd, services.clone(), line_height) {
             Ok(context) => Some(context),
             Err(error) => {
@@ -203,6 +206,11 @@ impl TextHostWindow {
         }
         if let Some(tsf) = &self.tsf {
             tsf.notify_layout();
+        }
+        unsafe {
+            let _ = self
+                .services
+                .OnTxPropertyBitsChange(TXTBIT_VIEWINSETCHANGE, TXTBIT_VIEWINSETCHANGE);
         }
     }
 
@@ -302,6 +310,7 @@ impl TextHostWindow {
             let mut client = RECT::default();
             let _ = GetClientRect(self.hwnd, &mut client);
             let _ = FillRect(hdc, &client, self.brush);
+            let old_font = SelectObject(hdc, self.font);
             let _ = SetBkColor(hdc, self.background);
             let _ = SetTextColor(hdc, self.text_color);
             let draw = self.services.TxDraw(
@@ -321,6 +330,7 @@ impl TextHostWindow {
             if let Err(error) = draw {
                 tracing::warn!(hwnd = self.hwnd.0 as isize, %error, "text_edit：TxDraw 失败");
             }
+            let _ = SelectObject(hdc, old_font);
             let _ = EndPaint(self.hwnd, &ps);
         }
     }
@@ -354,6 +364,7 @@ impl Drop for TextHostWindow {
 #[implement(ITextHost)]
 struct TextHost {
     hwnd: HWND,
+    line_height: i32,
     char_format: CHARFORMATW,
     para_format: PARAFORMAT,
 }
@@ -505,11 +516,16 @@ impl ITextHost_Impl for TextHost_Impl {
 
     fn TxGetViewInset(&self, prc: *mut RECT) -> Result<()> {
         unsafe {
+            let mut client = RECT::default();
+            let _ = GetClientRect(self.hwnd, &mut client);
+            let height = (client.bottom - client.top).max(0);
+            let line = self.line_height.min(height);
+            let top = ((height - line) / 2).max(0);
             *prc = RECT {
                 left: 2,
-                top: 2,
+                top,
                 right: 2,
-                bottom: 2,
+                bottom: (height - top - line).max(0),
             };
         }
         Ok(())
@@ -589,7 +605,7 @@ impl ITextHost_Impl for TextHost_Impl {
 
     fn TxGetPropertyBits(&self, _dwmask: u32, pdwbits: *mut u32) -> Result<()> {
         unsafe {
-            *pdwbits = 0;
+            *pdwbits = (TXTBIT_RICHTEXT | TXTBIT_SAVESELECTION) & _dwmask;
         }
         Ok(())
     }
