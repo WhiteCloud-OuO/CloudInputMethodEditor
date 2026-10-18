@@ -1977,15 +1977,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_TIMER => {
-            let ours = Cell::new(false);
+            let active = Cell::new(false);
             with_window(hwnd, |window| {
-                if window.scroll_anim_timer.get() != 0 && wparam.0 == window.scroll_anim_timer.get()
-                {
-                    ours.set(true);
+                if window.scroll_anim_timer.get() != 0 {
+                    active.set(true);
                     window.step_scroll_animations();
                 }
             });
-            if ours.get() {
+            if active.get() {
                 return LRESULT(0);
             }
             unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
