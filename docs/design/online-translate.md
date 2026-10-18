@@ -24,6 +24,9 @@
 同样做英汉互译；静态布局在同目录 `niutrans-window.json`，未配置凭据时脚本用 `update_content`
 更新提示标签；同样拷到 `Scripts\` 根部并填凭据。
 
+安装包的 `Scripts\lib\` 会默认带上这两份示例和 `niutrans-window.json`，但不会自动加载；
+要启用就复制到 `Scripts\` 根部并填自己的 appId / apikey。
+
 示例拿到译文后还会**按候选窗现在的宽度折行**：`cloudime.candidate.width()` 拿到窗口内容区宽度（点），
 扣掉左右内边距（各 8 点）与「在线 」前缀，用 `cloudime.ui.truncate(译文, 行宽, { mode = "wrap",
 max_lines = 5, font = "translate" })` 折成最多 5 行（超出的在末行补「…」）。行宽跟着窗口走，

@@ -27,6 +27,8 @@ C:\Program Files\CloudIME\
                               cloudime_default 同步进 Phrases\Phrase.db，用户短语不受影响）
     Scripts\                  用户 Lua 脚本（一个 .lua 一个脚本；本目录对普通用户可写，「设置 → 脚本」页走它）+
                               template.lua（「新建脚本」的模板，加载器按文件名跳过、不执行；升级会覆盖它，用户脚本不动）
+    Scripts\lib\              脚本工具与示例（不会被加载；md5.lua、example-niutrans.lua、
+                              niutrans-window.lua、niutrans-window.json 等；拷到 Scripts\ 根部即可启用）
     data\icons-arrangement.cfg 悬浮状态条的按钮排布（哪个按钮、位置、图标）
     data\icons\*.svg          那些按钮的图标（20×20）
     InputSchemes\             双键拼音方案文件（DoubleKeysPinyin\*.toml / .ini 与 AuxiliaryCodes\ 辅助码表；
