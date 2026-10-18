@@ -501,8 +501,9 @@ aux:show()
 - 动态控件（`flat_svg_button` / `text_edit`）可以写 `events = { 事件名 = "处理器名" }`；事件名用
   `click` / `right_click` / `hover` / `leave` / `wheel` / `focus` / `blur` / `mouse_enter` / `mouse_leave` /
   `mouse_pressed` / `mouse_released` / `mouse_clicked` / `mouse_double_clicked` / `text_changed` /
-  `key_pressed` / `focused` / `unfocused`（`text_edit` 也接受 `on_key_pressed` / `onKeyPressed`、
-  `on_focused` / `onFocused`、`on_unfocused` / `onUnfocused`），处理器名由脚本自己分发。
+  `key_pressed` / `focused` / `unfocused` / `value_changed`（`text_edit` 也接受 `on_key_pressed` / `onKeyPressed`、
+  `on_focused` / `onFocused`、`on_unfocused` / `onUnfocused`；滚动条也接受 `on_value_changed`），
+  处理器名由脚本自己分发。
   窗口事件载荷里会多一个 `event.handler`（没声明时是 `nil`），例如：
 
   ```lua
@@ -536,6 +537,8 @@ aux:show()
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（**边缘**颜色，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1 点）/ `fill`（可选填充，不写 = 无填充）/ `children = { …元素… }`；子控件用面板内相对坐标 |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省取 SVG 画板）；`svg`（整段 SVG）或 `svg_path`（文件）；`shape = rect / round_rect / circle / path` + `radius`；`name`（自动区域名）；`normal` / `hovered` / `pressed = { background = …, svg = … }`；`events = { 动作名 = "处理器名" }` |
 | `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 `h/2`）；`read_only` / `passkey`；`back_color`（背景）/ `edge_color`（边框）/ `edge_width`（缺省 1，0 不显示）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align = left / right`；`font_name` / `font_size` / `font_flag`；`text` 初始文本；`font`（缺省 `candidate`）；`name`（自动区域名）；`events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
+| `hscroll_bar` | 水平滚动条：`x` / `y` / `w` / `h`；`value` / `min_value` / `max_value`（都是非负整数，缺省 0 / 0 / 100）；`background_color`（兼容 `back_color` / `background` / `color` / `fill`）/ `thumb_color`（兼容 `slider_color` / `thumb` / `highlight`）；`name`；`events` |
+| `vscroll_bar` | 垂直滚动条，字段同 `hscroll_bar`；也接受拼写 `vhscroll_bar` / `vhsroll_bar` |
 
 颜色写 `"#RRGGBB"` / `"#AARRGGBB"` / `"#RGB"`，或 `{ r = …, g = …, b = …, a = … }`（0–255）。
 
@@ -654,6 +657,22 @@ icon:use_path_mask({ { "M", 0, 0 }, { "L", 16, 0 }, { "L", 16, 16 }, { "L", 0, 1
   `on_unfocused` / `onUnfocused` 离开编辑。可以在 JSON 的 `events` 里声明，也可以直接按
   `event.action == "key_pressed" / "focused" / "unfocused"` 和 `event.control` 分发。
 
+**滚动条（`hscroll_bar` / `vscroll_bar`）**
+
+```lua
+{ type = "hscroll_bar", name = "hours", x = 24, y = 300, w = 320, h = 12,
+  value = 40, min_value = 0, max_value = 100,
+  background_color = "#FFE0E0E0", thumb_color = "#FF4A90E2",
+  events = { value_changed = "hours_changed" } }
+```
+
+- 背景和滑块都是胶囊形状、纯填充无边框；背景就是鼠标命中区域。
+- `value` / `min_value` / `max_value` 是非负整数，缺省 `0 / 0 / 100`；解析时把 `value` 夹到值域。
+- 滑块长度为轨道 1/4（至少一个厚度），点击滑块可以拖动，点击轨道会先跳到该位置再拖动。
+- 鼠标滚轮落在滚动条上时按 ±1 改值，并吞掉这次滚轮；值变化派 `value_changed`，
+  载荷是 `event.control` / `event.value`，也可以声明 `events.value_changed` 处理器。
+- 垂直滚动条同字段；`vhscroll_bar` / `vhsroll_bar` 是兼容拼写。
+
 **区域（region）**：一块可以被鼠标**点击 / 拖拽**的范围 —— 元素只管画，交互看区域：
 
 ```lua
@@ -731,7 +750,7 @@ win:set_content{
 ```lua
 cloudime.on("window", function(event)
     -- event.window / event.id      哪块窗口（名字 / 编号）
-    -- event.action                 "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur" / "text_changed" / "key_pressed" / "focused" / "unfocused"
+    -- event.action                 "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur" / "text_changed" / "key_pressed" / "focused" / "unfocused" / "value_changed"
     -- event.x / event.y            内容区坐标（点）
     -- event.element               命中的元素（内容数组里 1 起的下标；没命中是 nil）
     -- event.region                命中的区域名（内容里的 regions；没命中是 nil）
@@ -740,6 +759,7 @@ cloudime.on("window", function(event)
     -- event.text                  text_changed 时的完整文本；其它事件是 nil
     -- event.key                   key_pressed 的虚拟键码；其它事件是 nil
     -- event.modifier              key_pressed 的修饰键位（1/2/4/8 可相加）
+    -- event.value                 value_changed 的新值；其它事件是 nil
     -- event.delta                 滚轮量（一格 ±120，正数往上；只有 wheel 有）
     if event.action == "wheel" then
         count = math.max(0, count + math.floor(event.delta / 120))

@@ -16,9 +16,9 @@ use std::time::SystemTime;
 
 use cloudime_render::{
     ButtonColors, ButtonShape, ButtonState, Color, Document, Element, FlatSvgButton, FontSlot,
-    HitRect, HitShape, Label, LabelRun, Panel, PathCommand, Pixmap, Region, StaticImage,
-    StaticShape, SvgAlign, TextBlock, TextEdit, flip_image, gray_image, load_image, mask_image,
-    rotate_image, scale_image, svg_size,
+    HitRect, HitShape, Label, LabelRun, Panel, PathCommand, Pixmap, Region, ScrollAxis, ScrollBar,
+    StaticImage, StaticShape, SvgAlign, TextBlock, TextEdit, flip_image, gray_image, load_image,
+    mask_image, rotate_image, scale_image, svg_size,
 };
 
 use crate::mlua;
@@ -784,10 +784,13 @@ fn parse_document(
         let mut element = parse_element(&table, images, 0)?;
         let handlers = parse_handlers(&table)?;
         if !handlers.is_empty()
-            && !matches!(&element, Element::FlatSvgButton(_) | Element::TextEdit(_))
+            && !matches!(
+                &element,
+                Element::FlatSvgButton(_) | Element::TextEdit(_) | Element::ScrollBar(_)
+            )
         {
             return Err(mlua::Error::RuntimeError(
-                "events 只能写在 flat_svg_button / text_edit 这类动态控件上；普通元素请用 regions"
+                "events 只能写在 flat_svg_button / text_edit / scroll_bar 这类动态控件上；普通元素请用 regions"
                     .to_owned(),
             ));
         }
@@ -829,6 +832,24 @@ fn parse_document(
             }
             let mut region =
                 Region::new(edit.region_name.clone(), edit.hit_shape((0.0, 0.0)), false);
+            region.handlers = handlers.clone();
+            button_regions.push(region);
+        }
+        if let Element::ScrollBar(bar) = &mut element {
+            if bar.region_name.trim().is_empty() {
+                bar.region_name = format!("scroll_bar_{}", elements.len() + 1);
+            }
+            if regions
+                .iter()
+                .chain(button_regions.iter())
+                .any(|region: &Region| region.name == bar.region_name)
+            {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "滚动条的区域名重复：{}",
+                    bar.region_name
+                )));
+            }
+            let mut region = Region::new(bar.region_name.clone(), bar.hit_shape((0.0, 0.0)), false);
             region.handlers = handlers;
             button_regions.push(region);
         }
@@ -1181,9 +1202,14 @@ fn parse_element(
         "panel" => parse_panel(table, images, depth),
         "flat_svg_button" => parse_flat_svg_button(table),
         "text_edit" => parse_text_edit(table),
+        "hscroll_bar" | "hscrollbar" => parse_scroll_bar(table, ScrollAxis::Horizontal),
+        "vscroll_bar" | "vhscroll_bar" | "vhsroll_bar" => {
+            parse_scroll_bar(table, ScrollAxis::Vertical)
+        }
         other => Err(mlua::Error::RuntimeError(format!(
             "元素 type 不认识：{other}（可用：rect / circle / line / text / svg / img / path / \
-             label / text_block / static_shape / static_image / panel / flat_svg_button / text_edit）"
+             label / text_block / static_shape / static_image / panel / flat_svg_button / text_edit / \
+             hscroll_bar / vscroll_bar）"
         ))),
     }
 }
@@ -1351,6 +1377,51 @@ fn parse_text_edit(table: &mlua::Table) -> mlua::Result<Element> {
         size: font_size,
         region_name: table.get::<Option<String>>("name")?.unwrap_or_default(),
     }))
+}
+
+/// `hscroll_bar` / `vscroll_bar`：整条背景胶囊 + 滑块胶囊；值域 `min_value..=max_value`。
+fn parse_scroll_bar(table: &mlua::Table, axis: ScrollAxis) -> mlua::Result<Element> {
+    let min = u64_value(table, "min_value", 0)?;
+    let max = u64_value(table, "max_value", 100)?;
+    if max < min {
+        return Err(mlua::Error::RuntimeError(format!(
+            "滚动条的 max_value（{max}）不能小于 min_value（{min}）"
+        )));
+    }
+    let value = u64_value(table, "value", 0)?.clamp(min, max);
+    Ok(Element::ScrollBar(ScrollBar {
+        x: number(table, "x", 0.0)?,
+        y: number(table, "y", 0.0)?,
+        width: positive(table, "w", "width")?,
+        height: positive(table, "h", "height")?,
+        background: color(table, "background_color", false)?
+            .or(color(table, "back_color", false)?)
+            .or(color(table, "background", false)?)
+            .or(color(table, "color", false)?)
+            .or(color(table, "fill", false)?),
+        thumb: color(table, "thumb_color", false)?
+            .or(color(table, "slider_color", false)?)
+            .or(color(table, "thumb", false)?)
+            .or(color(table, "highlight", false)?),
+        axis,
+        value,
+        min,
+        max,
+        region_name: table.get::<Option<String>>("name")?.unwrap_or_default(),
+    }))
+}
+
+/// 非负整数属性（Lua 数字可能是浮点；四舍五入后夹到 `u64`）。
+fn u64_value(table: &mlua::Table, key: &str, default: u64) -> mlua::Result<u64> {
+    let Some(value) = table.get::<Option<f64>>(key)? else {
+        return Ok(default);
+    };
+    if !value.is_finite() || value < 0.0 {
+        return Err(mlua::Error::RuntimeError(format!(
+            "滚动条 {key} 要是非负数（现在是 {value}）"
+        )));
+    }
+    Ok(value.round().min(u64::MAX as f64) as u64)
 }
 
 fn parse_svg_align(table: &mlua::Table) -> mlua::Result<SvgAlign> {
@@ -1850,6 +1921,9 @@ pub enum WindowAction {
 
     /// `text_edit` 失去焦点。
     Unfocused,
+
+    /// 滚动条的值变了；`event.value`。
+    ValueChanged,
 }
 
 impl WindowAction {
@@ -1873,6 +1947,7 @@ impl WindowAction {
             Self::KeyPressed => "key_pressed",
             Self::Focused => "focused",
             Self::Unfocused => "unfocused",
+            Self::ValueChanged => "value_changed",
         }
     }
 
@@ -1900,6 +1975,7 @@ impl WindowAction {
             "on_focused" | "onFocused" => Self::Focused,
             "unfocused" => Self::Unfocused,
             "on_unfocused" | "onUnfocused" => Self::Unfocused,
+            "value_changed" | "on_value_changed" | "onValueChanged" => Self::ValueChanged,
             _ => return None,
         })
     }
@@ -1944,6 +2020,9 @@ pub struct ScriptWindowEvent {
     /// `key_pressed` 的修饰键位（1 shift / 2 ctrl / 4 alt / 8 win，可相加）。
     pub modifier: Option<u8>,
 
+    /// `value_changed` 的新值；其它事件是 `None`。
+    pub value: Option<u64>,
+
     /// 滚轮量（只有 `Wheel` 有）。
     pub delta: Option<i32>,
 
@@ -1968,6 +2047,7 @@ pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result
     payload.set("text", event.text.clone())?;
     payload.set("key", event.key)?;
     payload.set("modifier", event.modifier)?;
+    payload.set("value", event.value)?;
     payload.set("delta", event.delta)?;
     payload.set("ctrl", event.ctrl)?;
     payload.set("alt", event.alt)?;
@@ -2207,6 +2287,67 @@ mod tests {
         );
     }
 
+    /// 水平 / 垂直滚动条：值域、区域、事件处理器和 u64 夹取。
+    #[test]
+    fn scroll_bars_parse_values_and_regions() {
+        let lua = mlua::Lua::new();
+        let content = lua
+            .load(
+                r##"
+                return {
+                    width = 300, height = 200,
+                    { type = "hscroll_bar", name = "hours", x = 10, y = 10, w = 200, h = 12,
+                      value = 150, min_value = 0, max_value = 100,
+                      background_color = "#FF112233", thumb_color = "#FF445566",
+                      events = { value_changed = "hours_changed" } },
+                    { type = "vscroll_bar", name = "minutes", x = 250, y = 10, w = 12, h = 150,
+                      value = 5, min_value = 10, max_value = 20 },
+                }
+            "##,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let document = parse_document(
+            &content,
+            (Some(300.0), Some(200.0)),
+            &mut ImageCache::default(),
+        )
+        .expect("读得出来");
+        let Element::ScrollBar(hours) = &document.elements[0] else {
+            panic!("不是水平滚动条");
+        };
+        assert_eq!(hours.axis, ScrollAxis::Horizontal);
+        assert_eq!((hours.value, hours.min, hours.max), (100, 0, 100));
+        assert_eq!(hours.background, Some(Color::rgba(0x11, 0x22, 0x33, 0xFF)));
+        assert_eq!(hours.thumb, Some(Color::rgba(0x44, 0x55, 0x66, 0xFF)));
+        assert!(document.regions.iter().any(|region| region.name == "hours"));
+        assert_eq!(
+            document
+                .regions
+                .iter()
+                .find(|region| region.name == "hours")
+                .and_then(|region| region.handler("value_changed")),
+            Some("hours_changed")
+        );
+        let Element::ScrollBar(minutes) = &document.elements[1] else {
+            panic!("不是垂直滚动条");
+        };
+        assert_eq!(minutes.axis, ScrollAxis::Vertical);
+        assert_eq!((minutes.value, minutes.min, minutes.max), (10, 10, 20));
+
+        let bad = lua
+            .load(
+                r#"return { width = 20, height = 20,
+                    { type = "hscroll_bar", name = "bad", x = 0, y = 0, w = 10, h = 10,
+                      min_value = 10, max_value = 1 } }"#,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        assert!(
+            parse_document(&bad, (Some(20.0), Some(20.0)), &mut ImageCache::default()).is_err()
+        );
+    }
+
     /// 扁平按钮的六个事件名。
     #[test]
     fn flat_button_actions_have_stable_payload_names() {
@@ -2320,6 +2461,7 @@ mod tests {
             text: Some("12".to_owned()),
             key: Some(0x41),
             modifier: Some(3),
+            value: Some(42),
             delta: Some(120),
             ctrl: true,
             alt: false,
@@ -2337,6 +2479,7 @@ mod tests {
         assert_eq!(payload.get::<String>("text").unwrap(), "12");
         assert_eq!(payload.get::<u32>("key").unwrap(), 0x41);
         assert_eq!(payload.get::<u8>("modifier").unwrap(), 3);
+        assert_eq!(payload.get::<u64>("value").unwrap(), 42);
         assert_eq!(payload.get::<u32>("id").unwrap(), 3);
         assert_eq!(payload.get::<i32>("delta").unwrap(), 120);
         assert_eq!(payload.get::<usize>("element").unwrap(), 2);

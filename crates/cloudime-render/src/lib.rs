@@ -33,8 +33,8 @@ mod theme;
 #[cfg(target_os = "windows")]
 pub use color::Color;
 pub use control::{
-    ButtonColors, ButtonShape, ButtonState, FlatSvgButton, Label, LabelRun, Panel, StaticImage,
-    StaticShape, SvgAlign, TextBlock, TextEdit,
+    ButtonColors, ButtonShape, ButtonState, FlatSvgButton, Label, LabelRun, Panel, ScrollAxis,
+    ScrollBar, StaticImage, StaticShape, SvgAlign, TextBlock, TextEdit,
 };
 /// 脚本窗口 / 面板的内容：**声明式**元素表（display list），由 [`Renderer::render_document`] 一次出图。
 pub use document::{

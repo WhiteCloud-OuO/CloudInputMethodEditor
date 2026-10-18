@@ -14,7 +14,9 @@ use i_overlay::float::single::SingleFloatOverlay;
 use tiny_skia::{PathBuilder, Pixmap};
 
 use crate::color::Color;
-use crate::control::{FlatSvgButton, Label, Panel, StaticImage, StaticShape, TextBlock, TextEdit};
+use crate::control::{
+    FlatSvgButton, Label, Panel, ScrollBar, StaticImage, StaticShape, TextBlock, TextEdit,
+};
 
 /// 一份内容：内容区尺寸（点）+ 元素表（按顺序画，后面的盖前面的）。
 #[derive(Clone)]
@@ -552,6 +554,9 @@ pub enum Element {
     /// 动态控件：扁平 SVG 按钮（背景形状 / 区域 / SVG 三件套，状态由窗口自动切换）。
     FlatSvgButton(FlatSvgButton),
 
+    /// 动态控件：水平 / 垂直滚动条（背景胶囊 + 滑块胶囊）。
+    ScrollBar(ScrollBar),
+
     /// 动态控件：单行文本编辑框（背景 / SVG 由渲染器画，文本区由 Windowless RichEdit 承载）。
     TextEdit(TextEdit),
 }
@@ -998,6 +1003,13 @@ impl std::fmt::Debug for Element {
             Self::FlatSvgButton(button) => f
                 .debug_struct("FlatSvgButton")
                 .field("state", &button.state)
+                .finish(),
+            Self::ScrollBar(bar) => f
+                .debug_struct("ScrollBar")
+                .field("axis", &bar.axis)
+                .field("value", &bar.value)
+                .field("min", &bar.min)
+                .field("max", &bar.max)
                 .finish(),
             Self::TextEdit(edit) => f
                 .debug_struct("TextEdit")

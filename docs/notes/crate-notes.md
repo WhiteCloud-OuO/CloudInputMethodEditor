@@ -1121,6 +1121,14 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `WindowAction::from_name` 校验。窗口事件载荷另有 `handler`（`ScriptWindowEvent.handler`）；
   没声明 `events` 时为 `nil`，旧脚本不受影响。静态元素上写 `events` 会报错（它没有自动命中框），
   要接事件请显式加 `regions`。
+- **滚动条**（`hscroll_bar` / `vscroll_bar`，2026-10-18）：`control::ScrollBar` 是背景胶囊 +
+  滑块胶囊；背景形状就是自动区域，`Region` 的 `drag = false`，避免按住时拖动整窗。值域
+  `value/min/max` 为 u64（缺省 0/0/100），解析时夹取。滑块长度 `track/4`（至少一个厚度），
+  `thumb_rect` / `value_at` 共用同一套几何；`ScriptWindow` 用 `ScrollDrag` 保存按下点相对滑块的
+  偏移，拖动 / 点轨道更新值并 `SetCapture`；滚轮落在滚动条上按 ±1 并吞掉滚轮。值变化派
+  `value_changed`（`ScriptWindowEvent.value`），布局事件名 `value_changed` / `on_value_changed`
+  归一。渲染器 `Element::ScrollBar` 画两段 `round_rect`，默认色取主题 `badge` / `highlight`。
+  当前只支持顶层滚动条，面板里的滚动条还没有命中 / 拖动宿主。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

@@ -324,6 +324,8 @@ win:set_content{
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（边缘，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1）/ `fill`（可选）/ `children`（相对坐标） |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省 SVG 画板）；`svg` / `svg_path`；`shape` + `radius`；`name`；`normal` / `hovered` / `pressed = { background, svg }`；`events = { 动作名 = "处理器名" }` |
 | `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`read_only` / `passkey`；`back_color` / `edge_color` / `edge_width`；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align`；`font_name` / `font_size` / `font_flag`；`text` / `font` / `name` / `events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
+| `hscroll_bar` | `x` / `y` / `w` / `h`；`value` / `min_value` / `max_value`（u64，缺省 0 / 0 / 100）；`background_color` / `thumb_color`；`name` / `events`；背景与滑块都是胶囊纯填充 |
+| `vscroll_bar` | 同 `hscroll_bar`，方向为垂直；`vhscroll_bar` / `vhsroll_bar` 是兼容拼写 |
 
 #### JSON 布局文件（前台 UI 文件）
 
@@ -430,6 +432,11 @@ win:set_content{
   4 alt / 8 win）发给脚本窗，派 `key_pressed`；`WM_SETFOCUS` / `WM_KILLFOCUS` 派 `focused` /
   `unfocused`。布局里的 `events` 可用 `on_key_pressed` / `onKeyPressed`、`on_focused` / `onFocused`、
   `on_unfocused` / `onUnfocused` 别名，解析时归一成 `key_pressed` / `focused` / `unfocused`。
+- **滚动条**（`hscroll_bar` / `vscroll_bar`）：整条背景胶囊 + 滑块胶囊，都是纯填充、无边框；
+  背景形状同时是自动区域。`value` / `min_value` / `max_value` 是 u64（缺省 0 / 0 / 100），
+  解析时把 `value` 夹到值域。滑块长度取轨道 1/4（至少一个厚度）；点滑块拖动、点轨道先跳转再拖。
+  鼠标滚轮落在滚动条上时按 ±1 改值并吞掉滚轮；值变化派 `value_changed`，载荷带
+  `event.control` / `event.value`，`events` 里可写 `value_changed` / `on_value_changed`。
 - **区域（region）**：内容里可以声明 `regions = { … }` —— 区域是**鼠标点击 / 拖拽的命中范围**
   （元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true` = 按住它拖会移动整块窗口，
   `false` = 不拖窗口（点击照常）。后写的区域盖住先写的；事件里的 `event.region` 就是命中的区域名
@@ -454,7 +461,7 @@ win:set_content{
 cloudime.on("window", function(event)
     -- event.window   建窗口时给的名字
     -- event.id       窗口编号
-    -- event.action   "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur" / "text_changed" / "key_pressed" / "focused" / "unfocused"
+    -- event.action   "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur" / "text_changed" / "key_pressed" / "focused" / "unfocused" / "value_changed"
     -- event.x, event.y   内容区坐标（点）
     -- event.element  命中的元素（内容是 1 起的数组，这里也是 1 起；没命中是 nil）
     -- event.region   命中的区域名（内容里的 regions；没命中是 nil）
@@ -463,6 +470,7 @@ cloudime.on("window", function(event)
     -- event.text     text_changed 时的完整文本；其它事件是 nil
     -- event.key      key_pressed 的虚拟键码；其它事件是 nil
     -- event.modifier key_pressed 的修饰键位（1 shift / 2 ctrl / 4 alt / 8 win）
+    -- event.value    value_changed 的新值；其它事件是 nil
     -- event.delta    滚轮量（一格 ±120，正数往上；只有 wheel 有）
     if event.action == "wheel" then
         count = math.max(0, count + math.floor(event.delta / 120))

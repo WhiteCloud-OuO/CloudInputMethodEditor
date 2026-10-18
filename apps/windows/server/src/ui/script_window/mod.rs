@@ -305,6 +305,13 @@ struct Drag {
     start_window: (i32, i32),
 }
 
+/// 滚动条拖动状态：元素下标 + 按下点相对滑块起点的偏移（点）。
+#[derive(Debug, Clone, Copy)]
+struct ScrollDrag {
+    index: usize,
+    offset: f32,
+}
+
 /// 一次拖动要移动超过多少像素才算「拖」而不是「点」。
 const DRAG_THRESHOLD: i32 = 4;
 
@@ -363,6 +370,9 @@ pub(super) struct ScriptWindow {
     /// 拖动中：按下时的光标屏幕坐标 + 窗口左上角。
     drag: Cell<Option<Drag>>,
 
+    /// 滚动条拖动：正在拖哪个元素 + 按下点相对滑块起点的偏移。
+    scrollbar_drag: Cell<Option<ScrollDrag>>,
+
     /// 这一次按下之后有没有真拖动过（系统可能在 `WM_LBUTTONUP` 之前就撤掉捕获，
     /// 所以「拖过就不算点击」得单独记）。
     moved_since_press: Cell<bool>,
@@ -417,6 +427,7 @@ impl ScriptWindow {
             last_click: Cell::new(None),
             text_edits: RefCell::new(Vec::new()),
             drag: Cell::new(None),
+            scrollbar_drag: Cell::new(None),
             moved_since_press: Cell::new(false),
             last: Cell::new((0, 0)),
             scale: Cell::new(1.0),
@@ -663,6 +674,7 @@ impl ScriptWindow {
             text: Some(text),
             key: None,
             modifier: None,
+            value: None,
             delta: None,
             ctrl,
             alt,
@@ -708,6 +720,7 @@ impl ScriptWindow {
             text: None,
             key,
             modifier,
+            value: None,
             delta: None,
             ctrl,
             alt,
@@ -746,6 +759,148 @@ impl ScriptWindow {
             Some(Element::FlatSvgButton(_))
         )
         .then_some(index)
+    }
+
+    fn scrollbar_index(&self, element: Option<usize>) -> Option<usize> {
+        let index = element?.checked_sub(1)?;
+        matches!(
+            self.document.borrow().elements.get(index),
+            Some(Element::ScrollBar(_))
+        )
+        .then_some(index)
+    }
+
+    fn scrollbar(&self, index: usize) -> Option<cloudime_render::ScrollBar> {
+        match self.document.borrow().elements.get(index) {
+            Some(Element::ScrollBar(bar)) => Some(bar.clone()),
+            _ => None,
+        }
+    }
+
+    fn set_scrollbar_value(&self, index: usize, value: u64) -> bool {
+        let mut document = self.document.borrow_mut();
+        let Some(Element::ScrollBar(bar)) = document.elements.get_mut(index) else {
+            return false;
+        };
+        if bar.value == value {
+            return false;
+        }
+        bar.value = value;
+        true
+    }
+
+    fn emit_scrollbar_value(&self, index: usize, value: u64, x: f32, y: f32) {
+        let document = self.document.borrow();
+        let Some(Element::ScrollBar(bar)) = document.elements.get(index) else {
+            return;
+        };
+        let handler = self.region_handler(&bar.region_name, WindowAction::ValueChanged);
+        let control = document
+            .control_name(index + 1)
+            .map(str::to_owned)
+            .unwrap_or_else(|| bar.region_name.clone());
+        let region = Some(bar.region_name.clone());
+        let (ctrl, alt, shift) = modifiers();
+        (self.events)(ScriptWindowEvent {
+            window: self.id,
+            name: self.name.clone(),
+            action: WindowAction::ValueChanged,
+            x,
+            y,
+            element: Some(index + 1),
+            region,
+            control: Some(control),
+            handler,
+            text: None,
+            key: None,
+            modifier: None,
+            value: Some(value),
+            delta: None,
+            ctrl,
+            alt,
+            shift,
+        });
+    }
+
+    /// 左键按在滚动条上：点滑块开始拖，点轨道先跳过去再拖。返回是否吃掉了这次按下。
+    fn begin_scrollbar_press(&self, client_x: i32, client_y: i32) -> bool {
+        let (x, y, element, _) = self.hit_at(client_x, client_y);
+        let Some(index) = self.scrollbar_index(element) else {
+            return false;
+        };
+        let Some(bar) = self.scrollbar(index) else {
+            return false;
+        };
+        let (tx, ty, tw, th) = bar.thumb_rect();
+        let inside_thumb = x >= tx && x <= tx + tw && y >= ty && y <= ty + th;
+        let offset = if inside_thumb {
+            match bar.axis {
+                cloudime_render::ScrollAxis::Horizontal => x - tx,
+                cloudime_render::ScrollAxis::Vertical => y - ty,
+            }
+        } else {
+            match bar.axis {
+                cloudime_render::ScrollAxis::Horizontal => tw * 0.5,
+                cloudime_render::ScrollAxis::Vertical => th * 0.5,
+            }
+        };
+        self.scrollbar_drag.set(Some(ScrollDrag { index, offset }));
+        let _ = unsafe { SetCapture(self.hwnd()) };
+        if !inside_thumb {
+            let value = bar.value_at((x, y), offset);
+            if self.set_scrollbar_value(index, value) {
+                self.repaint();
+                self.emit_scrollbar_value(index, value, x, y);
+            }
+        }
+        true
+    }
+
+    fn update_scrollbar_drag(&self, client_x: i32, client_y: i32) -> bool {
+        let Some(drag) = self.scrollbar_drag.get() else {
+            return false;
+        };
+        let (x, y, _, _) = self.hit_at(client_x, client_y);
+        let Some(bar) = self.scrollbar(drag.index) else {
+            self.scrollbar_drag.set(None);
+            return true;
+        };
+        let value = bar.value_at((x, y), drag.offset);
+        if self.set_scrollbar_value(drag.index, value) {
+            self.repaint();
+            self.emit_scrollbar_value(drag.index, value, x, y);
+        }
+        true
+    }
+
+    fn end_scrollbar_drag(&self) -> bool {
+        if self.scrollbar_drag.replace(None).is_some() {
+            let _ = unsafe { ReleaseCapture() };
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 滚轮落在滚动条上：按 ±1 步进值；返回是否吃掉了滚轮。
+    fn scrollbar_wheel(&self, client_x: i32, client_y: i32, delta: i32) -> bool {
+        let (x, y, element, _) = self.hit_at(client_x, client_y);
+        let Some(index) = self.scrollbar_index(element) else {
+            return false;
+        };
+        let Some(bar) = self.scrollbar(index) else {
+            return false;
+        };
+        let value = if delta > 0 {
+            bar.value.saturating_add(1).min(bar.max)
+        } else {
+            bar.value.saturating_sub(1).max(bar.min)
+        };
+        if self.set_scrollbar_value(index, value) {
+            self.repaint();
+            self.emit_scrollbar_value(index, value, x, y);
+        }
+        true
     }
 
     /// 改按钮状态；状态真的变了返回 `true`。
@@ -1019,6 +1174,7 @@ impl ScriptWindow {
         self.painted.set(None);
         self.hits.borrow_mut().clear();
         self.hover.set(None);
+        self.scrollbar_drag.set(None);
         self.reset_button_states();
         for edit in self.text_edits.borrow().iter() {
             edit.host.show(false);
@@ -1157,6 +1313,7 @@ impl ScriptWindow {
             text: None,
             key: None,
             modifier: None,
+            value: None,
             delta,
             ctrl,
             alt,
@@ -1214,6 +1371,7 @@ impl ScriptWindow {
             text: None,
             key: None,
             modifier: None,
+            value: None,
             delta: None,
             ctrl,
             alt,
@@ -1429,6 +1587,7 @@ impl ScriptAuxiliary {
                 text: None,
                 key: None,
                 modifier: None,
+                value: None,
                 delta: panel.delta,
                 ctrl: false,
                 alt: false,
@@ -1660,6 +1819,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         // 左键按下：开始记拖动起点；同时算这块窗口拿到键盘焦点。
         WM_LBUTTONDOWN => {
             with_window(hwnd, |window| {
+                if window.begin_scrollbar_press(client_x(lparam), client_y(lparam)) {
+                    return;
+                }
                 let (_, _, element, region) = window.hit_at(client_x(lparam), client_y(lparam));
                 let region_name = window.region_name(region);
                 window.focus_text_edit(element, region_name);
@@ -1671,6 +1833,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_MOUSEMOVE => {
             track_leave(hwnd);
             with_window(hwnd, |window| {
+                if window.update_scrollbar_drag(client_x(lparam), client_y(lparam)) {
+                    return;
+                }
                 if window.drag.get().is_some() {
                     window.drag_to();
                 } else {
@@ -1705,6 +1870,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         // 拖过就不是点击（阈值在 `drag_to` 里判）。
         WM_LBUTTONUP => {
             with_window(hwnd, |window| {
+                if window.end_scrollbar_drag() {
+                    return;
+                }
                 window.end_button_press(client_x(lparam), client_y(lparam));
                 if window.end_drag() {
                     // 拖到另一块显示器：DPI 变了就按新 DPI 重画
@@ -1725,6 +1893,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             with_window(hwnd, |window| {
                 window.cancel_button_press();
                 window.drag.set(None);
+                window.scrollbar_drag.set(None);
             });
             LRESULT(0)
         }
@@ -1737,6 +1906,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             };
             let _ = unsafe { ScreenToClient(hwnd, &mut point) };
             with_window(hwnd, |window| {
+                if window.scrollbar_wheel(point.x, point.y, delta) {
+                    return;
+                }
                 window.emit_with_delta(WindowAction::Wheel, point.x, point.y, Some(delta));
             });
             LRESULT(0)

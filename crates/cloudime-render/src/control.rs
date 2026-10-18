@@ -258,6 +258,137 @@ pub enum ButtonShape {
     },
 }
 
+/// **滚动条**：整条背景胶囊 + 可拖动的滑块胶囊；区域就是背景形状。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScrollAxis {
+    Horizontal,
+    Vertical,
+}
+
+#[derive(Clone)]
+pub struct ScrollBar {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    /// 背景颜色；`None` = 主题角标色。
+    pub background: Option<Color>,
+    /// 滑块颜色；`None` = 主题高亮色。
+    pub thumb: Option<Color>,
+    pub axis: ScrollAxis,
+    pub value: u64,
+    pub min: u64,
+    pub max: u64,
+    /// 自动区域名（同一份内容里唯一）。
+    pub region_name: String,
+}
+
+impl ScrollBar {
+    fn track_length(&self) -> f32 {
+        match self.axis {
+            ScrollAxis::Horizontal => self.width,
+            ScrollAxis::Vertical => self.height,
+        }
+    }
+
+    fn thickness(&self) -> f32 {
+        match self.axis {
+            ScrollAxis::Horizontal => self.height,
+            ScrollAxis::Vertical => self.width,
+        }
+    }
+
+    /// 滑块长度：轨道 1/4，至少一个厚度，最长整条轨道。
+    fn thumb_length(&self) -> f32 {
+        let track = self.track_length().max(1.0);
+        (track * 0.25).max(self.thickness()).min(track)
+    }
+
+    fn ratio(&self) -> f32 {
+        if self.max <= self.min {
+            0.0
+        } else {
+            ((self.value - self.min) as f64 / (self.max - self.min) as f64) as f32
+        }
+    }
+
+    /// 滑块在内容区里的矩形（点）。
+    pub fn thumb_rect(&self) -> (f32, f32, f32, f32) {
+        let track = self.track_length();
+        let thumb = self.thumb_length();
+        let travel = (track - thumb).max(0.0);
+        let start = travel * self.ratio().clamp(0.0, 1.0);
+        match self.axis {
+            ScrollAxis::Horizontal => (self.x + start, self.y, thumb, self.height),
+            ScrollAxis::Vertical => (self.x, self.y + start, self.width, thumb),
+        }
+    }
+
+    /// 指针（内容坐标）对应到某个值；`offset` 是按下点相对滑块起点的偏移。
+    pub fn value_at(&self, point: (f32, f32), offset: f32) -> u64 {
+        let track = self.track_length();
+        let thumb = self.thumb_length();
+        let travel = (track - thumb).max(0.0);
+        if travel <= 0.0 || self.max <= self.min {
+            return self.min;
+        }
+        let start = match self.axis {
+            ScrollAxis::Horizontal => self.x,
+            ScrollAxis::Vertical => self.y,
+        };
+        let position = match self.axis {
+            ScrollAxis::Horizontal => point.0,
+            ScrollAxis::Vertical => point.1,
+        };
+        let ratio = ((position - start - offset) / travel).clamp(0.0, 1.0);
+        self.min
+            + ((ratio as f64 * (self.max - self.min) as f64).round() as u64)
+                .min(self.max - self.min)
+    }
+
+    pub fn hit_shape(&self, origin: (f32, f32)) -> HitShape {
+        HitShape::RoundRect {
+            x: origin.0 + self.x,
+            y: origin.1 + self.y,
+            width: self.width,
+            height: self.height,
+            radius: self.thickness() * 0.5,
+        }
+    }
+
+    pub(crate) fn draw<R: ControlRender>(
+        &self,
+        render: &mut R,
+        theme: &Theme,
+        scale: f32,
+        origin: (f32, f32),
+        margin: f32,
+    ) {
+        let bg = self.background.unwrap_or(theme.colors.badge);
+        let thumb = self.thumb.unwrap_or(theme.colors.highlight);
+        let x = |value: f32| margin + (origin.0 + value) * scale;
+        let y = |value: f32| margin + (origin.1 + value) * scale;
+        let len = |value: f32| value * scale;
+        render.round_rect(
+            x(self.x),
+            y(self.y),
+            len(self.width),
+            len(self.height),
+            len(self.thickness() * 0.5),
+            bg,
+        );
+        let (tx, ty, tw, th) = self.thumb_rect();
+        render.round_rect(
+            x(tx),
+            y(ty),
+            len(tw),
+            len(th),
+            len(self.thickness() * 0.5),
+            thumb,
+        );
+    }
+}
+
 /// **扁平 SVG 按钮**：背景形状 + 区域 + SVG 图形；状态由窗口根据鼠标自动切换。
 #[derive(Clone)]
 pub struct FlatSvgButton {
