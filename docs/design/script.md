@@ -355,8 +355,10 @@ win:set_content{
   `ITextStoreACP` 把文本、选区、光标矩形桥到 RichEdit；键盘先给 `ITfKeystrokeMgr`，被输入法吃掉
   就不再交给 RichEdit。CloudIME 的中文组合、候选窗和提交都走这条路。焦点进入时按 windowless
   RichEdit 的约定依次 `OnTxInPlaceActivate` / `OnTxUIActivate`，再以 `wParam = NULL` 发
-  `WM_SETFOCUS`（否则没有插入符、拖选不重画）。文本通过 `TxGetViewInset` 和“宿主窗只留一行高”
-  双重保证垂直居中；`TxDraw` 前把宿主字体选进 DC，选中 / 未选中使用同一套字形。
+  `WM_SETFOCUS`（否则没有插入符、拖选不重画）。行高取字体实际度量，宿主窗只留 `行高 + 4` 并整体
+  垂直居中，`TxGetViewInset` 再补上下留白，改字号也会跟着居中；`TxDraw` 前把宿主字体选进 DC，
+  选中 / 未选中使用同一套字形。RichEdit 4.1 会把结尾 `…` 绑到 `Segoe UI Symbol`，初始文本以
+  `…` 结尾时会在前面补一个 1pt 空格规避（这是 RichEdit 的 font binding，彻底解决需自定义绘制）。
 - **区域（region）**：内容里可以声明 `regions = { … }` —— 区域是**鼠标点击 / 拖拽的命中范围**
   （元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true` = 按住它拖会移动整块窗口，
   `false` = 不拖窗口（点击照常）。后写的区域盖住先写的；事件里的 `event.region` 就是命中的区域名

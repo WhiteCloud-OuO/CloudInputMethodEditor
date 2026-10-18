@@ -1080,10 +1080,15 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   **`wParam = NULL`** 发 `WM_SETFOCUS`；只转发 `WM_SETFOCUS` 时 RichEdit 认为没有 UI 激活，
   插入符不出现、拖选也不会立即重画。失焦对应 `OnTxUIDeactivate` + `WM_KILLFOCUS`，隐藏 / 销毁时
   再 `OnTxInPlaceDeactivate`。
-  `TxGetViewInset` 按宿主高度和行高算上下留白（垂直居中）；`paint` 里 `TxDraw` 前把 `HFONT`
-  选进 DC、画完还原，保证选中 / 未选中走同一套字体（否则 `…` 的宽度和点距可能不一致）。
-  `TxGetPropertyBits` 返回 `TXTBIT_RICHTEXT | TXTBIT_SAVESELECTION`。宿主窗高度只留
-  `行高 + 4` 并整体垂直居中；单行 RichEdit 默认贴顶，单靠 `TxGetViewInset` 在部分版本上不够。
+  `TxGetViewInset` 按宿主高度和行高算上下留白；行高用 `GetTextMetrics` 的实际字高 + 外部行距，
+  所以改 `text_edit.size` 后宿主窗高度和留白会跟着变。`paint` 里 `TxDraw` 前把 `HFONT` 选进 DC、
+  画完还原；宿主窗高度只留 `行高 + 4` 并整体垂直居中，单行 RichEdit 默认贴顶，单靠
+  `TxGetViewInset` 在部分版本上不够。`TxGetPropertyBits` 返回 `TXTBIT_RICHTEXT |
+  TXTBIT_SAVESELECTION`。
+  ⚠️ RichEdit 4.1 的 font binding 会把**结尾的 U+2026** 绑到 `Segoe UI Symbol`，导致未选中 /
+  只选中省略号时点距变化；初始 `text` 若以 `…` 结尾，`shrink_ellipsis_space` 会在它前面插一个
+  空格并把该空格设成 1pt，避免省略号成为 run 尾部。用户自己键入到结尾的 `…` 仍可能触发该行为，
+  彻底解决需要自定义文本绘制或 D2D/DirectWrite 字体绑定。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

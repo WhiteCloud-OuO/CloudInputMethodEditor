@@ -14,17 +14,19 @@ use std::sync::OnceLock;
 
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetDC, HBRUSH, HDC, HGDIOBJ,
-    InvalidateRect, PAINTSTRUCT, ReleaseDC, SYS_COLOR_INDEX, SelectObject, SetBkColor,
-    SetTextColor,
+    BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetDC, GetTextMetricsW, HBRUSH,
+    HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT, ReleaseDC, SYS_COLOR_INDEX, SelectObject,
+    SetBkColor, SetTextColor, TEXTMETRICW,
 };
 use windows::Win32::System::Com::DVASPECT_CONTENT;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
+use windows::Win32::UI::Controls::EM_SETSEL;
 use windows::Win32::UI::Controls::RichEdit::{
     CFM_CHARSET, CFM_COLOR, CFM_FACE, CFM_SIZE, CHARFORMATW, EM_SETCHARFORMAT, ITextHost,
-    ITextHost_Impl, ITextServices, PARAFORMAT, SCF_ALL, TXTBACK_TRANSPARENT, TXTBACKSTYLE,
-    TXTBIT_RICHTEXT, TXTBIT_SAVESELECTION, TXTBIT_VIEWINSETCHANGE,
+    ITextHost_Impl, ITextServices, PARAFORMAT, SCF_ALL, SCF_SELECTION, TXTBACK_TRANSPARENT,
+    TXTBACKSTYLE, TXTBIT_RICHTEXT, TXTBIT_SAVESELECTION, TXTBIT_VIEWINSETCHANGE,
 };
+
 use windows::Win32::UI::Input::Ime::{HIMC, ImmGetContext, ImmReleaseContext};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -111,7 +113,8 @@ impl TextHostWindow {
         }?;
         let font = create_font(family, size, dpi);
         let brush = unsafe { CreateSolidBrush(background) };
-        let line_height = ((size * dpi as f32 / 72.0).ceil() as i32).max(1);
+
+        let line_height = font_line_height(font, size, dpi);
         let host: ITextHost = TextHost {
             hwnd,
             line_height,
@@ -180,7 +183,13 @@ impl TextHostWindow {
         });
         HOSTS.with(|map| map.borrow_mut().insert(hwnd.0 as isize, window.clone()));
         unsafe {
-            let text = HSTRING::from(text);
+            let mut result = LRESULT(0);
+            let text_string = if let Some(prefix) = text.strip_suffix('…') {
+                format!("{prefix} …")
+            } else {
+                text.to_string()
+            };
+            let text = HSTRING::from(text_string.as_str());
             if let Err(error) = window.services.TxSetText(&text) {
                 tracing::warn!(id = owner.0 as isize, %error, "text_edit：TxSetText 失败");
             }
@@ -191,13 +200,13 @@ impl TextHostWindow {
                 Some(LPARAM(1)),
             );
             let mut format = char_format(family, size, text_color);
-            let mut result = LRESULT(0);
             let _ = window.services.TxSendMessage(
                 EM_SETCHARFORMAT,
                 WPARAM(SCF_ALL as usize),
                 LPARAM(&mut format as *mut _ as isize),
                 &mut result,
             );
+            shrink_ellipsis_space(&window.services, &text_string, family, text_color);
         }
         Ok(window)
     }
@@ -689,12 +698,63 @@ fn char_format(family: Option<&str>, size: f32, text_color: COLORREF) -> CHARFOR
     format
 }
 
+fn shrink_ellipsis_space(
+    services: &ITextServices,
+    text: &str,
+    family: Option<&str>,
+    color: COLORREF,
+) {
+    let units: Vec<u16> = text.encode_utf16().collect();
+    let Some(index) = units.iter().position(|unit| *unit == 0x2026) else {
+        return;
+    };
+    if index == 0 || units[index - 1] != 0x20 {
+        return;
+    }
+    unsafe {
+        let mut format = char_format(family, 1.0, color);
+        let mut result = LRESULT(0);
+        let _ = services.TxSendMessage(
+            EM_SETSEL,
+            WPARAM(index - 1),
+            LPARAM(index as isize),
+            &mut result,
+        );
+        let _ = services.TxSendMessage(
+            EM_SETCHARFORMAT,
+            WPARAM(SCF_SELECTION as usize),
+            LPARAM(&mut format as *mut _ as isize),
+            &mut result,
+        );
+        let _ = services.TxSendMessage(EM_SETSEL, WPARAM(0), LPARAM(0), &mut result);
+    }
+}
+
+fn font_line_height(font: HGDIOBJ, size: f32, dpi: u32) -> i32 {
+    unsafe {
+        let dc = GetDC(None);
+        if dc.is_invalid() {
+            return ((size * dpi as f32 / 72.0).ceil() as i32).max(1);
+        }
+        let old = SelectObject(dc, font);
+        let mut metrics = TEXTMETRICW::default();
+        let ok = GetTextMetricsW(dc, &mut metrics).as_bool();
+        let _ = SelectObject(dc, old);
+        let _ = ReleaseDC(None, dc);
+        if ok {
+            (metrics.tmHeight + metrics.tmExternalLeading).max(1)
+        } else {
+            ((size * dpi as f32 / 72.0).ceil() as i32).max(1)
+        }
+    }
+}
+
 fn create_font(family: Option<&str>, size: f32, dpi: u32) -> HGDIOBJ {
     use windows::Win32::Graphics::Gdi::{
         CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DEFAULT_CHARSET, DEFAULT_PITCH,
         FF_DONTCARE, FW_NORMAL, OUT_DEFAULT_PRECIS,
     };
-    let height = -((size * dpi as f32 / 96.0).round() as i32).max(1);
+    let height = -((size * dpi as f32 / 72.0).round() as i32).max(1);
     let family = family.map(HSTRING::from).unwrap_or_default();
     unsafe {
         CreateFontW(
