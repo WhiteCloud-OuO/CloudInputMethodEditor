@@ -1,4 +1,4 @@
--- 小牛在线翻译窗口：Ctrl + Alt + Y。
+-- 小牛英汉互译窗口：Ctrl + Alt + Y。
 --
 -- 流程：
 --   1. 先记下剪贴板，模拟 Ctrl+C，再看剪贴板有没有变化；变了就用新复制的内容；
@@ -18,8 +18,8 @@
 -- 可以直接点上面的编辑框后再按，或重新打开窗口。
 
 cloudime.script{
-    name                  = "小牛在线翻译窗口",
-    description           = "Ctrl+Alt+Y：复制当前选中文本，在光标旁打开小牛在线翻译窗口",
+    name                  = "小牛英汉互译窗口",
+    description           = "Ctrl+Alt+Y：复制当前选中文本，在光标旁打开小牛英汉互译窗口",
     api                   = 2,
     trigger_condition     = "combination_key",
     combination_modifiers = "ctrl+alt",
@@ -28,14 +28,13 @@ cloudime.script{
     sync                  = false,
     handover              = "callback",
     on_error              = function(event, message)
-        cloudime.log("小牛在线翻译窗口出错：" .. event .. " - " .. message)
+        cloudime.log("小牛英汉互译窗口出错：" .. event .. " - " .. message)
     end,
 }
 
 -- ===== 配置 =====
 local APP_ID = "user_id"       -- TODO: 小牛翻译控制台 -> API 应用里的 appId
 local API_KEY = "user_key"     -- TODO: 小牛翻译控制台 -> API 应用里的 apikey
-local FROM, TO = "auto", "en"  -- 源语自动识别，翻成英文
 local ENDPOINT = "https://api.niutrans.com/v2/text/translate"
 local TIMEOUT_MS = 6000
 local MAX_SOURCE = 4000        -- 窗口里的编辑框最多放这么多字符
@@ -114,6 +113,14 @@ local function url_encode(text)
     end))
 end
 
+-- 英汉互译：有中文字符（UTF-8 的 0xE4–0xE9 起始字节）→ 中译英，否则英译中。
+local function translate_languages(text)
+    if text:find("[\228-\233]") then
+        return "zh", "en"
+    end
+    return "en", "zh"
+end
+
 local function show_result(text)
     if win then
         win:set_text("result", text)
@@ -137,9 +144,10 @@ local function request_translate(source)
     pending_request = true
     show_result("翻译中…")
 
+    local from, to = translate_languages(source)
     local params = {
-        ["from"] = FROM,
-        to = TO,
+        ["from"] = from,
+        to = to,
         appId = APP_ID,
         timestamp = tostring(os.time() * 1000),
         srcText = source,
@@ -184,11 +192,11 @@ end
 local function make_window(source)
     local path = layout_path()
     if not path then
-        cloudime.log("小牛在线翻译：找不到窗口布局文件 Scripts/lib/niutrans-window.json")
+        cloudime.log("小牛英汉互译：找不到窗口布局文件 Scripts/lib/niutrans-window.json")
         return
     end
     win = cloudime.window.create{
-        name        = "小牛在线翻译",
+        name        = "小牛英汉互译",
         width       = WIDTH,
         height      = HEIGHT,
         layout      = path,

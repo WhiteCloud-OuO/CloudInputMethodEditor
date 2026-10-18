@@ -1,4 +1,4 @@
--- 小牛翻译：Ctrl + Alt + T 翻**高亮候选**，译文写在候选窗底部那一行。
+-- 小牛英汉互译：Ctrl + Alt + T 翻**高亮候选**，中文→英文、英文→中文，译文写在候选窗底部那一行。
 --
 -- 这份是**活跃**的那个脚本（放在 Scripts\ 根部就会被加载）。`Scripts\lib\example-niutrans.lua`
 -- 是随包发出去的同一份参考（放 lib\ 里所以不会被加载）。
@@ -12,8 +12,8 @@
 -- 说明请求这条路是通的，填上真凭据就能出译文。
 
 cloudime.script{
-    name        = "小牛翻译",
-    description = "Ctrl + Alt + T 翻高亮候选，译文写在候选窗底部那一行（初次使用点击编辑，然后填写user_id和user_key）",
+    name        = "小牛英汉互译",
+    description = "Ctrl + Alt + T 翻高亮候选，中英互译，译文写在候选窗底部那一行（初次使用点击编辑，然后填写user_id和user_key）",
     api         = 2,
     trigger_condition = "combination_key",   -- Ctrl + Alt + T 触发（key 事件）
     combination_modifiers = "ctrl+alt",      -- 要哪一套修饰键（11 选一，含 none）
@@ -22,7 +22,7 @@ cloudime.script{
     sync        = false,     -- 只用异步回调
     handover    = "callback",
     on_error    = function(event, message)
-        cloudime.log("小牛翻译脚本出错：" .. event .. " → " .. message)
+        cloudime.log("小牛英汉互译脚本出错：" .. event .. " → " .. message)
     end,
 }
 
@@ -32,7 +32,6 @@ local md5 = dofile("Scripts/lib/md5.lua").hex
 local APP_ID = "user_id"      -- TODO: 换成自己的 appId（小牛翻译云平台 → 控制台 → API应用）
 local API_KEY = "user_key"    -- TODO: 换成自己的 apikey
 local ENDPOINT = "https://api.niutrans.com/v2/text/translate"
-local FROM, TO = "auto", "en"  -- 源语自动识别、翻成英文（见它的「支持语言列表」）
 local TIMEOUT_MS = 6000        -- 等候上限；不能超过清单里的 timeout
 local MAX_LINES = 5            -- 最多显示几行；再长的最后一行补「…」
 local FALLBACK_WIDTH = 460     -- 拿不到候选窗宽度时（还没画过窗口）按这个行宽折
@@ -61,6 +60,14 @@ local function url_encode(text)
     end))
 end
 
+-- 英汉互译：有中文字符（UTF-8 的 0xE4–0xE9 起始字节）→ 中译英，否则英译中。
+local function translate_languages(text)
+    if text:find("[\228-\233]") then
+        return "zh", "en"
+    end
+    return "en", "zh"
+end
+
 local pending = false
 
 cloudime.on("key", function(event)
@@ -78,9 +85,10 @@ cloudime.on("key", function(event)
         return                           -- 这一格没有候选
     end
 
+    local from, to = translate_languages(text)
     local params = {
-        ["from"] = FROM,
-        to = TO,
+        ["from"] = from,
+        to = to,
         appId = APP_ID,
         -- 毫秒（文档的参数表这么写；2026-10-07 真机验证过是对的，别照抄它 Python 示例里的秒）
         timestamp = tostring(os.time() * 1000),
