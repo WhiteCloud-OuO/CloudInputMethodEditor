@@ -1052,13 +1052,21 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   先派 clicked 再派 double。
 - **单行编辑框**（`text_edit`，2026-10-18）：`control::TextEdit` 负责背景胶囊 / 边框（缺省厚度 1、
   颜色取 `theme.colors.badge`）、可选 SVG（按背景高度缩放、`SvgAlign` 左右）和文本区几何
-  （无 SVG：`w-h` 居中；有 SVG：`w-h/2-svg宽度`；高度向内缩 1 点边框）。实际的输入框是 UI 线程上的
-  **系统 `EDIT`** 顶层 window（owner = 脚本窗）：`ScriptWindow::rebuild_text_edits` 在 `set_content`
-  时按元素重建、按 `Painter::text_font` 建 **候选词字体**（`font` 槽位可换，`size` 缺省取主题字号）
-  并 `WM_SETFONT`；`sync_text_edits` 在显示 / 拖动 / DPI 重画时按内容区坐标 + scale 摆位；
-  `focus_text_edit` 在点到胶囊边距时把焦点交给 EDIT。`TextEdit` 仍是可交互元素（返回命中框），
-  自动区域和按钮一样在解析时加进 `Document.regions`。⚠️ 文本值目前只做了初始 `text` + 系统输入，
-  脚本读写 API 还没加。嵌套在 `panel` 里的 `text_edit` 目前不会建 EDIT（仅顶层元素扫描）—— 测试脚本放在顶层。
+  （无 SVG：`w-h` 居中；有 SVG：`w-h/2-svg宽度`；高度向内缩 1 点边框）。实际的编辑控件是
+  **windowless RichEdit**（`script_window/text_host.rs`）：每块 `text_edit` 建一个普通顶层宿主窗
+  （owner = 脚本窗，`WS_EX_TOOLWINDOW | WS_EX_TOPMOST`），从 `Msftedit.dll` 取 `CreateTextServices`，
+  用 `IID_ITextServices` 做 `QueryInterface` 拿 `ITextServices`，再把自己的 `ITextHost` 实现接上去；
+  绘制由宿主窗 `WM_PAINT` 调 `TxDraw`，键盘 / 鼠标 / IME 消息原样转给 `TxSendMessage`。
+  `TxGetExtent` 必须返回 **HIMETRIC**（`像素 * 2540 / dpi`），返回像素会导致 RichEdit 布局成零宽、
+  文字完全看不见；`TxGetCharFormat` 的 `yHeight`（twips）和 `szFaceName` 也要填，否则默认字号为 0。
+  宿主窗的底色 / 文字色取 `Painter::text_edit_colors()`（候选窗主题），字体取 `Painter::text_font`
+  （`font` 槽位可换，`size` 缺省取主题字号）。`sync_text_edits` 在显示 / 拖动 / DPI 重画时按内容区坐标
+  + scale 摆位；`focus_text_edit` 在点到胶囊边距时把焦点交给宿主。
+  `TextEdit` 仍是可交互元素（返回命中框），自动区域和按钮一样在解析时加进 `Document.regions`。
+  ⚠️ 文本值目前只做了初始 `text` + 宿主输入，脚本读写 API 还没加；嵌套在 `panel` 里的 `text_edit`
+  目前不会建宿主（仅顶层元素扫描）——测试脚本放在顶层。windowless RichEdit 只走 IMM32 的
+  `TxImmGetContext`，不实现 TSF 文本存储；Server UI 进程里能用系统输入法，但 CloudIME 自己的 TSF
+  不会注入这个文本框（它只处理外部应用）。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

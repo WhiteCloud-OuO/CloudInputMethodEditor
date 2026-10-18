@@ -344,12 +344,15 @@ win:set_content{
   `ctrl` / `alt` / `shift`；`mouse_clicked` / `mouse_double_clicked` 只在没有修饰键且没拖动时派。
   双击由窗口自己按 `GetDoubleClickTime` + 系统双击距离判：第二次单击先派 `mouse_clicked`、
   再派 `mouse_double_clicked`。
-- **单行编辑框**（`text_edit`）：背景胶囊 / 边框 + 可选 SVG + **系统 EDIT 覆盖窗**。背景、边框
-  （缺省主题角标色、1 点）和 SVG 由渲染器画；文本区由 UI 线程建一个 `EDIT` 顶层窗（owner = 脚本窗），
-  点击后直接输入（IME / 剪贴板交给系统）。文本区几何：无 SVG 时 `w - h` 居中；有 SVG 时宽
+- **单行编辑框**（`text_edit`）：背景胶囊 / 边框 + 可选 SVG + **windowless RichEdit 宿主窗**。背景、边框
+  （缺省主题角标色、1 点）和 SVG 由渲染器画；文本区由 UI 线程建一个普通顶层宿主窗（owner = 脚本窗），
+  里面用 `Msftedit.dll` 的 `CreateTextServices` / `ITextServices` 承载编辑（不是 `EDIT` 控件），
+  键盘、鼠标、IME、剪贴板和选区都交给 RichEdit。文本区几何：无 SVG 时 `w - h` 居中；有 SVG 时宽
   `w - h/2 - svg宽度`、放在图标旁；高度向内缩 1 点边框，避免盖住边框 / 溢出胶囊。SVG 按背景高度缩放。
-  EDIT 字体缺省用候选词字体（`font` 可换槽位），字号缺省取主题里该槽位的字号（`size` 可覆盖）。
-  自动区域与按钮同一套（`drag = false`）。
+  RichEdit 字体缺省用候选词字体（`font` 可换槽位），字号缺省取主题里该槽位的字号（`size` 可覆盖）；
+  宿主窗底色 / 文字色跟随候选窗主题。自动区域与按钮同一套（`drag = false`）。
+  宿主只实现 `ITextHost` 的 IMM32 接口，没有 TSF 文本存储；Server UI 进程里 CloudIME 自己的 TSF
+  不会作用到这个文本框。
 - **区域（region）**：内容里可以声明 `regions = { … }` —— 区域是**鼠标点击 / 拖拽的命中范围**
   （元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true` = 按住它拖会移动整块窗口，
   `false` = 不拖窗口（点击照常）。后写的区域盖住先写的；事件里的 `event.region` 就是命中的区域名

@@ -436,7 +436,7 @@ pub enum Element {
     /// 动态控件：扁平 SVG 按钮（背景形状 / 区域 / SVG 三件套，状态由窗口自动切换）。
     FlatSvgButton(FlatSvgButton),
 
-    /// 动态控件：单行文本编辑框（背景 / SVG 由渲染器画，文本区由系统 EDIT 覆盖）。
+    /// 动态控件：单行文本编辑框（背景 / SVG 由渲染器画，文本区由 Windowless RichEdit 承载）。
     TextEdit(TextEdit),
 }
 

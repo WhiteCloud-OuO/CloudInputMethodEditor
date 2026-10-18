@@ -391,7 +391,7 @@ pub enum SvgAlign {
     Right,
 }
 
-/// **单行文本编辑框**：背景胶囊 / 边框 + 可选 SVG + 系统 EDIT 覆盖的文本区。
+/// **单行文本编辑框**：背景胶囊 / 边框 + 可选 SVG + Windowless RichEdit 承载的文本区。
 #[derive(Clone)]
 pub struct TextEdit {
     pub x: f32,
@@ -410,7 +410,7 @@ pub struct TextEdit {
     pub svg_align: SvgAlign,
     /// SVG 染色；`None` 保留 SVG 自己的颜色。
     pub svg_tint: Option<Color>,
-    /// 初始文本（真正输入由系统 EDIT 负责）。
+    /// 初始文本（真正输入由 Windowless RichEdit 负责）。
     pub text: String,
     /// 字体槽位；缺省候选词字体。
     pub font: FontSlot,
@@ -423,7 +423,7 @@ pub struct TextEdit {
 impl TextEdit {
     /// 文本区（相对按钮左上角）：没有 SVG 时居中；有 SVG 时放在图标旁边。
     pub fn edit_rect(&self) -> (f32, f32, f32, f32) {
-        // 让系统 EDIT 落在边框里面，别盖住 1 点边框 / 溢出胶囊。
+        // 让 RichEdit 落在边框里面，别盖住 1 点边框 / 溢出胶囊。
         let inset = self.border_width.max(0.0);
         let height = (self.height - inset * 2.0).max(1.0);
         if self.svg.is_none() {

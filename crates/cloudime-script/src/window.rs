@@ -991,7 +991,7 @@ fn parse_flat_svg_button(table: &mlua::Table) -> mlua::Result<Element> {
     }))
 }
 
-/// `text_edit`：背景胶囊 + 可选 SVG + 系统 EDIT 覆盖的文本区。
+/// `text_edit`：背景胶囊 + 可选 SVG + Windowless RichEdit 承载的文本区。
 fn parse_text_edit(table: &mlua::Table) -> mlua::Result<Element> {
     let width = positive(table, "w", "width")?;
     let height = positive(table, "h", "height")?;

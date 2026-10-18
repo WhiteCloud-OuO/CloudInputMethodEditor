@@ -7,7 +7,7 @@
 --   * 右上角 20 × 20、圆角 3 的 `flat_svg_button` 画 `Images\SVG\打叉.svg`，点它的自动区域关闭并销毁窗口；
 --   * 窗口内容用静态控件搭：`panel` / `label`（每段颜色不同）/ `text_block`（多行 + 行距）/
 --     `static_shape`（分隔线 + 圆角色块）/ `static_image`（测试机上的 `Images\cloud.png`，可选）；
---   * 两个单行编辑框：一个带 SVG 图标、一个不带（系统 EDIT，点进去可以输入）；
+--   * 两个单行编辑框：一个带 SVG 图标、一个不带（windowless RichEdit，点进去可以输入）；
 --   * 扁平按钮的 normal / hovered / pressed 底色与叉色由控件自动切换（悬停橙红底 + 白叉）。
 --   * 窗口背景 / 圆角由脚本画（`background = false`），颜色取自 `cloudime.get_theme()` 的当前主题；
 --     阴影与候选窗同一套（`shadow` 缺省开启）。

@@ -182,7 +182,12 @@ impl Painter {
         self.generation
     }
 
-    /// 某个字体槽位的字族与字号（点）：系统 EDIT 的字体用。
+    /// `text_edit` 宿主的底色 / 文字色：跟随候选窗主题，免得白底黑字压在深色面板上。
+    pub(super) fn text_edit_colors(&self) -> (Color, Color) {
+        (self.theme.colors.background, self.theme.colors.text)
+    }
+
+    /// 某个字体槽位的字族与字号（点）：`text_edit` 的字体用。
     pub(super) fn text_font(&self, slot: FontSlot) -> (Option<String>, f32) {
         match slot {
             FontSlot::Candidate => (self.theme.text_family.clone(), self.theme.text_font.size),

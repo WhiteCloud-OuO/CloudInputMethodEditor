@@ -19,25 +19,19 @@ use std::time::Instant;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
-use windows::Win32::Graphics::Gdi::{
-    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DEFAULT_CHARSET, DEFAULT_PITCH,
-    DeleteObject, FF_DONTCARE, FW_NORMAL, HFONT, OUT_DEFAULT_PRECIS,
-};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, SetFocus, TME_LEAVE,
-    TRACKMOUSEEVENT, TrackMouseEvent, VK_CONTROL, VK_MENU, VK_SHIFT,
+    GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT,
+    TrackMouseEvent, VK_CONTROL, VK_MENU, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, ES_AUTOHSCROLL, ES_LEFT, GetCursorPos, GetSystemMetrics,
-    HTCLIENT, HTTRANSPARENT, HWND_TOPMOST, IDC_ARROW, LoadCursorW, MA_NOACTIVATE, SM_CXDOUBLECLK,
-    SM_CYDOUBLECLK, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
-    SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow, WM_CAPTURECHANGED,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
-    WM_RBUTTONUP, WM_SETFONT, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    GetCursorPos, GetSystemMetrics, HTCLIENT, HTTRANSPARENT, IDC_ARROW, LoadCursorW, MA_NOACTIVATE,
+    SM_CXDOUBLECLK, SM_CYDOUBLECLK, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+    SetWindowPos, ShowWindow, WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_RBUTTONUP,
 };
-use windows::core::{HSTRING, PCWSTR, Result, w};
+use windows::core::{PCWSTR, Result, w};
 
 use cloudime_platform::LayoutMode;
 use cloudime_render::{ButtonState, Document, Element, HitShape, Region};
@@ -52,6 +46,9 @@ use super::layered;
 use super::monitor;
 use super::painter::SharedPainter;
 use super::window_class::WindowClass;
+use text_host::TextHostWindow;
+
+mod text_host;
 
 /// 脚本独立窗口的窗口类（所有脚本窗口共用）。
 const CLASS_NAME: PCWSTR = w!("CloudIMEScriptWindow");
@@ -249,12 +246,11 @@ type Painted = ((i32, i32), (i32, i32), u64, u64, u64);
 /// 上一次按钮单击：时间、按钮下标、客户区坐标（判双击用）。
 type LastClick = (Instant, usize, (i32, i32));
 
-/// 一个 `text_edit` 覆盖在脚本窗口上的系统 EDIT。
+/// 一个 `text_edit` 覆盖在脚本窗口上的 windowless RichEdit 宿主。
 struct TextEditWindow {
     /// 元素下标（`document.elements`，0 起）。
     element: usize,
-    hwnd: HWND,
-    font: HFONT,
+    host: Rc<TextHostWindow>,
 }
 
 /// 拖动状态：按下时的光标屏幕坐标 + 窗口左上角（物理像素）。
@@ -316,7 +312,7 @@ pub(super) struct ScriptWindow {
     /// 上一次按钮单击：时间、按钮下标、客户区坐标（判双击用）。
     last_click: Cell<Option<LastClick>>,
 
-    /// 各 `text_edit` 的系统 EDIT 覆盖窗。
+    /// 各 `text_edit` 的 windowless RichEdit 宿主窗。
     text_edits: RefCell<Vec<TextEditWindow>>,
 
     /// 拖动中：按下时的光标屏幕坐标 + 窗口左上角。
@@ -412,7 +408,7 @@ impl ScriptWindow {
         }
     }
 
-    /// 按当前内容重建系统 EDIT 覆盖窗（旧的全部销毁）。
+    /// 按当前内容重建 windowless RichEdit 宿主窗（旧的全部销毁）。
     fn rebuild_text_edits(&self) {
         self.destroy_text_edits();
         let mut edits = self.text_edits.borrow_mut();
@@ -421,78 +417,47 @@ impl ScriptWindow {
             let Element::TextEdit(edit) = element else {
                 continue;
             };
-            let style = windows::Win32::UI::WindowsAndMessaging::WINDOW_STYLE(
-                WS_POPUP.0 | ES_AUTOHSCROLL as u32 | ES_LEFT as u32,
-            );
-            let hwnd = unsafe {
-                CreateWindowExW(
-                    WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
-                    w!("EDIT"),
-                    w!(""),
-                    style,
-                    0,
-                    0,
-                    0,
-                    0,
-                    Some(self.hwnd()),
+            let (family, theme_size, background, text_color) = match self.painter.borrow().as_ref()
+            {
+                Some(painter) => {
+                    let (family, size) = painter.text_font(edit.font);
+                    let (background, text) = painter.text_edit_colors();
+                    (family, size, background, text)
+                }
+                None => (
                     None,
-                    None,
-                    None,
-                )
+                    14.0,
+                    cloudime_render::Color::rgba(255, 255, 255, 255),
+                    cloudime_render::Color::rgba(34, 34, 34, 255),
+                ),
             };
-            let Ok(hwnd) = hwnd else {
-                tracing::warn!(id = self.id, index, "text_edit：建系统 EDIT 失败");
-                continue;
-            };
-            let text = HSTRING::from(edit.text.as_str());
-            let _ = unsafe { SetWindowTextW(hwnd, &text) };
-            let (family, theme_size) = self
-                .painter
-                .borrow()
-                .as_ref()
-                .map(|painter| painter.text_font(edit.font))
-                .unwrap_or((None, 14.0));
             let size = edit.size.unwrap_or(theme_size);
-            let height = -((size * self.dpi.get() as f32 / 96.0).round() as i32).max(1);
-            let family = family
-                .map(|family| HSTRING::from(family.as_str()))
-                .unwrap_or_default();
-            let font = unsafe {
-                CreateFontW(
-                    height,
-                    0,
-                    0,
-                    0,
-                    FW_NORMAL.0 as i32,
-                    0,
-                    0,
-                    0,
-                    DEFAULT_CHARSET,
-                    OUT_DEFAULT_PRECIS,
-                    CLIP_DEFAULT_PRECIS,
-                    CLEARTYPE_QUALITY,
-                    (DEFAULT_PITCH.0 as u32) | (FF_DONTCARE.0 as u32),
-                    &family,
-                )
-            };
-            let _ = unsafe {
-                SendMessageW(
-                    hwnd,
-                    WM_SETFONT,
-                    Some(WPARAM(font.0 as usize)),
-                    Some(LPARAM(1)),
-                )
-            };
-            let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
-            edits.push(TextEditWindow {
-                element: index,
-                hwnd,
-                font,
-            });
+            let background = edit
+                .fill
+                .filter(|color| color.a == 255)
+                .unwrap_or(background);
+            let host = TextHostWindow::create(
+                self.hwnd(),
+                &edit.text,
+                family.as_deref(),
+                size,
+                colorref(background),
+                colorref(text_color),
+                self.dpi.get(),
+            );
+            match host {
+                Ok(host) => edits.push(TextEditWindow {
+                    element: index,
+                    host,
+                }),
+                Err(error) => {
+                    tracing::warn!(id = self.id, index, %error, "text_edit：建 windowless RichEdit 失败");
+                }
+            }
         }
     }
 
-    /// 把系统 EDIT 摆到背景形状的文本区；隐藏时一起隐藏。
+    /// 把 RichEdit 宿主摆到背景形状的文本区；隐藏时一起隐藏。
     fn sync_text_edits(&self) {
         let Some(position) = self.position.get() else {
             return;
@@ -509,29 +474,16 @@ impl ScriptWindow {
             let y = position.1 + ((control.y + y) * scale).round() as i32;
             let width = (width * scale).round().max(1.0) as i32;
             let height = (height * scale).round().max(1.0) as i32;
-            let _ = unsafe {
-                SetWindowPos(
-                    edit.hwnd,
-                    Some(HWND_TOPMOST),
-                    x,
-                    y,
-                    width,
-                    height,
-                    SWP_NOACTIVATE,
-                )
-            };
-            let _ = unsafe { ShowWindow(edit.hwnd, if shown { SW_SHOWNA } else { SW_HIDE }) };
+            edit.host.set_bounds(x, y, width, height);
+            edit.host.show(shown);
         }
     }
 
     fn destroy_text_edits(&self) {
-        for edit in self.text_edits.borrow_mut().drain(..) {
-            let _ = unsafe { DestroyWindow(edit.hwnd) };
-            let _ = unsafe { DeleteObject(edit.font.into()) };
-        }
+        self.text_edits.borrow_mut().clear();
     }
 
-    /// 点到文本编辑框的区域（背景胶囊的边距）时，把焦点交给系统 EDIT。
+    /// 点到文本编辑框的区域（背景胶囊的边距）时，把焦点交给 RichEdit 宿主。
     fn focus_text_edit(&self, element: Option<usize>) {
         let Some(index) = element.and_then(|element| element.checked_sub(1)) else {
             return;
@@ -540,8 +492,7 @@ impl ScriptWindow {
         let Some(edit) = edits.iter().find(|edit| edit.element == index) else {
             return;
         };
-        let _ = unsafe { SetForegroundWindow(edit.hwnd) };
-        let _ = unsafe { SetFocus(Some(edit.hwnd)) };
+        edit.host.focus();
     }
 
     /// 命中下标若是扁平按钮，返回它。
@@ -828,7 +779,7 @@ impl ScriptWindow {
         self.hover.set(None);
         self.reset_button_states();
         for edit in self.text_edits.borrow().iter() {
-            let _ = unsafe { ShowWindow(edit.hwnd, SW_HIDE) };
+            edit.host.show(false);
         }
         if self.shown.replace(false) {
             let _ = unsafe { ShowWindow(self.hwnd(), SW_HIDE) };
@@ -1295,6 +1246,13 @@ fn points_to_pixels(x: f32, y: f32, dpi: u32) -> (i32, i32) {
 /// 一个长度：点 → 物理像素。
 fn points(value: f32, dpi: u32) -> i32 {
     (value * dpi.max(1) as f32 / 96.0).round() as i32
+}
+
+/// 渲染器的 `Color` → Win32 `COLORREF`（0x00BBGGRR）。
+fn colorref(color: cloudime_render::Color) -> windows::Win32::Foundation::COLORREF {
+    windows::Win32::Foundation::COLORREF(
+        color.r as u32 | ((color.g as u32) << 8) | ((color.b as u32) << 16),
+    )
 }
 
 /// 系统 DPI（拿不到就按 100%）。
