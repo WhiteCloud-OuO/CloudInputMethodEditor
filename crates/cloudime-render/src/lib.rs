@@ -32,7 +32,10 @@ mod theme;
 
 #[cfg(target_os = "windows")]
 pub use color::Color;
-pub use control::{Label, LabelRun, Panel, StaticImage, StaticShape, TextBlock};
+pub use control::{
+    ButtonColors, ButtonShape, ButtonState, FlatSvgButton, Label, LabelRun, Panel, StaticImage,
+    StaticShape, TextBlock,
+};
 /// 脚本窗口 / 面板的内容：**声明式**元素表（display list），由 [`Renderer::render_document`] 一次出图。
 pub use document::{Document, Element, FontSlot, HitRect, HitShape, PathCommand, Region};
 /// **能画的元素**的 traits：`text` / `svg` / `img` / `line` / `rect`（含圆角与圆）/ `path`；
@@ -62,6 +65,7 @@ pub use renderer::{
     draw_key_map, key_map_cell, key_map_pixel_size, key_map_size,
 };
 pub use shadow::Shadow;
+pub use svg::svg_size;
 pub use text::{TextPainter, TextSize, TextStyle};
 pub use theme::{FontSpec, Palette, Theme};
 

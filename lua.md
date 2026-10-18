@@ -483,6 +483,7 @@ aux:show()
 | `static_shape` | `shape` = `line` / `rect` / `round_rect` / `circle` / `path`；字段与该形状同名（`from`/`to`/`x`/`y`/`w`/`h`/`radius`/`cx`/`cy`/`commands`）+ `color` |
 | `static_image` | `x` / `y` / `w` / `h`（可省，缺省图片像素尺寸）+ `image`（`cloudime.image.load` 的句柄）或 `path`（PNG / BMP / JPG） |
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（**边缘**颜色，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1 点）/ `fill`（可选填充，不写 = 无填充）/ `children = { …元素… }`；子控件用面板内相对坐标 |
+| `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省取 SVG 画板）；`svg`（整段 SVG）或 `svg_path`（文件）；`shape = rect / round_rect / circle / path` + `radius`；`name`（自动区域名）；`normal` / `hovered` / `pressed = { background = …, svg = … }` |
 
 颜色写 `"#RRGGBB"` / `"#AARRGGBB"` / `"#RGB"`，或 `{ r = …, g = …, b = …, a = … }`（0–255）。
 
@@ -521,6 +522,27 @@ icon:to_gray()                  -- BT.601 灰度（0–255），alpha 不变
 icon:use_path_mask({ { "M", 0, 0 }, { "L", 16, 0 }, { "L", 16, 16 }, { "L", 0, 16 }, { "Z" } })
 -- use_path_mask 也接受 { commands = { … } }；只保留路径内部（非零环绕）
 ```
+
+### 扁平 SVG 按钮（动态控件）
+
+`flat_svg_button` 把「区域 + 背景形状 + SVG」打包成一个按钮，鼠标状态由窗口自动维护：
+
+```lua
+{ type = "flat_svg_button", name = "close", x = 152, y = 8,
+  svg_path = cloudime.install_path("Images/SVG/打叉.svg"),
+  shape = "round_rect", radius = 3,
+  normal  = { background = "#00000000", svg = "#FF000000" },
+  hovered = { background = "#FFFF3300", svg = "#FFFFFFFF" },
+  pressed = { background = "#FFCC2900", svg = "#FFFFFFFF" } }
+```
+
+- **区域就是背景形状**：自动注册一个 `name`（缺省 `flat_svg_button_N`）、`drag = false` 的区域；
+  点击事件里 `event.region` 是这个名字，`event.element` 是按钮下标。
+- `w` / `h` 不写时，背景尺寸取 **SVG 画板尺寸**（`viewBox` / 宽高）；只写一个就按画板比例补另一个。
+  `shape` 缺省 `rect`，`round_rect` 的 `radius` 缺省 3；`circle` 缺省内切圆。
+- 背景先画、SVG 后画（居中，取短边）；颜色只在三个状态里取，窗口在 hover / 按下 / 松开时自动切换并重画。
+- **SVG 可以随时换**：重新 `set_content` 时给新的 `svg` / `svg_path` 即可（例如 hover 时把叉换成勾）。
+  按钮状态会从 normal 重新开始，下一次鼠标移动再按位置切换。
 
 **区域（region）**：一块可以被鼠标**点击 / 拖拽**的范围 —— 元素只管画，交互看区域：
 

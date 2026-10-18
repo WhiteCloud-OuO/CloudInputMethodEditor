@@ -4,10 +4,10 @@
 -- 在任意文本编辑器里按 **Ctrl + Alt + F3**：
 --   * 光标上方 30 点摆一块 180 × 140 的独立窗口；
 --   * 上方放不下（会超出显示器工作区）就改到光标下方 30 点；
---   * 右上角 20 × 20、圆角 3 的区域里画 `Images\SVG\打叉.svg`，点它关闭并销毁窗口；
+--   * 右上角 20 × 20、圆角 3 的 `flat_svg_button` 画 `Images\SVG\打叉.svg`，点它的自动区域关闭并销毁窗口；
 --   * 窗口内容用静态控件搭：`panel` / `label`（每段颜色不同）/ `text_block`（多行 + 行距）/
 --     `static_shape`（分隔线 + 圆角色块）/ `static_image`（测试机上的 `Images\cloud.png`，可选）；
---   * 鼠标不在这个区域里：叉是黑色、没有底色；移进去：底色变成 `#FFFF3300`、叉变成白色（模拟关闭按钮）；
+--   * 扁平按钮的 normal / hovered / pressed 底色与叉色由控件自动切换（悬停橙红底 + 白叉）。
 --   * 窗口背景 / 圆角由脚本画（`background = false`），颜色取自 `cloudime.get_theme()` 的当前主题；
 --     阴影与候选窗同一套（`shadow` 缺省开启）。
 -- F3 只负责创建：窗口已经开着时再按不会关它。
@@ -41,7 +41,6 @@ local BUTTON_Y = MARGIN
 
 local win = nil
 local waiting = false
-local hovering = false
 local close_svg = nil
 local cloud_image = nil
 
@@ -100,31 +99,18 @@ local function draw()
     local content = {
         width = WIDTH,
         height = HEIGHT,
-        regions = {
-            -- 铺满整个内容区：鼠标从关闭区域挪到窗口别处时也能收到 hover（好把按钮底色收起来）。
-            -- 后写的 close 盖住它。
-            { name = "body", x = 0, y = 0, w = WIDTH, h = HEIGHT },
-            -- 右上角的关闭区域：圆角矩形，按住它不拖窗口（点一下才是关闭）
-            { name = "close", x = BUTTON_X, y = BUTTON_Y,
-              w = BUTTON, h = BUTTON, radius = 3, drag = false },
-        },
         -- 窗口背景由脚本画（`create` 用了 background = false）；颜色跟随当前主题。
         { type = "rect", x = 0, y = 0, w = WIDTH, h = HEIGHT, radius = PANEL_RADIUS,
           color = color.background },
         -- 面板：把下面这些静态控件分组；缺省无填充，只画 #FFE0E0E0 的 1 点边框。
         { type = "panel", x = MARGIN, y = MARGIN, w = WIDTH - MARGIN * 2, h = HEIGHT - MARGIN * 2,
           children = children },
-    }
-    -- 鼠标在关闭区域里才画按钮底色；先画它、再画叉（叉在上面）。
-    if hovering then
-        content[#content + 1] = {
-            type = "rect", x = BUTTON_X, y = BUTTON_Y, w = BUTTON, h = BUTTON,
-            radius = 3, color = "#FFFF3300",
-        }
-    end
-    content[#content + 1] = {
-        type = "svg", x = BUTTON_X, y = BUTTON_Y, size = BUTTON, path = svg_path(),
-        tint = hovering and "#FFFFFFFF" or "#FF000000",
+        -- 扁平 SVG 按钮：区域 = 背景形状（20 × 20 取自 SVG 画板），三态颜色自动切换。
+        { type = "flat_svg_button", name = "close", x = BUTTON_X, y = BUTTON_Y,
+          svg_path = svg_path(), shape = "round_rect", radius = 3,
+          normal  = { background = "#00000000", svg = "#FF000000" },
+          hovered = { background = "#FFFF3300", svg = "#FFFFFFFF" },
+          pressed = { background = "#FFCC2900", svg = "#FFFFFFFF" } },
     }
     win:set_content(content)
 end
@@ -167,7 +153,6 @@ cloudime.on("caret", function(pos)
         cloudime.log("光标窗口测试：找不到 Images/SVG/打叉.svg")
         return
     end
-    hovering = false
     win = cloudime.window.create{
         name        = "光标窗口测试",
         width       = WIDTH,
@@ -184,21 +169,8 @@ cloudime.on("window", function(event)
     if not win or event.id ~= win.id then
         return
     end
-    if event.action == "hover" then
-        -- body 区域铺满窗口，鼠标离开 close 时这里也会收到一次 hover
-        local inside = event.region == "close"
-        if inside ~= hovering then
-            hovering = inside
-            draw()
-        end
-    elseif event.action == "leave" then
-        if hovering then
-            hovering = false
-            draw()
-        end
-    elseif event.action == "click" and event.region == "close" then
+    if event.action == "click" and event.region == "close" then
         win:close()
         win = nil
-        hovering = false
     end
 end)

@@ -14,7 +14,7 @@ use i_overlay::float::single::SingleFloatOverlay;
 use tiny_skia::{PathBuilder, Pixmap};
 
 use crate::color::Color;
-use crate::control::{Label, Panel, StaticImage, StaticShape, TextBlock};
+use crate::control::{FlatSvgButton, Label, Panel, StaticImage, StaticShape, TextBlock};
 
 /// 一份内容：内容区尺寸（点）+ 元素表（按顺序画，后面的盖前面的）。
 #[derive(Clone)]
@@ -432,6 +432,9 @@ pub enum Element {
 
     /// 静态控件：面板容器（背景 + 相对坐标的子控件）。
     Panel(Panel),
+
+    /// 动态控件：扁平 SVG 按钮（背景形状 / 区域 / SVG 三件套，状态由窗口自动切换）。
+    FlatSvgButton(FlatSvgButton),
 }
 
 /// 元素在内容区里的命中区域（**点**）。
@@ -872,6 +875,10 @@ impl std::fmt::Debug for Element {
             Self::Panel(panel) => f
                 .debug_struct("Panel")
                 .field("children", &panel.children.len())
+                .finish(),
+            Self::FlatSvgButton(button) => f
+                .debug_struct("FlatSvgButton")
+                .field("state", &button.state)
                 .finish(),
         }
     }

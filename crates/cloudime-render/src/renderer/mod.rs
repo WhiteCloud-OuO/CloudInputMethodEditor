@@ -976,6 +976,10 @@ fn draw_element(
             }
             None
         }
+        Element::FlatSvgButton(button) => {
+            button.draw(render, scale, origin, margin);
+            Some(button.hit_shape(origin))
+        }
     }
 }
 
@@ -1431,5 +1435,91 @@ mod tests {
         // 静态图像按目标矩形缩放画上去了。
         let image = rendered.rendered.pixmap.pixel(15, 70).unwrap();
         assert_eq!((image.red(), image.green(), image.blue()), (255, 0, 0));
+    }
+
+    /// 扁平 SVG 按钮：背景形状 / 区域一致，状态颜色自动切换，命中框是可交互的。
+    #[test]
+    fn flat_svg_buttons_switch_colors_by_state() {
+        use crate::color::Color;
+        use crate::control::{ButtonColors, ButtonShape, ButtonState, FlatSvgButton};
+        use crate::document::{Document, Element, HitShape};
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12"/></svg>"#;
+        let button = |state| FlatSvgButton {
+            x: 10.0,
+            y: 10.0,
+            width: 20.0,
+            height: 20.0,
+            shape: ButtonShape::RoundRect { radius: 3.0 },
+            svg: svg.to_owned(),
+            svg_size: (20.0, 20.0),
+            normal: ButtonColors {
+                background: Color::rgb(0, 255, 0),
+                svg: Color::rgb(0, 0, 0),
+            },
+            hovered: ButtonColors {
+                background: Color::rgb(255, 0, 0),
+                svg: Color::rgb(255, 255, 255),
+            },
+            pressed: ButtonColors {
+                background: Color::rgb(0, 0, 255),
+                svg: Color::rgb(255, 255, 0),
+            },
+            state,
+            region_name: "button".to_owned(),
+        };
+        let render = |state| {
+            let document = Document {
+                width: 40.0,
+                height: 40.0,
+                regions: Vec::new(),
+                elements: vec![Element::FlatSvgButton(button(state))],
+            };
+            renderer
+                .render_document(&document, &Theme::new(), 1.0, None, false)
+                .expect("画得出来")
+        };
+
+        let normal = render(ButtonState::Normal);
+        assert_eq!(
+            normal.hits[0],
+            Some(HitShape::RoundRect {
+                x: 10.0,
+                y: 10.0,
+                width: 20.0,
+                height: 20.0,
+                radius: 3.0,
+            }),
+            "区域就是背景形状"
+        );
+        let center = normal.rendered.pixmap.pixel(20, 20).unwrap();
+        assert_eq!(
+            (center.red(), center.green(), center.blue()),
+            (0, 0, 0),
+            "normal 的 SVG 是黑色"
+        );
+        let edge = normal.rendered.pixmap.pixel(11, 20).unwrap();
+        assert_eq!(
+            (edge.red(), edge.green(), edge.blue()),
+            (0, 255, 0),
+            "normal 的背景是绿色"
+        );
+
+        let hovered = render(ButtonState::Hovered);
+        let center = hovered.rendered.pixmap.pixel(20, 20).unwrap();
+        assert_eq!(
+            (center.red(), center.green(), center.blue()),
+            (255, 255, 255),
+            "hovered 的 SVG 是白色"
+        );
+        let edge = hovered.rendered.pixmap.pixel(11, 20).unwrap();
+        assert_eq!(
+            (edge.red(), edge.green(), edge.blue()),
+            (255, 0, 0),
+            "hovered 的背景是红色"
+        );
     }
 }

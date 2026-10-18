@@ -34,6 +34,13 @@ fn tint(icon: &mut Pixmap, color: Color) {
     }
 }
 
+/// SVG 的**画板尺寸**（`viewBox` / 宽高，点）；解析失败给 `None`。
+pub fn svg_size(source: &str) -> Option<(f32, f32)> {
+    let tree = usvg::Tree::from_str(source, &usvg::Options::default()).ok()?;
+    let size = tree.size();
+    Some((size.width(), size.height()))
+}
+
 /// 解析 + 栅格化成 `side × side` 的位图，两边装不下就留白（`usvg::Size` 保证宽高为正，零尺寸在解析时就被拒）。
 pub(crate) fn rasterize(svg: &str, side: u32) -> Result<Pixmap, RenderError> {
     let tree = usvg::Tree::from_str(svg, &usvg::Options::default()).map_err(|error| {

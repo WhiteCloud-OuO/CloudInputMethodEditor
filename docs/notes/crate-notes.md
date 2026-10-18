@@ -1036,6 +1036,14 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `image::scale_image` 双线性重采样、`rotate_image` 只收 90/180/270、`flip_image`、`gray_image`
   按 BT.601、`mask_image` 用 `tiny_skia::Mask` + `Pixmap::apply_mask`（路径坐标按图片像素）。
   `static_image` 的 `w` / `h` 可省，缺省取位图尺寸。
+- **扁平 SVG 按钮**（`flat_svg_button`，2026-10-18）：动态控件的第一件。`FlatSvgButton` 持
+  `ButtonShape`（rect / round_rect / circle / path，路径用按钮内坐标）、SVG 文本 / 画板尺寸、
+  三组 `ButtonColors` 和 `ButtonState`。`Element::FlatSvgButton` 的 `draw_element` 返回
+  `hit_shape`（与背景完全一致），所以它是可交互元素；解析内容时自动把它加进 `Document.regions`
+  （名字取 `name`，缺省 `flat_svg_button_N`，`drag = false`）。窗口侧 `ScriptWindow` 用
+  `hover_button` / `pressed_button` 两个下标在 `WM_MOUSEMOVE` / `WM_LBUTTONDOWN` / `WM_LBUTTONUP`
+  时切状态并 `repaint`（`render_and_present`），脚本不用自己跟踪 hover / press；点击仍走原来的
+  `window` 事件。SVG 换图靠重新 `set_content`。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

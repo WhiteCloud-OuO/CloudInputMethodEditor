@@ -14,9 +14,10 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use cloudime_render::{
-    Color, Document, Element, FontSlot, HitRect, HitShape, Label, LabelRun, Panel, PathCommand,
-    Pixmap, Region, StaticImage, StaticShape, TextBlock, flip_image, gray_image, load_image,
-    mask_image, rotate_image, scale_image,
+    ButtonColors, ButtonShape, ButtonState, Color, Document, Element, FlatSvgButton, FontSlot,
+    HitRect, HitShape, Label, LabelRun, Panel, PathCommand, Pixmap, Region, StaticImage,
+    StaticShape, TextBlock, flip_image, gray_image, load_image, mask_image, rotate_image,
+    scale_image, svg_size,
 };
 
 use crate::mlua;
@@ -591,6 +592,8 @@ fn parse_document(
     let width = check_size(width, "width")?;
     let height = check_size(height, "height")?;
     let mut elements = Vec::new();
+    let mut regions = parse_regions(content)?;
+    let mut button_regions = Vec::new();
     for entry in content.sequence_values::<mlua::Value>() {
         let entry = entry
             .map_err(|error| mlua::Error::RuntimeError(format!("内容里的元素读不动：{error}")))?;
@@ -605,13 +608,35 @@ fn parse_document(
                 "一份内容最多 {MAX_ELEMENTS} 个元素"
             )));
         }
-        elements.push(parse_element(&table, images, 0)?);
+        let mut element = parse_element(&table, images, 0)?;
+        if let Element::FlatSvgButton(button) = &mut element {
+            if button.region_name.trim().is_empty() {
+                button.region_name = format!("flat_svg_button_{}", elements.len() + 1);
+            }
+            if regions
+                .iter()
+                .chain(button_regions.iter())
+                .any(|region: &Region| region.name == button.region_name)
+            {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "扁平按钮的区域名重复：{}",
+                    button.region_name
+                )));
+            }
+            button_regions.push(Region::new(
+                button.region_name.clone(),
+                button.hit_shape((0.0, 0.0)),
+                false,
+            ));
+        }
+        elements.push(element);
     }
+    regions.extend(button_regions);
     Ok(Document {
         width,
         height,
         elements,
-        regions: parse_regions(content)?,
+        regions,
     })
 }
 
@@ -856,11 +881,109 @@ fn parse_element(
         "static_shape" => parse_static_shape(table),
         "static_image" => parse_static_image(table, images),
         "panel" => parse_panel(table, images, depth),
+        "flat_svg_button" => parse_flat_svg_button(table),
         other => Err(mlua::Error::RuntimeError(format!(
             "元素 type 不认识：{other}（可用：rect / circle / line / text / svg / img / path / \
-             label / text_block / static_shape / static_image / panel）"
+             label / text_block / static_shape / static_image / panel / flat_svg_button）"
         ))),
     }
+}
+
+/// `flat_svg_button`：背景形状 + 自动区域 + SVG，三种鼠标状态各有一套颜色。
+fn parse_flat_svg_button(table: &mlua::Table) -> mlua::Result<Element> {
+    let svg = match table.get::<Option<String>>("svg")? {
+        Some(source) => source,
+        None => {
+            let path: String = table.get("svg_path").map_err(|_| {
+                mlua::Error::RuntimeError(
+                    "flat_svg_button 缺 svg（整段 SVG）或 svg_path（SVG 文件）".to_owned(),
+                )
+            })?;
+            read_svg(&path)?
+        }
+    };
+    let art = svg_size(&svg).ok_or_else(|| {
+        mlua::Error::RuntimeError("flat_svg_button 的 SVG 解析失败（拿不到画板尺寸）".to_owned())
+    })?;
+    if !(art.0.is_finite() && art.1.is_finite() && art.0 > 0.0 && art.1 > 0.0) {
+        return Err(mlua::Error::RuntimeError(
+            "flat_svg_button 的 SVG 画板尺寸不对".to_owned(),
+        ));
+    }
+    let explicit_width = optional_positive(table, "w")?;
+    let explicit_height = optional_positive(table, "h")?;
+    let (width, height) = match (explicit_width, explicit_height) {
+        (Some(width), Some(height)) => (width, height),
+        (Some(width), None) => (width, width * art.1 / art.0),
+        (None, Some(height)) => (height * art.0 / art.1, height),
+        (None, None) => art,
+    };
+    let shape = match table
+        .get::<Option<String>>("shape")?
+        .as_deref()
+        .unwrap_or("rect")
+    {
+        "rect" => ButtonShape::Rect,
+        "round_rect" => ButtonShape::RoundRect {
+            radius: number(table, "radius", 3.0)?.max(0.0),
+        },
+        "circle" => ButtonShape::Circle {
+            radius: number(table, "radius", width.min(height) * 0.5)?.max(0.0),
+        },
+        "path" => ButtonShape::Path {
+            commands: parse_path(table)?,
+        },
+        other => {
+            return Err(mlua::Error::RuntimeError(format!(
+                "flat_svg_button 的 shape 不认识：{other}（可用：rect / round_rect / circle / path）"
+            )));
+        }
+    };
+    Ok(Element::FlatSvgButton(FlatSvgButton {
+        x: number(table, "x", 0.0)?,
+        y: number(table, "y", 0.0)?,
+        width,
+        height,
+        shape,
+        svg,
+        svg_size: art,
+        normal: button_colors(
+            table,
+            "normal",
+            Color::rgba(0, 0, 0, 0),
+            Color::rgb(0, 0, 0),
+        )?,
+        hovered: button_colors(
+            table,
+            "hovered",
+            Color::rgba(0, 0, 0, 0x1F),
+            Color::rgb(0, 0, 0),
+        )?,
+        pressed: button_colors(
+            table,
+            "pressed",
+            Color::rgba(0, 0, 0, 0x33),
+            Color::rgb(0, 0, 0),
+        )?,
+        state: ButtonState::Normal,
+        region_name: table.get::<Option<String>>("name")?.unwrap_or_default(),
+    }))
+}
+
+/// 按钮某一状态的颜色：`{ background = …, svg = … }`。
+fn button_colors(
+    table: &mlua::Table,
+    key: &str,
+    background: Color,
+    svg: Color,
+) -> mlua::Result<ButtonColors> {
+    let Some(state) = table.get::<Option<mlua::Table>>(key)? else {
+        return Ok(ButtonColors { background, svg });
+    };
+    Ok(ButtonColors {
+        background: color(&state, "background", false)?.unwrap_or(background),
+        svg: color(&state, "svg", false)?.unwrap_or(svg),
+    })
 }
 
 /// `label`：一行文字，`runs` 里每段自带颜色。
@@ -1656,6 +1779,66 @@ mod tests {
             }
             other => panic!("不是 panel：{other:?}"),
         }
+    }
+
+    /// `flat_svg_button`：背景尺寸默认取 SVG 画板，区域自动生成，三种状态颜色都读出来。
+    #[test]
+    fn flat_svg_buttons_parse_artboard_size_colors_and_region() {
+        let lua = mlua::Lua::new();
+        let content = lua
+            .load(
+                r##"
+                return {
+                    width = 100, height = 100,
+                    {
+                        type = "flat_svg_button", x = 10, y = 10,
+                        svg = [[<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20">
+                                  <rect x="4" y="4" width="12" height="12"/></svg>]],
+                        shape = "round_rect", radius = 3,
+                        normal  = { background = "#00000000", svg = "#FF000000" },
+                        hovered = { background = "#FFFF3300", svg = "#FFFFFFFF" },
+                        pressed = { background = "#FFCC2900", svg = "#FFFFFFFF" },
+                    },
+                }
+            "##,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let document = parse_document(
+            &content,
+            (Some(100.0), Some(100.0)),
+            &mut ImageCache::default(),
+        )
+        .expect("读得出来");
+        let Element::FlatSvgButton(button) = &document.elements[0] else {
+            panic!("不是 flat_svg_button：{:?}", document.elements[0]);
+        };
+        assert_eq!(
+            (button.width, button.height),
+            (20.0, 20.0),
+            "用 SVG 画板尺寸"
+        );
+        assert_eq!(button.region_name, "flat_svg_button_1");
+        assert_eq!(button.state, ButtonState::Normal);
+        assert!(
+            matches!(button.shape, ButtonShape::RoundRect { radius } if (radius - 3.0).abs() < 0.01)
+        );
+        assert_eq!(button.normal.background, Color::rgba(0, 0, 0, 0));
+        assert_eq!(button.hovered.background, Color::rgba(255, 51, 0, 255));
+        assert_eq!(button.hovered.svg, Color::rgb(255, 255, 255));
+        assert_eq!(button.pressed.background, Color::rgba(0xCC, 0x29, 0, 255));
+
+        assert_eq!(document.regions.len(), 1, "按钮自动带来一个区域");
+        let region = &document.regions[0];
+        assert_eq!(region.name, "flat_svg_button_1");
+        assert!(!region.draggable);
+        assert!(matches!(
+            region.shape,
+            HitShape::RoundRect { x, y, width, height, radius }
+                if (x - 10.0).abs() < 0.01 && (y - 10.0).abs() < 0.01
+                    && (width - 20.0).abs() < 0.01 && (height - 20.0).abs() < 0.01
+                    && (radius - 3.0).abs() < 0.01
+        ));
     }
 
     /// `cloudime.image.load` 的句柄可以直接放进 `static_image`（生命周期由 Arc 持有）；

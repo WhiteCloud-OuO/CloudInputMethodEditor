@@ -316,6 +316,7 @@ win:set_content{
 | `static_shape` | `shape = line / rect / round_rect / circle / path` + 对应字段 + `color` |
 | `static_image` | `x` / `y` / `w` / `h`（可省）+ `image`（`cloudime.image.load` 句柄）或 `path`（PNG / BMP / JPG） |
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（边缘，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1）/ `fill`（可选）/ `children`（相对坐标） |
+| `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省 SVG 画板）；`svg` / `svg_path`；`shape` + `radius`；`name`；`normal` / `hovered` / `pressed = { background, svg }` |
 
 - 坐标与尺寸一律是**点**（100% 缩放下 1 点 = 1 像素），随 DPI 一起放大；超出内容区的部分被裁掉。
 - **静态控件**（`label` / `text_block` / `static_shape` / `static_image` / `panel`）只用 traits 画、
@@ -331,6 +332,12 @@ win:set_content{
   就会用新图。相对路径按 Server 的工作目录（安装目录）算。
 - **混合 DPI**（2026-10-17）：`show{ x, y }` 的点坐标先按当前显示器 DPI 猜一个落点、问出那块显示器真正的 DPI
   再换算；窗口拖到另一块 DPI 不同的屏上会按新 DPI 重画（内容尺寸跟着变），名下的辅助窗口一起重新摆。
+- **扁平 SVG 按钮**（`flat_svg_button`，动态控件）：背景形状 + 自动区域 + SVG 三件套。区域形状
+  完全等于背景形状；`w` / `h` 不写时按 SVG 画板尺寸。`normal` / `hovered` / `pressed` 各给
+  `{ background, svg }` 两种颜色，窗口在鼠标移动 / 按下 / 松开时自动改 `ButtonState` 并重画。
+  SVG 不做固定：脚本重新 `set_content` 换 `svg` / `svg_path` 即可（按钮状态重新从 normal 开始）。
+  背景在 `cloudime-render::control::FlatSvgButton` 里按 `ButtonShape` 画，命中框由 `hit_shape` 给出；
+  自动区域在解析内容时加到 `Document.regions`（`drag = false`）。
 - **区域（region）**：内容里可以声明 `regions = { … }` —— 区域是**鼠标点击 / 拖拽的命中范围**
   （元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true` = 按住它拖会移动整块窗口，
   `false` = 不拖窗口（点击照常）。后写的区域盖住先写的；事件里的 `event.region` 就是命中的区域名

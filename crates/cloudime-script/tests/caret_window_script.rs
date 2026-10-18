@@ -1,11 +1,9 @@
 //! 随包的测试脚本（`Scripts/lib/test-caret-window.lua`）的行为：
-//! 按键请求光标 → `caret` 事件建窗口 / 读 SVG → 悬停换色 → 点关闭区域销毁。
-//!
-//! 放在集成测试里，`runtime.rs` 只留宿主 API；窗口长什么样全由脚本自己决定。
+//! 按键请求光标 → `caret` 事件建窗口 / 读 SVG → 点扁平按钮的自动区域销毁。
 
 use std::path::{Path, PathBuf};
 
-use cloudime_render::{Color, Document, Element};
+use cloudime_render::{ButtonState, Color, Document, Element};
 use cloudime_script::{Runtime, WindowRequest, mlua};
 
 /// 一个干净的临时脚本目录。
@@ -32,32 +30,6 @@ fn content_of(requests: &[WindowRequest], id: u32) -> &Document {
             _ => None,
         })
         .expect("送了内容")
-}
-
-fn svg_tint(document: &Document) -> Option<Color> {
-    document
-        .elements
-        .iter()
-        .find_map(|element| match element {
-            Element::Svg { tint, .. } => Some(*tint),
-            _ => None,
-        })
-        .flatten()
-}
-
-/// 右上角关闭按钮的底色（20 × 20，圆角 3，位置 152,8）。
-fn has_button_rect(document: &Document) -> bool {
-    document.elements.iter().any(|element| {
-        matches!(
-            element,
-            Element::Rect { x, y, width, height, radius, .. }
-                if (*x - 152.0).abs() < 0.01
-                    && (*y - 8.0).abs() < 0.01
-                    && (*width - 20.0).abs() < 0.01
-                    && (*height - 20.0).abs() < 0.01
-                    && (*radius - 3.0).abs() < 0.01
-        )
-    })
 }
 
 #[test]
@@ -149,13 +121,16 @@ fn the_caret_window_script_draws_and_closes_itself() {
     assert!(
         document.elements.iter().any(|element| matches!(
             element,
-            Element::Svg { source, .. } if source.contains("<svg")
+            Element::FlatSvgButton(button)
+                if button.svg.contains("<svg")
+                    && button.state == ButtonState::Normal
+                    && (button.width - 20.0).abs() < 0.01
+                    && (button.height - 20.0).abs() < 0.01
+                    && button.region_name == "close"
         )),
-        "从 Images\\SVG\\打叉.svg 读到了 SVG"
+        "关闭按钮是扁平 SVG 按钮（画板 20×20，自动区域 close）"
     );
     assert!(document.regions.iter().any(|region| region.name == "close"));
-    assert_eq!(svg_tint(document), Some(Color::rgba(0, 0, 0, 255)));
-    assert!(!has_button_rect(document), "没悬停时不画按钮底色");
 
     // 开着窗口再按 F3：不创建、不关闭。
     runtime.dispatch("key", key, None);
@@ -168,62 +143,6 @@ fn the_caret_window_script_draws_and_closes_itself() {
                 WindowRequest::Close(_) | WindowRequest::Create(_, _)
             ))
     );
-
-    // 鼠标进 close：先画 #FFFF3300 圆角矩形，再把叉染成白色。
-    runtime.dispatch(
-        "window",
-        event(
-            &runtime,
-            &[
-                ("id", mlua::Value::Integer(i64::from(id))),
-                (
-                    "action",
-                    mlua::Value::String(runtime.lua().create_string("hover").unwrap()),
-                ),
-                (
-                    "region",
-                    mlua::Value::String(runtime.lua().create_string("close").unwrap()),
-                ),
-            ],
-        ),
-        None,
-    );
-    let hovered = runtime.take_window_requests();
-    let hovered = content_of(&hovered, id);
-    assert!(has_button_rect(hovered));
-    assert!(hovered.elements.iter().any(|element| matches!(
-        element,
-        Element::Rect { color, .. } if *color == Color::rgba(255, 51, 0, 255)
-    )));
-    assert_eq!(
-        svg_tint(hovered),
-        Some(Color::rgba(255, 255, 255, 255)),
-        "悬停时叉是白色"
-    );
-
-    // 回到 body：底色收起、叉恢复黑色。
-    runtime.dispatch(
-        "window",
-        event(
-            &runtime,
-            &[
-                ("id", mlua::Value::Integer(i64::from(id))),
-                (
-                    "action",
-                    mlua::Value::String(runtime.lua().create_string("hover").unwrap()),
-                ),
-                (
-                    "region",
-                    mlua::Value::String(runtime.lua().create_string("body").unwrap()),
-                ),
-            ],
-        ),
-        None,
-    );
-    let left = runtime.take_window_requests();
-    let left = content_of(&left, id);
-    assert!(!has_button_rect(left));
-    assert_eq!(svg_tint(left), Some(Color::rgba(0, 0, 0, 255)));
 
     // 点关闭区域：销毁窗口。
     runtime.dispatch(

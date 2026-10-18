@@ -32,7 +32,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, Result, w};
 
 use cloudime_platform::LayoutMode;
-use cloudime_render::{Document, HitShape, Region};
+use cloudime_render::{ButtonState, Document, Element, HitShape, Region};
 use cloudime_script::{
     AuxiliarySpec, ScriptWindowEvent, WindowAction, WindowId, WindowRequest, WindowSpec,
 };
@@ -288,6 +288,12 @@ pub(super) struct ScriptWindow {
     /// 悬停事件只在「换元素 / 换区域」时派一次。
     hover: Cell<Option<(Option<usize>, Option<usize>)>>,
 
+    /// 当前鼠标所在的扁平按钮元素下标。
+    hover_button: Cell<Option<usize>>,
+
+    /// 当前按下的扁平按钮元素下标（按下态）。
+    pressed_button: Cell<Option<usize>>,
+
     /// 拖动中：按下时的光标屏幕坐标 + 窗口左上角。
     drag: Cell<Option<Drag>>,
 
@@ -340,6 +346,8 @@ impl ScriptWindow {
             hits: RefCell::new(Vec::new()),
             regions: RefCell::new(Vec::new()),
             hover: Cell::new(None),
+            hover_button: Cell::new(None),
+            pressed_button: Cell::new(None),
             drag: Cell::new(None),
             moved_since_press: Cell::new(false),
             last: Cell::new((0, 0)),
@@ -362,12 +370,125 @@ impl ScriptWindow {
     fn set_content(&self, document: Document) {
         *self.regions.borrow_mut() = document.regions.clone();
         *self.document.borrow_mut() = document;
+        // 新内容里的按钮从 normal 开始；鼠标下次移动再按位置切状态。
+        self.hover.set(None);
+        self.hover_button.set(None);
+        self.pressed_button.set(None);
         self.revision.set(self.revision.get() + 1);
         if self.shown.get()
             && let Some(position) = self.position.get()
         {
             self.render_and_present(position);
             self.sync_assets();
+        }
+    }
+
+    /// 命中下标若是扁平按钮，返回它。
+    fn button_index(&self, element: Option<usize>) -> Option<usize> {
+        // `element_at` / 事件载荷里的 `element` 是 **1 起** 的；`hits` / `document.elements` 是 0 起。
+        let index = element?.checked_sub(1)?;
+        matches!(
+            self.document.borrow().elements.get(index),
+            Some(Element::FlatSvgButton(_))
+        )
+        .then_some(index)
+    }
+
+    /// 改按钮状态；状态真的变了返回 `true`。
+    fn set_button_state(&self, index: usize, state: ButtonState) -> bool {
+        let mut document = self.document.borrow_mut();
+        let Some(Element::FlatSvgButton(button)) = document.elements.get_mut(index) else {
+            return false;
+        };
+        if button.state == state {
+            return false;
+        }
+        button.state = state;
+        true
+    }
+
+    /// 按当前窗口位置重画（不换内容）。
+    fn repaint(&self) {
+        if let Some(position) = self.position.get() {
+            // 内容没换、位置也没换，靠 revision 让 `render_and_present` 别走「签名相同」的短路。
+            self.revision.set(self.revision.get() + 1);
+            self.render_and_present(position);
+        }
+    }
+
+    /// 鼠标换到另一个元素：旧按钮回 normal、新按钮进 hovered（按下时保持 pressed）。
+    fn update_hover_button(&self, hovered: Option<usize>) {
+        let hovered = self.button_index(hovered);
+        let previous = self.hover_button.replace(hovered);
+        if previous == hovered {
+            return;
+        }
+        let pressed = self.pressed_button.get();
+        let mut changed = false;
+        if let Some(old) = previous
+            && Some(old) != pressed
+        {
+            changed |= self.set_button_state(old, ButtonState::Normal);
+        }
+        if let Some(new) = hovered {
+            let state = if Some(new) == pressed {
+                ButtonState::Pressed
+            } else {
+                ButtonState::Hovered
+            };
+            changed |= self.set_button_state(new, state);
+        }
+        if changed {
+            self.repaint();
+        }
+    }
+
+    /// 左键在按钮上按下：进入 pressed。
+    fn begin_button_press(&self, client_x: i32, client_y: i32) {
+        let (_, _, element, _) = self.hit_at(client_x, client_y);
+        let Some(index) = self.button_index(element) else {
+            return;
+        };
+        self.pressed_button.set(Some(index));
+        if self.set_button_state(index, ButtonState::Pressed) {
+            self.repaint();
+        }
+    }
+
+    /// 左键抬起：pressed 结束；鼠标还在按钮上就回到 hovered，否则 normal。
+    fn end_button_press(&self) {
+        let Some(index) = self.pressed_button.replace(None) else {
+            return;
+        };
+        let state = if self.hover_button.get() == Some(index) {
+            ButtonState::Hovered
+        } else {
+            ButtonState::Normal
+        };
+        if self.set_button_state(index, state) {
+            self.repaint();
+        }
+    }
+
+    /// 捕获丢失 / 窗口收起：按下态直接退回 normal。
+    fn cancel_button_press(&self) {
+        let Some(index) = self.pressed_button.replace(None) else {
+            return;
+        };
+        if self.set_button_state(index, ButtonState::Normal) {
+            self.repaint();
+        }
+    }
+
+    /// 收起 / 换内容：所有扁平按钮回 normal。
+    fn reset_button_states(&self) {
+        self.hover_button.set(None);
+        self.pressed_button.set(None);
+        let mut document = self.document.borrow_mut();
+        for element in &mut document.elements {
+            if let Element::FlatSvgButton(button) = element {
+                button.state = ButtonState::Normal;
+            }
         }
     }
 
@@ -499,6 +620,7 @@ impl ScriptWindow {
         self.painted.set(None);
         self.hits.borrow_mut().clear();
         self.hover.set(None);
+        self.reset_button_states();
         if self.shown.replace(false) {
             let _ = unsafe { ShowWindow(self.hwnd(), SW_HIDE) };
             tracing::info!(id = self.id, name = %self.name, "脚本独立窗口已收起");
@@ -580,6 +702,7 @@ impl ScriptWindow {
     fn emit_move(&self, client_x: i32, client_y: i32) {
         self.last.set((client_x, client_y));
         let (_, _, element, region) = self.hit_at(client_x, client_y);
+        self.update_hover_button(element);
         let key = (element, region);
         if self.hover.replace(Some(key)) == Some(key) {
             return;
@@ -591,6 +714,7 @@ impl ScriptWindow {
 
     fn emit_leave(&self) {
         self.hover.set(None);
+        self.update_hover_button(None);
         let (x, y) = self.last.get();
         self.emit(WindowAction::Leave, x, y);
     }
@@ -1009,6 +1133,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         // 左键按下：开始记拖动起点；同时算这块窗口拿到键盘焦点。
         WM_LBUTTONDOWN => {
             with_window(hwnd, |window| {
+                window.begin_button_press(client_x(lparam), client_y(lparam));
                 window.begin_drag(client_x(lparam), client_y(lparam));
             });
             LRESULT(0)
@@ -1031,6 +1156,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         // 拖过就不是点击（阈值在 `drag_to` 里判）。
         WM_LBUTTONUP => {
             with_window(hwnd, |window| {
+                window.end_button_press();
                 if window.end_drag() {
                     // 拖到另一块显示器：DPI 变了就按新 DPI 重画
                     window.refresh_after_move();
@@ -1047,7 +1173,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         WM_CAPTURECHANGED => {
-            with_window(hwnd, |window| window.drag.set(None));
+            with_window(hwnd, |window| {
+                window.cancel_button_press();
+                window.drag.set(None);
+            });
             LRESULT(0)
         }
         // 滚轮的坐标在 `lparam` 里是屏幕坐标，先换算成客户区；`delta` 在 `wparam` 高 16 位。
