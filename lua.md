@@ -537,8 +537,8 @@ aux:show()
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（**边缘**颜色，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1 点）/ `fill`（可选填充，不写 = 无填充）/ `children = { …元素… }`；子控件用面板内相对坐标 |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省取 SVG 画板）；`svg`（整段 SVG）或 `svg_path`（文件）；`shape = rect / round_rect / circle / path` + `radius`；`name`（自动区域名）；`normal` / `hovered` / `pressed = { background = …, svg = … }`；`events = { 动作名 = "处理器名" }` |
 | `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 `h/2`）；`read_only` / `passkey`；`back_color`（背景）/ `edge_color`（边框）/ `edge_width`（缺省 1，0 不显示）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align = left / right`；`font_name` / `font_size` / `font_flag`；`text` 初始文本；`font`（缺省 `candidate`）；`name`（自动区域名）；`events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
-| `hscroll_bar` | 水平滚动条：`x` / `y` / `w` / `h`；`value` / `min_value` / `max_value`（非负整数，缺省 0 / 0 / 100）/ `step`（滚轮和点轨道的步长，u64，缺省 1，不能为 0）；`background_color`（兼容 `back_color` / `background` / `color` / `fill`）/ `thumb_color`（兼容 `slider_color` / `thumb` / `highlight`）；`name`；`events` |
-| `vscroll_bar` | 垂直滚动条，字段同 `hscroll_bar`；也接受拼写 `vhscroll_bar` / `vhsroll_bar` |
+| `hscroll_bar` | 水平滚动条：`x` / `y` / `w`；高度 `h` 可省，缺省 8；`value` / `min_value` / `max_value`（非负整数，缺省 0 / 0 / 100）/ `step`（滚轮和点轨道的步长，u64，缺省 1，不能为 0）；`background_color`（兼容 `back_color` / `background` / `color` / `fill`）/ `thumb_color`（兼容 `slider_color` / `thumb` / `highlight`）；`name`；`events` |
+| `vscroll_bar` | 垂直滚动条，字段同 `hscroll_bar`，宽度 `w` 可省、缺省 8；也接受拼写 `vhscroll_bar` / `vhsroll_bar` |
 
 颜色写 `"#RRGGBB"` / `"#AARRGGBB"` / `"#RGB"`，或 `{ r = …, g = …, b = …, a = … }`（0–255）。
 
@@ -660,7 +660,7 @@ icon:use_path_mask({ { "M", 0, 0 }, { "L", 16, 0 }, { "L", 16, 16 }, { "L", 0, 1
 **滚动条（`hscroll_bar` / `vscroll_bar`）**
 
 ```lua
-{ type = "hscroll_bar", name = "hours", x = 24, y = 300, w = 320, h = 12,
+{ type = "hscroll_bar", name = "hours", x = 24, y = 300, w = 320,
   value = 40, min_value = 0, max_value = 100,
   background_color = "#FFE0E0E0", thumb_color = "#FF4A90E2",
   events = { value_changed = "hours_changed" } }

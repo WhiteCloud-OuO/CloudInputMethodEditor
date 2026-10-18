@@ -324,8 +324,8 @@ win:set_content{
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（边缘，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1）/ `fill`（可选）/ `children`（相对坐标） |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省 SVG 画板）；`svg` / `svg_path`；`shape` + `radius`；`name`；`normal` / `hovered` / `pressed = { background, svg }`；`events = { 动作名 = "处理器名" }` |
 | `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`read_only` / `passkey`；`back_color` / `edge_color` / `edge_width`；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align`；`font_name` / `font_size` / `font_flag`；`text` / `font` / `name` / `events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
-| `hscroll_bar` | `x` / `y` / `w` / `h`；`value` / `min_value` / `max_value`（u64，缺省 0 / 0 / 100）/ `step`（u64，缺省 1，不能为 0）；`background_color` / `thumb_color`；`name` / `events`；背景与滑块都是胶囊纯填充 |
-| `vscroll_bar` | 同 `hscroll_bar`，方向为垂直；`vhscroll_bar` / `vhsroll_bar` 是兼容拼写 |
+| `hscroll_bar` | `x` / `y` / `w`；高度 `h` 可省、缺省 8；`value` / `min_value` / `max_value`（u64，缺省 0 / 0 / 100）/ `step`（u64，缺省 1，不能为 0）；`background_color` / `thumb_color`；`name` / `events`；背景与滑块都是胶囊纯填充 |
+| `vscroll_bar` | 同 `hscroll_bar`，宽度 `w` 可省、缺省 8；`vhscroll_bar` / `vhsroll_bar` 是兼容拼写 |
 
 #### JSON 布局文件（前台 UI 文件）
 

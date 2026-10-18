@@ -1398,8 +1398,16 @@ fn parse_scroll_bar(table: &mlua::Table, axis: ScrollAxis) -> mlua::Result<Eleme
     Ok(Element::ScrollBar(ScrollBar {
         x: number(table, "x", 0.0)?,
         y: number(table, "y", 0.0)?,
-        width: positive(table, "w", "width")?,
-        height: positive(table, "h", "height")?,
+        width: if axis == ScrollAxis::Horizontal {
+            positive(table, "w", "width")?
+        } else {
+            optional_positive(table, "w")?.unwrap_or(8.0)
+        },
+        height: if axis == ScrollAxis::Horizontal {
+            optional_positive(table, "h")?.unwrap_or(8.0)
+        } else {
+            positive(table, "h", "height")?
+        },
         background: color(table, "background_color", false)?
             .or(color(table, "back_color", false)?)
             .or(color(table, "background", false)?)
@@ -2303,11 +2311,11 @@ mod tests {
                 r##"
                 return {
                     width = 300, height = 200,
-                    { type = "hscroll_bar", name = "hours", x = 10, y = 10, w = 200, h = 12,
+                    { type = "hscroll_bar", name = "hours", x = 10, y = 10, w = 200,
                       value = 150, min_value = 0, max_value = 100, step = 7,
                       background_color = "#FF112233", thumb_color = "#FF445566",
                       events = { value_changed = "hours_changed" } },
-                    { type = "vscroll_bar", name = "minutes", x = 250, y = 10, w = 12, h = 150,
+                    { type = "vscroll_bar", name = "minutes", x = 250, y = 10, h = 150,
                       value = 5, min_value = 10, max_value = 20 },
                 }
             "##,
@@ -2326,6 +2334,8 @@ mod tests {
         assert_eq!(hours.axis, ScrollAxis::Horizontal);
         assert_eq!((hours.value, hours.min, hours.max), (100, 0, 100));
         assert_eq!(hours.step, 7);
+        assert_eq!(hours.height, 8.0, "水平滚动条高度缺省 8");
+        assert_eq!(hours.width, 200.0);
         assert_eq!(hours.background, Some(Color::rgba(0x11, 0x22, 0x33, 0xFF)));
         assert_eq!(hours.thumb, Some(Color::rgba(0x44, 0x55, 0x66, 0xFF)));
         assert!(document.regions.iter().any(|region| region.name == "hours"));
@@ -2343,6 +2353,8 @@ mod tests {
         assert_eq!(minutes.axis, ScrollAxis::Vertical);
         assert_eq!((minutes.value, minutes.min, minutes.max), (10, 10, 20));
         assert_eq!(minutes.step, 1);
+        assert_eq!(minutes.width, 8.0, "垂直滚动条宽度缺省 8");
+        assert_eq!(minutes.height, 150.0);
 
         let bad = lua
             .load(
