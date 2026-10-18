@@ -40,6 +40,12 @@ const MAX_SIZE: f32 = 2048.0;
 /// 一段文字最多多少个字符。
 const MAX_TEXT: usize = 4096;
 
+/// 编辑框 / 面板未写边框宽度时的缺省值（点；100% 缩放下等于 1 像素）。
+const DEFAULT_BORDER_WIDTH: f32 = 1.0;
+
+/// 线元素未写厚度时的缺省值（点；100% 缩放下等于 1 像素）。
+const DEFAULT_LINE_WIDTH: f32 = 1.0;
+
 /// 一份内容最多几个区域（点击 / 拖拽范围）。
 const MAX_REGIONS: usize = 128;
 
@@ -1217,7 +1223,7 @@ fn parse_element(
         "line" => Ok(Element::Line {
             from: point(table, "from")?,
             to: point(table, "to")?,
-            thickness: number(table, "thickness", 1.0)?.max(0.5),
+            thickness: number(table, "thickness", DEFAULT_LINE_WIDTH)?.max(0.5),
             color: color(table, "color", true)?.expect("要了颜色"),
         }),
         "text" => {
@@ -1415,7 +1421,7 @@ fn parse_text_edit(table: &mlua::Table) -> mlua::Result<Element> {
     };
     let border_width = match table.get::<Option<f32>>("edge_width")? {
         Some(width) => width,
-        None => number(table, "border_width", 1.0)?,
+        None => number(table, "border_width", DEFAULT_BORDER_WIDTH)?,
     }
     .clamp(0.0, 16.0);
     let font_size = table
@@ -1477,7 +1483,7 @@ fn parse_text_box(table: &mlua::Table) -> mlua::Result<Element> {
     let height = positive(table, "h", "height")?;
     let border_width = match table.get::<Option<f32>>("edge_width")? {
         Some(width) => width,
-        None => number(table, "border_width", 1.0)?,
+        None => number(table, "border_width", DEFAULT_BORDER_WIDTH)?,
     }
     .clamp(0.0, 16.0);
     let font_size = table
@@ -1683,7 +1689,7 @@ fn parse_static_shape(table: &mlua::Table) -> mlua::Result<Element> {
         "line" => StaticShape::Line {
             from: point(table, "from")?,
             to: point(table, "to")?,
-            thickness: number(table, "thickness", 1.0)?.max(0.5),
+            thickness: number(table, "thickness", DEFAULT_LINE_WIDTH)?.max(0.5),
             color: color()?,
         },
         "rect" => StaticShape::Rect {
@@ -1776,7 +1782,7 @@ fn parse_panel(
         radius: number(table, "radius", 6.0)?.max(0.0),
         // 缺省只画边缘：`#FFE0E0E0`、1 点；要填色才写 `fill`。
         color: color(table, "color", false)?.unwrap_or(Color::rgba(0xE0, 0xE0, 0xE0, 0xFF)),
-        border_width: number(table, "border_width", 1.0)?.clamp(0.0, 16.0),
+        border_width: number(table, "border_width", DEFAULT_BORDER_WIDTH)?.clamp(0.0, 16.0),
         fill: color(table, "fill", false)?,
         children,
     }))
@@ -2503,6 +2509,49 @@ mod tests {
         };
         assert!(!code.auto_line_wrap);
         assert_eq!(code.line_spacing, 0);
+    }
+
+    /// 编辑框 / 面板 / 线的默认线宽都是 1 点。
+    #[test]
+    fn default_stroke_widths_are_one() {
+        let lua = mlua::Lua::new();
+        let content = lua
+            .load(
+                r##"
+                return {
+                    width = 200, height = 200,
+                    { type = "line", from = { x = 0, y = 0 }, to = { x = 10, y = 0 },
+                      color = "#FF000000" },
+                    { type = "panel", x = 0, y = 10, w = 100, h = 40 },
+                    { type = "text_edit", name = "edit", x = 0, y = 60, w = 100, h = 30 },
+                    { type = "text_box", name = "box", x = 0, y = 100, w = 100, h = 50 },
+                }
+            "##,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let document = parse_document(
+            &content,
+            (Some(200.0), Some(200.0)),
+            &mut ImageCache::default(),
+        )
+        .expect("读得出来");
+        let Element::Line { thickness, .. } = &document.elements[0] else {
+            panic!("不是 line");
+        };
+        assert_eq!(*thickness, 1.0);
+        let Element::Panel(panel) = &document.elements[1] else {
+            panic!("不是 panel");
+        };
+        assert_eq!(panel.border_width, 1.0);
+        let Element::TextEdit(edit) = &document.elements[2] else {
+            panic!("不是 text_edit");
+        };
+        assert_eq!(edit.border_width, 1.0);
+        let Element::TextBox(text_box) = &document.elements[3] else {
+            panic!("不是 text_box");
+        };
+        assert_eq!(text_box.border_width, 1.0);
     }
 
     /// 水平 / 垂直滚动条：值域、区域、事件处理器和 u64 夹取。

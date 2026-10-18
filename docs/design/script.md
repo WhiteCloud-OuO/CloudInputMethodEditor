@@ -324,7 +324,7 @@ win:set_content{
 |---|---|
 | `rect` | `x` / `y` / `w` / `h` 必给；`radius` 圆角（0 = 直角）；`color` 必给 |
 | `circle` | `cx` / `cy` / `radius`；`color` 必给 |
-| `line` | `from` / `to`（`{ x = …, y = … }` 或 `{ x, y }`）、`thickness`（点，缺省 1）；`color` 必给 |
+| `line` | `from` / `to`（`{ x = …, y = … }` 或 `{ x, y }`）、`thickness`（点，缺省 1，100% 缩放下 1 像素）；`color` 必给 |
 | `text` | `x` / `y`（行框左上角）/ `text` / `size`（点，缺省 16）；`font` = `candidate`（缺省）/ `pinyin` / `item_number` / `translate`；`color` 缺省黑；`italic` 可选 |
 | `svg` | `x` / `y` / `size`（见方）/ `source`（整段 SVG 文本）或 `path`（SVG 文件）；`tint` 可选（按 alpha 染色） |
 | `img` | `x` / `y` / `w` / `h` / `path`（PNG / BMP / JPG；相对路径按 Server 的工作目录 = 安装目录算） |
@@ -333,10 +333,10 @@ win:set_content{
 | `text_block` | `x` / `y` / `text`（可含 `\n`）/ `size` / `font`（缺省 `item_number`）/ `line_spacing`（点，缺省 2）/ `color`（整块同色） |
 | `static_shape` | `shape = line / rect / round_rect / circle / path` + 对应字段 + `color` |
 | `static_image` | `x` / `y` / `w` / `h`（可省）+ `image`（`cloudime.image.load` 句柄）或 `path`（PNG / BMP / JPG） |
-| `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（边缘，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1）/ `fill`（可选）/ `children`（相对坐标） |
+| `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（边缘，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1 点，100% 缩放下 1 像素）/ `fill`（可选）/ `children`（相对坐标） |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省 SVG 画板）；`svg` / `svg_path`；`shape` + `radius`；`name`；`normal` / `hovered` / `pressed = { background, svg }`；`events = { 动作名 = "处理器名" }` |
-| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`read_only` / `passkey`；`back_color` / `edge_color` / `edge_width`；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align`；`font_name` / `font_size` / `font_flag`；`text` / `font` / `name` / `events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
-| `text_box` | `x` / `y` / `w` / `h`；`radius`（缺省 6）；`read_only`；`back_color` / `edge_color` / `edge_width`；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color`；`font_name` / `font_size` / `font_flag`；`auto_line_wrap`（缺省 true）/ `line_spacing`（u16，缺省 8）；`text` / `font` / `name` / `events`；没有 `passkey` / SVG 属性，旧名兼容同 `text_edit` |
+| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`read_only` / `passkey`；`back_color` / `edge_color` / `edge_width`（缺省 1 点，100% 缩放下 1 像素）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align`；`font_name` / `font_size` / `font_flag`；`text` / `font` / `name` / `events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
+| `text_box` | `x` / `y` / `w` / `h`；`radius`（缺省 6）；`read_only`；`back_color` / `edge_color` / `edge_width`（缺省 1 点，100% 缩放下 1 像素）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color`；`font_name` / `font_size` / `font_flag`；`auto_line_wrap`（缺省 true）/ `line_spacing`（u16，缺省 8）；`text` / `font` / `name` / `events`；没有 `passkey` / SVG 属性，旧名兼容同 `text_edit` |
 | `hscroll_bar` | `x` / `y`；`w` / `h` 缺省都是 8；`value` / `min_value` / `max_value`（u64，缺省 0 / 0 / 100）/ `step`（u64，缺省 1，不能为 0）；`background_color` / `thumb_color`；`name` / `events`；背景与滑块都是胶囊纯填充 |
 | `vscroll_bar` | 同 `hscroll_bar`，`w` / `h` 缺省都是 8；`vhscroll_bar` / `vhsroll_bar` 是兼容拼写 |
 
