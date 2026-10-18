@@ -353,7 +353,9 @@ win:set_content{
   宿主窗底色 / 文字色跟随候选窗主题。自动区域与按钮同一套（`drag = false`）。
   TSF 输入由 `script_window/tsf.rs` + `text_store.rs` 接管：每个宿主窗建一个 `ITfContext`，
   `ITextStoreACP` 把文本、选区、光标矩形桥到 RichEdit；键盘先给 `ITfKeystrokeMgr`，被输入法吃掉
-  就不再交给 RichEdit。CloudIME 的中文组合、候选窗和提交都走这条路。
+  就不再交给 RichEdit。CloudIME 的中文组合、候选窗和提交都走这条路。焦点进入时按 windowless
+  RichEdit 的约定依次 `OnTxInPlaceActivate` / `OnTxUIActivate`，再以 `wParam = NULL` 发
+  `WM_SETFOCUS`（否则没有插入符、拖选不重画）。
 - **区域（region）**：内容里可以声明 `regions = { … }` —— 区域是**鼠标点击 / 拖拽的命中范围**
   （元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true` = 按住它拖会移动整块窗口，
   `false` = 不拖窗口（点击照常）。后写的区域盖住先写的；事件里的 `event.region` 就是命中的区域名

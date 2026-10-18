@@ -1076,7 +1076,10 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   失焦时清空。`WM_KEYDOWN` / `WM_KEYUP` 先经 `ITfKeystrokeMgr::TestKeyDown` / `KeyDown`，被输入法吃掉
   就跳过 RichEdit，`WM_CHAR` 跟着吞；没被吃掉的键仍走 RichEdit。候选窗位置由 `GetTextExt` 返回的
   RichEdit 光标屏幕矩形决定。CloudIME 的中文组合、候选窗和提交已在测试窗口验证；英文模式仍由
-  RichEdit 直接输入。
+  RichEdit 直接输入。另：宿主窗拿到焦点时必须先 `OnTxInPlaceActivate` + `OnTxUIActivate`，再用
+  **`wParam = NULL`** 发 `WM_SETFOCUS`；只转发 `WM_SETFOCUS` 时 RichEdit 认为没有 UI 激活，
+  插入符不出现、拖选也不会立即重画。失焦对应 `OnTxUIDeactivate` + `WM_KILLFOCUS`，隐藏 / 销毁时
+  再 `OnTxInPlaceDeactivate`。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

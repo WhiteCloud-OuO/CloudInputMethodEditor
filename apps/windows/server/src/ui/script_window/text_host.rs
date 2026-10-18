@@ -64,6 +64,9 @@ pub(super) struct TextHostWindow {
     tsf: Option<tsf::TsfContext>,
     /// 本次按键是否被 TSF 吃掉（用来吞掉后续 WM_CHAR）。
     eaten: Cell<bool>,
+    /// 是否已 `OnTxInPlaceActivate` / `OnTxUIActivate`。
+    active: Cell<bool>,
+    in_place: Cell<bool>,
     services: ITextServices,
     /// 引擎的宿主接口；必须比 `services` 活得久。
     #[allow(dead_code)]
@@ -161,6 +164,8 @@ impl TextHostWindow {
             hwnd,
             tsf,
             eaten: Cell::new(false),
+            active: Cell::new(false),
+            in_place: Cell::new(false),
             services,
             host,
             font,
@@ -206,7 +211,7 @@ impl TextHostWindow {
             let _ = ShowWindow(self.hwnd, if show { SW_SHOWNA } else { SW_HIDE });
         }
         if !show {
-            self.blur_tsf();
+            self.deactivate_in_place();
         }
     }
 
@@ -220,9 +225,56 @@ impl TextHostWindow {
         }
     }
 
-    fn blur_tsf(&self) {
+    /// 窗口拿到焦点：先 in-place / UI 激活，再按 windowless host 的约定用 NULL wParam
+    /// 发 `WM_SETFOCUS`。少了这两步 RichEdit 不会建插入符，拖选也不重画。
+    fn activate(&self) {
+        if !self.in_place.get() {
+            let mut rect = RECT::default();
+            unsafe {
+                let _ = GetClientRect(self.hwnd, &mut rect);
+                let _ = self.services.OnTxInPlaceActivate(&mut rect);
+            }
+            self.in_place.set(true);
+        }
+        if !self.active.replace(true) {
+            unsafe {
+                let _ = self.services.OnTxUIActivate();
+            }
+        }
+        let mut result = LRESULT(0);
+        unsafe {
+            let _ = self
+                .services
+                .TxSendMessage(WM_SETFOCUS, WPARAM(0), LPARAM(0), &mut result);
+        }
+        if let Some(tsf) = &self.tsf {
+            tsf.focus();
+        }
+    }
+
+    fn deactivate(&self) {
         if let Some(tsf) = &self.tsf {
             tsf.blur();
+        }
+        if self.active.replace(false) {
+            unsafe {
+                let _ = self.services.OnTxUIDeactivate();
+            }
+        }
+        let mut result = LRESULT(0);
+        unsafe {
+            let _ = self
+                .services
+                .TxSendMessage(WM_KILLFOCUS, WPARAM(0), LPARAM(0), &mut result);
+        }
+    }
+
+    fn deactivate_in_place(&self) {
+        self.deactivate();
+        if self.in_place.replace(false) {
+            unsafe {
+                let _ = self.services.OnTxInPlaceDeactivate();
+            }
         }
     }
 
@@ -286,6 +338,7 @@ impl TextHostWindow {
 
 impl Drop for TextHostWindow {
     fn drop(&mut self) {
+        self.deactivate_in_place();
         HOSTS.with(|map| {
             map.borrow_mut().remove(&(self.hwnd.0 as isize));
         });
@@ -655,14 +708,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         return LRESULT(0);
     }
     if msg == WM_SETFOCUS {
-        with_host(hwnd, |host| {
-            if let Some(tsf) = &host.tsf {
-                tsf.focus();
-            }
-        });
+        with_host(hwnd, |host| host.activate());
+        return LRESULT(0);
     }
     if msg == WM_KILLFOCUS {
-        with_host(hwnd, |host| host.blur_tsf());
+        with_host(hwnd, |host| host.deactivate());
+        return LRESULT(0);
     }
     if matches!(
         msg,
@@ -690,8 +741,6 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             | WM_LBUTTONDBLCLK
             | WM_MOUSEMOVE
             | WM_TIMER
-            | WM_SETFOCUS
-            | WM_KILLFOCUS
             | WM_SETFONT
             | WM_SIZE
     ) && let Some(result) = with_host(hwnd, |host| host.send(msg, wparam, lparam))
