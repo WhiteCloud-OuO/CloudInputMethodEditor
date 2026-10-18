@@ -1112,6 +1112,9 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   文本 API / `text_changed` / `key_pressed` / `focused` / `unfocused` 与 `text_edit` 共用；
   不支持 `passkey` 和 SVG，内部滚动条不派 `value_changed`。嵌套宿主能建、能编辑，但嵌套控件的
   内部滚动条命中目前只按顶层元素路径处理。
+  **闪烁修复**（2026-10-18）：`TxDraw` 改为先画到内存 DC 再 `BitBlt`；多行 `WM_MOUSEMOVE`
+  不再额外 `InvalidateRect`（RichEdit 自己会失效选区）；`TextHostWindow::set_bounds` / `show`
+  缓存上次边界和显隐，脚本窗口每帧重画时不再对所有宿主重复 `SetWindowPos` / `ShowWindow`。
 - **TSF 桥**（`script_window/text_store.rs` / `tsf.rs`，2026-10-18）：windowless RichEdit 自己只提供
   IMM32 的 `ITextHost::TxImmGetContext`，不直接参与 TSF；要让 CloudIME 的中文输入作用到它，必须补
   客户端文本存储。`text_store.rs` 实现 `ITextStoreACP`，把 `GetText` / `SetText` / 选区 / 插入 /

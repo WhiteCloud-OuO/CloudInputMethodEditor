@@ -17,10 +17,11 @@ use windows::Win32::Foundation::{
     COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, RECTL, SIZE, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT,
-    CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetDC, GetTextExtentPoint32W,
-    GetTextMetricsW, HBRUSH, HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT, ReleaseDC, SYS_COLOR_INDEX,
-    SelectObject, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
+    BeginPaint, BitBlt, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT,
+    CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC, DeleteObject, EndPaint,
+    FillRect, GetDC, GetTextExtentPoint32W, GetTextMetricsW, HBRUSH, HDC, HGDIOBJ, InvalidateRect,
+    PAINTSTRUCT, ReleaseDC, SRCCOPY, SYS_COLOR_INDEX, SelectObject, SetBkMode, SetTextColor,
+    TEXTMETRICW, TRANSPARENT, TextOutW,
 };
 use windows::Win32::System::Com::DVASPECT_CONTENT;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
@@ -875,12 +876,12 @@ impl TextHostWindow {
             let hdc = BeginPaint(self.hwnd, &mut ps);
             let mut client = RECT::default();
             let _ = GetClientRect(self.hwnd, &mut client);
-            let _ = FillRect(hdc, &client, self.brush);
             if self.multiline {
-                self.paint_multiline(hdc, &client);
+                self.paint_multiline_buffered(hdc, &client);
                 let _ = EndPaint(self.hwnd, &ps);
                 return;
             }
+            let _ = FillRect(hdc, &client, self.brush);
             let old_font = SelectObject(hdc, self.font);
             let _ = SetBkMode(hdc, TRANSPARENT);
             let text = self.text();
@@ -910,6 +911,36 @@ impl TextHostWindow {
             }
             let _ = SelectObject(hdc, old_font);
             let _ = EndPaint(self.hwnd, &ps);
+        }
+    }
+
+    /// 多行 RichEdit 的双缓冲绘制：拖动选区时 RichEdit 会频繁整窗失效，
+    /// 直接往窗口 DC 先填背景再 `TxDraw` 会看到未选中文字被反复擦掉 / 重画；
+    /// 先画到内存 DC，最后一次性 `BitBlt`。
+    fn paint_multiline_buffered(&self, hdc: HDC, client: &RECT) {
+        let width = client.right.max(1);
+        let height = client.bottom.max(1);
+        unsafe {
+            let memory = CreateCompatibleDC(Some(hdc));
+            if memory.is_invalid() {
+                let _ = FillRect(hdc, client, self.brush);
+                self.paint_multiline(hdc, client);
+                return;
+            }
+            let bitmap = CreateCompatibleBitmap(hdc, width, height);
+            if bitmap.is_invalid() {
+                let _ = DeleteDC(memory);
+                let _ = FillRect(hdc, client, self.brush);
+                self.paint_multiline(hdc, client);
+                return;
+            }
+            let old = SelectObject(memory, bitmap.into());
+            let _ = FillRect(memory, client, self.brush);
+            self.paint_multiline(memory, client);
+            let _ = BitBlt(hdc, 0, 0, width, height, Some(memory), 0, 0, SRCCOPY);
+            let _ = SelectObject(memory, old);
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(memory);
         }
     }
 
@@ -1541,7 +1572,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         {
             with_host(hwnd, |host| unsafe {
                 host.poke_caret();
-                let _ = InvalidateRect(Some(host.hwnd), None, false);
+                // 多行 RichEdit 自己会在选区变化时失效对应区域；鼠标拖动时再整窗
+                // InvalidateRect 一次，会把所有文字反复擦掉重画。
+                if !host.multiline || msg != WM_MOUSEMOVE {
+                    let _ = InvalidateRect(Some(host.hwnd), None, false);
+                }
             });
         }
         return result;
