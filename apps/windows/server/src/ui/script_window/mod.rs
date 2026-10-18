@@ -1035,8 +1035,8 @@ impl ScriptWindow {
             ScrollAxis::Vertical => (by, bh, thumb_h),
         };
         let position = match axis {
-            ScrollAxis::Horizontal => point.0,
-            ScrollAxis::Vertical => point.1,
+            ScrollAxis::Horizontal => point.0 - edit.x,
+            ScrollAxis::Vertical => point.1 - edit.y,
         };
         let travel = (track - thumb).max(1.0);
         let ratio = ((position - start - offset) / travel).clamp(0.0, 1.0);
