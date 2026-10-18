@@ -895,6 +895,10 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     if msg == WM_CHAR && with_host(hwnd, |host| host.eaten.get()).unwrap_or(false) {
         return LRESULT(0);
     }
+    // 悬停移动只保留给宿主判断光标；不再转给 RichEdit，免得它每次移动都失效重绘。
+    if msg == WM_MOUSEMOVE && (wparam.0 as u32 & 0x0001) == 0 {
+        return LRESULT(0);
+    }
     if msg == WM_SETFOCUS {
         with_host(hwnd, |host| host.activate());
         return LRESULT(0);
@@ -936,10 +940,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         if matches!(msg, WM_LBUTTONUP | WM_KEYUP) {
             with_host(hwnd, |host| host.notify_selection());
         }
+        let left_button = (wparam.0 as u32 & 0x0001) != 0;
         if matches!(
             msg,
-            WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK | WM_MOUSEMOVE | WM_KEYDOWN | WM_CHAR
-        ) {
+            WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK | WM_KEYDOWN | WM_CHAR
+        ) || (msg == WM_MOUSEMOVE && left_button)
+        {
             with_host(hwnd, |host| unsafe {
                 let _ = InvalidateRect(Some(host.hwnd), None, false);
             });

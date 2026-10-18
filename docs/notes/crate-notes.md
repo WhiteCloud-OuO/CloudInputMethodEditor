@@ -1086,7 +1086,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   单独用 `Segoe UI` 画（点距固定），选区高亮 / 插入符也用同一套宽度和字体度量计算；因此
   RichEdit 的 font binding 不会再影响显示，任意位置、选中与否的 `…` 都一致。
   `TxGetPropertyBits` 返回 `TXTBIT_RICHTEXT | TXTBIT_SAVESELECTION`，RichEdit 只负责编辑模型、
-  选区和 TSF，不再负责文字 / 插入符绘制。
+  选区和 TSF，不再负责文字 / 插入符绘制。鼠标悬停的 `WM_MOUSEMOVE` 不转给 RichEdit，也不主动
+  失效；只有按住左键拖选或键输入时才强制重绘，避免文字随鼠标移动高频闪烁。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——
