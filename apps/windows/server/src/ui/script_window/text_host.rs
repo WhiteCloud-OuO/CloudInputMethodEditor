@@ -120,6 +120,11 @@ pub(super) struct TextHostWindow {
     caret_timer: Cell<usize>,
     /// 横向滚动量（像素，内容向左移）：单行文本超过编辑区时跟随光标。
     scroll_x: Cell<i32>,
+    /// 上次摆位（物理像素）；脚本窗口每帧重画时滚动条拖动只改内部状态，不能反复
+    /// SetWindowPos 所有宿主窗，否则多个 RichEdit 会一起闪。
+    bounds: Cell<Option<(i32, i32, i32, i32)>>,
+    /// 上次显示 / 隐藏状态；同样避免每帧重复 ShowWindow。
+    shown: Cell<bool>,
     /// 多行模式：文字由 RichEdit 自己排版 / 绘制（`TxDraw`），内部滚动条由脚本窗口画。
     multiline: bool,
     /// 密码输入：只影响显示，真实文本仍交给 API。
@@ -252,6 +257,8 @@ impl TextHostWindow {
             caret_visible: Cell::new(false),
             caret_timer: Cell::new(0),
             scroll_x: Cell::new(0),
+            bounds: Cell::new(None),
+            shown: Cell::new(false),
             multiline,
             passkey,
         });
@@ -347,6 +354,10 @@ impl TextHostWindow {
         } else {
             y + (height.max(1) - host_height) / 2
         };
+        let bounds = (x, y, width.max(1), host_height);
+        if self.bounds.get() == Some(bounds) {
+            return;
+        }
         unsafe {
             let _ = SetWindowPos(
                 self.hwnd,
@@ -358,6 +369,7 @@ impl TextHostWindow {
                 SWP_NOACTIVATE,
             );
         }
+        self.bounds.set(Some(bounds));
         if let Some(tsf) = &self.tsf {
             tsf.notify_layout();
         }
@@ -369,6 +381,10 @@ impl TextHostWindow {
     }
 
     pub(super) fn show(&self, show: bool) {
+        if self.shown.get() == show {
+            return;
+        }
+        self.shown.set(show);
         unsafe {
             let _ = ShowWindow(self.hwnd, if show { SW_SHOWNA } else { SW_HIDE });
         }
