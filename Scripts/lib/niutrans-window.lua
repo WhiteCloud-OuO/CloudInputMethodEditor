@@ -45,6 +45,15 @@ local CONFIGURED = APP_ID ~= ""
     and API_KEY ~= ""
     and API_KEY ~= "user_key"
 
+local function selection_colors()
+    local theme = cloudime.get_theme()
+    local background = (theme and theme.candidate and theme.candidate.highlight)
+        or "#FF4A90E2"
+    local text = (theme and theme.candidate and theme.candidate.highlight_text)
+        or "#FFFFFFFF"
+    return background, text
+end
+
 local md5 = dofile("Scripts/lib/md5.lua").hex
 
 local CLOSE_SVG = [[
@@ -101,6 +110,7 @@ local function label(text, x, y, size, color)
 end
 
 local function content(source)
+    local selection_background, selection_text = selection_colors()
     local items = {
         { type = "rect", x = 0, y = 0, w = WIDTH, h = HEIGHT, radius = 12, color = "#FFFFFFFF" },
         { type = "text", x = 20, y = 14, text = "小牛在线翻译", size = 18,
@@ -135,8 +145,8 @@ local function content(source)
             edge_color = "#FFD0D0D0",
             edge_width = 1,
             text_color = "#FF222222",
-            sel_back_color = "#FF33FF33",
-            sel_text_color = "#FFFFFFFF",
+            sel_back_color = selection_background,
+            sel_text_color = selection_text,
             cursor_color = "#FF4A90E2",
             text = clamp_source(source),
             events = { on_key_pressed = "translate_key" },
@@ -157,6 +167,8 @@ local function content(source)
             edge_color = "#FFD0D0D0",
             edge_width = 1,
             text_color = "#FF333333",
+            sel_back_color = selection_background,
+            sel_text_color = selection_text,
             text = "",
         },
     }
