@@ -12,7 +12,7 @@
 | [`docs/notes/crate-notes.md`](docs/notes/crate-notes.md) | 实现要点（`crates/cloudime-script`、Server 的「用户脚本」两节） |
 | [`Scripts/template.lua`](Scripts/template.lua) | 「新建脚本」用的模板（只有清单骨架） |
 | [`Scripts/lib/example-niutrans.lua`](Scripts/lib/example-niutrans.lua) | 完整示例：小牛翻译（签名、表单编码、折行、多行显示） |
-| [`Scripts/lib/niutrans-window.lua`](Scripts/lib/niutrans-window.lua) | 小牛翻译窗口：Ctrl+Alt+Y 复制选中文本、光标旁多行编辑窗口、自动翻译 |
+| [`Scripts/lib/niutrans-window.lua`](Scripts/lib/niutrans-window.lua) | 小牛翻译窗口：Ctrl+Alt+Y 复制选中文本、光标旁多行编辑窗口、自动翻译；静态布局在同目录 `niutrans-window*.json` |
 | [`Scripts/lib/example-theme-by-app.lua`](Scripts/lib/example-theme-by-app.lua) | 示例：按前台程序换主题（组合键触发 + `cloudime.foreground_app()` / `cloudime.apply_theme()`） |
 | [`Scripts/lib/example-auto-number.lua`](Scripts/lib/example-auto-number.lua) | 示例：自动序号（`combination_key` + `none` 单键 + `cloudime.context` + `commit`「换行 + 下一条序号」） |
 | [`Scripts/lib/example-window.lua`](Scripts/lib/example-window.lua) | 示例：脚本窗口（`cloudime.window.create` + `set_content` + `window` 点击事件） |

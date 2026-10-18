@@ -6,6 +6,11 @@
 --   3. 如果拿到了复制文本，自动填到上面的编辑框并开始翻译；
 --   4. 没有配置小牛 API / KEY 时，窗口里直接提示先修改本脚本。
 --
+-- 窗口静态布局在：
+--   Scripts/lib/niutrans-window.json          （已配置）
+--   Scripts/lib/niutrans-window-warning.json  （未配置 API/KEY 时显示提示）
+-- 本脚本只负责复制、翻译和事件。
+--
 -- 使用前：
 --   * 把本文件放到安装目录的 Scripts\ 下（或从 Scripts\lib\ 复制过去），重启输入法服务；
 --   * 把 APP_ID / API_KEY 换成小牛翻译控制台里的值。仓库里的这份保持占位符，别填真凭据。
@@ -45,24 +50,8 @@ local CONFIGURED = APP_ID ~= ""
     and API_KEY ~= ""
     and API_KEY ~= "user_key"
 
-local function selection_colors()
-    local theme = cloudime.get_theme()
-    local background = (theme and theme.candidate and theme.candidate.highlight)
-        or "#FF4A90E2"
-    local text = (theme and theme.candidate and theme.candidate.highlight_text)
-        or "#FFFFFFFF"
-    return background, text
-end
-
 local md5 = dofile("Scripts/lib/md5.lua").hex
 
-local CLOSE_SVG = [[
-<svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 20 20">
-  <path d="M5 5 L15 15 M15 5 L5 15" stroke="#000" stroke-width="1.6" fill="none"/>
-</svg>
-]]
-
-local HINT = "按下 Ctrl+Enter 在线翻译内容"
 local WARNING = "请先在脚本文件中配置小牛翻译 API 和 KEY"
 
 local win = nil
@@ -99,85 +88,9 @@ local function clamp_source(text)
     return text:sub(1, MAX_SOURCE) .. "\n…（内容过长，已截断）"
 end
 
-local function label(text, x, y, size, color)
-    return {
-        type = "label",
-        x = x,
-        y = y,
-        size = size,
-        runs = { { text = text, color = color } },
-    }
-end
-
-local function content(source)
-    local selection_background, selection_text = selection_colors()
-    local items = {
-        { type = "rect", x = 0, y = 0, w = WIDTH, h = HEIGHT, radius = 12, color = "#FFFFFFFF" },
-        { type = "text", x = 20, y = 14, text = "小牛在线翻译", size = 18,
-          color = "#FF222222", font = "candidate" },
-        {
-            type = "flat_svg_button",
-            name = "close",
-            x = WIDTH - 44,
-            y = 12,
-            w = 24,
-            h = 24,
-            svg = CLOSE_SVG,
-            shape = "round_rect",
-            radius = 4,
-            normal = { background = "#00000000", svg = "#FF222222" },
-            hovered = { background = "#FFFF3300", svg = "#FFFFFFFF" },
-            pressed = { background = "#FFCC2900", svg = "#FFFFFFFF" },
-            events = { mouse_clicked = "close" },
-        },
-        {
-            type = "text_box",
-            name = "source",
-            x = 20,
-            y = 48,
-            w = WIDTH - 40,
-            h = 126,
-            font = "candidate",
-            font_size = 16,
-            line_spacing = 6,
-            auto_line_wrap = true,
-            back_color = "#FFFFFFFF",
-            edge_color = "#FFD0D0D0",
-            edge_width = 1,
-            text_color = "#FF222222",
-            sel_back_color = selection_background,
-            sel_text_color = selection_text,
-            cursor_color = "#FF4A90E2",
-            text = clamp_source(source),
-            events = { on_key_pressed = "translate_key" },
-        },
-        {
-            type = "text_box",
-            name = "result",
-            x = 20,
-            y = 186,
-            w = WIDTH - 40,
-            h = 160,
-            font = "candidate",
-            font_size = 16,
-            line_spacing = 6,
-            auto_line_wrap = true,
-            read_only = true,
-            back_color = "#FFF7F7F7",
-            edge_color = "#FFD0D0D0",
-            edge_width = 1,
-            text_color = "#FF333333",
-            sel_back_color = selection_background,
-            sel_text_color = selection_text,
-            text = "",
-        },
-    }
-
-    if not CONFIGURED then
-        items[#items + 1] = label(WARNING, 20, 360, 13, "#FFCC3333")
-    end
-    items[#items + 1] = label(HINT, 20, 416, 13, "#FF777777")
-    return items
+local function layout_path()
+    local file = CONFIGURED and "niutrans-window.json" or "niutrans-window-warning.json"
+    return cloudime.install_path("Scripts/lib/" .. file)
 end
 
 local function sign(params)
@@ -270,15 +183,23 @@ local function has_ctrl(modifier)
 end
 
 local function make_window(source)
+    local path = layout_path()
+    if not path then
+        cloudime.log("小牛在线翻译：找不到窗口布局文件（Scripts/lib/niutrans-window*.json）")
+        return
+    end
     win = cloudime.window.create{
         name        = "小牛在线翻译",
         width       = WIDTH,
         height      = HEIGHT,
+        layout      = path,
         interactive = true,
         background  = false,
         shadow      = true,
     }
-    win:set_content(content(source))
+    if source and source ~= "" then
+        win:set_text("source", clamp_source(source))
+    end
     win:show()
     win:focus(true)
     if CONFIGURED and source and source ~= "" then

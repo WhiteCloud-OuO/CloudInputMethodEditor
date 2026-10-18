@@ -1,0 +1,96 @@
+{
+  "width": 600,
+  "height": 450,
+  "controls": [
+    {
+      "name": "background",
+      "type": "rect",
+      "x": 0,
+      "y": 0,
+      "w": 600,
+      "h": 450,
+      "radius": 12,
+      "color": "#FFFFFFFF"
+    },
+    {
+      "name": "title",
+      "type": "text",
+      "x": 20,
+      "y": 14,
+      "text": "小牛在线翻译",
+      "size": 18,
+      "font": "candidate",
+      "color": "#FF222222"
+    },
+    {
+      "name": "close",
+      "type": "flat_svg_button",
+      "x": 556,
+      "y": 12,
+      "w": 24,
+      "h": 24,
+      "svg_path": "Images/SVG/打叉.svg",
+      "shape": "round_rect",
+      "radius": 4,
+      "normal": { "background": "#00000000", "svg": "#FF222222" },
+      "hovered": { "background": "#FFFF3300", "svg": "#FFFFFFFF" },
+      "pressed": { "background": "#FFCC2900", "svg": "#FFFFFFFF" },
+      "events": { "mouse_clicked": "close" }
+    },
+    {
+      "name": "source",
+      "type": "text_box",
+      "x": 20,
+      "y": 48,
+      "w": 560,
+      "h": 126,
+      "font": "candidate",
+      "font_size": 16,
+      "line_spacing": 6,
+      "auto_line_wrap": true,
+      "back_color": "#FFFFFFFF",
+      "edge_color": "#FFD0D0D0",
+      "edge_width": 1,
+      "text_color": "#FF222222",
+      "cursor_color": "#FF4A90E2",
+      "events": { "on_key_pressed": "translate_key" }
+    },
+    {
+      "name": "result",
+      "type": "text_box",
+      "x": 20,
+      "y": 186,
+      "w": 560,
+      "h": 160,
+      "font": "candidate",
+      "font_size": 16,
+      "line_spacing": 6,
+      "auto_line_wrap": true,
+      "read_only": true,
+      "back_color": "#FFF7F7F7",
+      "edge_color": "#FFD0D0D0",
+      "edge_width": 1,
+      "text_color": "#FF333333"
+    },
+    {
+      "name": "warning",
+      "type": "label",
+      "x": 20,
+      "y": 360,
+      "size": 13,
+      "runs": [
+        { "text": "请先在脚本文件中配置小牛翻译 API 和 KEY", "color": "#FFCC3333" }
+      ]
+    },
+    {
+      "name": "hint",
+      "type": "label",
+      "x": 20,
+      "y": 416,
+      "size": 13,
+      "runs": [
+        { "text": "按下 Ctrl+Enter 在线翻译内容", "color": "#FF777777" }
+      ]
+    }
+  ]
+}
