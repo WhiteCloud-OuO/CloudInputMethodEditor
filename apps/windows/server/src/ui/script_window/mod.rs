@@ -959,7 +959,7 @@ impl ScriptWindow {
         let path = edit.path.clone();
         let host = edit.host.clone();
         drop(edits);
-        if self.refresh_text_box_scroll(&path, &host) {
+        if self.refresh_text_box_scroll(&path, &host) && self.shown.get() {
             self.repaint();
         }
     }
