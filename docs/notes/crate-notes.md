@@ -1125,7 +1125,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   滑块胶囊；背景形状就是自动区域，`Region` 的 `drag = false`，避免按住时拖动整窗。值域
   `value/min/max` 为 u64（缺省 0/0/100），解析时夹取。滑块长度 `track/4`（至少一个厚度），
   `thumb_rect` / `value_at` 共用同一套几何；`ScriptWindow` 用 `ScrollDrag` 保存按下点相对滑块的
-  偏移，拖动 / 点轨道更新值并 `SetCapture`；滚轮落在滚动条上按 ±1 并吞掉滚轮。值变化派
+  偏移，拖动 / 点轨道更新值并 `SetCapture`；滚轮落在滚动条上时向上减、向下加 1 并吞掉滚轮。值变化派
   `value_changed`（`ScriptWindowEvent.value`），布局事件名 `value_changed` / `on_value_changed`
   归一。渲染器 `Element::ScrollBar` 画两段 `round_rect`，默认色取主题 `badge` / `highlight`。
   当前只支持顶层滚动条，面板里的滚动条还没有命中 / 拖动宿主。

@@ -892,9 +892,9 @@ impl ScriptWindow {
             return false;
         };
         let value = if delta > 0 {
-            bar.value.saturating_add(1).min(bar.max)
-        } else {
             bar.value.saturating_sub(1).max(bar.min)
+        } else {
+            bar.value.saturating_add(1).min(bar.max)
         };
         if self.set_scrollbar_value(index, value) {
             self.repaint();

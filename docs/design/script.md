@@ -435,7 +435,7 @@ win:set_content{
 - **滚动条**（`hscroll_bar` / `vscroll_bar`）：整条背景胶囊 + 滑块胶囊，都是纯填充、无边框；
   背景形状同时是自动区域。`value` / `min_value` / `max_value` 是 u64（缺省 0 / 0 / 100），
   解析时把 `value` 夹到值域。滑块长度取轨道 1/4（至少一个厚度）；点滑块拖动、点轨道先跳转再拖。
-  鼠标滚轮落在滚动条上时按 ±1 改值并吞掉滚轮；值变化派 `value_changed`，载荷带
+  鼠标滚轮落在滚动条上时按 ±1 改值（向上减、向下加）并吞掉滚轮；值变化派 `value_changed`，载荷带
   `event.control` / `event.value`，`events` 里可写 `value_changed` / `on_value_changed`。
 - **区域（region）**：内容里可以声明 `regions = { … }` —— 区域是**鼠标点击 / 拖拽的命中范围**
   （元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true` = 按住它拖会移动整块窗口，

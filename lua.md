@@ -669,8 +669,8 @@ icon:use_path_mask({ { "M", 0, 0 }, { "L", 16, 0 }, { "L", 16, 16 }, { "L", 0, 1
 - 背景和滑块都是胶囊形状、纯填充无边框；背景就是鼠标命中区域。
 - `value` / `min_value` / `max_value` 是非负整数，缺省 `0 / 0 / 100`；解析时把 `value` 夹到值域。
 - 滑块长度为轨道 1/4（至少一个厚度），点击滑块可以拖动，点击轨道会先跳到该位置再拖动。
-- 鼠标滚轮落在滚动条上时按 ±1 改值，并吞掉这次滚轮；值变化派 `value_changed`，
-  载荷是 `event.control` / `event.value`，也可以声明 `events.value_changed` 处理器。
+- 鼠标滚轮落在滚动条上时按 ±1 改值（向上滚减 1、向下滚加 1），并吞掉这次滚轮；值变化派
+  `value_changed`，载荷是 `event.control` / `event.value`，也可以声明 `events.value_changed` 处理器。
 - 垂直滚动条同字段；`vhscroll_bar` / `vhsroll_bar` 是兼容拼写。
 
 **区域（region）**：一块可以被鼠标**点击 / 拖拽**的范围 —— 元素只管画，交互看区域：
