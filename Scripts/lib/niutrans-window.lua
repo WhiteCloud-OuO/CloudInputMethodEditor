@@ -339,13 +339,13 @@ cloudime.on("window", function(event)
     if not win or event.id ~= win.id then
         return
     end
-    if event.handler == "close" and event.control == "close" then
+    if event.handler == "close" then
         win:close()
         win = nil
         pending_request = false
         return
     end
-    if event.control == "source"
+    if event.handler == "translate_key"
         and event.action == "key_pressed"
         and event.key == 13
         and has_ctrl(event.modifier)
