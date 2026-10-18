@@ -607,9 +607,12 @@ pub(crate) fn load_layout_document(
     fallback: (Option<f32>, Option<f32>),
     images: &mut ImageCache,
 ) -> mlua::Result<Document> {
-    let content = crate::layout_file::read(lua, path)?;
-    parse_document(&content, fallback, images)
-        .map_err(|error| mlua::Error::RuntimeError(format!("布局文件 {}：{error}", path.display())))
+    let layout = crate::layout_file::read(lua, path)?;
+    let mut document = parse_document(&layout.table, fallback, images).map_err(|error| {
+        mlua::Error::RuntimeError(format!("布局文件 {}：{error}", path.display()))
+    })?;
+    document.control_names = layout.control_names;
+    Ok(document)
 }
 
 /// 内容表 → [`Document`]：`width` / `height` 可省（用句柄里那份），元素是 1 起的数组。
@@ -704,6 +707,7 @@ fn parse_document(
         height,
         elements,
         regions,
+        control_names: Vec::new(),
     })
 }
 
@@ -1679,6 +1683,9 @@ pub struct ScriptWindowEvent {
     /// 命中的**区域**名（内容里 `regions` 那个 `name`）；没命中 / 没声明区域时是 `None`。
     pub region: Option<String>,
 
+    /// 命中的控件名（布局文件里每个控件的 `name`）；没有名字或没命中根元素时是 `None`。
+    pub control: Option<String>,
+
     /// 区域 / 布局为这个事件声明的处理器名（`events` 表）；没声明是 `None`。
     pub handler: Option<String>,
 
@@ -1701,6 +1708,7 @@ pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result
     payload.set("y", event.y)?;
     payload.set("element", event.element)?;
     payload.set("region", event.region.clone())?;
+    payload.set("control", event.control.clone())?;
     payload.set("handler", event.handler.clone())?;
     payload.set("delta", event.delta)?;
     payload.set("ctrl", event.ctrl)?;
@@ -1735,6 +1743,35 @@ mod tests {
         );
         assert_eq!(parse_hex_color("#12345"), None);
         assert_eq!(parse_hex_color("gggggg"), None);
+    }
+
+    /// 随包测试布局能通过内容解析器，名字也进入 Document。
+    #[test]
+    fn bundled_json_layout_parses_into_a_document() {
+        let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("../../Scripts/lib/test-caret-window.json");
+        let lua = mlua::Lua::new();
+        let document = load_layout_document(
+            &lua,
+            &path,
+            (Some(500.0), Some(360.0)),
+            &mut ImageCache::default(),
+        )
+        .unwrap_or_else(|error| panic!("{}：{error}", path.display()));
+        assert!(
+            document
+                .control_names
+                .iter()
+                .any(|control| control.name == "search")
+        );
+        assert!(
+            document
+                .control_names
+                .iter()
+                .any(|control| control.name == "close")
+        );
+        assert_eq!(document.control_name(3), Some("search"));
+        assert_eq!(document.control_name(5), Some("close"));
     }
 
     /// 扁平按钮的六个事件名。
@@ -1839,6 +1876,7 @@ mod tests {
             y: 8.0,
             element: Some(2),
             region: Some("plus".to_owned()),
+            control: Some("Counter".to_owned()),
             handler: Some("plus_clicked".to_owned()),
             delta: Some(120),
             ctrl: true,
@@ -1852,6 +1890,7 @@ mod tests {
         assert!(payload.get::<bool>("shift").unwrap());
         assert_eq!(payload.get::<String>("window").unwrap(), "面板");
         assert_eq!(payload.get::<String>("region").unwrap(), "plus");
+        assert_eq!(payload.get::<String>("control").unwrap(), "Counter");
         assert_eq!(payload.get::<String>("handler").unwrap(), "plus_clicked");
         assert_eq!(payload.get::<u32>("id").unwrap(), 3);
         assert_eq!(payload.get::<i32>("delta").unwrap(), 120);

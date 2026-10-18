@@ -46,7 +46,7 @@ use windows::core::{PCWSTR, Result, w};
 
 use cloudime_platform::LayoutMode;
 use cloudime_platform::input_schemes;
-use cloudime_render::{Layout, key_map_cell};
+use cloudime_render::{ControlName, Layout, key_map_cell};
 
 use super::layered;
 use super::monitor;
@@ -129,6 +129,7 @@ pub(super) struct PanelEvent {
     pub y: f32,
     pub element: Option<usize>,
     pub region: Option<String>,
+    pub control: Option<String>,
     pub handler: Option<String>,
     pub delta: Option<i32>,
 }
@@ -166,6 +167,9 @@ pub(super) struct AuxiliaryWindowTemplate {
 
     /// 脚本内容里声明的区域（点击 / 拖拽范围）。
     regions: RefCell<Vec<cloudime_render::Region>>,
+
+    /// 脚本内容里的控件名（布局文件）：事件里给 `control`。
+    control_names: RefCell<Vec<ControlName>>,
 
     /// 鼠标正停在哪个元素上（1 起；`None` = 没停在任何元素上）：悬停事件只在换元素时派。
     /// 与区域一起组成「这一拍停在哪」，换元素 / 换区域都算换。
@@ -240,6 +244,7 @@ impl AuxiliaryWindowTemplate {
             events: RefCell::new(None),
             hits: RefCell::new(Vec::new()),
             regions: RefCell::new(Vec::new()),
+            control_names: RefCell::new(Vec::new()),
             hover: Cell::new(None),
             last: Cell::new((0, 0)),
             scale: Cell::new(1.0),
@@ -273,6 +278,7 @@ impl AuxiliaryWindowTemplate {
 
     /// 换面板里要画的脚本内容（`cloudime.window.create_auxiliary` + `set_content`）。
     pub(super) fn set_document(&self, document: cloudime_render::Document) {
+        *self.control_names.borrow_mut() = document.control_names.clone();
         *self.content.borrow_mut() = Content::Document(document);
         self.revision.set(self.revision.get() + 1);
     }
@@ -347,6 +353,14 @@ impl AuxiliaryWindowTemplate {
                 ))
             })
             .unwrap_or((None, None));
+        let control = element.and_then(|element| {
+            let index = element.checked_sub(1)?;
+            self.control_names
+                .borrow()
+                .iter()
+                .find(|control| control.path.len() == 1 && control.path[0] == index)
+                .map(|control| control.name.clone())
+        });
         if let Some(events) = self.events.borrow().as_ref() {
             events(PanelEvent {
                 action,
@@ -354,6 +368,7 @@ impl AuxiliaryWindowTemplate {
                 y,
                 element,
                 region,
+                control,
                 handler,
                 delta,
             });

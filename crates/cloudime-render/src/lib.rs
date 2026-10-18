@@ -37,7 +37,9 @@ pub use control::{
     StaticShape, SvgAlign, TextBlock, TextEdit,
 };
 /// 脚本窗口 / 面板的内容：**声明式**元素表（display list），由 [`Renderer::render_document`] 一次出图。
-pub use document::{Document, Element, FontSlot, HitRect, HitShape, PathCommand, Region};
+pub use document::{
+    ControlName, Document, Element, FontSlot, HitRect, HitShape, PathCommand, Region,
+};
 /// **能画的元素**的 traits：`text` / `svg` / `img` / `line` / `rect`（含圆角与圆）/ `path`；
 /// 以及控件绘制用的一整套 [`ControlRender`]。
 pub use elements::{

@@ -872,6 +872,16 @@ impl ScriptWindow {
             .map(str::to_owned)
     }
 
+    /// 命中的根元素对应的布局控件名。
+    fn control_name(&self, element: Option<usize>) -> Option<String> {
+        element.and_then(|element| {
+            self.document
+                .borrow()
+                .control_name(element)
+                .map(str::to_owned)
+        })
+    }
+
     fn emit(&self, action: WindowAction, client_x: i32, client_y: i32) {
         self.emit_with_delta(action, client_x, client_y, None);
     }
@@ -885,6 +895,7 @@ impl ScriptWindow {
     ) {
         let (x, y, element, region) = self.hit_at(client_x, client_y);
         let (region, handler) = self.region_details(region, action);
+        let control = self.control_name(element);
         let (ctrl, alt, shift) = modifiers();
         (self.events)(ScriptWindowEvent {
             window: self.id,
@@ -894,6 +905,7 @@ impl ScriptWindow {
             y,
             element,
             region,
+            control,
             handler,
             delta,
             ctrl,
@@ -936,6 +948,7 @@ impl ScriptWindow {
             return;
         };
         let handler = self.region_handler(&region, action);
+        let control = self.control_name(Some(index + 1));
         let (x, y, _, _) = self.hit_at(client_x, client_y);
         let (ctrl, alt, shift) = modifiers();
         (self.events)(ScriptWindowEvent {
@@ -946,6 +959,7 @@ impl ScriptWindow {
             y,
             element: Some(index + 1),
             region: Some(region),
+            control,
             handler,
             delta: None,
             ctrl,
@@ -1157,6 +1171,7 @@ impl ScriptAuxiliary {
                 y: panel.y,
                 element: panel.element,
                 region: panel.region.clone(),
+                control: panel.control.clone(),
                 handler: panel.handler.clone(),
                 delta: panel.delta,
                 ctrl: false,

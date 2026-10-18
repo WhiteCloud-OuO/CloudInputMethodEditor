@@ -22,9 +22,9 @@
   "width": 500,
   "height": 360,
   "controls": [
-    { "type": "rect", "x": 0, "y": 0, "w": 500, "h": 360,
+    { "name": "background", "type": "rect", "x": 0, "y": 0, "w": 500, "h": 360,
       "radius": 12, "color": "#FFFFFFFF" },
-    { "type": "flat_svg_button", "name": "close", "x": 468, "y": 8,
+    { "name": "close", "type": "flat_svg_button", "x": 468, "y": 8,
       "w": 24, "h": 24, "svg_path": "Images/SVG/打叉.svg",
       "shape": "round_rect", "radius": 4,
       "normal": { "background": "#00000000", "svg": "#FF000000" },
@@ -37,10 +37,14 @@
 ```
 
 - `controls` 与 `elements` 等价；根数组等价于只有控件、尺寸用窗口缺省。
+- **每个控件都必须写 `name`**：以英文字母开头，后续只允许英文字母 / 数字 / 下划线，最长 255 个字符；
+  同一份布局里区分大小写唯一（`A1` 与 `a1` 是两个名字）；不能是 Rust 关键字。
+  它是脚本认控件的标识符，窗口事件里对应 `event.control`。
 - `width` / `height` 可省：`win:load_layout` 用句柄上的尺寸，`create{ layout = … }` 用创建参数；
   文件里写了就覆盖。
 - `regions` 与 `set_content` 的 `regions` 同义；`drag` 缺省 `true`。
-- 路径字段（`svg_path` / `img.path`）与 Lua 一样按 Server 工作目录（安装目录）解析。
+- 路径字段（`svg_path` / `img.path`）先按布局文件所在目录找，再逐级向上找；放在 `Scripts/lib/`
+  的布局可以直接引用安装根目录的 `Images/...`，也可以把素材放在布局旁边。
 - 文件上限 4 MB；控件数量、文字长度、图片像素等沿用 `script.md` 的内容限额。
 
 ## 事件响应
@@ -55,7 +59,7 @@
   扁平按钮的单击也接受 `click` / `double_click` 别名，真正派发的动作仍是 `mouse_clicked` /
   `mouse_double_clicked`。
 - 解析器把事件表挂到对应**自动区域**（按钮 / 编辑框）或显式区域上；窗口事件载荷增加
-  `handler`。脚本可以集中处理：
+  `handler` 和 `control`（命中的控件名）。脚本可以集中处理：
 
   ```lua
   cloudime.on("window", function(event)

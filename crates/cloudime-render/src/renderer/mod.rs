@@ -1295,6 +1295,7 @@ mod tests {
             width: 120.0,
             height: 48.0,
             regions: Vec::new(),
+            control_names: Vec::new(),
             elements: vec![
                 Element::Rect {
                     x: 0.0,
@@ -1368,6 +1369,7 @@ mod tests {
             width: 120.0,
             height: 80.0,
             regions: Vec::new(),
+            control_names: Vec::new(),
             elements: vec![
                 Element::Panel(Panel {
                     x: 0.0,
@@ -1480,6 +1482,7 @@ mod tests {
                 width: 40.0,
                 height: 40.0,
                 regions: Vec::new(),
+                control_names: Vec::new(),
                 elements: vec![Element::FlatSvgButton(button(state))],
             };
             renderer

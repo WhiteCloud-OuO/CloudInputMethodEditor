@@ -477,8 +477,8 @@ aux:show()
   "width": 500,
   "height": 360,
   "controls": [
-    { "type": "rect", "x": 0, "y": 0, "w": 500, "h": 360, "radius": 12, "color": "#FFFFFFFF" },
-    { "type": "flat_svg_button", "name": "close", "x": 468, "y": 8, "w": 24, "h": 24,
+    { "name": "background", "type": "rect", "x": 0, "y": 0, "w": 500, "h": 360, "radius": 12, "color": "#FFFFFFFF" },
+    { "name": "close", "type": "flat_svg_button", "x": 468, "y": 8, "w": 24, "h": 24,
       "svg_path": "Images/SVG/打叉.svg", "shape": "round_rect", "radius": 4,
       "normal": { "background": "#00000000", "svg": "#FF000000" },
       "events": { "mouse_clicked": "close_window" } }
@@ -490,6 +490,9 @@ aux:show()
 ```
 
 - `controls` 与 `elements` 等价；`width` / `height` / `regions` 可省（尺寸缺省用窗口那份）。根也可以直接写控件数组。
+- **每个控件必须写 `name`**：英文字母开头，只能包含英文字母 / 数字 / 下划线，最长 255 个字符，
+  同一份布局里唯一（区分大小写），且不能是 Rust 关键字。这个名称会作为控件标识符出现在
+  窗口事件的 `event.control` 里。
 - 动态控件（`flat_svg_button` / `text_edit`）可以写 `events = { 事件名 = "处理器名" }`；事件名用
   `click` / `right_click` / `hover` / `leave` / `wheel` / `focus` / `blur` / `mouse_enter` / `mouse_leave` /
   `mouse_pressed` / `mouse_released` / `mouse_clicked` / `mouse_double_clicked`（扁平按钮的单击也可写
@@ -505,9 +508,9 @@ aux:show()
   ```
 
   没有声明 `events` 的普通交互仍按 `event.region` / `event.element` + `event.action` 分发。
-- 布局文件里的 `svg_path` / `img.path` 与 Lua 一样按 Server 工作目录（安装目录）解析；相对路径建议用
-  `cloudime.install_path` 拼出绝对路径，或把文件放在安装目录下。
-- 改布局文件后要重新 `load_layout` 或重启输入法服务；不会自动监听文件变化。
+- 布局文件里的 `svg_path` / `img.path` 先按布局文件所在目录找，再逐级向上找；因此放在
+  `Scripts/lib/` 的布局可以直接写 `Images/...`（落到安装根目录），也可以把素材放在布局旁边。
+  改布局文件后要重新 `load_layout` 或重启输入法服务；不会自动监听文件变化。
 
 **元素表**（坐标 / 尺寸都是点，超出内容区的部分被裁掉）：
 
@@ -701,6 +704,7 @@ cloudime.on("window", function(event)
     -- event.x / event.y            内容区坐标（点）
     -- event.element               命中的元素（内容数组里 1 起的下标；没命中是 nil）
     -- event.region                命中的区域名（内容里的 regions；没命中是 nil）
+    -- event.control               命中的控件名（布局文件里的 name；没命中 / 没写 name 是 nil）
     -- event.handler               区域 / 布局声明的事件处理器名（events 表；没声明是 nil）
     -- event.delta                 滚轮量（一格 ±120，正数往上；只有 wheel 有）
     if event.action == "wheel" then

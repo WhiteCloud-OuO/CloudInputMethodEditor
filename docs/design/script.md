@@ -331,8 +331,8 @@ win:set_content{
   "width": 500,
   "height": 360,
   "controls": [
-    { "type": "rect", "x": 0, "y": 0, "w": 500, "h": 360, "radius": 12, "color": "#FFFFFFFF" },
-    { "type": "flat_svg_button", "name": "close", "x": 468, "y": 8, "w": 24, "h": 24,
+    { "name": "background", "type": "rect", "x": 0, "y": 0, "w": 500, "h": 360, "radius": 12, "color": "#FFFFFFFF" },
+    { "name": "close", "type": "flat_svg_button", "x": 468, "y": 8, "w": 24, "h": 24,
       "svg_path": "Images/SVG/打叉.svg", "shape": "round_rect", "radius": 4,
       "normal": { "background": "#00000000", "svg": "#FF000000" },
       "events": { "mouse_clicked": "close_window" } }
@@ -343,7 +343,9 @@ win:set_content{
 }
 ```
 
-- **字段与 Lua 元素表一一对应**：`type` 必写；非必填项省略或写 `null` 时走同一套缺省值。
+- **字段与 Lua 元素表一一对应**：`type` 必写；每个控件还必须写 `name`（英文字母开头，只含
+  英文字母 / 数字 / 下划线，最长 255，布局内区分大小写唯一，不能是 Rust 关键字），名字会进
+  窗口事件的 `event.control`。非必填项省略或写 `null` 时走同一套缺省值。
   顶层 `controls` 与 `elements` 等价；根也可以直接是控件数组。`width` / `height` / `regions` 可省，
   缺省尺寸用窗口创建时那份（`create{ layout = … }` 时布局文件里的尺寸优先）。
 - **事件响应**：动态控件（`flat_svg_button` / `text_edit`）和 `regions` 条目可以写
@@ -360,8 +362,8 @@ win:set_content{
   ```
 
   没声明 `events` 时仍按 `event.region` / `event.element` + `event.action` 分发，完全兼容旧脚本。
-- **路径**：`svg_path` / `img.path` 仍按 Server 工作目录（安装目录）解析，与 Lua 一致；
-  布局文件本身不提供“相对布局文件目录”的自动换算。
+- **路径**：JSON 里的 `svg_path` / `img.path` 先按布局文件所在目录找，再逐级向上找；放在
+  `Scripts/lib/` 的布局可以直接引用安装根目录的 `Images/...`，也可以把素材放在布局旁边。
 - **限额**：布局文件最大 **4 MB**；控件沿用内容限额（512 个元素、文字 4096 字符等）。
   改文件后要再 `load_layout` 或重启 Server，不监听文件变化。
 
@@ -434,6 +436,7 @@ cloudime.on("window", function(event)
     -- event.x, event.y   内容区坐标（点）
     -- event.element  命中的元素（内容是 1 起的数组，这里也是 1 起；没命中是 nil）
     -- event.region   命中的区域名（内容里的 regions；没命中是 nil）
+    -- event.control  命中的控件名（布局文件里的 name；没命中 / 没写 name 是 nil）
     -- event.handler  区域 / 布局声明的事件处理器名（events 表；没声明是 nil）
     -- event.delta    滚轮量（一格 ±120，正数往上；只有 wheel 有）
     if event.action == "wheel" then

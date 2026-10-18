@@ -40,19 +40,6 @@ fn the_caret_window_script_draws_and_closes_itself() {
     std::fs::copy(&source, dir.join("test-caret-window.lua")).unwrap();
     let runtime = Runtime::load(&dir, &[]);
     runtime.set_install_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
-    // 当前主题：脚本用 `cloudime.get_theme()` 取色（这里只给用到的几项）。
-    runtime.set_theme_hook(std::rc::Rc::new(
-        |lua: &mlua::Lua| -> mlua::Result<mlua::Table> {
-            let candidate = lua.create_table()?;
-            candidate.set("background", "#FF123456")?;
-            candidate.set("text", "#FFABCDEF")?;
-            candidate.set("page_number", "#FF888888")?;
-            candidate.set("extra", "#FF0000FF")?;
-            let theme = lua.create_table()?;
-            theme.set("candidate", candidate)?;
-            Ok(theme)
-        },
-    ));
     assert!(runtime.scripts().iter().any(|name| name == "光标窗口测试"));
 
     // Ctrl+Alt+F3：脚本请求光标位置。
@@ -109,14 +96,14 @@ fn the_caret_window_script_draws_and_closes_itself() {
     assert_eq!(show, (100.0, 246.0), "上方放不下，改到光标下方 30 点");
 
     let document = content_of(&requests, id);
-    // 背景由脚本自己画：第一块是整窗圆角矩形，颜色来自 `cloudime.get_theme()`。
+    // 背景由 JSON 布局自己画：第一块是整窗圆角矩形。
     assert!(matches!(
         &document.elements[0],
         Element::Rect { x, y, width, height, color, .. }
             if x.abs() < 0.01 && y.abs() < 0.01
                 && (*width - 500.0).abs() < 0.01
                 && (*height - 360.0).abs() < 0.01
-                && *color == Color::rgba(0x12, 0x34, 0x56, 0xFF)
+                && *color == Color::rgba(0xFF, 0xFF, 0xFF, 0xFF)
     ));
     assert!(
         document.elements.iter().any(|element| matches!(
@@ -131,6 +118,18 @@ fn the_caret_window_script_draws_and_closes_itself() {
         "关闭按钮是扁平 SVG 按钮（画板 20×20，自动区域 close）"
     );
     assert!(document.regions.iter().any(|region| region.name == "close"));
+    assert!(
+        document
+            .control_names
+            .iter()
+            .any(|control| control.name == "search")
+    );
+    assert!(
+        document
+            .control_names
+            .iter()
+            .any(|control| control.name == "close")
+    );
 
     // 开着窗口再按 F3：不创建、不关闭。
     runtime.dispatch("key", key, None);
@@ -157,6 +156,14 @@ fn the_caret_window_script_draws_and_closes_itself() {
                 ),
                 (
                     "region",
+                    mlua::Value::String(runtime.lua().create_string("close").unwrap()),
+                ),
+                (
+                    "handler",
+                    mlua::Value::String(runtime.lua().create_string("close").unwrap()),
+                ),
+                (
+                    "control",
                     mlua::Value::String(runtime.lua().create_string("close").unwrap()),
                 ),
             ],

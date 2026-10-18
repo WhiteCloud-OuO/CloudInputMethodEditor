@@ -3848,7 +3848,7 @@ mod tests {
                 "width": 180,
                 "height": 70,
                 "controls": [
-                    { "type": "rect", "x": 0, "y": 0, "w": 180, "h": 70,
+                    { "name": "background", "type": "rect", "x": 0, "y": 0, "w": 180, "h": 70,
                       "color": "#FF000000" }
                 ]
             }"##,
@@ -3899,7 +3899,7 @@ mod tests {
                 "width": 260,
                 "height": 90,
                 "controls": [
-                    { "type": "rect", "x": 0, "y": 0, "w": 260, "h": 90,
+                    { "name": "background", "type": "rect", "x": 0, "y": 0, "w": 260, "h": 90,
                       "radius": 8, "color": "#FFFFFFFF" },
                     { "type": "flat_svg_button", "name": "close", "x": 232, "y": 8,
                       "w": 20, "h": 20,

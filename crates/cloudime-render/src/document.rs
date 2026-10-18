@@ -30,6 +30,19 @@ pub struct Document {
 
     /// 可交互的**区域**（点击 / 拖拽的命中范围）；空表 = 没有区域（元素仍可单独命中）。
     pub regions: Vec<Region>,
+
+    /// JSON 布局里的控件名：名字 → 元素路径；脚本 / 事件按它认控件。
+    pub control_names: Vec<ControlName>,
+}
+
+/// 一个控件的名字与它在内容树里的位置（根元素从 0 开始，`children` 继续往下）。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ControlName {
+    /// 布局文件里的 `name`，同一份布局内唯一。
+    pub name: String,
+
+    /// 元素路径：`[根元素下标]` 或 `[根元素下标, 子元素下标, …]`（0 起）。
+    pub path: Vec<usize>,
 }
 
 impl Document {
@@ -40,7 +53,17 @@ impl Document {
             height,
             elements: Vec::new(),
             regions: Vec::new(),
+            control_names: Vec::new(),
         }
+    }
+
+    /// 命中的根元素（事件里的 `element`，1 起）对应的控件名。
+    pub fn control_name(&self, element: usize) -> Option<&str> {
+        let index = element.checked_sub(1)?;
+        self.control_names
+            .iter()
+            .find(|control| control.path.len() == 1 && control.path[0] == index)
+            .map(|control| control.name.as_str())
     }
 }
 
@@ -925,6 +948,7 @@ impl std::fmt::Debug for Document {
             .field("height", &self.height)
             .field("elements", &self.elements.len())
             .field("regions", &self.regions.len())
+            .field("control_names", &self.control_names.len())
             .finish()
     }
 }
