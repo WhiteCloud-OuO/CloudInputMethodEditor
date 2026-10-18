@@ -12,7 +12,7 @@
 | [`docs/notes/crate-notes.md`](docs/notes/crate-notes.md) | 实现要点（`crates/cloudime-script`、Server 的「用户脚本」两节） |
 | [`Scripts/template.lua`](Scripts/template.lua) | 「新建脚本」用的模板（只有清单骨架） |
 | [`Scripts/lib/example-niutrans.lua`](Scripts/lib/example-niutrans.lua) | 完整示例：小牛翻译（签名、表单编码、折行、多行显示） |
-| [`Scripts/lib/niutrans-window.lua`](Scripts/lib/niutrans-window.lua) | 小牛翻译窗口：Ctrl+Alt+Y 复制选中文本、光标旁多行编辑窗口、自动翻译；静态布局在同目录 `niutrans-window*.json` |
+| [`Scripts/lib/niutrans-window.lua`](Scripts/lib/niutrans-window.lua) | 小牛翻译窗口：Ctrl+Alt+Y 复制选中文本、光标旁多行编辑窗口、自动翻译；静态布局在同目录 `niutrans-window.json` |
 | [`Scripts/lib/example-theme-by-app.lua`](Scripts/lib/example-theme-by-app.lua) | 示例：按前台程序换主题（组合键触发 + `cloudime.foreground_app()` / `cloudime.apply_theme()`） |
 | [`Scripts/lib/example-auto-number.lua`](Scripts/lib/example-auto-number.lua) | 示例：自动序号（`combination_key` + `none` 单键 + `cloudime.context` + `commit`「换行 + 下一条序号」） |
 | [`Scripts/lib/example-window.lua`](Scripts/lib/example-window.lua) | 示例：脚本窗口（动态内容用 `set_content`；一般窗口布局优先 JSON 文件） |
@@ -481,6 +481,7 @@ aux:show()
 | `win:load_layout(path)` | 读一份 JSON 布局文件并换成整份内容；`width` / `height` / 控件 / 区域都从文件来 |
 | `win:get_text(name)` | 读某个 `text_edit` / `text_box` 最近一次文本；控件不存在 / 还没有文本时给 `nil` |
 | `win:set_text(name, text)` | 设置某个 `text_edit` / `text_box` 的文本（按控件名找，整份替换、光标放到末尾） |
+| `win:update_content(name, text)` | 更新静态 `label` / `text_block` 的显示文字；控件仍是静态的，不参与鼠标 / 键盘交互。`label` 沿用第一段文字的颜色 |
 | `win:select_all(name, all?)` | 全选；`all` 缺省 `true`，传 `false` 取消选择（选区收在末尾） |
 | `win:replace(name, find, text)` | 把文本里的 `find` **全部**替换成 `text`（`find` 为空不做事） |
 | `win:clear(name)` | 清空某个 `text_edit` / `text_box` |
@@ -492,6 +493,9 @@ aux:show()
 | `win:prune_region(name, 形状)` | 从已有区域里挖掉形状（只改命中、不重画） |
 | `win:region_contains(name, x, y)` | 点是否在区域里（含边界）；没有这个区域给 `nil` |
 | `win:region_relation(a, b)` | 两块区域的关系：`{ relation = "disjoint" / "intersect" / "contains" / "coincide", contains = "a" / "b" }`；没有区域给 `nil` |
+
+`win:update_content(name, text)` 只更新 JSON 布局里有 `name` 的 `label` / `text_block`；它们仍不参与
+鼠标 / 键盘交互。内联 `set_content` 创建的静态元素没有控件名表，不能用这个方法按名字更新。
 
 **JSON 布局文件**：`win:load_layout(path)` 或 `cloudime.window.create{ layout = path }` 可以直接读一份前台 UI 文件，
 控件字段与上面的元素表一致（`type` 必写，其余没写的项用元素表缺省值）。顶层格式：

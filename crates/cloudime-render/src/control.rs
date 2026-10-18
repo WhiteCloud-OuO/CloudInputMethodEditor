@@ -34,6 +34,20 @@ pub struct Label {
 }
 
 impl Label {
+    /// 更新静态标签的文字。颜色沿用第一个 run 的颜色；多色 run 会被合并成一段。
+    pub fn update_content(&mut self, text: &str) {
+        let color = self
+            .runs
+            .first()
+            .map(|run| run.color)
+            .unwrap_or(Color::rgb(0, 0, 0));
+        self.runs.clear();
+        self.runs.push(LabelRun {
+            text: text.to_owned(),
+            color,
+        });
+    }
+
     pub(crate) fn draw<R: ControlRender>(
         &self,
         render: &mut R,
@@ -65,6 +79,11 @@ pub struct TextBlock {
 }
 
 impl TextBlock {
+    /// 更新静态多行文本内容；不参与命中或编辑。
+    pub fn update_content(&mut self, text: &str) {
+        self.text = text.to_owned();
+    }
+
     pub(crate) fn draw<R: ControlRender>(
         &self,
         render: &mut R,

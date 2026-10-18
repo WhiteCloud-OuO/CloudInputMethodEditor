@@ -319,6 +319,13 @@ pub enum Request {
         text: String,
     },
 
+    /// 更新静态 `label` / `text_block` 的显示文本（不参与交互）。
+    UpdateContent {
+        id: WindowId,
+        name: String,
+        text: String,
+    },
+
     /// 全选（`true`）或取消选择（`false`）。
     SelectAll {
         id: WindowId,
@@ -422,6 +429,19 @@ pub(crate) fn handle(
                 set_text_requests
                     .borrow_mut()
                     .push(Request::SetText { id, name, text });
+                Ok(())
+            },
+        )?,
+    )?;
+
+    let update_requests = requests.clone();
+    handle.set(
+        "update_content",
+        lua.create_function(
+            move |_, (_this, name, text): (mlua::Table, String, String)| {
+                update_requests
+                    .borrow_mut()
+                    .push(Request::UpdateContent { id, name, text });
                 Ok(())
             },
         )?,
@@ -2323,19 +2343,29 @@ mod tests {
                 .as_deref(),
             Some("")
         );
-        let requests = requests.borrow();
-        assert!(requests.iter().any(|request| matches!(
+        let taken = requests.borrow();
+        assert!(taken.iter().any(|request| matches!(
             request,
             Request::SelectAll { name, select: false, .. } if name == "search"
         )));
-        assert!(requests.iter().any(|request| matches!(
+        assert!(taken.iter().any(|request| matches!(
             request,
             Request::ReplaceText { name, find, text, .. }
                 if name == "search" && find == "world" && text == "earth"
         )));
-        assert!(requests.iter().any(|request| matches!(
+        assert!(taken.iter().any(|request| matches!(
             request,
             Request::ClearText { name, .. } if name == "search"
+        )));
+        drop(taken);
+
+        lua.load("win:update_content('hint', '新提示')")
+            .exec()
+            .unwrap();
+        assert!(requests.borrow().iter().any(|request| matches!(
+            request,
+            Request::UpdateContent { name, text, .. }
+                if name == "hint" && text == "新提示"
         )));
     }
 

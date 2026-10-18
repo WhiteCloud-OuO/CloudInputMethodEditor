@@ -73,6 +73,16 @@
       "text_color": "#FF333333"
     },
     {
+      "name": "warning",
+      "type": "label",
+      "x": 20,
+      "y": 360,
+      "size": 13,
+      "runs": [
+        { "text": "", "color": "#FFCC3333" }
+      ]
+    },
+    {
       "name": "hint",
       "type": "label",
       "x": 20,

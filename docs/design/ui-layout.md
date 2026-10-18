@@ -42,7 +42,8 @@
 - `controls` 与 `elements` 等价；根数组等价于只有控件、尺寸用窗口缺省。
 - **每个控件都必须写 `name`**：以英文字母开头，后续只允许英文字母 / 数字 / 下划线，最长 255 个字符；
   同一份布局里区分大小写唯一（`A1` 与 `a1` 是两个名字）；不能是 Rust 关键字。
-  它是脚本认控件的标识符，窗口事件里对应 `event.control`。
+  它是脚本认控件的标识符，窗口事件里对应 `event.control`；静态 `label` / `text_block` 也可用
+  `win:update_content(name, text)` 按名称更新显示内容（仍不参与交互）。
 - `width` / `height` 可省：`win:load_layout` 用句柄上的尺寸，`create{ layout = … }` 用创建参数；
   文件里写了就覆盖。
 - `regions` 与 `set_content` 的 `regions` 同义；`drag` 缺省 `true`。

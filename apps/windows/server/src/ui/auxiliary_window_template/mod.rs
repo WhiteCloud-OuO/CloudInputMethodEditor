@@ -283,6 +283,21 @@ impl AuxiliaryWindowTemplate {
         self.revision.set(self.revision.get() + 1);
     }
 
+    /// 更新静态 `label` / `text_block` 的文字；只影响内容，不重建窗口。
+    pub(super) fn update_static_content(&self, name: &str, text: &str) -> bool {
+        let mut content = self.content.borrow_mut();
+        let Content::Document(document) = &mut *content else {
+            tracing::warn!("辅助窗口：只有脚本内容才能更新静态文本");
+            return false;
+        };
+        if !document.update_static_text(name, text) {
+            tracing::warn!(control = name, "辅助窗口：找不到 label / text_block");
+            return false;
+        }
+        self.revision.set(self.revision.get() + 1);
+        true
+    }
+
     /// 动态改一个区域的命中范围（合并 / 剪除）：只影响鼠标命中，不重画。
     pub(super) fn edit_region(&self, name: &str, shape: cloudime_render::HitShape, combine: bool) {
         let mut content = self.content.borrow_mut();

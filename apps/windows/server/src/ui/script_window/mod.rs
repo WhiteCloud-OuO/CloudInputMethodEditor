@@ -152,6 +152,20 @@ impl ScriptWindows {
                     tracing::warn!(id, control = name, "脚本窗口：set_text 时找不到这块窗口");
                 }
             }
+            WindowRequest::UpdateContent { id, name, text } => {
+                if let Some(window) = self.windows.get(&id) {
+                    window.update_static_content(&name, &text);
+                } else if let Some(aux) = self.auxiliaries.get(&id).cloned() {
+                    aux.update_static_content(&name, &text);
+                    self.sync_owner(&aux);
+                } else {
+                    tracing::warn!(
+                        id,
+                        control = name,
+                        "脚本窗口：update_content 时找不到这块窗口"
+                    );
+                }
+            }
             WindowRequest::SelectAll { id, name, select } => {
                 if let Some(window) = self.windows.get(&id) {
                     window.select_all(&name, select);
@@ -789,6 +803,28 @@ impl ScriptWindow {
                 "text_edit：set_text 找不到控件"
             );
         }
+    }
+
+    /// 更新静态 `label` / `text_block` 的文字；只重画，不重建编辑框。
+    fn update_static_content(&self, name: &str, text: &str) -> bool {
+        {
+            let mut document = self.document.borrow_mut();
+            if !document.update_static_text(name, text) {
+                tracing::warn!(
+                    id = self.id,
+                    control = name,
+                    "静态文本：找不到 label / text_block"
+                );
+                return false;
+            }
+        }
+        self.revision.set(self.revision.get() + 1);
+        if self.shown.get()
+            && let Some(position) = self.position.get()
+        {
+            self.render_and_present(position);
+        }
+        true
     }
 
     /// 全选 / 取消选择。
@@ -2117,6 +2153,10 @@ impl ScriptAuxiliary {
 
     fn set_content(&self, document: Document) {
         self.template.set_document(document);
+    }
+
+    fn update_static_content(&self, name: &str, text: &str) -> bool {
+        self.template.update_static_content(name, text)
     }
 
     /// 动态改一个区域的命中范围（合并 / 剪除）。

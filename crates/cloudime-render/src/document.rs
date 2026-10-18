@@ -106,6 +106,31 @@ impl Document {
             .find(|control| control.path == path)
             .map(|control| control.name.as_str())
     }
+
+    /// 更新一个静态 `label` / `text_block` 的显示文本；只改内容，不参与命中或编辑。
+    ///
+    /// 控件名来自 JSON 布局的 `control_names`；找不到、名字不是静态文本控件时返回 `false`。
+    pub fn update_static_text(&mut self, name: &str, text: &str) -> bool {
+        let Some(path) = self
+            .control_names
+            .iter()
+            .find(|control| control.name == name)
+            .map(|control| control.path.clone())
+        else {
+            return false;
+        };
+        match self.element_at_path_mut(&path) {
+            Some(Element::Label(label)) => {
+                label.update_content(text);
+                true
+            }
+            Some(Element::TextBlock(block)) => {
+                block.update_content(text);
+                true
+            }
+            _ => false,
+        }
+    }
 }
 
 fn collect_text_edits(
@@ -1235,6 +1260,60 @@ mod tests {
         let touching = rect(100.0, 0.0, 50.0, 50.0);
         assert!(!a.intersects(&touching));
         assert!(!a.contains_region(&touching));
+    }
+
+    /// 静态标签 / 文本块可以按控件名更新文字；颜色和静态属性不变。
+    #[test]
+    fn static_text_content_updates_by_control_name() {
+        let mut document = Document {
+            width: 100.0,
+            height: 60.0,
+            elements: vec![
+                Element::Label(Label {
+                    x: 4.0,
+                    y: 4.0,
+                    size: 12.0,
+                    slot: FontSlot::Candidate,
+                    runs: vec![crate::control::LabelRun {
+                        text: "旧".to_owned(),
+                        color: Color::rgb(1, 2, 3),
+                    }],
+                }),
+                Element::TextBlock(TextBlock {
+                    x: 4.0,
+                    y: 24.0,
+                    size: 12.0,
+                    slot: FontSlot::ItemNumber,
+                    line_spacing: 2.0,
+                    color: Color::rgb(4, 5, 6),
+                    text: "旧块".to_owned(),
+                }),
+            ],
+            regions: Vec::new(),
+            control_names: vec![
+                ControlName {
+                    name: "hint".to_owned(),
+                    path: vec![0],
+                },
+                ControlName {
+                    name: "note".to_owned(),
+                    path: vec![1],
+                },
+            ],
+        };
+        assert!(document.update_static_text("hint", "新提示"));
+        assert!(document.update_static_text("note", "新块"));
+        let Some(Element::Label(label)) = document.element_at_path(&[0]) else {
+            panic!("不是 label");
+        };
+        assert_eq!(label.runs.len(), 1);
+        assert_eq!(label.runs[0].text, "新提示");
+        assert_eq!(label.runs[0].color, Color::rgb(1, 2, 3));
+        let Some(Element::TextBlock(block)) = document.element_at_path(&[1]) else {
+            panic!("不是 text_block");
+        };
+        assert_eq!(block.text, "新块");
+        assert!(!document.update_static_text("missing", "x"));
     }
 
     /// 圆 / 圆角 / 带洞的区域也能判关系（多边形近似）。

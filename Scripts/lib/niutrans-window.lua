@@ -7,9 +7,8 @@
 --   4. 没有配置小牛 API / KEY 时，窗口里直接提示先修改本脚本。
 --
 -- 窗口静态布局在：
---   Scripts/lib/niutrans-window.json          （已配置）
---   Scripts/lib/niutrans-window-warning.json  （未配置 API/KEY 时显示提示）
--- 本脚本只负责复制、翻译和事件。
+--   Scripts/lib/niutrans-window.json
+-- 未配置 API/KEY 时，脚本用 win:update_content("warning", …) 在布局里的空标签上显示提示。
 --
 -- 使用前：
 --   * 把本文件放到安装目录的 Scripts\ 下（或从 Scripts\lib\ 复制过去），重启输入法服务；
@@ -89,8 +88,7 @@ local function clamp_source(text)
 end
 
 local function layout_path()
-    local file = CONFIGURED and "niutrans-window.json" or "niutrans-window-warning.json"
-    return cloudime.install_path("Scripts/lib/" .. file)
+    return cloudime.install_path("Scripts/lib/niutrans-window.json")
 end
 
 local function sign(params)
@@ -185,7 +183,7 @@ end
 local function make_window(source)
     local path = layout_path()
     if not path then
-        cloudime.log("小牛在线翻译：找不到窗口布局文件（Scripts/lib/niutrans-window*.json）")
+        cloudime.log("小牛在线翻译：找不到窗口布局文件 Scripts/lib/niutrans-window.json")
         return
     end
     win = cloudime.window.create{
@@ -200,6 +198,7 @@ local function make_window(source)
     if source and source ~= "" then
         win:set_text("source", clamp_source(source))
     end
+    win:update_content("warning", CONFIGURED and "" or WARNING)
     win:show()
     win:focus(true)
     if CONFIGURED and source and source ~= "" then
