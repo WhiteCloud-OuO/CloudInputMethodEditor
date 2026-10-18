@@ -1122,9 +1122,9 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   没声明 `events` 时为 `nil`，旧脚本不受影响。静态元素上写 `events` 会报错（它没有自动命中框），
   要接事件请显式加 `regions`。
 - **滚动条**（`hscroll_bar` / `vscroll_bar`，2026-10-18）：`control::ScrollBar` 是背景胶囊 +
-  滑块胶囊；背景形状就是自动区域，`Region` 的 `drag = false`，避免按住时拖动整窗。水平条 `h`
-  缺省 8，垂直条 `w` 缺省 8（另一端长度必填）。值域 `value/min/max` 为 u64（缺省 0/0/100），
-  `step` 为 u64（缺省 1，解析时拒绝 0）；值解析时夹取。
+  滑块胶囊；背景形状就是自动区域，`Region` 的 `drag = false`，避免按住时拖动整窗。`w` / `h`
+  都可省、缺省 8（水平条通常只写长度 `w`，垂直条只写高度 `h`）。值域
+  `value/min/max` 为 u64（缺省 0/0/100），`step` 为 u64（缺省 1，解析时拒绝 0）；值解析时夹取。
   滑块长度 `track/4`（至少一个厚度），`thumb_rect` / `value_at` 共用同一套几何；`ScriptWindow` 用
   `ScrollDrag` 保存按下点相对滑块的偏移，拖滑块更新值并 `SetCapture`；点非滑块区域按左/上减、
   右/下加一个 `step`；滚轮同理（向上减、向下加）并吞掉滚轮。拖拽外的改值用

@@ -1398,16 +1398,8 @@ fn parse_scroll_bar(table: &mlua::Table, axis: ScrollAxis) -> mlua::Result<Eleme
     Ok(Element::ScrollBar(ScrollBar {
         x: number(table, "x", 0.0)?,
         y: number(table, "y", 0.0)?,
-        width: if axis == ScrollAxis::Horizontal {
-            positive(table, "w", "width")?
-        } else {
-            optional_positive(table, "w")?.unwrap_or(8.0)
-        },
-        height: if axis == ScrollAxis::Horizontal {
-            optional_positive(table, "h")?.unwrap_or(8.0)
-        } else {
-            positive(table, "h", "height")?
-        },
+        width: optional_positive(table, "w")?.unwrap_or(8.0),
+        height: optional_positive(table, "h")?.unwrap_or(8.0),
         background: color(table, "background_color", false)?
             .or(color(table, "back_color", false)?)
             .or(color(table, "background", false)?)
@@ -2384,6 +2376,24 @@ mod tests {
             )
             .is_err()
         );
+
+        let defaults = lua
+            .load(
+                r#"return { width = 20, height = 20,
+                    { type = "hscroll_bar", name = "defaults", x = 0, y = 0 } }"#,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let document = parse_document(
+            &defaults,
+            (Some(20.0), Some(20.0)),
+            &mut ImageCache::default(),
+        )
+        .unwrap();
+        let Element::ScrollBar(bar) = &document.elements[0] else {
+            panic!("不是滚动条");
+        };
+        assert_eq!((bar.width, bar.height), (8.0, 8.0));
     }
 
     /// 扁平按钮的六个事件名。
