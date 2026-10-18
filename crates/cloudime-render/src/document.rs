@@ -45,6 +45,73 @@ pub struct ControlName {
     pub path: Vec<usize>,
 }
 
+/// 一个 `text_edit` 在内容区里的位置（控件左上角，点）；嵌套在面板里时由所有父面板偏移累加。
+#[derive(Debug, Clone, PartialEq)]
+pub struct TextEditPlacement {
+    /// 元素路径（0 起），可交给 [`Document::element_at_path`] 取回控件。
+    pub path: Vec<usize>,
+
+    /// 控件左上角的绝对内容坐标（点）。
+    pub x: f32,
+    pub y: f32,
+}
+
+impl Document {
+    /// 内容里所有 `text_edit`（含面板里的）的绝对位置。
+    pub fn text_edits(&self) -> Vec<TextEditPlacement> {
+        let mut placements = Vec::new();
+        collect_text_edits(&self.elements, (0.0, 0.0), &mut Vec::new(), &mut placements);
+        placements
+    }
+
+    /// 按元素路径取回一个元素。
+    pub fn element_at_path(&self, path: &[usize]) -> Option<&Element> {
+        let (first, rest) = path.split_first()?;
+        let mut element = self.elements.get(*first)?;
+        for index in rest {
+            let Element::Panel(panel) = element else {
+                return None;
+            };
+            element = panel.children.get(*index)?;
+        }
+        Some(element)
+    }
+
+    /// 按元素路径找控件名（JSON 布局里每个控件都有）。
+    pub fn control_name_at_path(&self, path: &[usize]) -> Option<&str> {
+        self.control_names
+            .iter()
+            .find(|control| control.path == path)
+            .map(|control| control.name.as_str())
+    }
+}
+
+fn collect_text_edits(
+    elements: &[Element],
+    origin: (f32, f32),
+    path: &mut Vec<usize>,
+    placements: &mut Vec<TextEditPlacement>,
+) {
+    for (index, element) in elements.iter().enumerate() {
+        path.push(index);
+        match element {
+            Element::TextEdit(edit) => placements.push(TextEditPlacement {
+                path: path.clone(),
+                x: origin.0 + edit.x,
+                y: origin.1 + edit.y,
+            }),
+            Element::Panel(panel) => collect_text_edits(
+                &panel.children,
+                (origin.0 + panel.x, origin.1 + panel.y),
+                path,
+                placements,
+            ),
+            _ => {}
+        }
+        path.pop();
+    }
+}
+
 impl Document {
     /// 只要一块 `width` × `height` 的空面板。
     pub fn empty(width: f32, height: f32) -> Self {

@@ -20,25 +20,26 @@ use windows::Win32::Graphics::Gdi::{
     SelectObject, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
 };
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-use windows::Win32::UI::Controls::EM_GETSEL;
 use windows::Win32::UI::Controls::RichEdit::{
     CFM_CHARSET, CFM_COLOR, CFM_FACE, CFM_SIZE, CHARFORMATW, EM_SETCHARFORMAT, ITextHost,
     ITextHost_Impl, ITextServices, PARAFORMAT, SCF_ALL, TXTBACK_TRANSPARENT, TXTBACKSTYLE,
     TXTBIT_RICHTEXT, TXTBIT_SAVESELECTION, TXTBIT_VIEWINSETCHANGE,
 };
+use windows::Win32::UI::Controls::{EM_GETSEL, EM_SETSEL};
 
 use windows::Win32::UI::Input::Ime::{HIMC, ImmGetContext, ImmReleaseContext};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCaretBlinkTime, GetClientRect,
-    IDC_IBEAM, KillTimer, LoadCursorW, SCROLL_WINDOW_FLAGS, SCROLLBAR_CONSTANTS, SW_HIDE,
-    SW_SHOWNA, SWP_NOACTIVATE, SendMessageW, SetCursor, SetTimer, SetWindowPos, ShowWindow,
-    WM_CHAR, WM_GETTEXT, WM_GETTEXTLENGTH, WM_IME_CHAR, WM_IME_COMPOSITION, WM_IME_COMPOSITIONFULL,
-    WM_IME_CONTROL, WM_IME_ENDCOMPOSITION, WM_IME_KEYDOWN, WM_IME_KEYUP, WM_IME_NOTIFY,
-    WM_IME_REQUEST, WM_IME_SELECT, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_INPUTLANGCHANGE,
-    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, EN_CHANGE, GetCaretBlinkTime,
+    GetClientRect, IDC_IBEAM, KillTimer, LoadCursorW, PostMessageW, SCROLL_WINDOW_FLAGS,
+    SCROLLBAR_CONSTANTS, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SendMessageW, SetCursor, SetTimer,
+    SetWindowPos, ShowWindow, WM_APP, WM_CHAR, WM_GETTEXT, WM_GETTEXTLENGTH, WM_IME_CHAR,
+    WM_IME_COMPOSITION, WM_IME_COMPOSITIONFULL, WM_IME_CONTROL, WM_IME_ENDCOMPOSITION,
+    WM_IME_KEYDOWN, WM_IME_KEYUP, WM_IME_NOTIFY, WM_IME_REQUEST, WM_IME_SELECT, WM_IME_SETCONTEXT,
+    WM_IME_STARTCOMPOSITION, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS,
+    WM_SETFONT, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WNDCLASSEXW,
+    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{
     BOOL, Error, GUID, HSTRING, IUnknown_Vtbl, Interface, PCWSTR, Result, implement, w,
@@ -53,6 +54,9 @@ type CreateTextServicesFn =
 
 const CLASS_NAME: PCWSTR = w!("CloudIMETextHost");
 
+/// 宿主窗 → 脚本窗口：编辑框文本变了，请重读并派发 `text_changed`。
+pub(super) const WM_TEXT_CHANGED: u32 = WM_APP + 0x4A;
+
 static CLASS: WindowClass = WindowClass::new();
 static CREATE_TEXT_SERVICES: OnceLock<Option<(CreateTextServicesFn, GUID)>> = OnceLock::new();
 
@@ -64,6 +68,7 @@ thread_local! {
 /// 一块 windowless RichEdit 宿主窗口。
 pub(super) struct TextHostWindow {
     hwnd: HWND,
+    owner: HWND,
     /// TSF 上下文；初始化失败时为 `None`，退化为普通 RichEdit 输入。
     tsf: Option<tsf::TsfContext>,
     /// 本次按键是否被 TSF 吃掉（用来吞掉后续 WM_CHAR）。
@@ -85,6 +90,8 @@ pub(super) struct TextHostWindow {
     selection_text: COLORREF,
     caret_visible: Cell<bool>,
     caret_timer: Cell<usize>,
+    /// 横向滚动量（像素，内容向左移）：单行文本超过编辑区时跟随光标。
+    scroll_x: Cell<i32>,
 }
 
 impl TextHostWindow {
@@ -129,6 +136,7 @@ impl TextHostWindow {
         let line_height = font_line_height(font, size, dpi);
         let host: ITextHost = TextHost {
             hwnd,
+            owner,
             line_height,
             char_format: char_format(family, size, text_color),
             para_format: PARAFORMAT {
@@ -181,6 +189,7 @@ impl TextHostWindow {
         };
         let window = Rc::new(Self {
             hwnd,
+            owner,
             tsf,
             eaten: Cell::new(false),
             active: Cell::new(false),
@@ -197,6 +206,7 @@ impl TextHostWindow {
             selection_text,
             caret_visible: Cell::new(false),
             caret_timer: Cell::new(0),
+            scroll_x: Cell::new(0),
         });
         HOSTS.with(|map| map.borrow_mut().insert(hwnd.0 as isize, window.clone()));
         unsafe {
@@ -364,6 +374,50 @@ impl TextHostWindow {
         self.caret_visible.set(true);
     }
 
+    /// 宿主窗句柄（脚本窗口的自定义 `text_changed` 消息按它找回控件）。
+    pub(super) fn hwnd(&self) -> HWND {
+        self.hwnd
+    }
+
+    /// 通知脚本窗重读文本（`TxNotify(EN_CHANGE)` 与输入消息兜底共用）。
+    fn notify_text_changed(&self) {
+        unsafe {
+            let _ = PostMessageW(
+                Some(self.owner),
+                WM_TEXT_CHANGED,
+                WPARAM(self.hwnd.0 as usize),
+                LPARAM(0),
+            );
+        }
+    }
+
+    /// 当前完整文本（UTF-8；脚本侧 `text_changed` / `get_text` 用）。
+    pub(super) fn text_string(&self) -> String {
+        String::from_utf16_lossy(&self.text())
+    }
+
+    /// 脚本 `set_text`：整份替换，光标放到末尾。
+    pub(super) fn set_text(&self, text: &str) {
+        let mut result = LRESULT(0);
+        let value = HSTRING::from(text);
+        unsafe {
+            let _ = self.services.TxSetText(&value);
+            let length = text.encode_utf16().count();
+            let _ = self.services.TxSendMessage(
+                EM_SETSEL,
+                WPARAM(length),
+                LPARAM(length as isize),
+                &mut result,
+            );
+        }
+        self.notify_selection();
+        self.caret_visible.set(true);
+        self.scroll_x.set(0);
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
+    }
+
     fn text(&self) -> Vec<u16> {
         let length = self.send(WM_GETTEXTLENGTH, WPARAM(0), LPARAM(0)).0.max(0) as usize;
         let mut buffer = vec![0u16; length + 1];
@@ -436,7 +490,7 @@ impl TextHostWindow {
             let mut metrics = TEXTMETRICW::default();
             let _ = GetTextMetricsW(hdc, &mut metrics);
             let baseline = client.bottom / 2 + metrics.tmAscent / 2;
-            let mut x = 2 + self.text_width(hdc, &text[..start]);
+            let mut x = 2 - self.scroll_x.get() + self.text_width(hdc, &text[..start]);
             let mut index = start;
             while index < end {
                 let ellipsis = text[index] == 0x2026;
@@ -485,8 +539,8 @@ impl TextHostWindow {
             let mut metrics = TEXTMETRICW::default();
             let _ = GetTextMetricsW(hdc, &mut metrics);
             let _ = SelectObject(hdc, old);
-            let x = 2 + self.text_width(hdc, &text[..start]);
-            if x >= client.right {
+            let x = 2 - self.scroll_x.get() + self.text_width(hdc, &text[..start]);
+            if x >= client.right || x < 0 {
                 return None;
             }
             let baseline = client.bottom / 2 + metrics.tmAscent / 2;
@@ -500,6 +554,39 @@ impl TextHostWindow {
         }
     }
 
+    /// 鼠标客户区坐标补上横向滚动量，再交给 RichEdit 做命中 / 拖选。
+    fn adjust_mouse(&self, lparam: LPARAM) -> LPARAM {
+        let x = (lparam.0 & 0xFFFF) as i16 as i32 + self.scroll_x.get();
+        let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+        let x = x.clamp(i16::MIN as i32, i16::MAX as i32) as i16 as u16 as isize;
+        let y = y as i16 as u16 as isize;
+        LPARAM((y << 16) | x)
+    }
+
+    fn ensure_visible(&self, hdc: HDC, text: &[u16], client: &RECT) -> i32 {
+        if !self.active.get() {
+            return self.scroll_x.get();
+        }
+        let width = self.text_width(hdc, text);
+        let view = (client.right - 4).max(1);
+        if width <= view {
+            self.scroll_x.set(0);
+            return 0;
+        }
+        let (_, end) = self.selection(text.len());
+        let caret = 2 + self.text_width(hdc, &text[..end]);
+        let mut scroll = self.scroll_x.get();
+        if caret - scroll > view {
+            scroll = caret - view;
+        } else if caret - scroll < 2 {
+            scroll = caret - 2;
+        }
+        let max = (width - view).max(0);
+        scroll = scroll.clamp(0, max);
+        self.scroll_x.set(scroll);
+        scroll
+    }
+
     fn paint(&self) {
         unsafe {
             let mut ps = PAINTSTRUCT::default();
@@ -510,14 +597,18 @@ impl TextHostWindow {
             let old_font = SelectObject(hdc, self.font);
             let _ = SetBkMode(hdc, TRANSPARENT);
             let text = self.text();
+            let scroll = self.ensure_visible(hdc, &text, &client);
             let (start, end) = self.selection(text.len());
             if start < end {
-                let first = 2 + self.text_width(hdc, &text[..start]);
-                let second = 2 + self.text_width(hdc, &text[..end]);
+                let first = 2 - scroll + self.text_width(hdc, &text[..start]);
+                let second = 2 - scroll + self.text_width(hdc, &text[..end]);
                 let selection = RECT {
-                    left: first.min(second),
+                    left: first.min(second).max(0),
                     top: 0,
-                    right: first.max(second).max(first.min(second) + 1),
+                    right: first
+                        .max(second)
+                        .max(first.min(second) + 1)
+                        .min(client.right),
                     bottom: client.bottom.max(1),
                 };
                 let _ = FillRect(hdc, &selection, self.highlight);
@@ -566,6 +657,7 @@ impl Drop for TextHostWindow {
 #[implement(ITextHost)]
 struct TextHost {
     hwnd: HWND,
+    owner: HWND,
     line_height: i32,
     char_format: CHARFORMATW,
     para_format: PARAFORMAT,
@@ -582,6 +674,20 @@ impl ITextHost_Impl for TextHost_Impl {
 
     fn TxShowScrollBar(&self, _fnbar: i32, _fshow: BOOL) -> BOOL {
         false.into()
+    }
+
+    fn TxNotify(&self, inotify: u32, _pv: *mut c_void) -> Result<()> {
+        if inotify == EN_CHANGE {
+            unsafe {
+                let _ = PostMessageW(
+                    Some(self.owner),
+                    WM_TEXT_CHANGED,
+                    WPARAM(self.hwnd.0 as usize),
+                    LPARAM(0),
+                );
+            }
+        }
+        Ok(())
     }
 
     fn TxEnableScrollBar(&self, _fusbflags: SCROLLBAR_CONSTANTS, _fuarrowflags: i32) -> BOOL {
@@ -800,10 +906,6 @@ impl ITextHost_Impl for TextHost_Impl {
         Ok(())
     }
 
-    fn TxNotify(&self, _inotify: u32, _pv: *mut c_void) -> Result<()> {
-        Ok(())
-    }
-
     fn TxImmGetContext(&self) -> HIMC {
         unsafe { ImmGetContext(self.hwnd) }
     }
@@ -959,6 +1061,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         with_host(hwnd, |host| host.deactivate());
         return LRESULT(0);
     }
+    let lparam = if matches!(
+        msg,
+        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK | WM_MOUSEMOVE
+    ) {
+        with_host(hwnd, |host| host.adjust_mouse(lparam)).unwrap_or(lparam)
+    } else {
+        lparam
+    };
     if matches!(
         msg,
         WM_KEYDOWN
@@ -991,6 +1101,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     {
         if matches!(msg, WM_LBUTTONUP | WM_KEYUP) {
             with_host(hwnd, |host| host.notify_selection());
+        }
+        if matches!(
+            msg,
+            WM_CHAR | WM_KEYDOWN | WM_KEYUP | WM_IME_CHAR | WM_IME_COMPOSITION
+        ) {
+            with_host(hwnd, |host| host.notify_text_changed());
         }
         let left_button = (wparam.0 as u32 & 0x0001) != 0;
         if matches!(

@@ -460,6 +460,8 @@ aux:show()
 |---|---|
 | `win:set_content{ … }` | 换一整份内容（整份替换；`width` / `height` 可省，缺省用建窗口时那份） |
 | `win:load_layout(path)` | 读一份 JSON 布局文件并换成整份内容；`width` / `height` / 控件 / 区域都从文件来 |
+| `win:get_text(name)` | 读某个 `text_edit` 最近一次文本；控件不存在 / 还没有文本时给 `nil` |
+| `win:set_text(name, text)` | 设置某个 `text_edit` 的文本（按控件名找，整份替换、光标放到末尾） |
 | `win:show{ x = …, y = … }` | 显示；坐标是**内容区左上角**的屏幕坐标（点）。不写就沿用上次的位置，没有过就摆在光标右下 |
 | `win:hide()` | 收起（不销毁） |
 | `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
@@ -622,6 +624,12 @@ icon:use_path_mask({ { "M", 0, 0 }, { "L", 16, 0 }, { "L", 16, 16 }, { "L", 0, 1
 - 没有 SVG：文本区宽 `w - h`，在背景里水平居中。
 - 有 SVG：SVG 按 `h` 缩放，文本区宽 `w - h - svg宽度 - 4`，放在图标旁边；`svg_align` 决定图标在左 / 右。
 - 自动区域名取 `name`（缺省 `text_edit_N`），`drag = false`；点文本区边距也会把焦点交给 RichEdit。
+- **嵌套面板**：`panel.children` 里的 `text_edit` 也会建宿主；坐标按所有父面板偏移累加，
+  自动区域名用 `name`（没写时按路径生成 `text_edit_0_1` 这种合法名字）。
+- **横向滚动**：单行文本超过编辑区时，内容跟随光标横向滚动；点击 / 拖选按滚动后的位置命中。
+- **读写文本**：`win:get_text(name)` 读最近文本，`win:set_text(name, text)` 整份替换（排队到 UI 线程）。
+  宿主每次文字变化会派 `text_changed` 事件，载荷带 `event.control` / `event.text`；脚本收到后
+  缓存已在运行时刷新，所以事件处理函数里再 `get_text` 能读到新值。
 
 **区域（region）**：一块可以被鼠标**点击 / 拖拽**的范围 —— 元素只管画，交互看区域：
 
@@ -700,12 +708,13 @@ win:set_content{
 ```lua
 cloudime.on("window", function(event)
     -- event.window / event.id      哪块窗口（名字 / 编号）
-    -- event.action                 "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur"
+    -- event.action                 "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur" / "text_changed"
     -- event.x / event.y            内容区坐标（点）
     -- event.element               命中的元素（内容数组里 1 起的下标；没命中是 nil）
     -- event.region                命中的区域名（内容里的 regions；没命中是 nil）
     -- event.control               命中的控件名（布局文件里的 name；没命中 / 没写 name 是 nil）
     -- event.handler               区域 / 布局声明的事件处理器名（events 表；没声明是 nil）
+    -- event.text                  text_changed 时的完整文本；其它事件是 nil
     -- event.delta                 滚轮量（一格 ±120，正数往上；只有 wheel 有）
     if event.action == "wheel" then
         count = math.max(0, count + math.floor(event.delta / 120))
@@ -730,13 +739,13 @@ end)
   ```
 
   ⚠️ 窗口不抢系统的键盘焦点：能收到哪些键由清单决定（`combination_key` 的 `combination_modifiers` +
-  `keys` 那一组），**不是**有焦点就能拿到所有键；窗口里也没有文本输入框。
+  `keys` 那一组），**不是**有焦点就能拿到所有键；需要文字输入时放一个 `text_edit`。
 - `window` 事件**不看清单的 `trigger_condition`**（与 `startup`、HTTP 回调一样，所有脚本都能收）。
 - 辅助窗口默认鼠标穿透：`create_auxiliary{ interactive = true }` 之后还要 `aux:focus(true)` 才真正接鼠标
   （焦点一组里只有一个：给了它，宿主那块窗就让开）。
 - 返回值按「没有按键的那一拍」处理：`notice` / `online` / `theme` / `adjust` 认，`passthrough` / `commit` 忽略。
 
-窗口活到 `close` 或输入法服务退出；`hide` 不销毁。**还没有**窗口内的文本输入 / 组句、拖元素（滑块之类）；
+窗口活到 `close` 或输入法服务退出；`hide` 不销毁。还没有多行编辑、富文本，以及拖元素（滑块之类）；
 拖动只移动整块窗口。
 
 ## 7. 标准库与运行环境
@@ -1110,6 +1119,6 @@ end)
 - **不做热重载**：改脚本 → 重启输入法服务。
 - **还没做的**（设计文档里记着）：惰性 Lua 状态（没脚本时不建状态）、
   改组句里「已选文本」的内容、把翻译 Tip 交给脚本写（现在是内置的本地词典 Tip + 独立的 `online` 行）、
-  脚本窗口里的文本输入 / 组句（窗口本身已经支持点击 / 滚轮 / 拖动 / 键盘焦点）。
+  脚本窗口里的多行编辑 / 富文本（单行 `text_edit`、IME、选区、剪贴板已支持）。
 - **没有脚本时不付代价**：`Scripts\` 不存在或里面没有真脚本时，按键路径上一次查表就返回，
   行为与「没有脚本功能」时逐字节一致。

@@ -1065,8 +1065,15 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `sync_text_edits` 在显示 / 拖动 / DPI 重画时按内容区坐标
   + scale 摆位；`focus_text_edit` 在点到胶囊边距时把焦点交给宿主。
   `TextEdit` 仍是可交互元素（返回命中框），自动区域和按钮一样在解析时加进 `Document.regions`。
-  ⚠️ 文本值目前只做了初始 `text` + 宿主输入，脚本读写 API 还没加；嵌套在 `panel` 里的 `text_edit`
-  目前不会建宿主（仅顶层元素扫描）——测试脚本放在顶层。
+  **嵌套 / 滚动 / 读写**（2026-10-18）：`Document::text_edits()` 递归累加面板偏移，因此
+  `panel.children` 里的 `text_edit` 也建宿主；嵌套控件补同名区域，`focus_text_edit` 先按区域名找宿主。
+  单行文本超过编辑区时 `scroll_x` 跟随光标，绘制 / 选区 / 插入符共用它；鼠标坐标在转发给 RichEdit
+  前补上 `scroll_x`，所以点击位置和显示一致。
+  文本缓存 `TextCache` 存在运行时：`set_content` / `load_layout` 的初始 `text`、`set_text` 和
+  `EN_CHANGE` 都会更新。`win:get_text(name)` 直接读缓存；`win:set_text(name, text)` 排 `SetText` 请求。
+  宿主 `TxNotify(EN_CHANGE)` `PostMessage` 自定义 `WM_TEXT_CHANGED` 给脚本窗，脚本窗读宿主文本后派
+  `text_changed` 事件（`event.control` / `event.text`），运行时在派发前刷新缓存，所以事件里再
+  `get_text` 能读到新值。辅助窗口的 `text_edit` 仍不建宿主（辅助窗口没有这套编辑宿主）。
 - **TSF 桥**（`script_window/text_store.rs` / `tsf.rs`，2026-10-18）：windowless RichEdit 自己只提供
   IMM32 的 `ITextHost::TxImmGetContext`，不直接参与 TSF；要让 CloudIME 的中文输入作用到它，必须补
   客户端文本存储。`text_store.rs` 实现 `ITextStoreACP`，把 `GetText` / `SetText` / 选区 / 插入 /

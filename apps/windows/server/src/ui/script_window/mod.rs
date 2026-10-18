@@ -46,7 +46,7 @@ use super::layered;
 use super::monitor;
 use super::painter::SharedPainter;
 use super::window_class::WindowClass;
-use text_host::TextHostWindow;
+use text_host::{TextHostWindow, WM_TEXT_CHANGED};
 
 mod text_host;
 mod text_store;
@@ -139,6 +139,13 @@ impl ScriptWindows {
                     aux.edit_region(&name, shape, combine);
                 } else {
                     tracing::warn!(id, "脚本窗口：改区域时找不到这块窗口");
+                }
+            }
+            WindowRequest::SetText { id, name, text } => {
+                if let Some(window) = self.windows.get(&id) {
+                    window.set_text(&name, &text);
+                } else {
+                    tracing::warn!(id, control = name, "脚本窗口：set_text 时找不到这块窗口");
                 }
             }
         }
@@ -250,8 +257,18 @@ type LastClick = (Instant, usize, (i32, i32));
 
 /// 一个 `text_edit` 覆盖在脚本窗口上的 windowless RichEdit 宿主。
 struct TextEditWindow {
-    /// 元素下标（`document.elements`，0 起）。
-    element: usize,
+    /// 元素路径（`document.elements` 里的根 / 面板 children 下标）。
+    path: Vec<usize>,
+
+    /// 自动区域名 / 控件名，`get_text` / `set_text` / 焦点都按它找。
+    name: String,
+
+    /// 控件左上角在内容区的绝对位置（点，已经累加父面板偏移）。
+    origin: (f32, f32),
+
+    /// 上一次派发给脚本的文本，重复的 `EN_CHANGE` / 输入消息不再重复派事件。
+    last_text: RefCell<String>,
+
     host: Rc<TextHostWindow>,
 }
 
@@ -415,10 +432,13 @@ impl ScriptWindow {
         self.destroy_text_edits();
         let mut edits = self.text_edits.borrow_mut();
         let document = self.document.borrow();
-        for (index, element) in document.elements.iter().enumerate() {
-            let Element::TextEdit(edit) = element else {
+        for placement in document.text_edits() {
+            let Some(Element::TextEdit(edit)) = document.element_at_path(&placement.path) else {
                 continue;
             };
+            if edit.region_name.is_empty() {
+                continue;
+            }
             let (family, theme_size, background, text_color, selection_background, selection_text) =
                 match self.painter.borrow().as_ref() {
                     Some(painter) => {
@@ -466,11 +486,14 @@ impl ScriptWindow {
             );
             match host {
                 Ok(host) => edits.push(TextEditWindow {
-                    element: index,
+                    path: placement.path,
+                    name: edit.region_name.clone(),
+                    origin: (placement.x, placement.y),
+                    last_text: RefCell::new(edit.text.clone()),
                     host,
                 }),
                 Err(error) => {
-                    tracing::warn!(id = self.id, index, %error, "text_edit：建 windowless RichEdit 失败");
+                    tracing::warn!(id = self.id, path = ?placement.path, %error, "text_edit：建 windowless RichEdit 失败");
                 }
             }
         }
@@ -485,12 +508,12 @@ impl ScriptWindow {
         let shown = self.shown.get();
         let document = self.document.borrow();
         for edit in self.text_edits.borrow().iter() {
-            let Some(Element::TextEdit(control)) = document.elements.get(edit.element) else {
+            let Some(Element::TextEdit(control)) = document.element_at_path(&edit.path) else {
                 continue;
             };
             let (x, y, width, height) = control.edit_rect();
-            let x = position.0 + ((control.x + x) * scale).round() as i32;
-            let y = position.1 + ((control.y + y) * scale).round() as i32;
+            let x = position.0 + ((edit.origin.0 + x) * scale).round() as i32;
+            let y = position.1 + ((edit.origin.1 + y) * scale).round() as i32;
             let width = (width * scale).round().max(1.0) as i32;
             let height = (height * scale).round().max(1.0) as i32;
             edit.host.set_bounds(x, y, width, height);
@@ -502,16 +525,81 @@ impl ScriptWindow {
         self.text_edits.borrow_mut().clear();
     }
 
-    /// 点到文本编辑框的区域（背景胶囊的边距）时，把焦点交给 RichEdit 宿主。
-    fn focus_text_edit(&self, element: Option<usize>) {
-        let Some(index) = element.and_then(|element| element.checked_sub(1)) else {
-            return;
-        };
+    /// 点到文本编辑框（顶层或面板里）的区域时，把焦点交给对应的 RichEdit 宿主。
+    fn focus_text_edit(&self, element: Option<usize>, region: Option<String>) {
         let edits = self.text_edits.borrow();
-        let Some(edit) = edits.iter().find(|edit| edit.element == index) else {
+        let target = edits.iter().find(|edit| {
+            region.as_deref() == Some(edit.name.as_str())
+                || element
+                    .is_some_and(|element| edit.path.len() == 1 && edit.path[0] + 1 == element)
+        });
+        if let Some(edit) = target {
+            edit.host.focus();
+        }
+    }
+
+    /// 按控件名找编辑框宿主（`set_text` 用）。
+    fn text_edit_host(&self, name: &str) -> Option<Rc<TextHostWindow>> {
+        self.text_edits
+            .borrow()
+            .iter()
+            .find(|edit| edit.name == name)
+            .map(|edit| edit.host.clone())
+    }
+
+    /// 把某个编辑框的文本同步到 UI 宿主（脚本 `set_text` 用）。
+    fn set_text(&self, name: &str, text: &str) {
+        if let Some(host) = self.text_edit_host(name) {
+            host.set_text(text);
+        } else {
+            tracing::warn!(
+                id = self.id,
+                control = name,
+                "text_edit：set_text 找不到控件"
+            );
+        }
+    }
+
+    /// RichEdit 报告 `EN_CHANGE`：把新文本作为 `text_changed` 事件送到工人线程。
+    fn text_changed(&self, host_hwnd: HWND) {
+        let edits = self.text_edits.borrow();
+        let Some(edit) = edits.iter().find(|edit| edit.host.hwnd() == host_hwnd) else {
             return;
         };
-        edit.host.focus();
+        let text = edit.host.text_string();
+        if *edit.last_text.borrow() == text {
+            return;
+        }
+        *edit.last_text.borrow_mut() = text.clone();
+        let document = self.document.borrow();
+        let Some(Element::TextEdit(control)) = document.element_at_path(&edit.path) else {
+            return;
+        };
+        let handler = self.region_handler(&control.region_name, WindowAction::TextChanged);
+        let control_name = document
+            .control_name_at_path(&edit.path)
+            .map(str::to_owned)
+            .unwrap_or_else(|| control.region_name.clone());
+        let region = Some(control.region_name.clone());
+        let element = (edit.path.len() == 1).then_some(edit.path[0] + 1);
+        let (x, y) = self.last.get();
+        let (ctrl, alt, shift) = modifiers();
+        (self.events)(ScriptWindowEvent {
+            window: self.id,
+            name: self.name.clone(),
+            action: WindowAction::TextChanged,
+            x: x as f32,
+            y: y as f32,
+            element,
+            region,
+            control: Some(control_name),
+            handler,
+            text: Some(text),
+            delta: None,
+            ctrl,
+            alt,
+            shift,
+        });
     }
 
     /// 命中下标若是扁平按钮，返回它。
@@ -882,6 +970,26 @@ impl ScriptWindow {
         })
     }
 
+    /// 区域名对应的控件名（嵌套在面板里的动态控件没有根元素命中，只能按区域名反查）。
+    fn control_name_for_region(&self, region: &str) -> Option<String> {
+        self.document
+            .borrow()
+            .control_names
+            .iter()
+            .find(|control| control.name == region)
+            .map(|control| control.name.clone())
+    }
+
+    /// 区域下标 → 区域名。
+    fn region_name(&self, index: Option<usize>) -> Option<String> {
+        index.and_then(|index| {
+            self.regions
+                .borrow()
+                .get(index)
+                .map(|region| region.name.clone())
+        })
+    }
+
     fn emit(&self, action: WindowAction, client_x: i32, client_y: i32) {
         self.emit_with_delta(action, client_x, client_y, None);
     }
@@ -895,7 +1003,11 @@ impl ScriptWindow {
     ) {
         let (x, y, element, region) = self.hit_at(client_x, client_y);
         let (region, handler) = self.region_details(region, action);
-        let control = self.control_name(element);
+        let control = self.control_name(element).or_else(|| {
+            region
+                .as_deref()
+                .and_then(|name| self.control_name_for_region(name))
+        });
         let (ctrl, alt, shift) = modifiers();
         (self.events)(ScriptWindowEvent {
             window: self.id,
@@ -907,6 +1019,7 @@ impl ScriptWindow {
             region,
             control,
             handler,
+            text: None,
             delta,
             ctrl,
             alt,
@@ -961,6 +1074,7 @@ impl ScriptWindow {
             region: Some(region),
             control,
             handler,
+            text: None,
             delta: None,
             ctrl,
             alt,
@@ -1173,6 +1287,7 @@ impl ScriptAuxiliary {
                 region: panel.region.clone(),
                 control: panel.control.clone(),
                 handler: panel.handler.clone(),
+                text: None,
                 delta: panel.delta,
                 ctrl: false,
                 alt: false,
@@ -1404,8 +1519,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         // 左键按下：开始记拖动起点；同时算这块窗口拿到键盘焦点。
         WM_LBUTTONDOWN => {
             with_window(hwnd, |window| {
-                let (_, _, element, _) = window.hit_at(client_x(lparam), client_y(lparam));
-                window.focus_text_edit(element);
+                let (_, _, element, region) = window.hit_at(client_x(lparam), client_y(lparam));
+                let region_name = window.region_name(region);
+                window.focus_text_edit(element, region_name);
                 window.begin_button_press(client_x(lparam), client_y(lparam));
                 window.begin_drag(client_x(lparam), client_y(lparam));
             });
@@ -1424,6 +1540,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_MOUSELEAVE => {
             with_window(hwnd, ScriptWindow::emit_leave);
+            LRESULT(0)
+        }
+        WM_TEXT_CHANGED => {
+            let host = HWND(wparam.0 as *mut _);
+            with_window(hwnd, |window| window.text_changed(host));
             LRESULT(0)
         }
         // 拖过就不是点击（阈值在 `drag_to` 里判）。

@@ -70,6 +70,19 @@
           "runs": [
             { "text": "静态控件演示", "color": "#FF222222" }
           ]
+        },
+        {
+          "name": "nested",
+          "type": "text_edit",
+          "x": 16,
+          "y": 250,
+          "w": 320,
+          "h": 32,
+          "font": "candidate",
+          "selection_background": "#FF33FF33",
+          "selection_color": "#FFFFFFFF",
+          "caret_color": "#FFFF0000",
+          "text": "面板里的输入框"
         }
       ]
     },

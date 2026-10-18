@@ -271,6 +271,8 @@ local aux = cloudime.window.create_auxiliary{
 |---|---|
 | `win:set_content{…}` | 换一整份内容（整份替换；见下），尺寸可以跟着变 |
 | `win:load_layout(path)` | 读 JSON 布局文件并整份替换；控件 / 尺寸 / 区域 / 事件都从文件来，见下 |
+| `win:get_text(name)` | 读某个 `text_edit` 的最近文本；没有 / 还没收到时给 `nil` |
+| `win:set_text(name, text)` | 设置某个 `text_edit` 的文本（按控件名找） |
 | `win:show{ x = …, y = … }` | 显示；`x` / `y` 是内容区左上角的**屏幕坐标（点）**，不写 = 上次的位置 / 光标右下 16 点 |
 | `win:hide()` | 收起（不销毁；内容留着，再 `show` 原样回来） |
 | `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
@@ -408,6 +410,13 @@ win:set_content{
   垂直居中，改字号也会跟着居中。文本不再由 `TxDraw` 画：宿主用 GDI 按自己的字体逐 run 绘制，
   `…` 单独用 Segoe UI 画并按同一套度量算选区 / 插入符，因此不会再被 RichEdit 的 font binding
   换成另一种字形。
+  **嵌套与滚动**：`Document::text_edits()` 递归累加父面板偏移，`text_edit` 放在 `panel.children`
+  里也会建宿主；嵌套控件用同名区域接收点击，点击时按区域名把焦点交给宿主。文本超过编辑区时
+  宿主按光标位置维护横向滚动量，鼠标坐标补上滚动量再交给 RichEdit，显示与命中一致。
+  **文本读写**：`win:get_text(name)` 读工人线程里的文本缓存，`win:set_text(name, text)` 排一个
+  `SetText` 请求；宿主 `EN_CHANGE` 通过 `WM_TEXT_CHANGED` 通知脚本窗，脚本窗把当前文本作为
+  `text_changed` 事件（`event.control` / `event.text`）送回工人线程，运行时在派发前刷新缓存。
+  初始 `text`、`set_text` 和输入都会更新缓存；读不到控件时 `get_text` 给 `nil`。
 - **区域（region）**：内容里可以声明 `regions = { … }` —— 区域是**鼠标点击 / 拖拽的命中范围**
   （元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true` = 按住它拖会移动整块窗口，
   `false` = 不拖窗口（点击照常）。后写的区域盖住先写的；事件里的 `event.region` 就是命中的区域名
@@ -432,12 +441,13 @@ win:set_content{
 cloudime.on("window", function(event)
     -- event.window   建窗口时给的名字
     -- event.id       窗口编号
-    -- event.action   "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur"
+    -- event.action   "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur" / "text_changed"
     -- event.x, event.y   内容区坐标（点）
     -- event.element  命中的元素（内容是 1 起的数组，这里也是 1 起；没命中是 nil）
     -- event.region   命中的区域名（内容里的 regions；没命中是 nil）
     -- event.control  命中的控件名（布局文件里的 name；没命中 / 没写 name 是 nil）
     -- event.handler  区域 / 布局声明的事件处理器名（events 表；没声明是 nil）
+    -- event.text     text_changed 时的完整文本；其它事件是 nil
     -- event.delta    滚轮量（一格 ±120，正数往上；只有 wheel 有）
     if event.action == "wheel" then
         count = math.max(0, count + math.floor(event.delta / 120))
@@ -483,7 +493,8 @@ end)
 
 ### 还没做
 
-- 窗口内的**文本输入 / 输入法组句**（`cloudime.window` 只做展示与交互面板）。
+- 单行文本输入由 `text_edit` 提供（含 IME / 选区 / 剪贴板）；多行编辑、富文本和脚本直接操作
+  RichEdit 仍未做。
 - 拖动**元素**（滑块、列表滚动）：现在拖动只移动整块窗口。
 - 键盘不是「有焦点就拿到所有键」：受清单声明与 DLL 的送键规则限制（见上）。
 - 按文件句柄读图（只有路径）；图像缓存靠下一次 `set_content` 发现文件变化，不监听文件系统。

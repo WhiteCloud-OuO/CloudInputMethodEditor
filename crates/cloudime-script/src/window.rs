@@ -8,6 +8,7 @@
 //! `Renderer::render_document` 一次出图 —— 这样脚本再怎么写也卡不住 UI 线程，反过来也一样。
 
 use std::cell::RefCell;
+use std::collections::HashMap;
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::Arc;
@@ -24,6 +25,10 @@ use crate::mlua;
 
 /// 窗口编号：脚本那一侧只当句柄的一部分，UI 线程按它认窗口。
 pub type WindowId = u32;
+
+/// 脚本侧看到的编辑框文本缓存：`(窗口编号, 控件名) → 最近一次文本`。
+/// UI 线程通过 `text_changed` 事件刷新，`get_text` 直接读它（不阻塞工人线程）。
+pub(crate) type TextCache = Rc<RefCell<HashMap<(WindowId, String), String>>>;
 
 /// 一个脚本窗口最多画几个元素（超了当场报错 —— 一份内容要在一帧里画完）。
 const MAX_ELEMENTS: usize = 512;
@@ -306,6 +311,13 @@ pub enum Request {
         shape: HitShape,
         combine: bool,
     },
+
+    /// 设置某个 `text_edit` 的文本（按控件名找）。
+    SetText {
+        id: WindowId,
+        name: String,
+        text: String,
+    },
 }
 
 /// 窗口句柄是「独立窗口」还是「辅助窗口」（同一套方法，落点不同）。
@@ -329,6 +341,7 @@ impl Kind {
 ///
 /// 句柄是一张普通表（`kind` / `name` / `width` / `height` 只是给人看的），方法闭包里带着编号；
 /// 脚本怎么改那张表都影响不到运行时 —— 与 `cloudime` 表是只读代理同一个规矩。
+#[allow(clippy::too_many_arguments)]
 pub(crate) fn handle(
     lua: &mlua::Lua,
     kind: Kind,
@@ -337,6 +350,7 @@ pub(crate) fn handle(
     size: (Option<f32>, Option<f32>),
     requests: Rc<RefCell<Vec<Request>>>,
     images: Rc<RefCell<ImageCache>>,
+    texts: TextCache,
 ) -> mlua::Result<mlua::Table> {
     let handle = lua.create_table()?;
     handle.set("id", id)?;
@@ -352,6 +366,7 @@ pub(crate) fn handle(
     let content_requests = requests.clone();
     let content_images = images.clone();
     let content_regions = regions.clone();
+    let content_texts = texts.clone();
     handle.set(
         "set_content",
         lua.create_function(move |_, (this, content): (mlua::Table, mlua::Table)| {
@@ -360,12 +375,38 @@ pub(crate) fn handle(
                 fallback_size(&this),
                 &mut content_images.borrow_mut(),
             )?;
+            cache_document_texts(&document, id, &content_texts);
             *content_regions.borrow_mut() = document.regions.clone();
             content_requests
                 .borrow_mut()
                 .push(Request::SetContent(id, document));
             Ok(())
         })?,
+    )?;
+
+    let get_texts = texts.clone();
+    handle.set(
+        "get_text",
+        lua.create_function(move |_, (_this, name): (mlua::Table, String)| {
+            Ok(get_texts.borrow().get(&(id, name)).cloned())
+        })?,
+    )?;
+
+    let set_text_requests = requests.clone();
+    let set_texts = texts.clone();
+    handle.set(
+        "set_text",
+        lua.create_function(
+            move |_, (_this, name, text): (mlua::Table, String, String)| {
+                set_texts
+                    .borrow_mut()
+                    .insert((id, name.clone()), text.clone());
+                set_text_requests
+                    .borrow_mut()
+                    .push(Request::SetText { id, name, text });
+                Ok(())
+            },
+        )?,
     )?;
 
     let show_requests = requests.clone();
@@ -383,6 +424,7 @@ pub(crate) fn handle(
     let layout_requests = requests.clone();
     let layout_images = images.clone();
     let layout_regions = regions.clone();
+    let layout_texts = texts.clone();
     handle.set(
         "load_layout",
         lua.create_function(move |lua, (this, path): (mlua::Table, String)| {
@@ -392,6 +434,7 @@ pub(crate) fn handle(
                 fallback_size(&this),
                 &mut layout_images.borrow_mut(),
             )?;
+            cache_document_texts(&document, id, &layout_texts);
             this.set("width", document.width)?;
             this.set("height", document.height)?;
             *layout_regions.borrow_mut() = document.regions.clone();
@@ -615,6 +658,20 @@ pub(crate) fn load_layout_document(
     Ok(document)
 }
 
+/// 把一份内容里的编辑框初始文本写进脚本侧缓存（换内容 / 建布局时用）。
+pub(crate) fn cache_document_texts(document: &Document, id: WindowId, cache: &TextCache) {
+    let mut cache = cache.borrow_mut();
+    cache.retain(|(window, _), _| *window != id);
+    for placement in document.text_edits() {
+        let Some(Element::TextEdit(edit)) = document.element_at_path(&placement.path) else {
+            continue;
+        };
+        if !edit.region_name.is_empty() {
+            cache.insert((id, edit.region_name.clone()), edit.text.clone());
+        }
+    }
+}
+
 /// 内容表 → [`Document`]：`width` / `height` 可省（用句柄里那份），元素是 1 起的数组。
 fn parse_document(
     content: &mlua::Table,
@@ -702,6 +759,20 @@ fn parse_document(
         elements.push(element);
     }
     regions.extend(button_regions);
+
+    // 面板里的 `text_edit`：补自动区域名，并给命中测试补一块绝对坐标的区域。
+    let mut path = Vec::new();
+    assign_nested_text_names(&mut elements, &mut path);
+    for region in nested_text_edit_regions(&elements, (0.0, 0.0), false) {
+        if regions.iter().any(|existing| existing.name == region.name) {
+            return Err(mlua::Error::RuntimeError(format!(
+                "文本编辑框的区域名重复：{}",
+                region.name
+            )));
+        }
+        regions.push(region);
+    }
+
     Ok(Document {
         width,
         height,
@@ -709,6 +780,46 @@ fn parse_document(
         regions,
         control_names: Vec::new(),
     })
+}
+
+/// 嵌套 `text_edit` 没写 `name` 时用路径生成一个合法区域名（顶层仍用 `text_edit_N`）。
+fn assign_nested_text_names(elements: &mut [Element], path: &mut Vec<usize>) {
+    for (index, element) in elements.iter_mut().enumerate() {
+        path.push(index);
+        match element {
+            Element::TextEdit(edit) if edit.region_name.is_empty() => {
+                let suffix = path
+                    .iter()
+                    .map(|index| index.to_string())
+                    .collect::<Vec<_>>()
+                    .join("_");
+                edit.region_name = format!("text_edit_{suffix}");
+            }
+            Element::Panel(panel) => assign_nested_text_names(&mut panel.children, path),
+            _ => {}
+        }
+        path.pop();
+    }
+}
+
+fn nested_text_edit_regions(elements: &[Element], origin: (f32, f32), nested: bool) -> Vec<Region> {
+    let mut regions = Vec::new();
+    for element in elements {
+        match element {
+            Element::TextEdit(edit) if nested => regions.push(Region::new(
+                edit.region_name.clone(),
+                edit.hit_shape(origin),
+                false,
+            )),
+            Element::Panel(panel) => regions.extend(nested_text_edit_regions(
+                &panel.children,
+                (origin.0 + panel.x, origin.1 + panel.y),
+                true,
+            )),
+            _ => {}
+        }
+    }
+    regions
 }
 
 /// 内容里的 `regions`：`{ { name = "plus", x = …, y = …, w = …, h = …, radius = …, drag = true } }`。
@@ -1615,6 +1726,9 @@ pub enum WindowAction {
 
     /// 在扁平按钮上双击（第二次 `mouse_clicked`，没有修饰键）。
     MouseDoubleClicked,
+
+    /// `text_edit` 里的文字或选区变了（`event.control` / `event.text` 一起给）。
+    TextChanged,
 }
 
 impl WindowAction {
@@ -1634,6 +1748,7 @@ impl WindowAction {
             Self::MouseReleased => "mouse_released",
             Self::MouseClicked => "mouse_clicked",
             Self::MouseDoubleClicked => "mouse_double_clicked",
+            Self::TextChanged => "text_changed",
         }
     }
 
@@ -1654,6 +1769,7 @@ impl WindowAction {
             "mouse_clicked" => Self::MouseClicked,
             "mouse_double_clicked" => Self::MouseDoubleClicked,
             "double_click" => Self::MouseDoubleClicked,
+            "text_changed" => Self::TextChanged,
             _ => return None,
         })
     }
@@ -1689,6 +1805,9 @@ pub struct ScriptWindowEvent {
     /// 区域 / 布局为这个事件声明的处理器名（`events` 表）；没声明是 `None`。
     pub handler: Option<String>,
 
+    /// `text_changed` 时当前编辑框的完整文本；其它事件是 `None`。
+    pub text: Option<String>,
+
     /// 滚轮量（只有 `Wheel` 有）。
     pub delta: Option<i32>,
 
@@ -1710,6 +1829,7 @@ pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result
     payload.set("region", event.region.clone())?;
     payload.set("control", event.control.clone())?;
     payload.set("handler", event.handler.clone())?;
+    payload.set("text", event.text.clone())?;
     payload.set("delta", event.delta)?;
     payload.set("ctrl", event.ctrl)?;
     payload.set("alt", event.alt)?;
@@ -1772,6 +1892,84 @@ mod tests {
         );
         assert_eq!(document.control_name(3), Some("search"));
         assert_eq!(document.control_name(5), Some("close"));
+    }
+
+    /// 嵌套在 `panel.children` 里的 `text_edit`：绝对位置、区域和自动名字都要有。
+    #[test]
+    fn nested_text_edits_get_absolute_placements_and_regions() {
+        let lua = mlua::Lua::new();
+        let content = lua
+            .load(
+                r##"
+                return {
+                    width = 220, height = 120,
+                    { type = "panel", x = 10, y = 20, w = 200, h = 90,
+                      children = {
+                          { type = "panel", x = 4, y = 6, w = 190, h = 70,
+                            children = {
+                                { type = "text_edit", name = "inner", x = 8, y = 10,
+                                  w = 120, h = 28, text = "inside" }
+                            } }
+                      } }
+                }
+            "##,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let document = parse_document(
+            &content,
+            (Some(220.0), Some(120.0)),
+            &mut ImageCache::default(),
+        )
+        .expect("读得出来");
+        let placements = document.text_edits();
+        assert_eq!(placements.len(), 1);
+        assert_eq!(placements[0].path, vec![0, 0, 0]);
+        assert_eq!((placements[0].x, placements[0].y), (22.0, 36.0));
+        assert!(matches!(
+            document.element_at_path(&[0, 0, 0]),
+            Some(Element::TextEdit(edit)) if edit.region_name == "inner"
+        ));
+        assert!(document.regions.iter().any(|region| region.name == "inner"));
+    }
+
+    /// 脚本按控件名读写文本：`set_content` 的初始文本进缓存，`set_text` / `get_text` 同步。
+    #[test]
+    fn text_edits_can_be_read_and_written_by_control_name() {
+        let lua = mlua::Lua::new();
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let cache = Rc::new(RefCell::new(HashMap::new()));
+        let win = handle(
+            &lua,
+            Kind::Independent,
+            1,
+            "面板",
+            (Some(120.0), Some(40.0)),
+            requests.clone(),
+            Rc::new(RefCell::new(ImageCache::default())),
+            cache.clone(),
+        )
+        .unwrap();
+        lua.globals().set("win", win).unwrap();
+        lua.load(
+            r#"win:set_content{
+                width = 120, height = 40,
+                { type = "text_edit", name = "search", x = 0, y = 0, w = 120, h = 40,
+                  text = "hello" },
+            }"#,
+        )
+        .exec()
+        .unwrap();
+        let text: Option<String> = lua.load("return win:get_text('search')").eval().unwrap();
+        assert_eq!(text.as_deref(), Some("hello"));
+
+        lua.load("win:set_text('search', 'world')").exec().unwrap();
+        let text: Option<String> = lua.load("return win:get_text('search')").eval().unwrap();
+        assert_eq!(text.as_deref(), Some("world"));
+        assert!(requests.borrow().iter().any(|request| matches!(
+            request,
+            Request::SetText { name, text, .. } if name == "search" && text == "world"
+        )));
     }
 
     /// 扁平按钮的六个事件名。
@@ -1878,6 +2076,7 @@ mod tests {
             region: Some("plus".to_owned()),
             control: Some("Counter".to_owned()),
             handler: Some("plus_clicked".to_owned()),
+            text: Some("12".to_owned()),
             delta: Some(120),
             ctrl: true,
             alt: false,
@@ -1892,6 +2091,7 @@ mod tests {
         assert_eq!(payload.get::<String>("region").unwrap(), "plus");
         assert_eq!(payload.get::<String>("control").unwrap(), "Counter");
         assert_eq!(payload.get::<String>("handler").unwrap(), "plus_clicked");
+        assert_eq!(payload.get::<String>("text").unwrap(), "12");
         assert_eq!(payload.get::<u32>("id").unwrap(), 3);
         assert_eq!(payload.get::<i32>("delta").unwrap(), 120);
         assert_eq!(payload.get::<usize>("element").unwrap(), 2);
@@ -2401,6 +2601,7 @@ mod tests {
             (Some(200.0), Some(100.0)),
             Rc::new(RefCell::new(Vec::new())),
             Rc::new(RefCell::new(ImageCache::default())),
+            Rc::new(RefCell::new(std::collections::HashMap::new())),
         )
         .unwrap();
         lua.globals().set("win", handle).unwrap();

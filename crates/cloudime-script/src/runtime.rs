@@ -754,6 +754,10 @@ pub struct Runtime {
     window_seq: Rc<Cell<u32>>,
 
     /// 脚本窗口内容里的图像缓存（按路径判新旧）：同一张图不用每次 `set_content` 都重新解码。
+    /// 脚本侧看到的编辑框文本缓存（UI 线程的 `text_changed` 事件刷新）。
+    window_texts: window::TextCache,
+
+    /// 脚本窗口要的图像缓存（按路径 + 修改时间；同一张图不会每次 `set_content` 都重新解码）。
     image_cache: Rc<RefCell<window::ImageCache>>,
 }
 
@@ -792,6 +796,7 @@ impl Runtime {
             window_requests: Rc::new(RefCell::new(Vec::new())),
             window_seq: Rc::new(Cell::new(0)),
             image_cache: Rc::new(RefCell::new(window::ImageCache::default())),
+            window_texts: Rc::new(RefCell::new(HashMap::new())),
         };
         if let Err(error) = install_host_api(&runtime) {
             // 装不上就少了 `cloudime` 表，脚本会报 nil：记一条，别让 Server 起不来。
@@ -931,6 +936,15 @@ impl Runtime {
     /// 返回处理函数们**返回的表**（按 `priority` + 登记顺序）：返回 `nil` 或别的东西的当没说话，跳过。
     /// 某个处理函数报错 / 超限额只中止这一次（先调它清单里的 `on_error`），其余照常。
     pub fn dispatch(&self, event: &str, payload: Table, app: Option<&str>) -> Vec<Table> {
+        // UI 线程的编辑框文本变化先落进脚本侧缓存，`win:get_text` 不用等下一个来回。
+        if event == "window" {
+            let id = payload.get::<u32>("id").ok();
+            let control = payload.get::<String>("control").ok();
+            let text = payload.get::<String>("text").ok();
+            if let (Some(id), Some(control), Some(text)) = (id, control, text) {
+                self.window_texts.borrow_mut().insert((id, control), text);
+            }
+        }
         // `key`：组句里 Server 会派发**所有**按键，组合键脚本只该收它声明的那一组（修饰键 + 键）。
         let key = (event == "key")
             .then(|| {
@@ -1521,6 +1535,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     let create_requests = runtime.window_requests.clone();
     let create_seq = runtime.window_seq.clone();
     let create_images = runtime.image_cache.clone();
+    let create_texts = runtime.window_texts.clone();
     window_table.set(
         "create",
         lua.create_function(move |lua, options: mlua::Table| {
@@ -1545,6 +1560,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 .borrow_mut()
                 .push(window::Request::Create(id, spec.clone()));
             if let Some(document) = document {
+                window::cache_document_texts(&document, id, &create_texts);
                 create_requests
                     .borrow_mut()
                     .push(window::Request::SetContent(id, document));
@@ -1557,12 +1573,14 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 (Some(spec.width), Some(spec.height)),
                 create_requests.clone(),
                 create_images.clone(),
+                create_texts.clone(),
             )
         })?,
     )?;
     let auxiliary_requests = runtime.window_requests.clone();
     let auxiliary_seq = runtime.window_seq.clone();
     let auxiliary_images = runtime.image_cache.clone();
+    let auxiliary_texts = runtime.window_texts.clone();
     window_table.set(
         "create_auxiliary",
         lua.create_function(move |lua, options: mlua::Table| {
@@ -1587,6 +1605,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 .borrow_mut()
                 .push(window::Request::CreateAuxiliary(id, spec.clone()));
             if let Some(document) = document {
+                window::cache_document_texts(&document, id, &auxiliary_texts);
                 auxiliary_requests
                     .borrow_mut()
                     .push(window::Request::SetContent(id, document));
@@ -1599,6 +1618,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 (spec.width, spec.height),
                 auxiliary_requests.clone(),
                 auxiliary_images.clone(),
+                auxiliary_texts.clone(),
             )
         })?,
     )?;
@@ -3765,6 +3785,26 @@ mod tests {
         runtime.dispatch("startup", payload, None);
         // 请求没发出去（`http_get` 报错了），所以没有挂着的请求
         assert!(!runtime.has_pending_requests());
+    }
+
+    /// UI 层的 `text_changed` 事件先刷新脚本侧文本缓存，再进脚本处理函数。
+    #[test]
+    fn text_changed_events_update_the_runtime_cache() {
+        let runtime = Runtime::none();
+        let payload = runtime.lua().create_table().unwrap();
+        payload.set("id", 7).unwrap();
+        payload.set("action", "text_changed").unwrap();
+        payload.set("control", "search").unwrap();
+        payload.set("text", "hello").unwrap();
+        runtime.dispatch("window", payload, None);
+        assert_eq!(
+            runtime
+                .window_texts
+                .borrow()
+                .get(&(7, "search".to_owned()))
+                .map(String::as_str),
+            Some("hello")
+        );
     }
 
     /// `cloudime.window.*`：脚本只产出请求（窗口在 UI 线程上建），句柄上的方法按调用顺序排队，
