@@ -1,0 +1,111 @@
+{
+  "width": 500,
+  "height": 360,
+  "controls": [
+    {
+      "type": "rect",
+      "x": 0,
+      "y": 0,
+      "w": 500,
+      "h": 360,
+      "radius": 12,
+      "color": "#FFFFFFFF"
+    },
+    {
+      "type": "panel",
+      "x": 8,
+      "y": 8,
+      "w": 484,
+      "h": 344,
+      "children": [
+        {
+          "type": "label",
+          "x": 88,
+          "y": 18,
+          "size": 20,
+          "runs": [
+            { "text": "云朵", "color": "#FF4A90E2" },
+            { "text": "输入法", "color": "#FF222222" }
+          ]
+        },
+        {
+          "type": "text_block",
+          "x": 88,
+          "y": 54,
+          "size": 14,
+          "line_spacing": 5,
+          "text": "500 × 360\nCtrl+Alt+F3 只创建",
+          "color": "#FF888888"
+        },
+        {
+          "type": "static_shape",
+          "shape": "line",
+          "from": { "x": 16, "y": 110 },
+          "to": { "x": 468, "y": 110 },
+          "thickness": 1,
+          "color": "#FF888888"
+        },
+        {
+          "type": "static_shape",
+          "shape": "round_rect",
+          "x": 16,
+          "y": 122,
+          "w": 452,
+          "h": 28,
+          "radius": 8,
+          "color": "#FFF0C8FF"
+        },
+        {
+          "type": "label",
+          "x": 28,
+          "y": 127,
+          "size": 14,
+          "runs": [
+            { "text": "静态控件演示", "color": "#FF222222" }
+          ]
+        }
+      ]
+    },
+    {
+      "type": "text_edit",
+      "name": "search",
+      "x": 24,
+      "y": 172,
+      "w": 320,
+      "h": 32,
+      "font": "candidate",
+      "svg_path": "Images/SVG/打勾.svg",
+      "svg_align": "left",
+      "selection_background": "#FF33FF33",
+      "selection_color": "#FFFFFFFF",
+      "caret_color": "#FFFF0000",
+      "text": "在这里输入…"
+    },
+    {
+      "type": "text_edit",
+      "name": "plain",
+      "x": 24,
+      "y": 216,
+      "w": 320,
+      "h": 32,
+      "font": "candidate",
+      "selection_background": "#FF33FF33",
+      "selection_color": "#FFFFFFFF",
+      "caret_color": "#FFFF0000",
+      "text": "没有图标的输入框"
+    },
+    {
+      "type": "flat_svg_button",
+      "name": "close",
+      "x": 472,
+      "y": 8,
+      "svg_path": "Images/SVG/打叉.svg",
+      "shape": "round_rect",
+      "radius": 3,
+      "normal": { "background": "#00000000", "svg": "#FF000000" },
+      "hovered": { "background": "#FFFF3300", "svg": "#FFFFFFFF" },
+      "pressed": { "background": "#FFCC2900", "svg": "#FFFFFFFF" },
+      "events": { "mouse_clicked": "close" }
+    }
+  ]
+}
