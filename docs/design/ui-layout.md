@@ -7,6 +7,9 @@
 
 - 让脚本作者把控件布局从 Lua 里拆出来：用 JSON 描述尺寸、控件、区域和事件响应，Lua 只负责
   生命周期与业务分支。
+- **默认规则（2026-10-18）**：凡是创建脚本窗口（独立窗口 / 辅助窗口），除非确实需要运行时
+  动态生成大量控件、或整份布局频繁变化，否则一律使用 JSON 布局文件；
+  `cloudime.window.create{ layout = … }` / `win:load_layout(…)` 是默认入口，`set_content` 是例外。
 - JSON 只是**另一种内容来源**，解析后仍得到同一个 `cloudime_render::Document`：
   工人线程读文件、解析、生成元素与区域；UI 线程照旧经 `Renderer::render_document` 出图。
   渲染器不关心内容来自 Lua 还是 JSON，也不在 UI 线程做文件 IO。

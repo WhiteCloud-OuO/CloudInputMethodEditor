@@ -242,6 +242,12 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
 用来做面板、悬浮提示、小工具 —— 两类窗口的定义与规矩见 `docs/design/windows.md` §1–§5，这里只定
 「脚本能看见什么」。
 
+**布局规则（2026-10-18）**：新建脚本窗口时，控件布局默认写进 **JSON 布局文件**，通过
+`cloudime.window.create{ layout = … }` 或 `win:load_layout(…)` 加载；Lua 只负责交互、文本、
+位置和少量属性更新。只有确实需要运行时动态生成大量控件、或整份布局频繁变化时，才用
+`win:set_content{…}` 内联元素表。JSON 布局的字段与内联元素表一一对应，见
+`docs/design/ui-layout.md`。
+
 **为什么内容是声明式的**：脚本跑在工人线程、窗口在 UI 线程，两边不能直接互相调用（从 UI 线程回调 Lua
 会卡住所有应用的输入）。所以脚本不「画」，只交一份**元素表**（`Document` = 内容区尺寸 + 有序元素），
 Server 在 UI 线程上经云朵渲染器（`Renderer::render_document`）一次出图、`UpdateLayeredWindow` 整块贴上 ——
@@ -255,6 +261,7 @@ local win = cloudime.window.create{
     width = 240,          -- 内容区宽（点，8–2048；缺省 240）
     height = 120,         -- 内容区高（点，8–2048；缺省 120）
     interactive = true,   -- 接不接鼠标（缺省 false = 鼠标穿透，纯展示）
+    layout = "Scripts/lib/main.json", -- 推荐：控件布局放 JSON；尺寸以布局文件为准
     shadow = true,        -- 要不要与候选窗同源的那层阴影（缺省 true）
     background = true,    -- 要不要输入法画的面板底色 / 圆角（缺省 true）；false = 全由元素表自己画
 }
@@ -337,6 +344,7 @@ win:set_content{
 2026-10-18 起，同一个窗口内容也可以写在 JSON 文件里：`win:load_layout(path)` 读入并整份替换，
 或在 `cloudime.window.create{ layout = path }` 时直接作为初始内容。布局解析在工人线程完成，
 产物仍是同一个 `Document`；UI 线程与渲染器不需要知道内容来自 Lua 还是 JSON。
+**新建窗口的默认做法是写 JSON 布局**；`set_content` 内联只用于确实需要动态整份变化的场景。
 
 ```json
 {

@@ -15,7 +15,7 @@
 | [`Scripts/lib/niutrans-window.lua`](Scripts/lib/niutrans-window.lua) | 小牛翻译窗口：Ctrl+Alt+Y 复制选中文本、光标旁多行编辑窗口、自动翻译；静态布局在同目录 `niutrans-window*.json` |
 | [`Scripts/lib/example-theme-by-app.lua`](Scripts/lib/example-theme-by-app.lua) | 示例：按前台程序换主题（组合键触发 + `cloudime.foreground_app()` / `cloudime.apply_theme()`） |
 | [`Scripts/lib/example-auto-number.lua`](Scripts/lib/example-auto-number.lua) | 示例：自动序号（`combination_key` + `none` 单键 + `cloudime.context` + `commit`「换行 + 下一条序号」） |
-| [`Scripts/lib/example-window.lua`](Scripts/lib/example-window.lua) | 示例：脚本窗口（`cloudime.window.create` + `set_content` + `window` 点击事件） |
+| [`Scripts/lib/example-window.lua`](Scripts/lib/example-window.lua) | 示例：脚本窗口（动态内容用 `set_content`；一般窗口布局优先 JSON 文件） |
 
 ## 目录
 
@@ -439,15 +439,21 @@ local box = cloudime.ui.truncate(文本, 行宽 [, 选项])   -- → { text, lin
 内容是一份**元素表**（矩形 / 圆 / 线 / 文字 / SVG / 图片 / 路径），窗口由输入法在 UI 线程上按模板建、
 用与候选窗同一个渲染器画 —— 脚本不直接画，也卡不住输入。
 
+> **默认规则（2026-10-18）**：凡是创建脚本窗口（独立窗口 / 辅助窗口），除非确实需要
+> **运行时动态生成大量控件**、或**整份布局频繁变化**，否则控件布局一律写进 **JSON 布局文件**，
+> 用 `cloudime.window.create{ layout = … }` 或 `win:load_layout(…)` 加载；Lua 只负责交互、
+> 文本内容、位置和少量属性更新。`win:set_content{…}` 只作为确有必要的例外。
+> 这样布局可单独编辑、对比和复用，脚本不会把控件树和业务逻辑混在一起。
+
 ```lua
 -- 建一块 240 × 120 点的面板（interactive = true 才接鼠标）
 local win = cloudime.window.create{
     name = "统计", width = 240, height = 120, interactive = true,
-    -- layout = "Scripts/lib/main.json"  -- 也可以直接读 JSON 布局；尺寸以布局文件为准
+    layout = "Scripts/lib/main.json",  -- 推荐：控件布局在 JSON 里；尺寸以布局文件为准
     -- background = false  -- 不要输入法画的面板底色 / 圆角，改由元素表自己画背景
 }
 
--- 换一整份内容：坐标与尺寸都是点，左上角原点
+-- 例外：确有需要时，才换一整份内联内容；坐标与尺寸都是点，左上角原点
 win:set_content{
     { type = "rect", x = 0, y = 0, w = 240, h = 32, radius = 8, color = "#33111111" },
     { type = "text", x = 12, y = 6, text = "今日 12 条", size = 16, color = "#FF222222" },

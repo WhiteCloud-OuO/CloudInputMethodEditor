@@ -248,6 +248,7 @@ pub(super) trait Clonable: Asset {
   `ScriptWindow` 用**独立窗口模板**、`ScriptAuxiliary` 用**辅助窗口模板**并作为宿主资产（`Assets::add`）。
   内容是一份声明式 `Document`，经 `Painter::render_document` 一次出图；命中按形状（`HitShape`：圆角 / 圆 /
   线段 / 路径填充）；鼠标、滚轮、拖动（整块窗）、键盘焦点（`key` 载荷带 `window`）都在这层。
+  新建脚本窗口默认用 JSON 布局文件描述控件，Lua 只做交互；只有动态整份变化的场景才内联 `set_content`。
   规则（API、限额、事件载荷）在 `docs/design/script.md`「脚本窗口」。
 - **画元素**（`cloudime-render`）：`elements`（六条元素 trait）、`render`（`Render`：一块离屏位图 + 共享的
   字形管线；候选窗 / 状态条 / 状态提示 / 辅助窗口面板 / 脚本窗口全走它）、`document`（脚本内容的元素表 +

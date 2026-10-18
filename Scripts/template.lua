@@ -13,6 +13,8 @@
 --   3. 清单里 api / trigger_condition / sync / handover / timeout / on_error 必写；budget 只能比全局上限小。
 --   4. 不许改 cloudime 表；脚本自己的持久状态写别处（别写安装目录 —— 升级 / 卸载会删）。
 --   5. 唯一允许的「等」是 cloudime.http_get 与 cloudime.http_post（异步；时限必给，且不能超过清单里的 timeout）。
+--   6. 建脚本窗口时默认把控件布局写进 JSON 布局文件（create{ layout = … } / load_layout）；
+--      只有确需运行时动态生成大量控件或整份布局频繁变化时，才用 set_content 内联元素表。
 
 cloudime.script{
     name        = "我的脚本",           -- 日志里点名用；不写就用文件名
