@@ -112,6 +112,7 @@
       "fill_color": "#FF00AA00",
       "font_size": 18,
       "font_flag": 0,
+      "events": { "on_key_pressed": "search_key", "on_focused": "search_focus", "on_unfocused": "search_blur" },
       "text": "在这里输入…"
     },
     {

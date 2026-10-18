@@ -1081,6 +1081,10 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `font_name` / `font_size` / `font_flag` → `CreateFontW`（1 加粗 / 2 斜体 / 4 下划线 / 8 删除线）；
   旧的 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` /
   `svg_color` / `size` 仍兼容。辅助窗口的 `text_edit` 仍不建宿主（辅助窗口没有这套编辑宿主）。
+  编辑事件：宿主 `WM_KEYDOWN` / `WM_SYSKEYDOWN` 用 `modifier_bits()`（1 shift / 2 ctrl / 4 alt /
+  8 win）打包到自定义 `WM_TEXT_KEY`，`WM_SETFOCUS` / `WM_KILLFOCUS` 发 `WM_TEXT_FOCUS`；脚本窗
+  查宿主路径后派 `key_pressed` / `focused` / `unfocused`，事件带 `key` / `modifier`。布局事件名
+  `on_key_pressed` / `onKeyPressed` 等由 `WindowAction::from_name` 归一成 `key_pressed` 等。
 - **TSF 桥**（`script_window/text_store.rs` / `tsf.rs`，2026-10-18）：windowless RichEdit 自己只提供
   IMM32 的 `ITextHost::TxImmGetContext`，不直接参与 TSF；要让 CloudIME 的中文输入作用到它，必须补
   客户端文本存储。`text_store.rs` 实现 `ITextStoreACP`，把 `GetText` / `SetText` / 选区 / 插入 /

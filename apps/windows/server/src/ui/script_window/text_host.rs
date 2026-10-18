@@ -28,7 +28,10 @@ use windows::Win32::UI::Controls::RichEdit::{
 use windows::Win32::UI::Controls::{EM_GETSEL, EM_SETREADONLY, EM_SETSEL};
 
 use windows::Win32::UI::Input::Ime::{HIMC, ImmGetContext, ImmReleaseContext};
-use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
+    VK_SHIFT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, EN_CHANGE, GetCaretBlinkTime,
     GetClientRect, IDC_IBEAM, KillTimer, LoadCursorW, PostMessageW, SCROLL_WINDOW_FLAGS,
@@ -56,6 +59,12 @@ const CLASS_NAME: PCWSTR = w!("CloudIMETextHost");
 
 /// 宿主窗 → 脚本窗口：编辑框文本变了，请重读并派发 `text_changed`。
 pub(super) const WM_TEXT_CHANGED: u32 = WM_APP + 0x4A;
+
+/// 宿主窗 → 脚本窗口：编辑框按键按下（`lparam` 低 16 位 key、高 8 位 modifier）。
+pub(super) const WM_TEXT_KEY: u32 = WM_APP + 0x4B;
+
+/// 宿主窗 → 脚本窗口：编辑框获得 / 失去焦点（`lparam` 1 = focused）。
+pub(super) const WM_TEXT_FOCUS: u32 = WM_APP + 0x4C;
 
 static CLASS: WindowClass = WindowClass::new();
 static CREATE_TEXT_SERVICES: OnceLock<Option<(CreateTextServicesFn, GUID)>> = OnceLock::new();
@@ -402,6 +411,31 @@ impl TextHostWindow {
                 WM_TEXT_CHANGED,
                 WPARAM(self.hwnd.0 as usize),
                 LPARAM(0),
+            );
+        }
+    }
+
+    /// 通知脚本窗有按键按下。
+    fn notify_key_pressed(&self, key: u32, modifier: u8) {
+        let packed = ((modifier as isize) << 16) | key as isize;
+        unsafe {
+            let _ = PostMessageW(
+                Some(self.owner),
+                WM_TEXT_KEY,
+                WPARAM(self.hwnd.0 as usize),
+                LPARAM(packed),
+            );
+        }
+    }
+
+    /// 通知脚本窗编辑框获得 / 失去焦点。
+    fn notify_focus(&self, focused: bool) {
+        unsafe {
+            let _ = PostMessageW(
+                Some(self.owner),
+                WM_TEXT_FOCUS,
+                WPARAM(self.hwnd.0 as usize),
+                LPARAM(isize::from(focused)),
             );
         }
     }
@@ -1081,6 +1115,15 @@ fn system_color(index: SYS_COLOR_INDEX) -> COLORREF {
     unsafe { COLORREF(windows::Win32::Graphics::Gdi::GetSysColor(index)) }
 }
 
+/// 当前修饰键位：1 shift / 2 ctrl / 4 alt / 8 win。
+fn modifier_bits() -> u8 {
+    let shift = unsafe { GetKeyState(VK_SHIFT.0 as i32) < 0 };
+    let ctrl = unsafe { GetKeyState(VK_CONTROL.0 as i32) < 0 };
+    let alt = unsafe { GetKeyState(VK_MENU.0 as i32) < 0 };
+    let win = unsafe { GetKeyState(VK_LWIN.0 as i32) < 0 || GetKeyState(VK_RWIN.0 as i32) < 0 };
+    u8::from(shift) | (u8::from(ctrl) << 1) | (u8::from(alt) << 2) | (u8::from(win) << 3)
+}
+
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // 自定义消息转发给 RichEdit；文字和选区由宿主用 GDI 自绘。
     if msg == WM_PAINT {
@@ -1089,6 +1132,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     }
     // 输入法先看键；被吃掉就不再给 RichEdit（WM_CHAR 也跟着吞）。
     if matches!(msg, WM_KEYDOWN | WM_KEYUP | WM_SYSKEYDOWN | WM_SYSKEYUP) {
+        if matches!(msg, WM_KEYDOWN | WM_SYSKEYDOWN) {
+            let modifier = modifier_bits();
+            with_host(hwnd, |host| {
+                host.notify_key_pressed(wparam.0 as u32, modifier)
+            });
+        }
         let eaten = with_host(hwnd, |host| host.tsf_key(msg, wparam, lparam)).unwrap_or(false);
         if eaten {
             return LRESULT(0);
@@ -1117,11 +1166,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         return LRESULT(0);
     }
     if msg == WM_SETFOCUS {
-        with_host(hwnd, |host| host.activate());
+        with_host(hwnd, |host| {
+            host.activate();
+            host.notify_focus(true);
+        });
         return LRESULT(0);
     }
     if msg == WM_KILLFOCUS {
-        with_host(hwnd, |host| host.deactivate());
+        with_host(hwnd, |host| {
+            host.deactivate();
+            host.notify_focus(false);
+        });
         return LRESULT(0);
     }
     let lparam = if matches!(

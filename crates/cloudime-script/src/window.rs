@@ -882,11 +882,12 @@ fn nested_text_edit_regions(elements: &[Element], origin: (f32, f32), nested: bo
     let mut regions = Vec::new();
     for element in elements {
         match element {
-            Element::TextEdit(edit) if nested => regions.push(Region::new(
-                edit.region_name.clone(),
-                edit.hit_shape(origin),
-                false,
-            )),
+            Element::TextEdit(edit) if nested => {
+                let mut region =
+                    Region::new(edit.region_name.clone(), edit.hit_shape(origin), false);
+                region.handlers = edit.handlers.clone();
+                regions.push(region);
+            }
             Element::Panel(panel) => regions.extend(nested_text_edit_regions(
                 &panel.children,
                 (origin.0 + panel.x, origin.1 + panel.y),
@@ -954,13 +955,14 @@ fn parse_handlers(table: &mlua::Table) -> mlua::Result<Vec<(String, String)>> {
         let (action, handler) = entry?;
         let action = action.trim();
         let handler = handler.trim();
-        if WindowAction::from_name(action).is_none() {
+        let Some(action) = WindowAction::from_name(action) else {
             return Err(mlua::Error::RuntimeError(format!(
                 "events 的事件名不认识：{action}（可用：click / right_click / hover / leave / wheel / \
                  focus / blur / mouse_enter / mouse_leave / mouse_pressed / mouse_released / \
-                 mouse_clicked / mouse_double_clicked）"
+                 mouse_clicked / mouse_double_clicked / text_changed / key_pressed / focused / unfocused）"
             )));
-        }
+        };
+        let action = action.as_str();
         if handler.is_empty() {
             return Err(mlua::Error::RuntimeError(format!(
                 "events 的 {action} 处理器名不能为空"
@@ -1343,6 +1345,7 @@ fn parse_text_edit(table: &mlua::Table) -> mlua::Result<Element> {
             .unwrap_or(false),
         font_name,
         font_flag,
+        handlers: parse_handlers(table)?,
         text: table.get::<Option<String>>("text")?.unwrap_or_default(),
         font: font_slot(table)?,
         size: font_size,
@@ -1838,6 +1841,15 @@ pub enum WindowAction {
 
     /// `text_edit` 里的文字或选区变了（`event.control` / `event.text` 一起给）。
     TextChanged,
+
+    /// `text_edit` 按键按下；`event.key` / `event.modifier`。
+    KeyPressed,
+
+    /// `text_edit` 获得焦点。
+    Focused,
+
+    /// `text_edit` 失去焦点。
+    Unfocused,
 }
 
 impl WindowAction {
@@ -1858,6 +1870,9 @@ impl WindowAction {
             Self::MouseClicked => "mouse_clicked",
             Self::MouseDoubleClicked => "mouse_double_clicked",
             Self::TextChanged => "text_changed",
+            Self::KeyPressed => "key_pressed",
+            Self::Focused => "focused",
+            Self::Unfocused => "unfocused",
         }
     }
 
@@ -1879,6 +1894,12 @@ impl WindowAction {
             "mouse_double_clicked" => Self::MouseDoubleClicked,
             "double_click" => Self::MouseDoubleClicked,
             "text_changed" => Self::TextChanged,
+            "key_pressed" => Self::KeyPressed,
+            "on_key_pressed" | "onKeyPressed" => Self::KeyPressed,
+            "focused" => Self::Focused,
+            "on_focused" | "onFocused" => Self::Focused,
+            "unfocused" => Self::Unfocused,
+            "on_unfocused" | "onUnfocused" => Self::Unfocused,
             _ => return None,
         })
     }
@@ -1917,6 +1938,12 @@ pub struct ScriptWindowEvent {
     /// `text_changed` 时当前编辑框的完整文本；其它事件是 `None`。
     pub text: Option<String>,
 
+    /// `key_pressed` 的虚拟键码；其它事件是 `None`。
+    pub key: Option<u32>,
+
+    /// `key_pressed` 的修饰键位（1 shift / 2 ctrl / 4 alt / 8 win，可相加）。
+    pub modifier: Option<u8>,
+
     /// 滚轮量（只有 `Wheel` 有）。
     pub delta: Option<i32>,
 
@@ -1939,6 +1966,8 @@ pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result
     payload.set("control", event.control.clone())?;
     payload.set("handler", event.handler.clone())?;
     payload.set("text", event.text.clone())?;
+    payload.set("key", event.key)?;
+    payload.set("modifier", event.modifier)?;
     payload.set("delta", event.delta)?;
     payload.set("ctrl", event.ctrl)?;
     payload.set("alt", event.alt)?;
@@ -2206,7 +2235,8 @@ mod tests {
                     { type = "flat_svg_button", name = "close", x = 96, y = 8, w = 16, h = 16,
                       svg = [[<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
                                 <rect width="16" height="16"/></svg>]],
-                      events = { mouse_clicked = "close_window", mouse_enter = "close_hover" } },
+                      events = { mouse_clicked = "close_window", mouse_enter = "close_hover",
+                                 on_key_pressed = "on_key" } },
                 }
             "##,
             )
@@ -2229,6 +2259,11 @@ mod tests {
             Some("close_hover")
         );
         assert_eq!(document.regions[0].handler("mouse_leave"), None);
+        assert_eq!(
+            document.regions[0].handler("key_pressed"),
+            Some("on_key"),
+            "on_key_pressed 归一成 key_pressed"
+        );
 
         let bad = lua
             .load(
@@ -2283,6 +2318,8 @@ mod tests {
             control: Some("Counter".to_owned()),
             handler: Some("plus_clicked".to_owned()),
             text: Some("12".to_owned()),
+            key: Some(0x41),
+            modifier: Some(3),
             delta: Some(120),
             ctrl: true,
             alt: false,
@@ -2298,6 +2335,8 @@ mod tests {
         assert_eq!(payload.get::<String>("control").unwrap(), "Counter");
         assert_eq!(payload.get::<String>("handler").unwrap(), "plus_clicked");
         assert_eq!(payload.get::<String>("text").unwrap(), "12");
+        assert_eq!(payload.get::<u32>("key").unwrap(), 0x41);
+        assert_eq!(payload.get::<u8>("modifier").unwrap(), 3);
         assert_eq!(payload.get::<u32>("id").unwrap(), 3);
         assert_eq!(payload.get::<i32>("delta").unwrap(), 120);
         assert_eq!(payload.get::<usize>("element").unwrap(), 2);

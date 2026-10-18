@@ -426,6 +426,8 @@ pub struct TextEdit {
     pub font_name: Option<String>,
     /// 字体标志：1 加粗 / 2 斜体 / 4 下划线 / 8 删除线，可相加。
     pub font_flag: u8,
+    /// 事件处理器表（`events`）：动作名 → 处理器名，挂在自动区域上。
+    pub handlers: Vec<(String, String)>,
     /// 初始文本（真正输入由 Windowless RichEdit 负责）。
     pub text: String,
     /// 字体槽位；缺省候选词字体。

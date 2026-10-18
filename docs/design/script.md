@@ -426,6 +426,10 @@ win:set_content{
   `back_color` / `edge_color` / `edge_width` 映射到背景填充与边框；`text_color` / `cursor_color` /
   `sel_back_color` / `sel_text_color` 进宿主；`fill_color` 是 SVG 染色；`font_name` / `font_size` /
   `font_flag` 控制 GDI 字体（1 加粗 / 2 斜体 / 4 下划线 / 8 删除线）。旧字段名仍兼容。
+  **编辑事件**：宿主在 `WM_KEYDOWN` / `WM_SYSKEYDOWN` 时把虚拟键码和修饰键位（1 shift / 2 ctrl /
+  4 alt / 8 win）发给脚本窗，派 `key_pressed`；`WM_SETFOCUS` / `WM_KILLFOCUS` 派 `focused` /
+  `unfocused`。布局里的 `events` 可用 `on_key_pressed` / `onKeyPressed`、`on_focused` / `onFocused`、
+  `on_unfocused` / `onUnfocused` 别名，解析时归一成 `key_pressed` / `focused` / `unfocused`。
 - **区域（region）**：内容里可以声明 `regions = { … }` —— 区域是**鼠标点击 / 拖拽的命中范围**
   （元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true` = 按住它拖会移动整块窗口，
   `false` = 不拖窗口（点击照常）。后写的区域盖住先写的；事件里的 `event.region` 就是命中的区域名
@@ -450,13 +454,15 @@ win:set_content{
 cloudime.on("window", function(event)
     -- event.window   建窗口时给的名字
     -- event.id       窗口编号
-    -- event.action   "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur" / "text_changed"
+    -- event.action   "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur" / "text_changed" / "key_pressed" / "focused" / "unfocused"
     -- event.x, event.y   内容区坐标（点）
     -- event.element  命中的元素（内容是 1 起的数组，这里也是 1 起；没命中是 nil）
     -- event.region   命中的区域名（内容里的 regions；没命中是 nil）
     -- event.control  命中的控件名（布局文件里的 name；没命中 / 没写 name 是 nil）
     -- event.handler  区域 / 布局声明的事件处理器名（events 表；没声明是 nil）
     -- event.text     text_changed 时的完整文本；其它事件是 nil
+    -- event.key      key_pressed 的虚拟键码；其它事件是 nil
+    -- event.modifier key_pressed 的修饰键位（1 shift / 2 ctrl / 4 alt / 8 win）
     -- event.delta    滚轮量（一格 ±120，正数往上；只有 wheel 有）
     if event.action == "wheel" then
         count = math.max(0, count + math.floor(event.delta / 120))

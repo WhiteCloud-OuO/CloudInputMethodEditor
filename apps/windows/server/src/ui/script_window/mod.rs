@@ -46,7 +46,7 @@ use super::layered;
 use super::monitor;
 use super::painter::SharedPainter;
 use super::window_class::WindowClass;
-use text_host::{TextHostWindow, WM_TEXT_CHANGED};
+use text_host::{TextHostWindow, WM_TEXT_CHANGED, WM_TEXT_FOCUS, WM_TEXT_KEY};
 
 mod text_host;
 mod text_store;
@@ -661,11 +661,80 @@ impl ScriptWindow {
             control: Some(control_name),
             handler,
             text: Some(text),
+            key: None,
+            modifier: None,
             delta: None,
             ctrl,
             alt,
             shift,
         });
+    }
+
+    /// 编辑框按键按下（`key_pressed`）或焦点变化（`focused` / `unfocused`）。
+    fn emit_text_event(
+        &self,
+        host_hwnd: HWND,
+        action: WindowAction,
+        key: Option<u32>,
+        modifier: Option<u8>,
+    ) {
+        let edits = self.text_edits.borrow();
+        let Some(edit) = edits.iter().find(|edit| edit.host.hwnd() == host_hwnd) else {
+            return;
+        };
+        let document = self.document.borrow();
+        let Some(Element::TextEdit(control)) = document.element_at_path(&edit.path) else {
+            return;
+        };
+        let handler = self.region_handler(&control.region_name, action);
+        let control_name = document
+            .control_name_at_path(&edit.path)
+            .map(str::to_owned)
+            .unwrap_or_else(|| control.region_name.clone());
+        let region = Some(control.region_name.clone());
+        let element = (edit.path.len() == 1).then_some(edit.path[0] + 1);
+        let (x, y) = self.last.get();
+        let (ctrl, alt, shift) = modifiers();
+        (self.events)(ScriptWindowEvent {
+            window: self.id,
+            name: self.name.clone(),
+            action,
+            x: x as f32,
+            y: y as f32,
+            element,
+            region,
+            control: Some(control_name),
+            handler,
+            text: None,
+            key,
+            modifier,
+            delta: None,
+            ctrl,
+            alt,
+            shift,
+        });
+    }
+
+    fn text_key_pressed(&self, host_hwnd: HWND, key: u32, modifier: u8) {
+        self.emit_text_event(
+            host_hwnd,
+            WindowAction::KeyPressed,
+            Some(key),
+            Some(modifier),
+        );
+    }
+
+    fn text_focus_changed(&self, host_hwnd: HWND, focused: bool) {
+        self.emit_text_event(
+            host_hwnd,
+            if focused {
+                WindowAction::Focused
+            } else {
+                WindowAction::Unfocused
+            },
+            None,
+            None,
+        );
     }
 
     /// 命中下标若是扁平按钮，返回它。
@@ -1086,6 +1155,8 @@ impl ScriptWindow {
             control,
             handler,
             text: None,
+            key: None,
+            modifier: None,
             delta,
             ctrl,
             alt,
@@ -1141,6 +1212,8 @@ impl ScriptWindow {
             control,
             handler,
             text: None,
+            key: None,
+            modifier: None,
             delta: None,
             ctrl,
             alt,
@@ -1354,6 +1427,8 @@ impl ScriptAuxiliary {
                 control: panel.control.clone(),
                 handler: panel.handler.clone(),
                 text: None,
+                key: None,
+                modifier: None,
                 delta: panel.delta,
                 ctrl: false,
                 alt: false,
@@ -1611,6 +1686,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_TEXT_CHANGED => {
             let host = HWND(wparam.0 as *mut _);
             with_window(hwnd, |window| window.text_changed(host));
+            LRESULT(0)
+        }
+        WM_TEXT_KEY => {
+            let host = HWND(wparam.0 as *mut _);
+            let key = (lparam.0 & 0xFFFF) as u32;
+            let modifier = ((lparam.0 >> 16) & 0xFF) as u8;
+            with_window(hwnd, |window| window.text_key_pressed(host, key, modifier));
+            LRESULT(0)
+        }
+        WM_TEXT_FOCUS => {
+            let host = HWND(wparam.0 as *mut _);
+            with_window(hwnd, |window| {
+                window.text_focus_changed(host, lparam.0 != 0)
+            });
             LRESULT(0)
         }
         // 拖过就不是点击（阈值在 `drag_to` 里判）。

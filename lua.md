@@ -500,8 +500,9 @@ aux:show()
   窗口事件的 `event.control` 里。
 - 动态控件（`flat_svg_button` / `text_edit`）可以写 `events = { 事件名 = "处理器名" }`；事件名用
   `click` / `right_click` / `hover` / `leave` / `wheel` / `focus` / `blur` / `mouse_enter` / `mouse_leave` /
-  `mouse_pressed` / `mouse_released` / `mouse_clicked` / `mouse_double_clicked`（扁平按钮的单击也可写
-  `click`，双击也可写 `double_click`），处理器名由脚本自己分发。
+  `mouse_pressed` / `mouse_released` / `mouse_clicked` / `mouse_double_clicked` / `text_changed` /
+  `key_pressed` / `focused` / `unfocused`（`text_edit` 也接受 `on_key_pressed` / `onKeyPressed`、
+  `on_focused` / `onFocused`、`on_unfocused` / `onUnfocused`），处理器名由脚本自己分发。
   窗口事件载荷里会多一个 `event.handler`（没声明时是 `nil`），例如：
 
   ```lua
@@ -648,6 +649,10 @@ icon:use_path_mask({ { "M", 0, 0 }, { "L", 16, 0 }, { "L", 16, 16 }, { "L", 0, 1
   缓存已在运行时刷新，所以事件处理函数里再 `get_text` 能读到新值。
 - **编辑方法**：`win:select_all(name[, false])` 全选 / 取消选择；`win:replace(name, find, text)` 把
   `find` 的全部出现替换成 `text`；`win:clear(name)` 清空。
+- **事件**：`on_key_pressed` / `onKeyPressed`（`event.key` 虚拟键码，`event.modifier` 位：
+  1 shift / 2 ctrl / 4 alt / 8 win，可相加）；`on_focused` / `onFocused` 进入编辑；
+  `on_unfocused` / `onUnfocused` 离开编辑。可以在 JSON 的 `events` 里声明，也可以直接按
+  `event.action == "key_pressed" / "focused" / "unfocused"` 和 `event.control` 分发。
 
 **区域（region）**：一块可以被鼠标**点击 / 拖拽**的范围 —— 元素只管画，交互看区域：
 
@@ -726,13 +731,15 @@ win:set_content{
 ```lua
 cloudime.on("window", function(event)
     -- event.window / event.id      哪块窗口（名字 / 编号）
-    -- event.action                 "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur" / "text_changed"
+    -- event.action                 "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur" / "text_changed" / "key_pressed" / "focused" / "unfocused"
     -- event.x / event.y            内容区坐标（点）
     -- event.element               命中的元素（内容数组里 1 起的下标；没命中是 nil）
     -- event.region                命中的区域名（内容里的 regions；没命中是 nil）
     -- event.control               命中的控件名（布局文件里的 name；没命中 / 没写 name 是 nil）
     -- event.handler               区域 / 布局声明的事件处理器名（events 表；没声明是 nil）
     -- event.text                  text_changed 时的完整文本；其它事件是 nil
+    -- event.key                   key_pressed 的虚拟键码；其它事件是 nil
+    -- event.modifier              key_pressed 的修饰键位（1/2/4/8 可相加）
     -- event.delta                 滚轮量（一格 ±120，正数往上；只有 wheel 有）
     if event.action == "wheel" then
         count = math.max(0, count + math.floor(event.delta / 120))
