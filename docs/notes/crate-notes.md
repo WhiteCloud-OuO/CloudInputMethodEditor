@@ -683,6 +683,13 @@ Server 装配直接退出，表现成「装完打不出候选、按键没反应�
 （`apps/windows/server/Cargo.toml` 因此加了 `Win32_System_DataExchange` / `Win32_System_Memory` /
 `Win32_System_Ole` 三个 windows feature。）
 
+**模拟按键**（`cloudime.keyboard.press`）：Server 的 `dispatch/keyboard.rs` 用 `SendInput` 发一组
+`KEYBDINPUT`（修饰键按下 → 普通键按下 / 抬起 → 修饰键抬起）。脚本触发时 Ctrl / Alt 往往还按着，
+发送前最多等 450 ms 让修饰键松开，避免 `Ctrl+Alt+Y` 里的 Alt 混进 `Ctrl+C`；发送完再等 400 ms，
+让前台应用完成复制 / 提交，脚本随后读剪贴板。它只支持简单组合键，且注入发生在脚本工人线程：
+**不要在一个会阻塞 DLL 等回包的 key 处理里同步调用它**——翻译窗口脚本把复制放到 `caret` 回调里，
+就是让 key 处理先返回、目标应用恢复输入后再注入。`Runtime::set_keyboard` 装接口。
+
 **当前时间**（`cloudime.get_time`）：`jiff::Zoned::now()`（`cloudime-script` 因此加了 `jiff`）拼一张**本地时间**的表
 —— `year` / `month` / `day` / `hour` / `minute` / `second` / `weekday`（1 = 周一 … 7 = 周日）/ `unix`（Unix 秒）。
 脚本本来也能用标准库的 `os.date` / `os.time`（`os` 表只换了 `exit` / `execute`），这一份是不依赖标准库的稳定形状。

@@ -12,6 +12,7 @@
 | [`docs/notes/crate-notes.md`](docs/notes/crate-notes.md) | 实现要点（`crates/cloudime-script`、Server 的「用户脚本」两节） |
 | [`Scripts/template.lua`](Scripts/template.lua) | 「新建脚本」用的模板（只有清单骨架） |
 | [`Scripts/lib/example-niutrans.lua`](Scripts/lib/example-niutrans.lua) | 完整示例：小牛翻译（签名、表单编码、折行、多行显示） |
+| [`Scripts/lib/niutrans-window.lua`](Scripts/lib/niutrans-window.lua) | 小牛翻译窗口：Ctrl+Alt+Y 复制选中文本、光标旁多行编辑窗口、自动翻译 |
 | [`Scripts/lib/example-theme-by-app.lua`](Scripts/lib/example-theme-by-app.lua) | 示例：按前台程序换主题（组合键触发 + `cloudime.foreground_app()` / `cloudime.apply_theme()`） |
 | [`Scripts/lib/example-auto-number.lua`](Scripts/lib/example-auto-number.lua) | 示例：自动序号（`combination_key` + `none` 单键 + `cloudime.context` + `commit`「换行 + 下一条序号」） |
 | [`Scripts/lib/example-window.lua`](Scripts/lib/example-window.lua) | 示例：脚本窗口（`cloudime.window.create` + `set_content` + `window` 点击事件） |
@@ -273,6 +274,7 @@ cloudime.on(事件名, function(载荷) … end)   -- 登记处理函数，只�
 | `cloudime.text.after(上限?)` | 同上，但只取**光标之后**那一段（从光标那个字符起） |
 | `cloudime.clipboard.settext(文本)` | 把 `文本` 写进剪贴板（覆盖原来的内容）。写不进去（被别的程序占着）**报错** |
 | `cloudime.clipboard.gettext()` | 读剪贴板里的文本 → 字符串；里面没有文本（图片 / 文件 / 空）给 `nil`；打不开**报错** |
+| `cloudime.keyboard.press(组合键)` | 模拟一次组合键，例如 `"ctrl+c"` / `"ctrl+enter"`；支持 `ctrl` / `alt` / `shift` / `win` + 一个普通键。发送前会短暂等待当前按住的修饰键松开，再发给前台窗口 |
 | `cloudime.run(命令)` | 起外部程序，**启动就返回、不等子进程**（等同 `os.execute`） |
 | `cloudime.caret()` | 请求一次**光标位置**：DLL 在下一次按键处理完之后量插入点，结果以 **`caret` 事件**送来（不是返回值，见下） |
 | `cloudime.install_dir()` | 安装目录的绝对路径（`Scripts\` / `Images\` 的上一级）；测试 / 没有安装目录时给 `nil` |
@@ -289,6 +291,17 @@ cloudime.on(事件名, function(载荷) … end)   -- 登记处理函数，只�
 - 剪贴板是**全局资源**：别的程序正占着它时开头几次会失败（Server 短等重试几次，仍不行就报错）→ 建议 `pcall` 接住。
 - `gettext()` 读得到**任何程序**刚放进剪贴板的东西（密码管理器复制的密码也算）—— 这是你自己写的脚本、风险自担；
   输入法不拦也不记。空的剪贴板给 `nil`（与「打不开」区分：后者报错）。
+
+`cloudime.keyboard.press(组合键)`：
+
+- 组合键是 `+` 分隔的字符串，修饰键支持 `ctrl` / `alt` / `shift` / `win`，后面跟一个普通键：
+  `"ctrl+c"`、`"ctrl+enter"`、`"alt+tab"`；字母大小写不敏感，也支持 `enter` / `tab` / `esc` /
+  `space` / `backspace` / `delete` / 方向键 / `home` / `end` / `pageup` / `pagedown` / `f1`–`f12`。
+- 发送给**当前前台窗口**。脚本里请先确认目标窗口仍然在前台；脚本窗口自己拿到焦点后，
+  组合键会发给脚本窗口。
+- 快捷键触发脚本时，Ctrl / Alt 往往还按着；接口会先短暂等待这些修饰键松开（最多约 450 ms），
+  再注入组合键，避免把 `Ctrl+Alt+Y` 里的 Alt 带进 `Ctrl+C`。
+- 只用于简单的本机快捷操作；它不是自动化测试工具，也不保证所有以管理员权限运行的窗口都接收注入按键。
 
 `cloudime.text.*` 的几件事：
 

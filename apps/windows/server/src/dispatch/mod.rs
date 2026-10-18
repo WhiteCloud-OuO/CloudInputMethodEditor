@@ -8,6 +8,7 @@ mod composed;
 mod config;
 mod document;
 mod key;
+mod keyboard;
 mod message;
 mod reload;
 mod rescore;
@@ -242,6 +243,7 @@ impl Router {
         });
         // 剪贴板（`cloudime.clipboard.*`）：Server 就在用户会话里，直接用 Windows 剪贴板 API
         scripts.set_clipboard(Rc::new(clipboard::set_text), Rc::new(clipboard::get_text));
+        scripts.set_keyboard(Rc::new(keyboard::press));
         // 中文模式的符号映射缺省表在配置里（Core 自己缺省是空表），在这里接上，测试与正式跑的是同一条路
         engine.set_punctuation_mapping(config.punctuation_mapping.clone());
         // 本进程启动时配置里的主题：脚本 `apply_theme(false)` 回退到它

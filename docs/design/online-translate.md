@@ -19,6 +19,8 @@
 **随包的示例**：`Scripts\lib\example-niutrans.lua`（小牛翻译「通用文本-Flash」的完整实现：签名、表单编码、
 抠 `tgtText`、写 `online` 都写好了）。它在 `lib\` 子目录里，**不会被加载** —— 拷到 `Scripts\` 根部、
 填上自己的 appId / apikey、重启输入法服务就生效。另有 `Scripts\lib\md5.lua`（纯 Lua MD5）供签名用。
+窗口版示例是 `Scripts\lib\niutrans-window.lua`：`Ctrl+Alt+Y` 复制选中文本、在光标旁开多行翻译窗口，
+同样拷到 `Scripts\` 根部并填凭据。
 
 示例拿到译文后还会**按候选窗现在的宽度折行**：`cloudime.candidate.width()` 拿到窗口内容区宽度（点），
 扣掉左右内边距（各 8 点）与「在线 」前缀，用 `cloudime.ui.truncate(译文, 行宽, { mode = "wrap",

@@ -593,6 +593,10 @@ pub type ClipboardSetHook = Rc<dyn Fn(&str) -> Result<(), String>>;
 /// `Ok(None)` = 剪贴板里没有文本（图片 / 文件 / 空）。
 pub type ClipboardGetHook = Rc<dyn Fn() -> Result<Option<String>, String>>;
 
+/// `cloudime.keyboard.press` 背后的实现：由 Server 装（[`Runtime::set_keyboard`]）。
+/// 参数是一组 `ctrl+alt+key` 形式的组合键；返回失败原因。
+pub type KeyboardHook = Rc<dyn Fn(&str) -> Result<(), String>>;
+
 /// `cloudime.get_curr_config` 背后的实现：由 Server 装（[`Runtime::set_config_hook`]），
 /// 把当前配置拼成一张 Lua 表（键名与 `config.toml` 一致，另加 `theme.available`；见 `lua.md`）。
 pub type ConfigHook = Rc<dyn Fn(&Lua) -> mlua::Result<Table>>;
@@ -721,6 +725,8 @@ pub struct Runtime {
     /// 剪贴板（`cloudime.clipboard.*`）：Server 用 [`Runtime::set_clipboard`] 装进来。
     clipboard_set: Rc<RefCell<Option<ClipboardSetHook>>>,
     clipboard_get: Rc<RefCell<Option<ClipboardGetHook>>>,
+    /// 模拟组合键（`cloudime.keyboard.press`）；Server 用 Windows `SendInput` 实现。
+    keyboard: Rc<RefCell<Option<KeyboardHook>>>,
 
     /// 当前配置（`cloudime.get_curr_config`）：Server 用 [`Runtime::set_config_hook`] 装进来。
     config_hook: Rc<RefCell<Option<ConfigHook>>>,
@@ -785,6 +791,7 @@ impl Runtime {
             text_hook: Rc::new(RefCell::new(None)),
             clipboard_set: Rc::new(RefCell::new(None)),
             clipboard_get: Rc::new(RefCell::new(None)),
+            keyboard: Rc::new(RefCell::new(None)),
             config_hook: Rc::new(RefCell::new(None)),
             app_hook: Rc::new(RefCell::new(None)),
             host: Rc::new(RefCell::new(None)),
@@ -1261,6 +1268,11 @@ impl Runtime {
         *self.clipboard_get.borrow_mut() = Some(get);
     }
 
+    /// 装“模拟组合键”接口（`cloudime.keyboard.press`），Server 用 Windows `SendInput` 实现。
+    pub fn set_keyboard(&self, press: KeyboardHook) {
+        *self.keyboard.borrow_mut() = Some(press);
+    }
+
     /// 登记过任何处理函数没有（Server 据此决定要不要去读整篇文本 —— 没脚本就不读）。
     pub fn has_any_handlers(&self) -> bool {
         self.handlers
@@ -1296,6 +1308,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     let text_hook = &runtime.text_hook;
     let clipboard_set = &runtime.clipboard_set;
     let clipboard_get = &runtime.clipboard_get;
+    let keyboard = &runtime.keyboard;
     let config_hook = &runtime.config_hook;
     let app_hook = &runtime.app_hook;
     let host = &runtime.host;
@@ -1691,6 +1704,21 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
         })?,
     )?;
     table.set("clipboard", clipboard)?;
+    // 模拟组合键：`cloudime.keyboard.press("ctrl+c")`。真实现由 Server 用 SendInput 装。
+    let keyboard_table = lua.create_table()?;
+    let keyboard_state = keyboard.clone();
+    keyboard_table.set(
+        "press",
+        lua.create_function(move |_, chord: String| {
+            let hook = keyboard_state.borrow().clone().ok_or_else(|| {
+                mlua::Error::RuntimeError(
+                    "cloudime.keyboard 用不了：服务器没有安装键盘接口".to_owned(),
+                )
+            })?;
+            hook(&chord).map_err(mlua::Error::RuntimeError)
+        })?,
+    )?;
+    table.set("keyboard", keyboard_table)?;
     // 当前时间：`cloudime.get_time()` → `{ year, month, day, hour, minute, second, weekday, unix }`。
     // 前七个字段是**本地时间**；`weekday` 1 = 周一 … 7 = 周日；`unix` 是 Unix 秒。
     // （脚本本来也能用标准库的 `os.date` / `os.time`，这一份是不依赖标准库的稳定形状。）
@@ -3380,6 +3408,33 @@ mod tests {
         let error = bare
             .lua()
             .load("cloudime.clipboard.gettext()")
+            .exec()
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("用不了"), "{error}");
+    }
+
+    /// `cloudime.keyboard.press`：把组合键交给 Server；没装接口报错。
+    #[test]
+    fn keyboard_presses_go_through_the_host() {
+        let runtime = Runtime::none();
+        let seen: Rc<RefCell<Vec<String>>> = Rc::new(RefCell::new(Vec::new()));
+        let recorder = seen.clone();
+        runtime.set_keyboard(Rc::new(move |chord| {
+            recorder.borrow_mut().push(chord.to_owned());
+            Ok(())
+        }));
+        runtime
+            .lua()
+            .load("cloudime.keyboard.press('ctrl+c')")
+            .exec()
+            .unwrap();
+        assert_eq!(*seen.borrow(), ["ctrl+c"]);
+
+        let bare = Runtime::none();
+        let error = bare
+            .lua()
+            .load("cloudime.keyboard.press('ctrl+c')")
             .exec()
             .unwrap_err()
             .to_string();

@@ -178,6 +178,10 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
 - **剪贴板**：`cloudime.clipboard.settext(文本)` 写、`cloudime.clipboard.gettext()` 读（→ 字符串 / `nil`）。
   实现在 Server 侧（Windows 剪贴板 API，被别的程序占着时短等重试、仍不行报错），不经 DLL。
   `gettext` 读得到任何程序放进剪贴板的文本（含密码管理器）—— 用户自担，文档里写明。
+- **模拟按键**：`cloudime.keyboard.press("ctrl+c")` 用 Windows `SendInput` 向前台窗口注入一次
+  组合键；支持 `ctrl` / `alt` / `shift` / `win` + 一个普通键。发送前短暂等待当前按住的修饰键松开，
+  避免快捷键本身的 Alt 混入；发送后等约 400 ms 再返回，方便脚本紧接着读剪贴板。
+  它不是自动化测试接口，也不保证所有管理员窗口接收注入。
 - **光标位置**：`cloudime.caret()` 是**请求**（没有返回值）：Server 在下一拍的 `KeyResult.want_caret`
   里请 DLL 量一次插入点（异步只读编辑会话，`com/edit/caret.rs`；拿不到退到鼠标位置），DLL 用
   `ClientMessage::Caret` 送回来，Server 派 `caret` 事件。载荷是插入点矩形与所在显示器工作区
