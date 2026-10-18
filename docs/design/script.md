@@ -317,6 +317,7 @@ win:set_content{
 | `static_image` | `x` / `y` / `w` / `h`（可省）+ `image`（`cloudime.image.load` 句柄）或 `path`（PNG / BMP / JPG） |
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（边缘，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1）/ `fill`（可选）/ `children`（相对坐标） |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省 SVG 画板）；`svg` / `svg_path`；`shape` + `radius`；`name`；`normal` / `hovered` / `pressed = { background, svg }` |
+| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`fill` / `color`（边框）/ `border_width`；`svg` / `svg_path` + `svg_align` + `svg_color`；`text` / `size` / `name` |
 
 - 坐标与尺寸一律是**点**（100% 缩放下 1 点 = 1 像素），随 DPI 一起放大；超出内容区的部分被裁掉。
 - **静态控件**（`label` / `text_block` / `static_shape` / `static_image` / `panel`）只用 traits 画、
@@ -343,6 +344,10 @@ win:set_content{
   `ctrl` / `alt` / `shift`；`mouse_clicked` / `mouse_double_clicked` 只在没有修饰键且没拖动时派。
   双击由窗口自己按 `GetDoubleClickTime` + 系统双击距离判：第二次单击先派 `mouse_clicked`、
   再派 `mouse_double_clicked`。
+- **单行编辑框**（`text_edit`）：背景胶囊 / 边框 + 可选 SVG + **系统 EDIT 覆盖窗**。背景、边框
+  （缺省主题角标色、1 点）和 SVG 由渲染器画；文本区由 UI 线程建一个 `EDIT` 顶层窗（owner = 脚本窗），
+  点击后直接输入（IME / 剪贴板交给系统）。文本区几何：无 SVG 时 `w - h` 居中；有 SVG 时宽
+  `w - h/2 - svg宽度`、放在图标旁。SVG 按背景高度缩放。自动区域与按钮同一套（`drag = false`）。
 - **区域（region）**：内容里可以声明 `regions = { … }` —— 区域是**鼠标点击 / 拖拽的命中范围**
   （元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true` = 按住它拖会移动整块窗口，
   `false` = 不拖窗口（点击照常）。后写的区域盖住先写的；事件里的 `event.region` 就是命中的区域名

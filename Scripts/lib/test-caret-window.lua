@@ -2,11 +2,12 @@
 --
 -- 用法：把这个文件从 `Scripts\lib\` 拷到 `Scripts\` 下（或直接放在 `Scripts\` 里），重启输入法服务。
 -- 在任意文本编辑器里按 **Ctrl + Alt + F3**：
---   * 光标上方 30 点摆一块 180 × 140 的独立窗口；
+--   * 光标上方 30 点摆一块 500 × 360 的独立窗口；
 --   * 上方放不下（会超出显示器工作区）就改到光标下方 30 点；
 --   * 右上角 20 × 20、圆角 3 的 `flat_svg_button` 画 `Images\SVG\打叉.svg`，点它的自动区域关闭并销毁窗口；
 --   * 窗口内容用静态控件搭：`panel` / `label`（每段颜色不同）/ `text_block`（多行 + 行距）/
 --     `static_shape`（分隔线 + 圆角色块）/ `static_image`（测试机上的 `Images\cloud.png`，可选）；
+--   * 两个单行编辑框：一个带 SVG 图标、一个不带（系统 EDIT，点进去可以输入）；
 --   * 扁平按钮的 normal / hovered / pressed 底色与叉色由控件自动切换（悬停橙红底 + 白叉）。
 --   * 窗口背景 / 圆角由脚本画（`background = false`），颜色取自 `cloudime.get_theme()` 的当前主题；
 --     阴影与候选窗同一套（`shadow` 缺省开启）。
@@ -19,7 +20,7 @@
 
 cloudime.script{
     name                  = "光标窗口测试",
-    description           = "Ctrl+Alt+F3：光标上方 30 点开一块 180×140 的测试窗口（右上角 × 关闭）",
+    description           = "Ctrl+Alt+F3：光标上方 30 点开一块 500×360 的测试窗口（右上角 × 关闭）",
     api                   = 2,
     trigger_condition     = "combination_key",
     combination_modifiers = "ctrl+alt",
@@ -32,8 +33,8 @@ cloudime.script{
     end,
 }
 
-local WIDTH, HEIGHT, GAP = 180, 140, 30
-local PANEL_RADIUS = 8
+local WIDTH, HEIGHT, GAP = 500, 360, 30
+local PANEL_RADIUS = 12
 local BUTTON = 20
 local MARGIN = 8
 local BUTTON_X = WIDTH - BUTTON - MARGIN
@@ -79,21 +80,21 @@ local function draw()
     local color = palette()
     -- 面板的子控件：云朵图是测试机上的可选素材（仓库里没有），有就放进来。
     local children = {
-        { type = "label", x = 56, y = 10, size = 16,
+        { type = "label", x = 88, y = 18, size = 20,
           runs = { { text = "云朵", color = color.accent },
                    { text = "输入法", color = color.text } } },
-        { type = "text_block", x = 56, y = 36, size = 12, line_spacing = 4,
-          text = "180 × 140\nCtrl+Alt+F3 只创建", color = color.muted },
-        { type = "static_shape", shape = "line", from = { x = 8, y = 78 },
-          to = { x = WIDTH - MARGIN * 2 - 8, y = 78 }, thickness = 1, color = color.muted },
-        { type = "static_shape", shape = "round_rect", x = 8, y = 86, w = 148, h = 26,
-          radius = 6, color = color.highlight },
-        { type = "label", x = 16, y = 91, size = 12,
+        { type = "text_block", x = 88, y = 54, size = 14, line_spacing = 5,
+          text = "500 × 360\nCtrl+Alt+F3 只创建", color = color.muted },
+        { type = "static_shape", shape = "line", from = { x = 16, y = 110 },
+          to = { x = WIDTH - MARGIN * 2 - 16, y = 110 }, thickness = 1, color = color.muted },
+        { type = "static_shape", shape = "round_rect", x = 16, y = 122, w = WIDTH - MARGIN * 2 - 32, h = 28,
+          radius = 8, color = color.highlight },
+        { type = "label", x = 28, y = 127, size = 14,
           runs = { { text = "静态控件演示", color = color.text } } },
     }
     local icon = cloud_icon()
     if icon then
-        table.insert(children, 1, { type = "static_image", x = 8, y = 8, w = 40, h = 40,
+        table.insert(children, 1, { type = "static_image", x = 16, y = 16, w = 56, h = 56,
                                     image = icon })
     end
     local content = {
@@ -105,6 +106,13 @@ local function draw()
         -- 面板：把下面这些静态控件分组；缺省无填充，只画 #FFE0E0E0 的 1 点边框。
         { type = "panel", x = MARGIN, y = MARGIN, w = WIDTH - MARGIN * 2, h = HEIGHT - MARGIN * 2,
           children = children },
+        -- 有 SVG 图标的单行编辑框（图标按背景高度缩放，放在左侧）
+        { type = "text_edit", name = "search", x = 24, y = 172, w = 320, h = 32,
+          svg_path = cloudime.install_path("Images/SVG/打勾.svg"), svg_align = "left",
+          text = "在这里输入…", size = 14 },
+        -- 无 SVG 的单行编辑框（文本区居中）
+        { type = "text_edit", name = "plain", x = 24, y = 216, w = 320, h = 32,
+          text = "没有图标的输入框", size = 14 },
         -- 扁平 SVG 按钮：区域 = 背景形状（20 × 20 取自 SVG 画板），三态颜色自动切换。
         { type = "flat_svg_button", name = "close", x = BUTTON_X, y = BUTTON_Y,
           svg_path = svg_path(), shape = "round_rect", radius = 3,

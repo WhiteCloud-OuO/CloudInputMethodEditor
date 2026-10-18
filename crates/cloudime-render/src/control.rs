@@ -384,6 +384,113 @@ fn translate_commands(commands: &[PathCommand], dx: f32, dy: f32) -> Vec<PathCom
         .collect()
 }
 
+/// 文本编辑框里 SVG 图案靠哪一边。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SvgAlign {
+    Left,
+    Right,
+}
+
+/// **单行文本编辑框**：背景胶囊 / 边框 + 可选 SVG + 系统 EDIT 覆盖的文本区。
+#[derive(Clone)]
+pub struct TextEdit {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub radius: f32,
+    /// 内部填充；`None` = 透明。
+    pub fill: Option<Color>,
+    /// 边框颜色；`None` = 主题的候选角标色。
+    pub border: Option<Color>,
+    pub border_width: f32,
+    pub svg: Option<String>,
+    /// SVG 画板尺寸（点）。
+    pub svg_size: (f32, f32),
+    pub svg_align: SvgAlign,
+    /// SVG 染色；`None` 保留 SVG 自己的颜色。
+    pub svg_tint: Option<Color>,
+    /// 初始文本（真正输入由系统 EDIT 负责）。
+    pub text: String,
+    /// 字号（点），系统 EDIT 字体用。
+    pub size: f32,
+    /// 自动区域名。
+    pub region_name: String,
+}
+
+impl TextEdit {
+    /// 文本区（相对按钮左上角）：没有 SVG 时居中；有 SVG 时放在图标旁边。
+    pub fn edit_rect(&self) -> (f32, f32, f32, f32) {
+        let height = self.height;
+        if self.svg.is_none() {
+            return (height * 0.5, 0.0, (self.width - height).max(0.0), height);
+        }
+        let svg_width = self.svg_width();
+        let gutter = height * 0.25;
+        let width = (self.width - height * 0.5 - svg_width).max(0.0);
+        match self.svg_align {
+            SvgAlign::Left => (gutter + svg_width, 0.0, width, height),
+            SvgAlign::Right => (gutter, 0.0, width, height),
+        }
+    }
+
+    /// SVG 按背景高度缩放后的宽度。
+    pub fn svg_width(&self) -> f32 {
+        if self.svg_size.1 <= 0.0 {
+            return self.height;
+        }
+        self.height * self.svg_size.0 / self.svg_size.1
+    }
+
+    pub fn hit_shape(&self, origin: (f32, f32)) -> HitShape {
+        HitShape::RoundRect {
+            x: origin.0 + self.x,
+            y: origin.1 + self.y,
+            width: self.width,
+            height: self.height,
+            radius: self.radius,
+        }
+    }
+
+    pub(crate) fn draw<R: ControlRender>(
+        &self,
+        render: &mut R,
+        theme: &Theme,
+        scale: f32,
+        origin: (f32, f32),
+        margin: f32,
+    ) {
+        let x = margin + (origin.0 + self.x) * scale;
+        let y = margin + (origin.1 + self.y) * scale;
+        let width = self.width * scale;
+        let height = self.height * scale;
+        if let Some(fill) = self.fill {
+            render.round_rect(x, y, width, height, self.radius * scale, fill);
+        }
+        let border = self.border.unwrap_or(theme.colors.badge);
+        if self.border_width > 0.0
+            && let Some(rect) = tiny_skia::Rect::from_xywh(x, y, width, height)
+        {
+            render.stroke_round_rect(rect, self.radius * scale, self.border_width * scale, border);
+        }
+        if let Some(svg) = &self.svg {
+            let gutter = self.height * 0.25;
+            let svg_width = self.svg_width();
+            let svg_x = match self.svg_align {
+                SvgAlign::Left => gutter,
+                SvgAlign::Right => self.width - gutter - svg_width,
+            };
+            let _ = render.svg(
+                svg,
+                margin + (origin.0 + self.x + svg_x) * scale,
+                margin + (origin.1 + self.y) * scale,
+                height,
+                self.svg_tint,
+            );
+        }
+    }
+}
+
 /// 控件文字样式：与 `draw_element` 的 `text` 元素同一套（字族按槽位取主题）。
 fn text_style(theme: &Theme, slot: FontSlot, size: f32, color: Color, scale: f32) -> TextStyle {
     let font = FontSpec::with_size(size).scaled(scale);

@@ -980,6 +980,10 @@ fn draw_element(
             button.draw(render, scale, origin, margin);
             Some(button.hit_shape(origin))
         }
+        Element::TextEdit(edit) => {
+            edit.draw(render, m.theme, scale, origin, margin);
+            Some(edit.hit_shape(origin))
+        }
     }
 }
 

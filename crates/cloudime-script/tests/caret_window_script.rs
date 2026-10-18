@@ -106,7 +106,7 @@ fn the_caret_window_script_draws_and_closes_itself() {
             _ => None,
         })
         .expect("显示窗口");
-    assert_eq!(show, (100.0, 30.0), "光标上方 30 点（200 - 30 - 140）");
+    assert_eq!(show, (100.0, 246.0), "上方放不下，改到光标下方 30 点");
 
     let document = content_of(&requests, id);
     // 背景由脚本自己画：第一块是整窗圆角矩形，颜色来自 `cloudime.get_theme()`。
@@ -114,8 +114,8 @@ fn the_caret_window_script_draws_and_closes_itself() {
         &document.elements[0],
         Element::Rect { x, y, width, height, color, .. }
             if x.abs() < 0.01 && y.abs() < 0.01
-                && (*width - 180.0).abs() < 0.01
-                && (*height - 140.0).abs() < 0.01
+                && (*width - 500.0).abs() < 0.01
+                && (*height - 360.0).abs() < 0.01
                 && *color == Color::rgba(0x12, 0x34, 0x56, 0xFF)
     ));
     assert!(

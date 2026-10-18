@@ -16,8 +16,8 @@ use std::time::SystemTime;
 use cloudime_render::{
     ButtonColors, ButtonShape, ButtonState, Color, Document, Element, FlatSvgButton, FontSlot,
     HitRect, HitShape, Label, LabelRun, Panel, PathCommand, Pixmap, Region, StaticImage,
-    StaticShape, TextBlock, flip_image, gray_image, load_image, mask_image, rotate_image,
-    scale_image, svg_size,
+    StaticShape, SvgAlign, TextBlock, TextEdit, flip_image, gray_image, load_image, mask_image,
+    rotate_image, scale_image, svg_size,
 };
 
 use crate::mlua;
@@ -629,6 +629,26 @@ fn parse_document(
                 false,
             ));
         }
+        if let Element::TextEdit(edit) = &mut element {
+            if edit.region_name.trim().is_empty() {
+                edit.region_name = format!("text_edit_{}", elements.len() + 1);
+            }
+            if regions
+                .iter()
+                .chain(button_regions.iter())
+                .any(|region: &Region| region.name == edit.region_name)
+            {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "文本编辑框的区域名重复：{}",
+                    edit.region_name
+                )));
+            }
+            button_regions.push(Region::new(
+                edit.region_name.clone(),
+                edit.hit_shape((0.0, 0.0)),
+                false,
+            ));
+        }
         elements.push(element);
     }
     regions.extend(button_regions);
@@ -882,9 +902,10 @@ fn parse_element(
         "static_image" => parse_static_image(table, images),
         "panel" => parse_panel(table, images, depth),
         "flat_svg_button" => parse_flat_svg_button(table),
+        "text_edit" => parse_text_edit(table),
         other => Err(mlua::Error::RuntimeError(format!(
             "元素 type 不认识：{other}（可用：rect / circle / line / text / svg / img / path / \
-             label / text_block / static_shape / static_image / panel / flat_svg_button）"
+             label / text_block / static_shape / static_image / panel / flat_svg_button / text_edit）"
         ))),
     }
 }
@@ -968,6 +989,64 @@ fn parse_flat_svg_button(table: &mlua::Table) -> mlua::Result<Element> {
         state: ButtonState::Normal,
         region_name: table.get::<Option<String>>("name")?.unwrap_or_default(),
     }))
+}
+
+/// `text_edit`：背景胶囊 + 可选 SVG + 系统 EDIT 覆盖的文本区。
+fn parse_text_edit(table: &mlua::Table) -> mlua::Result<Element> {
+    let width = positive(table, "w", "width")?;
+    let height = positive(table, "h", "height")?;
+    let (svg, svg_size, svg_align) = match table.get::<Option<String>>("svg")? {
+        Some(source) => {
+            let size = svg_size(&source).ok_or_else(|| {
+                mlua::Error::RuntimeError("text_edit 的 SVG 解析失败（拿不到画板尺寸）".to_owned())
+            })?;
+            (Some(source), size, parse_svg_align(table)?)
+        }
+        None => {
+            if let Some(path) = table.get::<Option<String>>("svg_path")? {
+                let source = read_svg(&path)?;
+                let size = svg_size(&source).ok_or_else(|| {
+                    mlua::Error::RuntimeError(
+                        "text_edit 的 SVG 文件解析失败（拿不到画板尺寸）".to_owned(),
+                    )
+                })?;
+                (Some(source), size, parse_svg_align(table)?)
+            } else {
+                (None, (height, height), SvgAlign::Left)
+            }
+        }
+    };
+    Ok(Element::TextEdit(TextEdit {
+        x: number(table, "x", 0.0)?,
+        y: number(table, "y", 0.0)?,
+        width,
+        height,
+        radius: number(table, "radius", height * 0.5)?.max(0.0),
+        fill: color(table, "fill", false)?,
+        border: color(table, "color", false)?,
+        border_width: number(table, "border_width", 1.0)?.clamp(0.0, 16.0),
+        svg,
+        svg_size,
+        svg_align,
+        svg_tint: color(table, "svg_color", false)?,
+        text: table.get::<Option<String>>("text")?.unwrap_or_default(),
+        size: number(table, "size", 14.0)?.clamp(1.0, 256.0),
+        region_name: table.get::<Option<String>>("name")?.unwrap_or_default(),
+    }))
+}
+
+fn parse_svg_align(table: &mlua::Table) -> mlua::Result<SvgAlign> {
+    match table
+        .get::<Option<String>>("svg_align")?
+        .as_deref()
+        .unwrap_or("left")
+    {
+        "left" => Ok(SvgAlign::Left),
+        "right" => Ok(SvgAlign::Right),
+        other => Err(mlua::Error::RuntimeError(format!(
+            "svg_align 不认识：{other}（可用：left / right）"
+        ))),
+    }
 }
 
 /// 按钮某一状态的颜色：`{ background = …, svg = … }`。
@@ -1891,6 +1970,58 @@ mod tests {
                 if (x - 10.0).abs() < 0.01 && (y - 10.0).abs() < 0.01
                     && (width - 20.0).abs() < 0.01 && (height - 20.0).abs() < 0.01
                     && (radius - 3.0).abs() < 0.01
+        ));
+    }
+
+    /// `text_edit`：默认胶囊尺寸 / 文本区几何 / 自动区域；有 SVG 时文本区让到旁边。
+    #[test]
+    fn text_edits_parse_capsule_and_text_area_geometry() {
+        let lua = mlua::Lua::new();
+        let content = lua
+            .load(
+                r##"
+                return {
+                    width = 320, height = 100,
+                    { type = "text_edit", name = "plain", x = 10, y = 10, w = 200, h = 24,
+                      text = "hello" },
+                    { type = "text_edit", name = "with_icon", x = 10, y = 50, w = 300, h = 24,
+                      svg = [[<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
+                                <rect width="32" height="32"/></svg>]],
+                      svg_align = "left" },
+                }
+            "##,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let document = parse_document(
+            &content,
+            (Some(320.0), Some(100.0)),
+            &mut ImageCache::default(),
+        )
+        .expect("读得出来");
+        assert_eq!(document.regions.len(), 2, "每个 text_edit 自动一个区域");
+
+        let Element::TextEdit(plain) = &document.elements[0] else {
+            panic!("不是 text_edit：{:?}", document.elements[0]);
+        };
+        assert_eq!(plain.region_name, "plain");
+        assert_eq!(plain.radius, 12.0, "缺省胶囊：高的一半");
+        assert!(plain.fill.is_none());
+        assert!(plain.border.is_none(), "缺省用主题角标色");
+        assert_eq!(plain.border_width, 1.0);
+        assert!(plain.svg.is_none());
+        assert_eq!(plain.edit_rect(), (12.0, 0.0, 176.0, 24.0));
+
+        let Element::TextEdit(with_icon) = &document.elements[1] else {
+            panic!("不是 text_edit：{:?}", document.elements[1]);
+        };
+        assert!(with_icon.svg.is_some());
+        assert_eq!(with_icon.svg_width(), 24.0, "图标按背景高度缩放");
+        assert_eq!(with_icon.edit_rect(), (30.0, 0.0, 264.0, 24.0));
+
+        assert!(matches!(
+            &document.regions[0],
+            Region { name, draggable: false, .. } if name == "plain"
         ));
     }
 
