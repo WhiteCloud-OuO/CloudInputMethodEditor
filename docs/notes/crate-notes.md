@@ -1056,7 +1056,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   **windowless RichEdit**（`script_window/text_host.rs`）：每块 `text_edit` 建一个普通顶层宿主窗
   （owner = 脚本窗，`WS_EX_TOOLWINDOW | WS_EX_TOPMOST`），从 `Msftedit.dll` 取 `CreateTextServices`，
   用 `IID_ITextServices` 做 `QueryInterface` 拿 `ITextServices`，再把自己的 `ITextHost` 实现接上去；
-  绘制由宿主窗 `WM_PAINT` 调 `TxDraw`，键盘 / 鼠标 / IME 消息原样转给 `TxSendMessage`。
+  绘制由宿主窗 `WM_PAINT` 不调 `TxDraw`；键盘 / 鼠标 / IME 消息原样转给 `TxSendMessage`，文字和选区由宿主用 GDI 自绘。
   `TxGetExtent` 必须返回 **HIMETRIC**（`像素 * 2540 / dpi`），返回像素会导致 RichEdit 布局成零宽、
   文字完全看不见；`TxGetCharFormat` 的 `yHeight`（twips）和 `szFaceName` 也要填，否则默认字号为 0。
   宿主窗的底色 / 文字色取 `Painter::text_edit_colors()`（候选窗主题），字体取 `Painter::text_font`
@@ -1081,14 +1081,12 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   插入符不出现、拖选也不会立即重画。失焦对应 `OnTxUIDeactivate` + `WM_KILLFOCUS`，隐藏 / 销毁时
   再 `OnTxInPlaceDeactivate`。
   `TxGetViewInset` 按宿主高度和行高算上下留白；行高用 `GetTextMetrics` 的实际字高 + 外部行距，
-  所以改 `text_edit.size` 后宿主窗高度和留白会跟着变。`paint` 里 `TxDraw` 前把 `HFONT` 选进 DC、
-  画完还原；宿主窗高度只留 `行高 + 4` 并整体垂直居中，单行 RichEdit 默认贴顶，单靠
-  `TxGetViewInset` 在部分版本上不够。`TxGetPropertyBits` 返回 `TXTBIT_RICHTEXT |
-  TXTBIT_SAVESELECTION`。
-  ⚠️ RichEdit 4.1 的 font binding 会把**结尾的 U+2026** 绑到 `Segoe UI Symbol`，导致未选中 /
-  只选中省略号时点距变化；初始 `text` 若以 `…` 结尾，`shrink_ellipsis_space` 会在它前面插一个
-  空格并把该空格设成 1pt，避免省略号成为 run 尾部。用户自己键入到结尾的 `…` 仍可能触发该行为，
-  彻底解决需要自定义文本绘制或 D2D/DirectWrite 字体绑定。
+  所以改 `text_edit.size` 后宿主窗高度和留白会跟着变。宿主窗高度只留 `行高 + 4` 并整体垂直居中。
+  **文本不再走 `TxDraw`**：宿主用 GDI 逐 run 绘制（`TextOutW`），普通文字用主题字体，`U+2026`
+  单独用 `Segoe UI` 画（点距固定），选区高亮 / 插入符也用同一套宽度和字体度量计算；因此
+  RichEdit 的 font binding 不会再影响显示，任意位置、选中与否的 `…` 都一致。
+  `TxGetPropertyBits` 返回 `TXTBIT_RICHTEXT | TXTBIT_SAVESELECTION`，RichEdit 只负责编辑模型、
+  选区和 TSF，不再负责文字 / 插入符绘制。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

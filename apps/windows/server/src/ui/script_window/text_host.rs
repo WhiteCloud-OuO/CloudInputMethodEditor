@@ -2,8 +2,9 @@
 //! 而是通过 `Msftedit.dll!CreateTextServices` 拿 `ITextServices`，由我们自己的窗口过程把
 //! 绘制 / 键盘 / 鼠标 / IME 消息转给它。
 //!
-//! 这样文本编辑、选区、剪贴板、IME 仍由 RichEdit 引擎负责，但窗口本身、背景、字体和位置都由
-//! 脚本窗口控制；不再是系统 `EDIT` 的白底矩形。
+//! 这样文本编辑、选区、剪贴板、IME 仍由 RichEdit 引擎负责，但窗口本身、背景、字体、文字绘制和
+//! 位置都由脚本窗口控制；文字用宿主自己的 GDI 字体逐 run 绘制，不调用 `TxDraw`，避免 RichEdit
+//! 的 font binding 改写 `…` 等字符的字形。
 
 use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
@@ -12,19 +13,18 @@ use std::mem::size_of;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetDC, GetTextMetricsW, HBRUSH,
-    HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT, ReleaseDC, SYS_COLOR_INDEX, SelectObject,
-    SetBkColor, SetTextColor, TEXTMETRICW,
+    BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetDC, GetTextExtentPoint32W,
+    GetTextMetricsW, HBRUSH, HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT, ReleaseDC, SYS_COLOR_INDEX,
+    SelectObject, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
 };
-use windows::Win32::System::Com::DVASPECT_CONTENT;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
-use windows::Win32::UI::Controls::EM_SETSEL;
+use windows::Win32::UI::Controls::EM_GETSEL;
 use windows::Win32::UI::Controls::RichEdit::{
     CFM_CHARSET, CFM_COLOR, CFM_FACE, CFM_SIZE, CHARFORMATW, EM_SETCHARFORMAT, ITextHost,
-    ITextHost_Impl, ITextServices, PARAFORMAT, SCF_ALL, SCF_SELECTION, TXTBACK_TRANSPARENT,
-    TXTBACKSTYLE, TXTBIT_RICHTEXT, TXTBIT_SAVESELECTION, TXTBIT_VIEWINSETCHANGE,
+    ITextHost_Impl, ITextServices, PARAFORMAT, SCF_ALL, TXTBACK_TRANSPARENT, TXTBACKSTYLE,
+    TXTBIT_RICHTEXT, TXTBIT_SAVESELECTION, TXTBIT_VIEWINSETCHANGE,
 };
 
 use windows::Win32::UI::Input::Ime::{HIMC, ImmGetContext, ImmReleaseContext};
@@ -33,12 +33,12 @@ use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateCaret, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
     IDC_IBEAM, KillTimer, LoadCursorW, SCROLL_WINDOW_FLAGS, SCROLLBAR_CONSTANTS, SW_HIDE,
     SW_SHOWNA, SWP_NOACTIVATE, SendMessageW, SetCaretPos, SetCursor, SetTimer, SetWindowPos,
-    ShowCaret, ShowWindow, WM_CHAR, WM_IME_CHAR, WM_IME_COMPOSITION, WM_IME_COMPOSITIONFULL,
-    WM_IME_CONTROL, WM_IME_ENDCOMPOSITION, WM_IME_KEYDOWN, WM_IME_KEYUP, WM_IME_NOTIFY,
-    WM_IME_REQUEST, WM_IME_SELECT, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_INPUTLANGCHANGE,
-    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN,
-    WM_SYSKEYUP, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    ShowCaret, ShowWindow, WM_CHAR, WM_GETTEXT, WM_GETTEXTLENGTH, WM_IME_CHAR, WM_IME_COMPOSITION,
+    WM_IME_COMPOSITIONFULL, WM_IME_CONTROL, WM_IME_ENDCOMPOSITION, WM_IME_KEYDOWN, WM_IME_KEYUP,
+    WM_IME_NOTIFY, WM_IME_REQUEST, WM_IME_SELECT, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION,
+    WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_SYSCHAR,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{
     BOOL, Error, GUID, HSTRING, IUnknown_Vtbl, Interface, PCWSTR, Result, implement, w,
@@ -77,8 +77,9 @@ pub(super) struct TextHostWindow {
     #[allow(dead_code)]
     host: ITextHost,
     font: HGDIOBJ,
+    ellipsis_font: HGDIOBJ,
     brush: HBRUSH,
-    background: COLORREF,
+    highlight: HBRUSH,
     text_color: COLORREF,
 }
 
@@ -112,7 +113,9 @@ impl TextHostWindow {
             )
         }?;
         let font = create_font(family, size, dpi);
+        let ellipsis_font = create_font(Some("Segoe UI"), size, dpi);
         let brush = unsafe { CreateSolidBrush(background) };
+        let highlight = unsafe { CreateSolidBrush(COLORREF(0x00FFE8CC)) };
 
         let line_height = font_line_height(font, size, dpi);
         let host: ITextHost = TextHost {
@@ -177,18 +180,15 @@ impl TextHostWindow {
             services,
             host,
             font,
+            ellipsis_font,
             brush,
-            background,
+            highlight,
             text_color,
         });
         HOSTS.with(|map| map.borrow_mut().insert(hwnd.0 as isize, window.clone()));
         unsafe {
             let mut result = LRESULT(0);
-            let text_string = if let Some(prefix) = text.strip_suffix('…') {
-                format!("{prefix} …")
-            } else {
-                text.to_string()
-            };
+            let text_string = text.to_string();
             let text = HSTRING::from(text_string.as_str());
             if let Err(error) = window.services.TxSetText(&text) {
                 tracing::warn!(id = owner.0 as isize, %error, "text_edit：TxSetText 失败");
@@ -206,7 +206,6 @@ impl TextHostWindow {
                 LPARAM(&mut format as *mut _ as isize),
                 &mut result,
             );
-            shrink_ellipsis_space(&window.services, &text_string, family, text_color);
         }
         Ok(window)
     }
@@ -281,9 +280,15 @@ impl TextHostWindow {
         if let Some(tsf) = &self.tsf {
             tsf.focus();
         }
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+        }
     }
 
     fn deactivate(&self) {
+        unsafe {
+            let _ = windows::Win32::UI::WindowsAndMessaging::HideCaret(Some(self.hwnd));
+        }
         if let Some(tsf) = &self.tsf {
             tsf.blur();
         }
@@ -326,6 +331,130 @@ impl TextHostWindow {
         }
     }
 
+    fn text(&self) -> Vec<u16> {
+        let length = self.send(WM_GETTEXTLENGTH, WPARAM(0), LPARAM(0)).0.max(0) as usize;
+        let mut buffer = vec![0u16; length + 1];
+        let copied = self
+            .send(
+                WM_GETTEXT,
+                WPARAM(length + 1),
+                LPARAM(buffer.as_mut_ptr() as isize),
+            )
+            .0
+            .max(0) as usize;
+        buffer.truncate(copied.min(length));
+        buffer
+    }
+
+    fn selection(&self, length: usize) -> (usize, usize) {
+        let mut start = 0u32;
+        let mut end = 0u32;
+        self.send(
+            EM_GETSEL,
+            WPARAM(&mut start as *mut u32 as usize),
+            LPARAM(&mut end as *mut u32 as isize),
+        );
+        ((start as usize).min(length), (end as usize).min(length))
+    }
+
+    fn text_width(&self, hdc: HDC, text: &[u16]) -> i32 {
+        let mut width = 0;
+        let mut index = 0;
+        while index < text.len() {
+            let ellipsis = text[index] == 0x2026;
+            let start = index;
+            if ellipsis {
+                index += 1;
+            } else {
+                while index < text.len() && text[index] != 0x2026 {
+                    index += 1;
+                }
+            }
+            let font = if ellipsis {
+                self.ellipsis_font
+            } else {
+                self.font
+            };
+            unsafe {
+                let old = SelectObject(hdc, font);
+                let mut size = SIZE::default();
+                let _ = GetTextExtentPoint32W(hdc, &text[start..index], &mut size);
+                let _ = SelectObject(hdc, old);
+                width += size.cx;
+            }
+        }
+        width
+    }
+
+    fn draw_text(&self, hdc: HDC, text: &[u16], client: &RECT) {
+        if text.is_empty() {
+            return;
+        }
+        unsafe {
+            let old = SelectObject(hdc, self.font);
+            let mut metrics = TEXTMETRICW::default();
+            let _ = GetTextMetricsW(hdc, &mut metrics);
+            let baseline = client.bottom / 2 + metrics.tmAscent / 2;
+            let mut x = 2;
+            let mut index = 0;
+            while index < text.len() {
+                let ellipsis = text[index] == 0x2026;
+                let start = index;
+                if ellipsis {
+                    index += 1;
+                } else {
+                    while index < text.len() && text[index] != 0x2026 {
+                        index += 1;
+                    }
+                }
+                let font = if ellipsis {
+                    self.ellipsis_font
+                } else {
+                    self.font
+                };
+                let run_old = SelectObject(hdc, font);
+                let mut run_metrics = TEXTMETRICW::default();
+                let _ = GetTextMetricsW(hdc, &mut run_metrics);
+                let _ = TextOutW(hdc, x, baseline - run_metrics.tmAscent, &text[start..index]);
+                let mut size = SIZE::default();
+                let _ = GetTextExtentPoint32W(hdc, &text[start..index], &mut size);
+                let _ = SelectObject(hdc, run_old);
+                x += size.cx;
+            }
+            let _ = SelectObject(hdc, old);
+        }
+    }
+
+    fn update_caret(&self, hdc: HDC, text: &[u16]) {
+        if !self.active.get() {
+            return;
+        }
+        let (start, end) = self.selection(text.len());
+        if start != end {
+            unsafe {
+                let _ = windows::Win32::UI::WindowsAndMessaging::HideCaret(Some(self.hwnd));
+            }
+            return;
+        }
+        let mut client = RECT::default();
+        unsafe {
+            let _ = GetClientRect(self.hwnd, &mut client);
+            let old = SelectObject(hdc, self.font);
+            let mut metrics = TEXTMETRICW::default();
+            let _ = GetTextMetricsW(hdc, &mut metrics);
+            let _ = SelectObject(hdc, old);
+            let x = 2 + self.text_width(hdc, &text[..start]);
+            if x >= client.right {
+                let _ = windows::Win32::UI::WindowsAndMessaging::HideCaret(Some(self.hwnd));
+                return;
+            }
+            let baseline = client.bottom / 2 + metrics.tmAscent / 2;
+            let y = baseline - metrics.tmAscent;
+            let _ = SetCaretPos(x, y);
+            let _ = ShowCaret(Some(self.hwnd));
+        }
+    }
+
     fn paint(&self) {
         unsafe {
             let mut ps = PAINTSTRUCT::default();
@@ -334,25 +463,23 @@ impl TextHostWindow {
             let _ = GetClientRect(self.hwnd, &mut client);
             let _ = FillRect(hdc, &client, self.brush);
             let old_font = SelectObject(hdc, self.font);
-            let _ = SetBkColor(hdc, self.background);
+            let _ = SetBkMode(hdc, TRANSPARENT);
             let _ = SetTextColor(hdc, self.text_color);
-            let draw = self.services.TxDraw(
-                DVASPECT_CONTENT,
-                -1,
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                hdc,
-                HDC::default(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                std::ptr::null_mut(),
-                0,
-                0,
-                0,
-            );
-            if let Err(error) = draw {
-                tracing::warn!(hwnd = self.hwnd.0 as isize, %error, "text_edit：TxDraw 失败");
+            let text = self.text();
+            let (start, end) = self.selection(text.len());
+            if start < end {
+                let first = 2 + self.text_width(hdc, &text[..start]);
+                let second = 2 + self.text_width(hdc, &text[..end]);
+                let selection = RECT {
+                    left: first.min(second),
+                    top: 0,
+                    right: first.max(second).max(first.min(second) + 1),
+                    bottom: client.bottom.max(1),
+                };
+                let _ = FillRect(hdc, &selection, self.highlight);
             }
+            self.draw_text(hdc, &text, &client);
+            self.update_caret(hdc, &text);
             let _ = SelectObject(hdc, old_font);
             let _ = EndPaint(self.hwnd, &ps);
         }
@@ -378,7 +505,9 @@ impl Drop for TextHostWindow {
         unsafe {
             let _ = DestroyWindow(self.hwnd);
             let _ = DeleteObject(self.font);
+            let _ = DeleteObject(self.ellipsis_font);
             let _ = DeleteObject(self.brush.into());
+            let _ = DeleteObject(self.highlight.into());
         }
     }
 }
@@ -458,8 +587,9 @@ impl ITextHost_Impl for TextHost_Impl {
         }
     }
 
-    fn TxSetCaretPos(&self, x: i32, y: i32) -> BOOL {
-        unsafe { SetCaretPos(x, y).is_ok().into() }
+    fn TxSetCaretPos(&self, _x: i32, _y: i32) -> BOOL {
+        // 位置由宿主按 GDI 字体度量设置，RichEdit 自己的 x/y 不用。
+        false.into()
     }
 
     fn TxSetTimer(&self, idtimer: u32, utimeout: u32) -> BOOL {
@@ -698,38 +828,6 @@ fn char_format(family: Option<&str>, size: f32, text_color: COLORREF) -> CHARFOR
     format
 }
 
-fn shrink_ellipsis_space(
-    services: &ITextServices,
-    text: &str,
-    family: Option<&str>,
-    color: COLORREF,
-) {
-    let units: Vec<u16> = text.encode_utf16().collect();
-    let Some(index) = units.iter().position(|unit| *unit == 0x2026) else {
-        return;
-    };
-    if index == 0 || units[index - 1] != 0x20 {
-        return;
-    }
-    unsafe {
-        let mut format = char_format(family, 1.0, color);
-        let mut result = LRESULT(0);
-        let _ = services.TxSendMessage(
-            EM_SETSEL,
-            WPARAM(index - 1),
-            LPARAM(index as isize),
-            &mut result,
-        );
-        let _ = services.TxSendMessage(
-            EM_SETCHARFORMAT,
-            WPARAM(SCF_SELECTION as usize),
-            LPARAM(&mut format as *mut _ as isize),
-            &mut result,
-        );
-        let _ = services.TxSendMessage(EM_SETSEL, WPARAM(0), LPARAM(0), &mut result);
-    }
-}
-
 fn font_line_height(font: HGDIOBJ, size: f32, dpi: u32) -> i32 {
     unsafe {
         let dc = GetDC(None);
@@ -782,7 +880,7 @@ fn system_color(index: SYS_COLOR_INDEX) -> COLORREF {
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    // 自定义消息转发给 RichEdit；绘制由我们自己填底 + TxDraw。
+    // 自定义消息转发给 RichEdit；文字和选区由宿主用 GDI 自绘。
     if msg == WM_PAINT {
         with_host(hwnd, |host| host.paint());
         return LRESULT(0);
@@ -837,6 +935,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     {
         if matches!(msg, WM_LBUTTONUP | WM_KEYUP) {
             with_host(hwnd, |host| host.notify_selection());
+        }
+        if matches!(
+            msg,
+            WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK | WM_MOUSEMOVE | WM_KEYDOWN | WM_CHAR
+        ) {
+            with_host(hwnd, |host| unsafe {
+                let _ = InvalidateRect(Some(host.hwnd), None, false);
+            });
         }
         return result;
     }
