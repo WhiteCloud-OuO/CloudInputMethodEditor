@@ -484,7 +484,7 @@ aux:show()
 | `static_image` | `x` / `y` / `w` / `h`（可省，缺省图片像素尺寸）+ `image`（`cloudime.image.load` 的句柄）或 `path`（PNG / BMP / JPG） |
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（**边缘**颜色，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1 点）/ `fill`（可选填充，不写 = 无填充）/ `children = { …元素… }`；子控件用面板内相对坐标 |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省取 SVG 画板）；`svg`（整段 SVG）或 `svg_path`（文件）；`shape = rect / round_rect / circle / path` + `radius`；`name`（自动区域名）；`normal` / `hovered` / `pressed = { background = …, svg = … }` |
-| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 `h/2`，胶囊）；`fill`（可选）；`color`（边框，缺省主题角标色）；`border_width`（缺省 1）；`svg` / `svg_path` + `svg_align = left / right` + `svg_color`；`text` 初始文本；`size`（字号，缺省 14）；`name`（自动区域名） |
+| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 `h/2`，胶囊）；`fill`（可选）；`color`（边框，缺省主题角标色）；`border_width`（缺省 1）；`svg` / `svg_path` + `svg_align = left / right` + `svg_color`；`text` 初始文本；`font`（缺省 `candidate`）/ `size`（缺省用主题该字体字号）；`name`（自动区域名） |
 
 颜色写 `"#RRGGBB"` / `"#AARRGGBB"` / `"#RGB"`，或 `{ r = …, g = …, b = …, a = … }`（0–255）。
 
@@ -570,7 +570,8 @@ icon:use_path_mask({ { "M", 0, 0 }, { "L", 16, 0 }, { "L", 16, 16 }, { "L", 0, 1
 - 背景缺省是**胶囊**（`radius = h/2`）、透明填充、边框用主题的候选角标色（`candidate.badge`）、
   线宽 1 点；可以写 `fill` / `color` / `border_width` 覆盖。
 - 文本区由系统 **EDIT** 覆盖在窗口上，点一下就能用鼠标 / 键盘输入（含 IME、剪贴板）。
-  `text` 是初始文本，`size` 是 EDIT 字号。
+  `text` 是初始文本；字体缺省用**候选词字体**，`font` 可换成 `pinyin` / `item_number` / `translate`，
+  `size` 不写就跟主题里该字体的字号。
 - 没有 SVG：文本区宽 `w - h`，在背景里水平居中。
 - 有 SVG：SVG 按 `h` 缩放，文本区宽 `w - h/2 - svg宽度`，放在图标旁边；`svg_align` 决定图标在左 / 右。
 - 自动区域名取 `name`（缺省 `text_edit_N`），`drag = false`；点文本区边距也会把焦点交给系统 EDIT。

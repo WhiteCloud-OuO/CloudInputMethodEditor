@@ -19,6 +19,10 @@ use std::time::Instant;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::Graphics::Gdi::{
+    CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DEFAULT_CHARSET, DEFAULT_PITCH,
+    DeleteObject, FF_DONTCARE, FW_NORMAL, HFONT, OUT_DEFAULT_PRECIS,
+};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -28,10 +32,10 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 use windows::Win32::UI::WindowsAndMessaging::{
     CreateWindowExW, DestroyWindow, ES_AUTOHSCROLL, ES_LEFT, GetCursorPos, GetSystemMetrics,
     HTCLIENT, HTTRANSPARENT, HWND_TOPMOST, IDC_ARROW, LoadCursorW, MA_NOACTIVATE, SM_CXDOUBLECLK,
-    SM_CYDOUBLECLK, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+    SM_CYDOUBLECLK, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SendMessageW,
     SetForegroundWindow, SetWindowPos, SetWindowTextW, ShowWindow, WM_CAPTURECHANGED,
     WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
-    WM_RBUTTONUP, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_RBUTTONUP, WM_SETFONT, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
@@ -250,6 +254,7 @@ struct TextEditWindow {
     /// 元素下标（`document.elements`，0 起）。
     element: usize,
     hwnd: HWND,
+    font: HFONT,
 }
 
 /// 拖动状态：按下时的光标屏幕坐标 + 窗口左上角（物理像素）。
@@ -441,10 +446,48 @@ impl ScriptWindow {
             };
             let text = HSTRING::from(edit.text.as_str());
             let _ = unsafe { SetWindowTextW(hwnd, &text) };
+            let (family, theme_size) = self
+                .painter
+                .borrow()
+                .as_ref()
+                .map(|painter| painter.text_font(edit.font))
+                .unwrap_or((None, 14.0));
+            let size = edit.size.unwrap_or(theme_size);
+            let height = -((size * self.dpi.get() as f32 / 96.0).round() as i32).max(1);
+            let family = family
+                .map(|family| HSTRING::from(family.as_str()))
+                .unwrap_or_default();
+            let font = unsafe {
+                CreateFontW(
+                    height,
+                    0,
+                    0,
+                    0,
+                    FW_NORMAL.0 as i32,
+                    0,
+                    0,
+                    0,
+                    DEFAULT_CHARSET,
+                    OUT_DEFAULT_PRECIS,
+                    CLIP_DEFAULT_PRECIS,
+                    CLEARTYPE_QUALITY,
+                    (DEFAULT_PITCH.0 as u32) | (FF_DONTCARE.0 as u32),
+                    &family,
+                )
+            };
+            let _ = unsafe {
+                SendMessageW(
+                    hwnd,
+                    WM_SETFONT,
+                    Some(WPARAM(font.0 as usize)),
+                    Some(LPARAM(1)),
+                )
+            };
             let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
             edits.push(TextEditWindow {
                 element: index,
                 hwnd,
+                font,
             });
         }
     }
@@ -484,6 +527,7 @@ impl ScriptWindow {
     fn destroy_text_edits(&self) {
         for edit in self.text_edits.borrow_mut().drain(..) {
             let _ = unsafe { DestroyWindow(edit.hwnd) };
+            let _ = unsafe { DeleteObject(edit.font.into()) };
         }
     }
 

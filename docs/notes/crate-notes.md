@@ -1052,12 +1052,13 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   先派 clicked 再派 double。
 - **单行编辑框**（`text_edit`，2026-10-18）：`control::TextEdit` 负责背景胶囊 / 边框（缺省厚度 1、
   颜色取 `theme.colors.badge`）、可选 SVG（按背景高度缩放、`SvgAlign` 左右）和文本区几何
-  （无 SVG：`w-h` 居中；有 SVG：`w-h/2-svg宽度`）。实际的输入框是 UI 线程上的**系统 `EDIT`**
-  顶层 window（owner = 脚本窗）：`ScriptWindow::rebuild_text_edits` 在 `set_content` 时按元素重建，
-  `sync_text_edits` 在显示 / 拖动 / DPI 重画时按内容区坐标 + scale 摆位；`focus_text_edit` 在点到
-  胶囊边距时把焦点交给 EDIT。`TextEdit` 仍是可交互元素（返回命中框），自动区域和按钮一样在解析时
-  加进 `Document.regions`。⚠️ 文本值目前只做了初始 `text` + 系统输入，脚本读写 API 还没加。
-  嵌套在 `panel` 里的 `text_edit` 目前不会建 EDIT（仅顶层元素扫描）—— 测试脚本放在顶层。
+  （无 SVG：`w-h` 居中；有 SVG：`w-h/2-svg宽度`；高度向内缩 1 点边框）。实际的输入框是 UI 线程上的
+  **系统 `EDIT`** 顶层 window（owner = 脚本窗）：`ScriptWindow::rebuild_text_edits` 在 `set_content`
+  时按元素重建、按 `Painter::text_font` 建 **候选词字体**（`font` 槽位可换，`size` 缺省取主题字号）
+  并 `WM_SETFONT`；`sync_text_edits` 在显示 / 拖动 / DPI 重画时按内容区坐标 + scale 摆位；
+  `focus_text_edit` 在点到胶囊边距时把焦点交给 EDIT。`TextEdit` 仍是可交互元素（返回命中框），
+  自动区域和按钮一样在解析时加进 `Document.regions`。⚠️ 文本值目前只做了初始 `text` + 系统输入，
+  脚本读写 API 还没加。嵌套在 `panel` 里的 `text_edit` 目前不会建 EDIT（仅顶层元素扫描）—— 测试脚本放在顶层。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

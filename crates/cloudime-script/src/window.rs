@@ -1030,7 +1030,10 @@ fn parse_text_edit(table: &mlua::Table) -> mlua::Result<Element> {
         svg_align,
         svg_tint: color(table, "svg_color", false)?,
         text: table.get::<Option<String>>("text")?.unwrap_or_default(),
-        size: number(table, "size", 14.0)?.clamp(1.0, 256.0),
+        font: font_slot(table)?,
+        size: table
+            .get::<Option<f32>>("size")?
+            .map(|size| size.clamp(1.0, 256.0)),
         region_name: table.get::<Option<String>>("name")?.unwrap_or_default(),
     }))
 }
@@ -2010,14 +2013,16 @@ mod tests {
         assert!(plain.border.is_none(), "缺省用主题角标色");
         assert_eq!(plain.border_width, 1.0);
         assert!(plain.svg.is_none());
-        assert_eq!(plain.edit_rect(), (12.0, 0.0, 176.0, 24.0));
+        assert_eq!(plain.font, FontSlot::Candidate, "缺省候选项字体");
+        assert!(plain.size.is_none(), "字号缺省跟主题");
+        assert_eq!(plain.edit_rect(), (12.0, 1.0, 176.0, 22.0));
 
         let Element::TextEdit(with_icon) = &document.elements[1] else {
             panic!("不是 text_edit：{:?}", document.elements[1]);
         };
         assert!(with_icon.svg.is_some());
         assert_eq!(with_icon.svg_width(), 24.0, "图标按背景高度缩放");
-        assert_eq!(with_icon.edit_rect(), (30.0, 0.0, 264.0, 24.0));
+        assert_eq!(with_icon.edit_rect(), (30.0, 1.0, 264.0, 22.0));
 
         assert!(matches!(
             &document.regions[0],

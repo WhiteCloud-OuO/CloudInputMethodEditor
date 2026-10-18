@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use cloudime_platform::LayoutMode;
 use cloudime_render::{
-    Color, FontLibrary, Frame, Layout, Preedit, Rendered, RenderedStatus, Renderer, Row, Shadow,
-    StatusCell, Theme, UiFont, system_fonts,
+    Color, FontLibrary, FontSlot, Frame, Layout, Preedit, Rendered, RenderedStatus, Renderer, Row,
+    Shadow, StatusCell, Theme, UiFont, system_fonts,
 };
 
 use crate::dispatch::RenderSettings;
@@ -180,6 +180,22 @@ impl Painter {
     /// 这一份渲染器是第几次建的（见 [`NEXT_GENERATION`]）。
     pub(super) fn generation(&self) -> u64 {
         self.generation
+    }
+
+    /// 某个字体槽位的字族与字号（点）：系统 EDIT 的字体用。
+    pub(super) fn text_font(&self, slot: FontSlot) -> (Option<String>, f32) {
+        match slot {
+            FontSlot::Candidate => (self.theme.text_family.clone(), self.theme.text_font.size),
+            FontSlot::Pinyin => (
+                self.theme.pinyin_family.clone(),
+                self.theme.pinyin_font.size,
+            ),
+            FontSlot::ItemNumber => (self.theme.index_family.clone(), self.theme.index_font.size),
+            FontSlot::Translate => (
+                self.theme.translate_family.clone(),
+                self.theme.translate_font.size,
+            ),
+        }
     }
 
     /// 画一块空面板（内容区尺寸给死）：给「窗口模板」用（版面还没生成时）。

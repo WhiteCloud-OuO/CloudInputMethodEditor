@@ -412,8 +412,10 @@ pub struct TextEdit {
     pub svg_tint: Option<Color>,
     /// 初始文本（真正输入由系统 EDIT 负责）。
     pub text: String,
-    /// 字号（点），系统 EDIT 字体用。
-    pub size: f32,
+    /// 字体槽位；缺省候选词字体。
+    pub font: FontSlot,
+    /// 字号（点）；`None` = 用主题里该槽位的字号。
+    pub size: Option<f32>,
     /// 自动区域名。
     pub region_name: String,
 }
@@ -421,16 +423,23 @@ pub struct TextEdit {
 impl TextEdit {
     /// 文本区（相对按钮左上角）：没有 SVG 时居中；有 SVG 时放在图标旁边。
     pub fn edit_rect(&self) -> (f32, f32, f32, f32) {
-        let height = self.height;
+        // 让系统 EDIT 落在边框里面，别盖住 1 点边框 / 溢出胶囊。
+        let inset = self.border_width.max(0.0);
+        let height = (self.height - inset * 2.0).max(1.0);
         if self.svg.is_none() {
-            return (height * 0.5, 0.0, (self.width - height).max(0.0), height);
+            return (
+                self.height * 0.5,
+                inset,
+                (self.width - self.height).max(0.0),
+                height,
+            );
         }
         let svg_width = self.svg_width();
-        let gutter = height * 0.25;
-        let width = (self.width - height * 0.5 - svg_width).max(0.0);
+        let gutter = self.height * 0.25;
+        let width = (self.width - self.height * 0.5 - svg_width).max(0.0);
         match self.svg_align {
-            SvgAlign::Left => (gutter + svg_width, 0.0, width, height),
-            SvgAlign::Right => (gutter, 0.0, width, height),
+            SvgAlign::Left => (gutter + svg_width, inset, width, height),
+            SvgAlign::Right => (gutter, inset, width, height),
         }
     }
 

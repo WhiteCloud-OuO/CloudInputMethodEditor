@@ -109,10 +109,10 @@ local function draw()
         -- 有 SVG 图标的单行编辑框（图标按背景高度缩放，放在左侧）
         { type = "text_edit", name = "search", x = 24, y = 172, w = 320, h = 32,
           svg_path = cloudime.install_path("Images/SVG/打勾.svg"), svg_align = "left",
-          text = "在这里输入…", size = 14 },
+          text = "在这里输入…" },
         -- 无 SVG 的单行编辑框（文本区居中）
         { type = "text_edit", name = "plain", x = 24, y = 216, w = 320, h = 32,
-          text = "没有图标的输入框", size = 14 },
+          text = "没有图标的输入框" },
         -- 扁平 SVG 按钮：区域 = 背景形状（20 × 20 取自 SVG 画板），三态颜色自动切换。
         { type = "flat_svg_button", name = "close", x = BUTTON_X, y = BUTTON_Y,
           svg_path = svg_path(), shape = "round_rect", radius = 3,
