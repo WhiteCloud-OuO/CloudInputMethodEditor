@@ -1389,6 +1389,12 @@ fn parse_scroll_bar(table: &mlua::Table, axis: ScrollAxis) -> mlua::Result<Eleme
         )));
     }
     let value = u64_value(table, "value", 0)?.clamp(min, max);
+    let step = u64_value(table, "step", 1)?;
+    if step == 0 {
+        return Err(mlua::Error::RuntimeError(
+            "滚动条的 step 不能为 0".to_owned(),
+        ));
+    }
     Ok(Element::ScrollBar(ScrollBar {
         x: number(table, "x", 0.0)?,
         y: number(table, "y", 0.0)?,
@@ -1407,6 +1413,7 @@ fn parse_scroll_bar(table: &mlua::Table, axis: ScrollAxis) -> mlua::Result<Eleme
         value,
         min,
         max,
+        step,
         region_name: table.get::<Option<String>>("name")?.unwrap_or_default(),
     }))
 }
@@ -2297,7 +2304,7 @@ mod tests {
                 return {
                     width = 300, height = 200,
                     { type = "hscroll_bar", name = "hours", x = 10, y = 10, w = 200, h = 12,
-                      value = 150, min_value = 0, max_value = 100,
+                      value = 150, min_value = 0, max_value = 100, step = 7,
                       background_color = "#FF112233", thumb_color = "#FF445566",
                       events = { value_changed = "hours_changed" } },
                     { type = "vscroll_bar", name = "minutes", x = 250, y = 10, w = 12, h = 150,
@@ -2318,6 +2325,7 @@ mod tests {
         };
         assert_eq!(hours.axis, ScrollAxis::Horizontal);
         assert_eq!((hours.value, hours.min, hours.max), (100, 0, 100));
+        assert_eq!(hours.step, 7);
         assert_eq!(hours.background, Some(Color::rgba(0x11, 0x22, 0x33, 0xFF)));
         assert_eq!(hours.thumb, Some(Color::rgba(0x44, 0x55, 0x66, 0xFF)));
         assert!(document.regions.iter().any(|region| region.name == "hours"));
@@ -2334,6 +2342,7 @@ mod tests {
         };
         assert_eq!(minutes.axis, ScrollAxis::Vertical);
         assert_eq!((minutes.value, minutes.min, minutes.max), (10, 10, 20));
+        assert_eq!(minutes.step, 1);
 
         let bad = lua
             .load(
@@ -2345,6 +2354,23 @@ mod tests {
             .unwrap();
         assert!(
             parse_document(&bad, (Some(20.0), Some(20.0)), &mut ImageCache::default()).is_err()
+        );
+
+        let zero_step = lua
+            .load(
+                r#"return { width = 20, height = 20,
+                    { type = "hscroll_bar", name = "zero", x = 0, y = 0, w = 10, h = 10,
+                      step = 0 } }"#,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        assert!(
+            parse_document(
+                &zero_step,
+                (Some(20.0), Some(20.0)),
+                &mut ImageCache::default()
+            )
+            .is_err()
         );
     }
 

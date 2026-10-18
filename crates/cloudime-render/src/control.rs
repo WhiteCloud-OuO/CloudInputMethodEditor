@@ -279,6 +279,8 @@ pub struct ScrollBar {
     pub value: u64,
     pub min: u64,
     pub max: u64,
+    /// 滚轮 / 点击轨道时每次改变的步长（至少 1）。
+    pub step: u64,
     /// 自动区域名（同一份内容里唯一）。
     pub region_name: String,
 }

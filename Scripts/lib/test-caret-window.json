@@ -157,6 +157,7 @@
       "value": 40,
       "min_value": 0,
       "max_value": 100,
+      "step": 5,
       "background_color": "#FFE0E0E0",
       "thumb_color": "#FF4A90E2",
       "events": { "value_changed": "horizontal_changed" }
@@ -171,6 +172,7 @@
       "value": 20,
       "min_value": 0,
       "max_value": 100,
+      "step": 5,
       "background_color": "#FFE0E0E0",
       "thumb_color": "#FF4A90E2"
     }

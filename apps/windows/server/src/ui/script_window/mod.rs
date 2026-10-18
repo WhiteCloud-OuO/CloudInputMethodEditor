@@ -833,26 +833,28 @@ impl ScriptWindow {
         };
         let (tx, ty, tw, th) = bar.thumb_rect();
         let inside_thumb = x >= tx && x <= tx + tw && y >= ty && y <= ty + th;
-        let offset = if inside_thumb {
-            match bar.axis {
-                cloudime_render::ScrollAxis::Horizontal => x - tx,
-                cloudime_render::ScrollAxis::Vertical => y - ty,
-            }
-        } else {
-            match bar.axis {
-                cloudime_render::ScrollAxis::Horizontal => tw * 0.5,
-                cloudime_render::ScrollAxis::Vertical => th * 0.5,
-            }
-        };
-        self.scrollbar_drag.set(Some(ScrollDrag { index, offset }));
-        let _ = unsafe { SetCapture(self.hwnd()) };
         if !inside_thumb {
-            let value = bar.value_at((x, y), offset);
+            let before = match bar.axis {
+                cloudime_render::ScrollAxis::Horizontal => x < tx,
+                cloudime_render::ScrollAxis::Vertical => y < ty,
+            };
+            let value = if before {
+                bar.value.saturating_sub(bar.step).max(bar.min)
+            } else {
+                bar.value.saturating_add(bar.step).min(bar.max)
+            };
             if self.set_scrollbar_value(index, value) {
                 self.repaint();
                 self.emit_scrollbar_value(index, value, x, y);
             }
+            return true;
         }
+        let offset = match bar.axis {
+            cloudime_render::ScrollAxis::Horizontal => x - tx,
+            cloudime_render::ScrollAxis::Vertical => y - ty,
+        };
+        self.scrollbar_drag.set(Some(ScrollDrag { index, offset }));
+        let _ = unsafe { SetCapture(self.hwnd()) };
         true
     }
 
@@ -892,9 +894,9 @@ impl ScriptWindow {
             return false;
         };
         let value = if delta > 0 {
-            bar.value.saturating_sub(1).max(bar.min)
+            bar.value.saturating_sub(bar.step).max(bar.min)
         } else {
-            bar.value.saturating_add(1).min(bar.max)
+            bar.value.saturating_add(bar.step).min(bar.max)
         };
         if self.set_scrollbar_value(index, value) {
             self.repaint();
