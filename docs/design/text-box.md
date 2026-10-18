@@ -1,10 +1,10 @@
 # 多行编辑框 `text_box`
 
-2026-10-18 设计。目标是在已有单行编辑框 `text_edit` 的基础上，复用同一套 Windowless RichEdit、
+2026-10-18 设计并实现。目标是在已有单行编辑框 `text_edit` 的基础上，复用同一套 Windowless RichEdit、
 脚本文本缓存和字体 / 颜色模型，增加多行显示、自动换行和内部滚动条。
 
-本页先定结构和行为；实现落在 `cloudime-render` 的控件、`cloudime-script` 的解析 / 文本 API，
-以及 Server `script_window` 的宿主窗和交互层。
+实现落在 `cloudime-render` 的 `TextBox` 控件、`cloudime-script` 的 `parse_text_box` / 文本 API，
+以及 Server `script_window` 的宿主窗和内部滚动条交互层。
 
 ## 组成与几何
 
@@ -131,8 +131,12 @@ win:clear("editor")
 | `crates/cloudime-render/src/renderer/mod.rs` | 多行背景和滚动条绘制 |
 | `crates/cloudime-script/src/window.rs` | `parse_text_box`、`Element::TextBox`、文本 API 缓存 |
 | `apps/windows/server/src/ui/script_window/text_host.rs` | 多行 RichEdit 模式、`TxDraw`、滚动查询 / 回写、行距 |
-| `apps/windows/server/src/ui/script_window/mod.rs` | `TextBoxWindow`、文本区 / 滚动条交互、焦点 / 事件 |
+| `apps/windows/server/src/ui/script_window/mod.rs` | 文本宿主统一收集、内部滚动条状态 / 拖动 / 滚轮 / 事件 |
 | `lua.md` / `docs/design/script.md` / `docs/notes/crate-notes.md` | 对外属性、方法、事件和实现说明 |
+
+实现状态：已完成。多行文本由 RichEdit 的 `TxDraw` 绘制；建宿主后先 `OnTxInPlaceActivate`
+强制排版再读滚动范围。内部滚动条命中按顶层 `text_box` 路径处理，嵌套在面板里的控件能编辑，
+但嵌套控件内部的滚动条拖动尚未接入。内部滚动条暂不派 `value_changed`，也没有独立颜色属性。
 
 ## 验收
 

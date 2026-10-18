@@ -324,6 +324,7 @@ win:set_content{
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（边缘，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1）/ `fill`（可选）/ `children`（相对坐标） |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省 SVG 画板）；`svg` / `svg_path`；`shape` + `radius`；`name`；`normal` / `hovered` / `pressed = { background, svg }`；`events = { 动作名 = "处理器名" }` |
 | `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`read_only` / `passkey`；`back_color` / `edge_color` / `edge_width`；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align`；`font_name` / `font_size` / `font_flag`；`text` / `font` / `name` / `events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
+| `text_box` | `x` / `y` / `w` / `h`；`radius`（缺省 6）；`read_only`；`back_color` / `edge_color` / `edge_width`；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color`；`font_name` / `font_size` / `font_flag`；`auto_line_wrap`（缺省 true）/ `line_spacing`（u16，缺省 8）；`text` / `font` / `name` / `events`；没有 `passkey` / SVG 属性，旧名兼容同 `text_edit` |
 | `hscroll_bar` | `x` / `y`；`w` / `h` 缺省都是 8；`value` / `min_value` / `max_value`（u64，缺省 0 / 0 / 100）/ `step`（u64，缺省 1，不能为 0）；`background_color` / `thumb_color`；`name` / `events`；背景与滑块都是胶囊纯填充 |
 | `vscroll_bar` | 同 `hscroll_bar`，`w` / `h` 缺省都是 8；`vhscroll_bar` / `vhsroll_bar` 是兼容拼写 |
 
@@ -355,7 +356,8 @@ win:set_content{
   窗口事件的 `event.control`。非必填项省略或写 `null` 时走同一套缺省值。
   顶层 `controls` 与 `elements` 等价；根也可以直接是控件数组。`width` / `height` / `regions` 可省，
   缺省尺寸用窗口创建时那份（`create{ layout = … }` 时布局文件里的尺寸优先）。
-- **事件响应**：动态控件（`flat_svg_button` / `text_edit`）和 `regions` 条目可以写
+- **事件响应**：动态控件（`flat_svg_button` / `text_edit` / `text_box` / `hscroll_bar` / `vscroll_bar`）
+  和 `regions` 条目可以写
   `events = { 事件名 = "处理器名" }`。事件名必须是窗口事件已有的动作（`mouse_clicked`、
   `mouse_enter`、`click` 等；扁平按钮的单击也接受 `click` / `double_click` 别名）；解析时校验，
   写错整份布局失败。窗口事件载荷增加 `handler`，脚本按处理器名分发：
@@ -432,6 +434,16 @@ win:set_content{
   4 alt / 8 win）发给脚本窗，派 `key_pressed`；`WM_SETFOCUS` / `WM_KILLFOCUS` 派 `focused` /
   `unfocused`。布局里的 `events` 可用 `on_key_pressed` / `onKeyPressed`、`on_focused` / `onFocused`、
   `on_unfocused` / `onUnfocused` 别名，解析时归一成 `key_pressed` / `focused` / `unfocused`。
+- **多行编辑框**（`text_box`）：背景圆角矩形 + 文本区 + 内部水平 / 垂直滚动条。文本区由
+  同一个 windowless RichEdit 宿主承载，多行模式打开 `TXTBIT_MULTILINE`；`auto_line_wrap = true`
+  时再打开 `TXTBIT_WORDWRAP` 并隐藏水平滚动条。`line_spacing` 是 u16（缺省 8），通过
+  `PARAFORMAT2` 的 `PFM_LINESPACING` 映射成行距。
+  宿主建好后做一次 `OnTxInPlaceActivate` 强制排版，再读 `TxGetHScroll` / `TxGetVScroll`；
+  文本超出可视区时把滚动条的 `visible` / 范围写回 `TextBox` 运行时状态。文本区几何会扣掉
+  出现的滚动条（8 点厚 + 4 点间隙），滚动条由渲染器画在控件内部，不进入 `regions`。
+  拖动滑块用 `EM_SETSCROLLPOS` 回写 RichEdit，点轨道翻一页，滚轮由宿主按页高 1/4 滚动；
+  滚动位置变化通过 `WM_TEXT_SCROLL` 通知脚本窗重画滑块。文本 / 按键 / 焦点事件和文本 API
+  与 `text_edit` 共用一套；内部滚动条不派 `value_changed`。不支持 `passkey` 和 SVG。
 - **滚动条**（`hscroll_bar` / `vscroll_bar`）：整条背景胶囊 + 滑块胶囊，都是纯填充、无边框；
   背景形状同时是自动区域。`value` / `min_value` / `max_value` 是 u64（缺省 0 / 0 / 100），
   `step` 是 u64（缺省 1，不能为 0），解析时把 `value` 夹到值域。滑块长度取轨道 1/4
@@ -518,8 +530,8 @@ end)
 
 ### 还没做
 
-- 单行文本输入由 `text_edit` 提供（含 IME / 选区 / 剪贴板）；多行编辑框 `text_box` 已出设计
-  （`docs/design/text-box.md`），尚未实现；富文本和脚本直接操作 RichEdit 仍未做。
+- 单行文本输入由 `text_edit` 提供，多行编辑框由 `text_box` 提供（均含 IME / 选区 / 剪贴板；
+  `text_box` 的内部滚动条暂不暴露成脚本控件）；富文本和脚本直接操作 RichEdit 仍未做。
 - 拖动**元素**（滑块、列表滚动）：现在拖动只移动整块窗口。
 - 键盘不是「有焦点就拿到所有键」：受清单声明与 DLL 的送键规则限制（见上）。
 - 按文件句柄读图（只有路径）；图像缓存靠下一次 `set_content` 发现文件变化，不监听文件系统。

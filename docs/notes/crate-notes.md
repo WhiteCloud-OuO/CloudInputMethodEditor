@@ -1085,6 +1085,21 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   8 win）打包到自定义 `WM_TEXT_KEY`，`WM_SETFOCUS` / `WM_KILLFOCUS` 发 `WM_TEXT_FOCUS`；脚本窗
   查宿主路径后派 `key_pressed` / `focused` / `unfocused`，事件带 `key` / `modifier`。布局事件名
   `on_key_pressed` / `onKeyPressed` 等由 `WindowAction::from_name` 归一成 `key_pressed` 等。
+- **多行编辑框**（`text_box`，2026-10-18）：`control::TextBox` 是背景圆角矩形 + 文本区 +
+  内部滚动条；文本区由同一个 windowless RichEdit 宿主多行模式承载（`TXTBIT_MULTILINE`，
+  `auto_line_wrap` 再开 `TXTBIT_WORDWRAP`）。多行绘制走 RichEdit 的 `TxDraw`（单行仍是宿主 GDI
+  自绘），选区 / 插入符 / IME 组合交给 RichEdit；`TxGetSysColor` 返回自定义正文 / 高亮色。
+  `TxGetScrollBars` 返回 `WS_VSCROLL`（不换行时加 `WS_HSCROLL`），宿主 `TxSetScrollRange` 等仍不画
+  原生条；RichEdit 需要一次 `OnTxInPlaceActivate` 才会排版，`TextHostWindow::ensure_layout` 在
+  建好后做这件事，`TxGetHScroll` / `TxGetVScroll` 才有行数 / 范围。`line_spacing` 映射成
+  `PARAFORMAT2` 的 `PFM_LINESPACING`（精确行距，u16 点，缺省 8）。
+  `ScriptWindow` 在 `rebuild_text_edits` 里同时收集 `text_edits()` 和 `text_boxes()`；滚动范围写回
+  `Element::TextBox.h_scroll` / `v_scroll`，渲染器按可见性扣文本区并画 8 点厚、4 点间隙的滚动条。
+  内部滚动条不进 `regions`：`begin_text_box_press` 按控件内坐标判滑块 / 轨道，拖动用
+  `EM_SETSCROLLPOS`，点轨道翻页，滚轮在宿主里按页高 1/4 滚动；`WM_TEXT_SCROLL` 通知脚本窗刷新滑块。
+  文本 API / `text_changed` / `key_pressed` / `focused` / `unfocused` 与 `text_edit` 共用；
+  不支持 `passkey` 和 SVG，内部滚动条不派 `value_changed`。嵌套宿主能建、能编辑，但嵌套控件的
+  内部滚动条命中目前只按顶层元素路径处理。
 - **TSF 桥**（`script_window/text_store.rs` / `tsf.rs`，2026-10-18）：windowless RichEdit 自己只提供
   IMM32 的 `ITextHost::TxImmGetContext`，不直接参与 TSF；要让 CloudIME 的中文输入作用到它，必须补
   客户端文本存储。`text_store.rs` 实现 `ITextStoreACP`，把 `GetText` / `SetText` / 选区 / 插入 /

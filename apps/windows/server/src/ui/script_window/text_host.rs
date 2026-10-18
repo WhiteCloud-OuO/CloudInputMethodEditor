@@ -13,17 +13,23 @@ use std::mem::size_of;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, SIZE, WPARAM};
+use windows::Win32::Foundation::{
+    COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, RECTL, SIZE, WPARAM,
+};
 use windows::Win32::Graphics::Gdi::{
-    BeginPaint, CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetDC, GetTextExtentPoint32W,
+    BeginPaint, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT,
+    CreateSolidBrush, DeleteObject, EndPaint, FillRect, GetDC, GetTextExtentPoint32W,
     GetTextMetricsW, HBRUSH, HDC, HGDIOBJ, InvalidateRect, PAINTSTRUCT, ReleaseDC, SYS_COLOR_INDEX,
     SelectObject, SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW,
 };
+use windows::Win32::System::Com::DVASPECT_CONTENT;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::UI::Controls::RichEdit::{
-    CFM_CHARSET, CFM_COLOR, CFM_FACE, CFM_SIZE, CHARFORMATW, EM_SETCHARFORMAT, ITextHost,
-    ITextHost_Impl, ITextServices, PARAFORMAT, SCF_ALL, TXTBACK_TRANSPARENT, TXTBACKSTYLE,
-    TXTBIT_RICHTEXT, TXTBIT_SAVESELECTION, TXTBIT_VIEWINSETCHANGE,
+    CFE_BOLD, CFE_ITALIC, CFE_STRIKEOUT, CFE_UNDERLINE, CFM_BOLD, CFM_CHARSET, CFM_COLOR, CFM_FACE,
+    CFM_ITALIC, CFM_SIZE, CFM_STRIKEOUT, CFM_UNDERLINE, CHARFORMATW, EM_SETCHARFORMAT,
+    EM_SETPARAFORMAT, EM_SETSCROLLPOS, ITextHost, ITextHost_Impl, ITextServices, PARAFORMAT,
+    PARAFORMAT2, PFM_LINESPACING, SCF_ALL, TXTBACK_TRANSPARENT, TXTBACKSTYLE, TXTBIT_MULTILINE,
+    TXTBIT_RICHTEXT, TXTBIT_SAVESELECTION, TXTBIT_VIEWINSETCHANGE, TXTBIT_WORDWRAP,
 };
 use windows::Win32::UI::Controls::{EM_GETSEL, EM_SETREADONLY, EM_SETSEL};
 
@@ -33,16 +39,17 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, EN_CHANGE, GetCaretBlinkTime,
-    GetClientRect, IDC_IBEAM, KillTimer, LoadCursorW, PostMessageW, SCROLL_WINDOW_FLAGS,
-    SCROLLBAR_CONSTANTS, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SendMessageW, SetCursor, SetTimer,
-    SetWindowPos, ShowWindow, WM_APP, WM_CHAR, WM_GETTEXT, WM_GETTEXTLENGTH, WM_IME_CHAR,
-    WM_IME_COMPOSITION, WM_IME_COMPOSITIONFULL, WM_IME_CONTROL, WM_IME_ENDCOMPOSITION,
-    WM_IME_KEYDOWN, WM_IME_KEYUP, WM_IME_NOTIFY, WM_IME_REQUEST, WM_IME_SELECT, WM_IME_SETCONTEXT,
-    WM_IME_STARTCOMPOSITION, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS,
-    WM_SETFONT, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WNDCLASSEXW,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    CS_DBLCLKS, CreateCaret, CreateWindowExW, DefWindowProcW, DestroyWindow, EN_CHANGE,
+    GetCaretBlinkTime, GetClientRect, HideCaret, IDC_IBEAM, KillTimer, LoadCursorW, PostMessageW,
+    SCROLL_WINDOW_FLAGS, SCROLLBAR_CONSTANTS, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SendMessageW,
+    SetCaretPos, SetCursor, SetTimer, SetWindowPos, ShowCaret, ShowWindow, WM_APP, WM_CHAR,
+    WM_GETTEXT, WM_GETTEXTLENGTH, WM_IME_CHAR, WM_IME_COMPOSITION, WM_IME_COMPOSITIONFULL,
+    WM_IME_CONTROL, WM_IME_ENDCOMPOSITION, WM_IME_KEYDOWN, WM_IME_KEYUP, WM_IME_NOTIFY,
+    WM_IME_REQUEST, WM_IME_SELECT, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_INPUTLANGCHANGE,
+    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_SYSCHAR,
+    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_HSCROLL,
+    WS_POPUP, WS_VSCROLL,
 };
 use windows::core::{
     BOOL, Error, GUID, HSTRING, IUnknown_Vtbl, Interface, PCWSTR, Result, implement, w,
@@ -65,6 +72,18 @@ pub(super) const WM_TEXT_KEY: u32 = WM_APP + 0x4B;
 
 /// 宿主窗 → 脚本窗口：编辑框获得 / 失去焦点（`lparam` 1 = focused）。
 pub(super) const WM_TEXT_FOCUS: u32 = WM_APP + 0x4C;
+
+/// 宿主 → 脚本窗口：多行编辑框的滚动位置 / 可见范围变了，请刷新内部滚动条。
+pub(super) const WM_TEXT_SCROLL: u32 = WM_APP + 0x4D;
+
+/// 多行编辑框的滚动范围（像素）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(super) struct ScrollInfo {
+    pub min: i32,
+    pub max: i32,
+    pub pos: i32,
+    pub page: i32,
+}
 
 static CLASS: WindowClass = WindowClass::new();
 static CREATE_TEXT_SERVICES: OnceLock<Option<(CreateTextServicesFn, GUID)>> = OnceLock::new();
@@ -101,6 +120,8 @@ pub(super) struct TextHostWindow {
     caret_timer: Cell<usize>,
     /// 横向滚动量（像素，内容向左移）：单行文本超过编辑区时跟随光标。
     scroll_x: Cell<i32>,
+    /// 多行模式：文字由 RichEdit 自己排版 / 绘制（`TxDraw`），内部滚动条由脚本窗口画。
+    multiline: bool,
     /// 密码输入：只影响显示，真实文本仍交给 API。
     passkey: bool,
 }
@@ -121,6 +142,9 @@ impl TextHostWindow {
         font_flag: u8,
         read_only: bool,
         passkey: bool,
+        multiline: bool,
+        auto_wrap: bool,
+        line_spacing: u16,
         dpi: u32,
     ) -> Result<Rc<Self>> {
         ensure_class()?;
@@ -152,6 +176,12 @@ impl TextHostWindow {
             hwnd,
             owner,
             passkey,
+            multiline,
+            auto_wrap,
+            background,
+            text_color,
+            selection_background,
+            selection_text,
             line_height,
             char_format: char_format(family, size, text_color),
             para_format: PARAFORMAT {
@@ -222,6 +252,7 @@ impl TextHostWindow {
             caret_visible: Cell::new(false),
             caret_timer: Cell::new(0),
             scroll_x: Cell::new(0),
+            multiline,
             passkey,
         });
         HOSTS.with(|map| map.borrow_mut().insert(hwnd.0 as isize, window.clone()));
@@ -239,6 +270,21 @@ impl TextHostWindow {
                 Some(LPARAM(1)),
             );
             let mut format = char_format(family, size, text_color);
+            if multiline {
+                format.dwMask |= CFM_BOLD | CFM_ITALIC | CFM_UNDERLINE | CFM_STRIKEOUT;
+                if font_flag & 1 != 0 {
+                    format.dwEffects |= CFE_BOLD;
+                }
+                if font_flag & 2 != 0 {
+                    format.dwEffects |= CFE_ITALIC;
+                }
+                if font_flag & 4 != 0 {
+                    format.dwEffects |= CFE_UNDERLINE;
+                }
+                if font_flag & 8 != 0 {
+                    format.dwEffects |= CFE_STRIKEOUT;
+                }
+            }
             let _ = window.services.TxSendMessage(
                 EM_SETCHARFORMAT,
                 WPARAM(SCF_ALL as usize),
@@ -253,15 +299,54 @@ impl TextHostWindow {
                     &mut result,
                 );
             }
+            if multiline && line_spacing > 0 {
+                let mut format = PARAFORMAT2 {
+                    Base: PARAFORMAT {
+                        cbSize: size_of::<PARAFORMAT2>() as u32,
+                        dwMask: PFM_LINESPACING,
+                        ..Default::default()
+                    },
+                    dyLineSpacing: ((size * 1.2 + line_spacing as f32) * 20.0).round().max(1.0)
+                        as i32,
+                    bLineSpacingRule: 3,
+                    ..Default::default()
+                };
+                let _ = window.services.TxSendMessage(
+                    EM_SETPARAFORMAT,
+                    WPARAM(0),
+                    LPARAM(&mut format as *mut _ as isize),
+                    &mut result,
+                );
+            }
+            if multiline {
+                let _ = window
+                    .services
+                    .TxSendMessage(EM_SETSEL, WPARAM(0), LPARAM(0), &mut result);
+                let mut point = POINT { x: 0, y: 0 };
+                let _ = window.services.TxSendMessage(
+                    EM_SETSCROLLPOS,
+                    WPARAM(0),
+                    LPARAM(&mut point as *mut _ as isize),
+                    &mut result,
+                );
+            }
         }
         Ok(window)
     }
 
     pub(super) fn set_bounds(&self, x: i32, y: i32, width: i32, height: i32) {
-        // RichEdit 单行文本默认贴顶；宿主窗本身只留一行高并垂直居中，避免依赖
-        // `TxGetViewInset` 在不同 RichEdit 版本里的差异。
-        let host_height = (self.line_height + 4).min(height.max(1)).max(1);
-        let y = y + (height.max(1) - host_height) / 2;
+        // 单行 RichEdit 默认贴顶；宿主窗本身只留一行高并垂直居中，避免依赖
+        // `TxGetViewInset` 在不同 RichEdit 版本里的差异。多行编辑框要用完整文本区。
+        let host_height = if self.multiline {
+            height.max(1)
+        } else {
+            (self.line_height + 4).min(height.max(1)).max(1)
+        };
+        let y = if self.multiline {
+            y
+        } else {
+            y + (height.max(1) - host_height) / 2
+        };
         unsafe {
             let _ = SetWindowPos(
                 self.hwnd,
@@ -326,6 +411,13 @@ impl TextHostWindow {
         }
         if let Some(tsf) = &self.tsf {
             tsf.focus();
+        }
+        if self.multiline {
+            self.caret_visible.set(true);
+            unsafe {
+                let _ = InvalidateRect(Some(self.hwnd), None, false);
+            }
+            return;
         }
         self.caret_visible.set(true);
         if self.caret_timer.get() == 0 {
@@ -403,6 +495,87 @@ impl TextHostWindow {
         self.hwnd
     }
 
+    /// 多行模式需要在建好、摆好尺寸后做一次 in-place 激活，RichEdit 才会排版并给出
+    /// 行数 / 滚动范围；这里只激活排版，不抢焦点。
+    pub(super) fn ensure_layout(&self) {
+        if !self.multiline || self.in_place.get() {
+            return;
+        }
+        let mut rect = RECT::default();
+        unsafe {
+            let _ = GetClientRect(self.hwnd, &mut rect);
+            if self.services.OnTxInPlaceActivate(&mut rect).is_ok() {
+                self.in_place.set(true);
+            }
+        }
+    }
+
+    /// 多行编辑框当前的横向 / 纵向滚动范围。
+    pub(super) fn scroll_info(&self) -> (ScrollInfo, ScrollInfo) {
+        if !self.multiline {
+            return (ScrollInfo::default(), ScrollInfo::default());
+        }
+        let mut horizontal = ScrollInfo::default();
+        let mut vertical = ScrollInfo::default();
+        unsafe {
+            let mut enabled = BOOL(0);
+            let _ = self.services.TxGetHScroll(
+                &mut horizontal.min,
+                &mut horizontal.max,
+                &mut horizontal.pos,
+                &mut horizontal.page,
+                &mut enabled,
+            );
+            let _ = self.services.TxGetVScroll(
+                &mut vertical.min,
+                &mut vertical.max,
+                &mut vertical.pos,
+                &mut vertical.page,
+                &mut enabled,
+            );
+        }
+        (horizontal, vertical)
+    }
+
+    /// 把多行编辑框滚到指定位置（像素）。
+    pub(super) fn set_scroll(&self, x: i32, y: i32) {
+        if !self.multiline {
+            return;
+        }
+        let mut point = POINT { x, y };
+        let mut result = LRESULT(0);
+        unsafe {
+            let _ = self.services.TxSendMessage(
+                EM_SETSCROLLPOS,
+                WPARAM(0),
+                LPARAM(&mut point as *mut _ as isize),
+                &mut result,
+            );
+        }
+        self.notify_scroll();
+    }
+
+    /// 按像素增量滚动；没有可滚范围时不动。
+    pub(super) fn scroll_by(&self, dx: i32, dy: i32) {
+        let (h, v) = self.scroll_info();
+        let x = (h.pos + dx).clamp(h.min, h.max.max(h.min));
+        let y = (v.pos + dy).clamp(v.min, v.max.max(v.min));
+        if x != h.pos || y != v.pos {
+            self.set_scroll(x, y);
+        }
+    }
+
+    fn notify_scroll(&self) {
+        unsafe {
+            let _ = PostMessageW(
+                Some(self.owner),
+                WM_TEXT_SCROLL,
+                WPARAM(self.hwnd.0 as usize),
+                LPARAM(0),
+            );
+        }
+    }
+
     /// 通知脚本窗重读文本（`TxNotify(EN_CHANGE)` 与输入消息兜底共用）。
     fn notify_text_changed(&self) {
         unsafe {
@@ -471,6 +644,9 @@ impl TextHostWindow {
         self.notify_selection();
         self.caret_visible.set(true);
         self.scroll_x.set(0);
+        if self.multiline {
+            self.notify_scroll();
+        }
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
         }
@@ -684,6 +860,11 @@ impl TextHostWindow {
             let mut client = RECT::default();
             let _ = GetClientRect(self.hwnd, &mut client);
             let _ = FillRect(hdc, &client, self.brush);
+            if self.multiline {
+                self.paint_multiline(hdc, &client);
+                let _ = EndPaint(self.hwnd, &ps);
+                return;
+            }
             let old_font = SelectObject(hdc, self.font);
             let _ = SetBkMode(hdc, TRANSPARENT);
             let text = self.text();
@@ -713,6 +894,33 @@ impl TextHostWindow {
             }
             let _ = SelectObject(hdc, old_font);
             let _ = EndPaint(self.hwnd, &ps);
+        }
+    }
+
+    /// 多行模式让 RichEdit 自己排版 / 画文字、选区和 IME 组合串。
+    fn paint_multiline(&self, hdc: HDC, client: &RECT) {
+        let mut bounds = RECTL {
+            left: 0,
+            top: 0,
+            right: client.right.max(1),
+            bottom: client.bottom.max(1),
+        };
+        let mut update = *client;
+        unsafe {
+            let _ = self.services.TxDraw(
+                DVASPECT_CONTENT,
+                -1,
+                std::ptr::null_mut(),
+                std::ptr::null_mut(),
+                hdc,
+                HDC::default(),
+                &mut bounds,
+                std::ptr::null_mut(),
+                &mut update,
+                0,
+                0,
+                0,
+            );
         }
     }
 
@@ -750,6 +958,12 @@ struct TextHost {
     hwnd: HWND,
     owner: HWND,
     passkey: bool,
+    multiline: bool,
+    auto_wrap: bool,
+    background: COLORREF,
+    text_color: COLORREF,
+    selection_background: COLORREF,
+    selection_text: COLORREF,
     line_height: i32,
     char_format: CHARFORMATW,
     para_format: PARAFORMAT,
@@ -813,18 +1027,34 @@ impl ITextHost_Impl for TextHost_Impl {
     fn TxCreateCaret(
         &self,
         _hbmp: windows::Win32::Graphics::Gdi::HBITMAP,
-        _xwidth: i32,
-        _yheight: i32,
+        xwidth: i32,
+        yheight: i32,
     ) -> BOOL {
-        false.into()
+        if !self.multiline {
+            return false.into();
+        }
+        unsafe { CreateCaret(self.hwnd, None, xwidth.max(1), yheight.max(1)).is_ok() }.into()
     }
 
-    fn TxShowCaret(&self, _fshow: BOOL) -> BOOL {
-        false.into()
+    fn TxShowCaret(&self, fshow: BOOL) -> BOOL {
+        if !self.multiline {
+            return false.into();
+        }
+        unsafe {
+            if fshow.as_bool() {
+                let _ = ShowCaret(Some(self.hwnd));
+            } else {
+                let _ = HideCaret(Some(self.hwnd));
+            }
+        }
+        true.into()
     }
 
-    fn TxSetCaretPos(&self, _x: i32, _y: i32) -> BOOL {
-        false.into()
+    fn TxSetCaretPos(&self, x: i32, y: i32) -> BOOL {
+        if !self.multiline {
+            return false.into();
+        }
+        unsafe { SetCaretPos(x, y).is_ok() }.into()
     }
 
     fn TxSetTimer(&self, idtimer: u32, utimeout: u32) -> BOOL {
@@ -907,6 +1137,16 @@ impl ITextHost_Impl for TextHost_Impl {
             let mut client = RECT::default();
             let _ = GetClientRect(self.hwnd, &mut client);
             let height = (client.bottom - client.top).max(0);
+            if self.multiline {
+                let inset = 2.min(height / 2);
+                *prc = RECT {
+                    left: 2,
+                    top: inset,
+                    right: 2,
+                    bottom: inset,
+                };
+                return Ok(());
+            }
             let line = self.line_height.min(height);
             let top = ((height - line) / 2).max(0);
             *prc = RECT {
@@ -934,6 +1174,20 @@ impl ITextHost_Impl for TextHost_Impl {
     }
 
     fn TxGetSysColor(&self, nindex: SYS_COLOR_INDEX) -> COLORREF {
+        if self.multiline {
+            if nindex == COLOR_WINDOW {
+                return self.background;
+            }
+            if nindex == COLOR_WINDOWTEXT {
+                return self.text_color;
+            }
+            if nindex == COLOR_HIGHLIGHT {
+                return self.selection_background;
+            }
+            if nindex == COLOR_HIGHLIGHTTEXT {
+                return self.selection_text;
+            }
+        }
         system_color(nindex)
     }
 
@@ -952,8 +1206,13 @@ impl ITextHost_Impl for TextHost_Impl {
     }
 
     fn TxGetScrollBars(&self, pdwscrollbar: *mut u32) -> Result<()> {
+        let bars = if self.multiline {
+            WS_VSCROLL.0 | if self.auto_wrap { 0 } else { WS_HSCROLL.0 }
+        } else {
+            0
+        };
         unsafe {
-            *pdwscrollbar = 0;
+            *pdwscrollbar = bars;
         }
         Ok(())
     }
@@ -991,9 +1250,16 @@ impl ITextHost_Impl for TextHost_Impl {
         Ok(())
     }
 
-    fn TxGetPropertyBits(&self, _dwmask: u32, pdwbits: *mut u32) -> Result<()> {
+    fn TxGetPropertyBits(&self, dwmask: u32, pdwbits: *mut u32) -> Result<()> {
+        let mut bits = TXTBIT_RICHTEXT | TXTBIT_SAVESELECTION;
+        if self.multiline {
+            bits |= TXTBIT_MULTILINE;
+            if self.auto_wrap {
+                bits |= TXTBIT_WORDWRAP;
+            }
+        }
         unsafe {
-            *pdwbits = (TXTBIT_RICHTEXT | TXTBIT_SAVESELECTION) & _dwmask;
+            *pdwbits = bits & dwmask;
         }
         Ok(())
     }
@@ -1162,6 +1428,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
     }
     // 悬停移动只保留给宿主判断光标；不再转给 RichEdit，免得它每次移动都失效重绘。
+    if msg == WM_MOUSEWHEEL && with_host(hwnd, |host| host.multiline).unwrap_or(false) {
+        let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16 as i32;
+        let step = with_host(hwnd, |host| {
+            let (_, vertical) = host.scroll_info();
+            (vertical.page / 4).max(host.line_height * 2).max(8)
+        })
+        .unwrap_or(24);
+        let dy = if delta > 0 { -step } else { step };
+        with_host(hwnd, |host| host.scroll_by(0, dy));
+        return LRESULT(0);
+    }
     if msg == WM_MOUSEMOVE && (wparam.0 as u32 & 0x0001) == 0 {
         return LRESULT(0);
     }
@@ -1212,6 +1489,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             | WM_LBUTTONUP
             | WM_LBUTTONDBLCLK
             | WM_MOUSEMOVE
+            | WM_MOUSEWHEEL
             | WM_TIMER
             | WM_SETFONT
             | WM_SIZE
@@ -1225,6 +1503,19 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             WM_CHAR | WM_KEYDOWN | WM_KEYUP | WM_IME_CHAR | WM_IME_COMPOSITION
         ) {
             with_host(hwnd, |host| host.notify_text_changed());
+        }
+        if matches!(
+            msg,
+            WM_MOUSEWHEEL
+                | WM_LBUTTONDOWN
+                | WM_LBUTTONUP
+                | WM_LBUTTONDBLCLK
+                | WM_MOUSEMOVE
+                | WM_KEYDOWN
+                | WM_CHAR
+                | WM_SIZE
+        ) {
+            with_host(hwnd, |host| host.notify_scroll());
         }
         let left_button = (wparam.0 as u32 & 0x0001) != 0;
         if matches!(

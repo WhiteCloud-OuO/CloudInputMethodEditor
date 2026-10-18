@@ -2,10 +2,10 @@
 --
 -- 用法：把这个文件从 `Scripts\lib\` 拷到 `Scripts\` 下（或直接放在 `Scripts\` 里），重启输入法服务。
 -- 在任意文本编辑器里按 **Ctrl + Alt + F3**：
---   * 光标上方 30 点摆一块 500 × 360 的独立窗口；
+--   * 光标上方 30 点摆一块 760 × 640 的独立窗口；
 --   * 上方放不下（会超出显示器工作区）就改到光标下方 30 点；
 --   * 窗口内容来自 `Scripts/lib/test-caret-window.json`：静态控件、两个单行编辑框、
---     右上角扁平 SVG 关闭按钮都在布局文件里；
+--     两个多行编辑框（自动换行 / 不换行）、独立滚动条和右上角扁平 SVG 关闭按钮；
 --   * 关闭按钮用 `events.mouse_clicked = "close"` 声明事件，脚本在 `window` 事件里按
 --     `event.handler` 分发；
 --   * 窗口背景 / 圆角由布局文件里的 `rect` 画（`create` 用 `background = false`），
@@ -19,7 +19,7 @@
 
 cloudime.script{
     name                  = "光标窗口测试",
-    description           = "Ctrl+Alt+F3：光标上方 30 点开一块 500×360 的 JSON 布局测试窗口（右上角 × 关闭）",
+    description           = "Ctrl+Alt+F3：光标上方 30 点开一块 760×640 的 JSON 布局测试窗口（含多行编辑框，右上角 × 关闭）",
     api                   = 2,
     trigger_condition     = "combination_key",
     combination_modifiers = "ctrl+alt",
@@ -32,7 +32,7 @@ cloudime.script{
     end,
 }
 
-local WIDTH, HEIGHT, GAP = 500, 360, 30
+local WIDTH, HEIGHT, GAP = 760, 640, 30
 
 local win = nil
 local waiting = false

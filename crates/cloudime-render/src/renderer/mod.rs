@@ -984,6 +984,10 @@ fn draw_element(
             bar.draw(render, m.theme, scale, origin, margin);
             Some(bar.hit_shape(origin))
         }
+        Element::TextBox(edit) => {
+            edit.draw(render, m.theme, scale, origin, margin);
+            Some(edit.hit_shape(origin))
+        }
         Element::TextEdit(edit) => {
             edit.draw(render, m.theme, scale, origin, margin);
             Some(edit.hit_shape(origin))

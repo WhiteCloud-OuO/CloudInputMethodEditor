@@ -17,8 +17,8 @@ use std::time::SystemTime;
 use cloudime_render::{
     ButtonColors, ButtonShape, ButtonState, Color, Document, Element, FlatSvgButton, FontSlot,
     HitRect, HitShape, Label, LabelRun, Panel, PathCommand, Pixmap, Region, ScrollAxis, ScrollBar,
-    StaticImage, StaticShape, SvgAlign, TextBlock, TextEdit, flip_image, gray_image, load_image,
-    mask_image, rotate_image, scale_image, svg_size,
+    StaticImage, StaticShape, SvgAlign, TextBlock, TextBox, TextBoxScroll, TextEdit, flip_image,
+    gray_image, load_image, mask_image, rotate_image, scale_image, svg_size,
 };
 
 use crate::mlua;
@@ -746,6 +746,14 @@ pub(crate) fn cache_document_texts(document: &Document, id: WindowId, cache: &Te
             cache.insert((id, edit.region_name.clone()), edit.text.clone());
         }
     }
+    for placement in document.text_boxes() {
+        let Some(Element::TextBox(edit)) = document.element_at_path(&placement.path) else {
+            continue;
+        };
+        if !edit.region_name.is_empty() {
+            cache.insert((id, edit.region_name.clone()), edit.text.clone());
+        }
+    }
 }
 
 /// 内容表 → [`Document`]：`width` / `height` 可省（用句柄里那份），元素是 1 起的数组。
@@ -786,11 +794,14 @@ fn parse_document(
         if !handlers.is_empty()
             && !matches!(
                 &element,
-                Element::FlatSvgButton(_) | Element::TextEdit(_) | Element::ScrollBar(_)
+                Element::FlatSvgButton(_)
+                    | Element::TextEdit(_)
+                    | Element::TextBox(_)
+                    | Element::ScrollBar(_)
             )
         {
             return Err(mlua::Error::RuntimeError(
-                "events 只能写在 flat_svg_button / text_edit / scroll_bar 这类动态控件上；普通元素请用 regions"
+                "events 只能写在 flat_svg_button / text_edit / text_box / scroll_bar 这类动态控件上；普通元素请用 regions"
                     .to_owned(),
             ));
         }
@@ -827,6 +838,25 @@ fn parse_document(
             {
                 return Err(mlua::Error::RuntimeError(format!(
                     "文本编辑框的区域名重复：{}",
+                    edit.region_name
+                )));
+            }
+            let mut region =
+                Region::new(edit.region_name.clone(), edit.hit_shape((0.0, 0.0)), false);
+            region.handlers = handlers.clone();
+            button_regions.push(region);
+        }
+        if let Element::TextBox(edit) = &mut element {
+            if edit.region_name.trim().is_empty() {
+                edit.region_name = format!("text_box_{}", elements.len() + 1);
+            }
+            if regions
+                .iter()
+                .chain(button_regions.iter())
+                .any(|region: &Region| region.name == edit.region_name)
+            {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "多行编辑框的区域名重复：{}",
                     edit.region_name
                 )));
             }
@@ -892,6 +922,14 @@ fn assign_nested_text_names(elements: &mut [Element], path: &mut Vec<usize>) {
                     .join("_");
                 edit.region_name = format!("text_edit_{suffix}");
             }
+            Element::TextBox(edit) if edit.region_name.is_empty() => {
+                let suffix = path
+                    .iter()
+                    .map(|index| index.to_string())
+                    .collect::<Vec<_>>()
+                    .join("_");
+                edit.region_name = format!("text_box_{suffix}");
+            }
             Element::Panel(panel) => assign_nested_text_names(&mut panel.children, path),
             _ => {}
         }
@@ -904,6 +942,12 @@ fn nested_text_edit_regions(elements: &[Element], origin: (f32, f32), nested: bo
     for element in elements {
         match element {
             Element::TextEdit(edit) if nested => {
+                let mut region =
+                    Region::new(edit.region_name.clone(), edit.hit_shape(origin), false);
+                region.handlers = edit.handlers.clone();
+                regions.push(region);
+            }
+            Element::TextBox(edit) if nested => {
                 let mut region =
                     Region::new(edit.region_name.clone(), edit.hit_shape(origin), false);
                 region.handlers = edit.handlers.clone();
@@ -1202,6 +1246,7 @@ fn parse_element(
         "panel" => parse_panel(table, images, depth),
         "flat_svg_button" => parse_flat_svg_button(table),
         "text_edit" => parse_text_edit(table),
+        "text_box" => parse_text_box(table),
         "hscroll_bar" | "hscrollbar" => parse_scroll_bar(table, ScrollAxis::Horizontal),
         "vscroll_bar" | "vhscroll_bar" | "vhsroll_bar" => {
             parse_scroll_bar(table, ScrollAxis::Vertical)
@@ -1376,6 +1421,68 @@ fn parse_text_edit(table: &mlua::Table) -> mlua::Result<Element> {
         font: font_slot(table)?,
         size: font_size,
         region_name: table.get::<Option<String>>("name")?.unwrap_or_default(),
+    }))
+}
+
+fn parse_text_box(table: &mlua::Table) -> mlua::Result<Element> {
+    let width = positive(table, "w", "width")?;
+    let height = positive(table, "h", "height")?;
+    let border_width = match table.get::<Option<f32>>("edge_width")? {
+        Some(width) => width,
+        None => number(table, "border_width", 1.0)?,
+    }
+    .clamp(0.0, 16.0);
+    let font_size = table
+        .get::<Option<f32>>("font_size")?
+        .or(table.get::<Option<f32>>("size")?)
+        .map(|size| size.clamp(1.0, 256.0));
+    let font_flag = table.get::<Option<u8>>("font_flag")?.unwrap_or(0);
+    if font_flag & !0x0F != 0 {
+        return Err(mlua::Error::RuntimeError(format!(
+            "font_flag 只能是 0–15 的组合（1 加粗 / 2 斜体 / 4 下划线 / 8 删除线），现在是 {font_flag}"
+        )));
+    }
+    let font_name = table
+        .get::<Option<String>>("font_name")?
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty());
+    let line_spacing = table
+        .get::<Option<u64>>("line_spacing")?
+        .unwrap_or(8)
+        .min(u16::MAX as u64) as u16;
+    Ok(Element::TextBox(TextBox {
+        x: number(table, "x", 0.0)?,
+        y: number(table, "y", 0.0)?,
+        width,
+        height,
+        radius: number(table, "radius", 6.0)?.max(0.0),
+        fill: color(table, "back_color", false)?.or(color(table, "fill", false)?),
+        border: color(table, "edge_color", false)?.or(color(table, "color", false)?),
+        border_width,
+        selection_background: color(table, "sel_back_color", false)?.or(color(
+            table,
+            "selection_background",
+            false,
+        )?),
+        selection_color: color(table, "sel_text_color", false)?.or(color(
+            table,
+            "selection_color",
+            false,
+        )?),
+        caret_color: color(table, "cursor_color", false)?.or(color(table, "caret_color", false)?),
+        text_color: color(table, "text_color", false)?,
+        read_only: table.get::<Option<bool>>("read_only")?.unwrap_or(false),
+        auto_line_wrap: table.get::<Option<bool>>("auto_line_wrap")?.unwrap_or(true),
+        line_spacing,
+        font_name,
+        font_flag,
+        handlers: parse_handlers(table)?,
+        text: table.get::<Option<String>>("text")?.unwrap_or_default(),
+        font: font_slot(table)?,
+        size: font_size,
+        region_name: table.get::<Option<String>>("name")?.unwrap_or_default(),
+        h_scroll: TextBoxScroll::default(),
+        v_scroll: TextBoxScroll::default(),
     }))
 }
 
@@ -2116,7 +2223,8 @@ mod tests {
                 .any(|control| control.name == "close")
         );
         assert_eq!(document.control_name(3), Some("search"));
-        assert_eq!(document.control_name(5), Some("close"));
+        assert_eq!(document.control_name(5), Some("notes"));
+        assert_eq!(document.control_name(7), Some("close"));
     }
 
     /// 嵌套在 `panel.children` 里的 `text_edit`：绝对位置、区域和自动名字都要有。
@@ -2292,6 +2400,48 @@ mod tests {
         assert!(
             parse_document(&bad, (Some(10.0), Some(10.0)), &mut ImageCache::default()).is_err()
         );
+    }
+
+    /// `text_box`：多行属性、缺省行距 / 自动换行和区域。
+    #[test]
+    fn text_box_parses_multiline_defaults() {
+        let lua = mlua::Lua::new();
+        let content = lua
+            .load(
+                r##"
+                return {
+                    width = 300, height = 200,
+                    { type = "text_box", name = "notes", x = 10, y = 10, w = 280, h = 120,
+                      text = "第一行\n第二行", font_name = "Consolas", font_size = 16 },
+                    { type = "text_box", name = "code", x = 10, y = 140, w = 280, h = 40,
+                      auto_line_wrap = false, line_spacing = 0, text = "一行" },
+                }
+            "##,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let document = parse_document(
+            &content,
+            (Some(300.0), Some(200.0)),
+            &mut ImageCache::default(),
+        )
+        .expect("text_box 读得出来");
+        let Element::TextBox(notes) = &document.elements[0] else {
+            panic!("不是 text_box");
+        };
+        assert_eq!(notes.region_name, "notes");
+        assert!(notes.auto_line_wrap);
+        assert_eq!(notes.line_spacing, 8);
+        assert_eq!(notes.font_name.as_deref(), Some("Consolas"));
+        assert_eq!(notes.size, Some(16.0));
+        assert_eq!(notes.text, "第一行\n第二行");
+        assert!(!notes.h_scroll.visible && !notes.v_scroll.visible);
+
+        let Element::TextBox(code) = &document.elements[1] else {
+            panic!("不是 text_box");
+        };
+        assert!(!code.auto_line_wrap);
+        assert_eq!(code.line_spacing, 0);
     }
 
     /// 水平 / 垂直滚动条：值域、区域、事件处理器和 u64 夹取。

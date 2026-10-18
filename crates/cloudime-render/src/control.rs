@@ -524,6 +524,237 @@ pub enum SvgAlign {
     Right,
 }
 
+/// `text_box` 内部滚动条的可见范围（值单位由 RichEdit 的像素位置换算）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct TextBoxScroll {
+    pub min: u64,
+    pub max: u64,
+    pub value: u64,
+    pub page: u64,
+    pub visible: bool,
+}
+
+impl TextBoxScroll {
+    fn ratio(&self) -> f32 {
+        let span = self.max.saturating_sub(self.min);
+        if span == 0 {
+            0.0
+        } else {
+            ((self.value.saturating_sub(self.min)) as f64 / span as f64) as f32
+        }
+    }
+
+    /// 滑块长度按可见页占整段内容的比例算，至少一个滚动条厚度。
+    fn thumb_length(&self, track: f32, thickness: f32) -> f32 {
+        if track <= 0.0 {
+            return 0.0;
+        }
+        let span = self.max.saturating_sub(self.min) as f64;
+        let page = self.page.max(1) as f64;
+        let length = track as f64 * page / (span + page).max(1.0);
+        (length as f32).max(thickness).min(track)
+    }
+}
+
+/// **多行文本编辑框**：背景圆角矩形 + 文本区 + 内部控制条；文本本身由 Windowless RichEdit 绘制。
+#[derive(Clone)]
+pub struct TextBox {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub radius: f32,
+    pub fill: Option<Color>,
+    pub border: Option<Color>,
+    pub border_width: f32,
+    pub selection_background: Option<Color>,
+    pub selection_color: Option<Color>,
+    pub caret_color: Option<Color>,
+    pub text_color: Option<Color>,
+    pub read_only: bool,
+    /// 自动换行；启用时没有水平滚动条。
+    pub auto_line_wrap: bool,
+    /// 行距（像素）。
+    pub line_spacing: u16,
+    pub font_name: Option<String>,
+    pub font_flag: u8,
+    pub handlers: Vec<(String, String)>,
+    pub text: String,
+    pub font: FontSlot,
+    pub size: Option<f32>,
+    pub region_name: String,
+    /// 运行时滚动状态；由宿主查 RichEdit 后写回。
+    pub h_scroll: TextBoxScroll,
+    pub v_scroll: TextBoxScroll,
+}
+
+impl TextBox {
+    const SCROLLBAR_THICKNESS: f32 = 8.0;
+    const SCROLLBAR_GAP: f32 = 4.0;
+
+    /// 文本区（相对控件左上角）；滚动条出现时自动让出右侧 / 底部。
+    pub fn edit_rect(&self) -> (f32, f32, f32, f32) {
+        let inset = self.border_width.max(0.0);
+        let padding = 4.0;
+        let right = self.width
+            - inset
+            - padding
+            - if self.v_scroll.visible {
+                Self::SCROLLBAR_THICKNESS + Self::SCROLLBAR_GAP
+            } else {
+                0.0
+            };
+        let bottom = self.height
+            - inset
+            - padding
+            - if self.h_scroll.visible && !self.auto_line_wrap {
+                Self::SCROLLBAR_THICKNESS + Self::SCROLLBAR_GAP
+            } else {
+                0.0
+            };
+        (
+            inset + padding,
+            inset + padding,
+            (right - inset - padding).max(1.0),
+            (bottom - inset - padding).max(1.0),
+        )
+    }
+
+    /// 滚动条在本控件内的矩形。
+    pub fn bar_rect(&self, axis: ScrollAxis) -> (f32, f32, f32, f32) {
+        let inset = self.border_width.max(0.0) + 2.0;
+        match axis {
+            ScrollAxis::Vertical => {
+                let x = self.width - inset - Self::SCROLLBAR_THICKNESS;
+                let extra = if self.h_scroll.visible && !self.auto_line_wrap {
+                    Self::SCROLLBAR_THICKNESS + Self::SCROLLBAR_GAP
+                } else {
+                    0.0
+                };
+                let y = inset + Self::SCROLLBAR_GAP;
+                (
+                    x,
+                    y,
+                    Self::SCROLLBAR_THICKNESS,
+                    (self.height - y - inset - extra).max(1.0),
+                )
+            }
+            ScrollAxis::Horizontal => {
+                let y = self.height - inset - Self::SCROLLBAR_THICKNESS;
+                let extra = if self.v_scroll.visible {
+                    Self::SCROLLBAR_THICKNESS + Self::SCROLLBAR_GAP
+                } else {
+                    0.0
+                };
+                let x = inset + Self::SCROLLBAR_GAP;
+                (
+                    x,
+                    y,
+                    (self.width - x - inset - extra).max(1.0),
+                    Self::SCROLLBAR_THICKNESS,
+                )
+            }
+        }
+    }
+
+    pub fn scroll(&self, axis: ScrollAxis) -> TextBoxScroll {
+        match axis {
+            ScrollAxis::Horizontal => self.h_scroll,
+            ScrollAxis::Vertical => self.v_scroll,
+        }
+    }
+
+    /// 滑块矩形；`axis` 的滚动条不可见时返回空矩形。
+    pub fn thumb_rect(&self, axis: ScrollAxis) -> (f32, f32, f32, f32) {
+        let (bx, by, bw, bh) = self.bar_rect(axis);
+        let scroll = self.scroll(axis);
+        if !scroll.visible {
+            return (bx, by, 0.0, 0.0);
+        }
+        match axis {
+            ScrollAxis::Horizontal => {
+                let length = scroll.thumb_length(bw, bh);
+                let travel = (bw - length).max(0.0);
+                (bx + travel * scroll.ratio(), by, length, bh)
+            }
+            ScrollAxis::Vertical => {
+                let length = scroll.thumb_length(bh, bw);
+                let travel = (bh - length).max(0.0);
+                (bx, by + travel * scroll.ratio(), bw, length)
+            }
+        }
+    }
+
+    pub fn hit_shape(&self, origin: (f32, f32)) -> HitShape {
+        HitShape::RoundRect {
+            x: origin.0 + self.x,
+            y: origin.1 + self.y,
+            width: self.width,
+            height: self.height,
+            radius: self.radius,
+        }
+    }
+
+    pub(crate) fn draw<R: ControlRender>(
+        &self,
+        render: &mut R,
+        theme: &Theme,
+        scale: f32,
+        origin: (f32, f32),
+        margin: f32,
+    ) {
+        let x = |value: f32| margin + (origin.0 + value) * scale;
+        let y = |value: f32| margin + (origin.1 + value) * scale;
+        let len = |value: f32| value * scale;
+        if let Some(fill) = self.fill {
+            render.round_rect(
+                x(self.x),
+                y(self.y),
+                len(self.width),
+                len(self.height),
+                len(self.radius),
+                fill,
+            );
+        }
+        let border = self.border.unwrap_or(theme.colors.badge);
+        if self.border_width > 0.0
+            && let Some(rect) =
+                tiny_skia::Rect::from_xywh(x(self.x), y(self.y), len(self.width), len(self.height))
+        {
+            render.stroke_round_rect(rect, len(self.radius), len(self.border_width), border);
+        }
+        let background = theme.colors.badge;
+        let thumb = theme.colors.highlight;
+        for axis in [ScrollAxis::Horizontal, ScrollAxis::Vertical] {
+            let scroll = self.scroll(axis);
+            if !scroll.visible {
+                continue;
+            }
+            let (bx, by, bw, bh) = self.bar_rect(axis);
+            let radius = Self::SCROLLBAR_THICKNESS * 0.5;
+            render.round_rect(
+                x(self.x + bx),
+                y(self.y + by),
+                len(bw),
+                len(bh),
+                len(radius),
+                background,
+            );
+            let (tx, ty, tw, th) = self.thumb_rect(axis);
+            if tw > 0.0 && th > 0.0 {
+                render.round_rect(
+                    x(self.x + tx),
+                    y(self.y + ty),
+                    len(tw),
+                    len(th),
+                    len(radius),
+                    thumb,
+                );
+            }
+        }
+    }
+}
+
 /// **单行文本编辑框**：背景胶囊 / 边框 + 可选 SVG + Windowless RichEdit 承载的文本区。
 #[derive(Clone)]
 pub struct TextEdit {

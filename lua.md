@@ -460,11 +460,11 @@ aux:show()
 |---|---|
 | `win:set_content{ … }` | 换一整份内容（整份替换；`width` / `height` 可省，缺省用建窗口时那份） |
 | `win:load_layout(path)` | 读一份 JSON 布局文件并换成整份内容；`width` / `height` / 控件 / 区域都从文件来 |
-| `win:get_text(name)` | 读某个 `text_edit` 最近一次文本；控件不存在 / 还没有文本时给 `nil` |
-| `win:set_text(name, text)` | 设置某个 `text_edit` 的文本（按控件名找，整份替换、光标放到末尾） |
+| `win:get_text(name)` | 读某个 `text_edit` / `text_box` 最近一次文本；控件不存在 / 还没有文本时给 `nil` |
+| `win:set_text(name, text)` | 设置某个 `text_edit` / `text_box` 的文本（按控件名找，整份替换、光标放到末尾） |
 | `win:select_all(name, all?)` | 全选；`all` 缺省 `true`，传 `false` 取消选择（选区收在末尾） |
 | `win:replace(name, find, text)` | 把文本里的 `find` **全部**替换成 `text`（`find` 为空不做事） |
-| `win:clear(name)` | 清空某个 `text_edit` |
+| `win:clear(name)` | 清空某个 `text_edit` / `text_box` |
 | `win:show{ x = …, y = … }` | 显示；坐标是**内容区左上角**的屏幕坐标（点）。不写就沿用上次的位置，没有过就摆在光标右下 |
 | `win:hide()` | 收起（不销毁） |
 | `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
@@ -498,10 +498,11 @@ aux:show()
 - **每个控件必须写 `name`**：英文字母开头，只能包含英文字母 / 数字 / 下划线，最长 255 个字符，
   同一份布局里唯一（区分大小写），且不能是 Rust 关键字。这个名称会作为控件标识符出现在
   窗口事件的 `event.control` 里。
-- 动态控件（`flat_svg_button` / `text_edit`）可以写 `events = { 事件名 = "处理器名" }`；事件名用
+- 动态控件（`flat_svg_button` / `text_edit` / `text_box` / `hscroll_bar` / `vscroll_bar`）可以写
+  `events = { 事件名 = "处理器名" }`；事件名用
   `click` / `right_click` / `hover` / `leave` / `wheel` / `focus` / `blur` / `mouse_enter` / `mouse_leave` /
   `mouse_pressed` / `mouse_released` / `mouse_clicked` / `mouse_double_clicked` / `text_changed` /
-  `key_pressed` / `focused` / `unfocused` / `value_changed`（`text_edit` 也接受 `on_key_pressed` / `onKeyPressed`、
+  `key_pressed` / `focused` / `unfocused` / `value_changed`（`text_edit` / `text_box` 也接受 `on_key_pressed` / `onKeyPressed`、
   `on_focused` / `onFocused`、`on_unfocused` / `onUnfocused`；滚动条也接受 `on_value_changed`），
   处理器名由脚本自己分发。
   窗口事件载荷里会多一个 `event.handler`（没声明时是 `nil`），例如：
@@ -537,6 +538,7 @@ aux:show()
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（**边缘**颜色，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1 点）/ `fill`（可选填充，不写 = 无填充）/ `children = { …元素… }`；子控件用面板内相对坐标 |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省取 SVG 画板）；`svg`（整段 SVG）或 `svg_path`（文件）；`shape = rect / round_rect / circle / path` + `radius`；`name`（自动区域名）；`normal` / `hovered` / `pressed = { background = …, svg = … }`；`events = { 动作名 = "处理器名" }` |
 | `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 `h/2`）；`read_only` / `passkey`；`back_color`（背景）/ `edge_color`（边框）/ `edge_width`（缺省 1，0 不显示）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align = left / right`；`font_name` / `font_size` / `font_flag`；`text` 初始文本；`font`（缺省 `candidate`）；`name`（自动区域名）；`events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
+| `text_box` | 多行编辑框：`x` / `y` / `w` / `h`；`radius`（缺省 6）；`read_only`；`back_color` / `edge_color` / `edge_width`；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color`；`font_name` / `font_size` / `font_flag`；`auto_line_wrap`（缺省 true，启用时无水平滚动条）/ `line_spacing`（u16，缺省 8）；`text` / `font` / `name` / `events`；没有 `passkey` 和 SVG 属性；`text_edit` 的文本方法 / 事件都适用 |
 | `hscroll_bar` | 水平滚动条：`x` / `y` 必给；`w` / `h` 可省，缺省都是 8（水平条通常写长度 `w`，只写 `h` 就是 8 点厚）；`value` / `min_value` / `max_value`（非负整数，缺省 0 / 0 / 100）/ `step`（滚轮和点轨道的步长，u64，缺省 1，不能为 0）；`background_color`（兼容 `back_color` / `background` / `color` / `fill`）/ `thumb_color`（兼容 `slider_color` / `thumb` / `highlight`）；`name`；`events` |
 | `vscroll_bar` | 垂直滚动条，字段同 `hscroll_bar`，`w` / `h` 缺省都是 8；也接受拼写 `vhscroll_bar` / `vhsroll_bar` |
 
@@ -656,6 +658,23 @@ icon:use_path_mask({ { "M", 0, 0 }, { "L", 16, 0 }, { "L", 16, 16 }, { "L", 0, 1
   1 shift / 2 ctrl / 4 alt / 8 win，可相加）；`on_focused` / `onFocused` 进入编辑；
   `on_unfocused` / `onUnfocused` 离开编辑。可以在 JSON 的 `events` 里声明，也可以直接按
   `event.action == "key_pressed" / "focused" / "unfocused"` 和 `event.control` 分发。
+
+### 多行编辑框（`text_box`）
+
+```lua
+{ type = "text_box", name = "notes", x = 24, y = 300, w = 680, h = 150,
+  auto_line_wrap = true, line_spacing = 8, font_size = 16,
+  text = "第一行\n第二行\n内容超过可视区域时右侧出现滚动条。" }
+```
+
+- 背景是普通圆角矩形（`radius` 缺省 6），没有 SVG，也没有 `passkey`。
+- `auto_line_wrap` 缺省 `true`：打开 RichEdit 的自动换行并隐藏水平滚动条；设为 `false` 可横向滚动。
+- `line_spacing` 为 `u16`，缺省 `8`，表示两行的行距（点，100% 缩放下等于像素）。
+- 文本区由 Windowless RichEdit 多行排版；内容超出可视区时才显示内部水平 / 垂直滚动条，
+  滚动条厚 8 点、与文本区间隔 4 点。拖滑块、点轨道和滚轮都能滚动；内部滚动条不是脚本控件，
+  不派 `value_changed`。
+- 文本方法、`text_changed` / `key_pressed` / `focused` / `unfocused` 事件与 `text_edit` 相同。
+  嵌套在 `panel.children` 里的 `text_box` 也会建宿主并接收文本事件。
 
 **滚动条（`hscroll_bar` / `vscroll_bar`）**
 

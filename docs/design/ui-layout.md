@@ -49,7 +49,7 @@
 
 ## 事件响应
 
-动态控件（`flat_svg_button` / `text_edit`）和区域条目可以带：
+动态控件（`flat_svg_button` / `text_edit` / `text_box` / `hscroll_bar` / `vscroll_bar`）和区域条目可以带：
 
 ```json
 "events": { "mouse_clicked": "close_window", "mouse_enter": "close_hover" }

@@ -101,8 +101,8 @@ fn the_caret_window_script_draws_and_closes_itself() {
         &document.elements[0],
         Element::Rect { x, y, width, height, color, .. }
             if x.abs() < 0.01 && y.abs() < 0.01
-                && (*width - 500.0).abs() < 0.01
-                && (*height - 360.0).abs() < 0.01
+                && (*width - 760.0).abs() < 0.01
+                && (*height - 640.0).abs() < 0.01
                 && *color == Color::rgba(0xFF, 0xFF, 0xFF, 0xFF)
     ));
     assert!(
@@ -118,6 +118,13 @@ fn the_caret_window_script_draws_and_closes_itself() {
         "关闭按钮是扁平 SVG 按钮（画板 20×20，自动区域 close）"
     );
     assert!(document.regions.iter().any(|region| region.name == "close"));
+    assert!(
+        document.elements.iter().any(|element| matches!(
+            element,
+            Element::TextBox(edit) if edit.region_name == "notes" && edit.auto_line_wrap
+        )),
+        "测试布局里有自动换行的多行编辑框"
+    );
     assert!(
         document
             .control_names

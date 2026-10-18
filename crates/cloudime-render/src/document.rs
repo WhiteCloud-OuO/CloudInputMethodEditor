@@ -15,7 +15,7 @@ use tiny_skia::{PathBuilder, Pixmap};
 
 use crate::color::Color;
 use crate::control::{
-    FlatSvgButton, Label, Panel, ScrollBar, StaticImage, StaticShape, TextBlock, TextEdit,
+    FlatSvgButton, Label, Panel, ScrollBar, StaticImage, StaticShape, TextBlock, TextBox, TextEdit,
 };
 
 /// 一份内容：内容区尺寸（点）+ 元素表（按顺序画，后面的盖前面的）。
@@ -66,6 +66,26 @@ impl Document {
         placements
     }
 
+    /// 内容里所有 `text_box` 的绝对位置。
+    pub fn text_boxes(&self) -> Vec<TextEditPlacement> {
+        let mut placements = Vec::new();
+        collect_text_boxes(&self.elements, (0.0, 0.0), &mut Vec::new(), &mut placements);
+        placements
+    }
+
+    /// 按元素路径取可变元素。
+    pub fn element_at_path_mut(&mut self, path: &[usize]) -> Option<&mut Element> {
+        let (first, rest) = path.split_first()?;
+        let mut element = self.elements.get_mut(*first)?;
+        for index in rest {
+            let Element::Panel(panel) = element else {
+                return None;
+            };
+            element = panel.children.get_mut(*index)?;
+        }
+        Some(element)
+    }
+
     /// 按元素路径取回一个元素。
     pub fn element_at_path(&self, path: &[usize]) -> Option<&Element> {
         let (first, rest) = path.split_first()?;
@@ -103,6 +123,32 @@ fn collect_text_edits(
                 y: origin.1 + edit.y,
             }),
             Element::Panel(panel) => collect_text_edits(
+                &panel.children,
+                (origin.0 + panel.x, origin.1 + panel.y),
+                path,
+                placements,
+            ),
+            _ => {}
+        }
+        path.pop();
+    }
+}
+
+fn collect_text_boxes(
+    elements: &[Element],
+    origin: (f32, f32),
+    path: &mut Vec<usize>,
+    placements: &mut Vec<TextEditPlacement>,
+) {
+    for (index, element) in elements.iter().enumerate() {
+        path.push(index);
+        match element {
+            Element::TextBox(edit) => placements.push(TextEditPlacement {
+                path: path.clone(),
+                x: origin.0 + edit.x,
+                y: origin.1 + edit.y,
+            }),
+            Element::Panel(panel) => collect_text_boxes(
                 &panel.children,
                 (origin.0 + panel.x, origin.1 + panel.y),
                 path,
@@ -558,6 +604,8 @@ pub enum Element {
     ScrollBar(ScrollBar),
 
     /// 动态控件：单行文本编辑框（背景 / SVG 由渲染器画，文本区由 Windowless RichEdit 承载）。
+    TextBox(TextBox),
+
     TextEdit(TextEdit),
 }
 
@@ -1011,6 +1059,7 @@ impl std::fmt::Debug for Element {
                 .field("min", &bar.min)
                 .field("max", &bar.max)
                 .finish(),
+            Self::TextBox(edit) => f.debug_struct("TextBox").field("text", &edit.text).finish(),
             Self::TextEdit(edit) => f
                 .debug_struct("TextEdit")
                 .field("text", &edit.text)

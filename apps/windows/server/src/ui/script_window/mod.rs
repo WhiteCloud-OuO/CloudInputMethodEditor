@@ -34,12 +34,6 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, Result, w};
 
-use cloudime_platform::LayoutMode;
-use cloudime_render::{ButtonState, Document, Element, HitShape, Region};
-use cloudime_script::{
-    AuxiliarySpec, ScriptWindowEvent, WindowAction, WindowId, WindowRequest, WindowSpec,
-};
-
 use super::auxiliary::{Asset, Bridge, DesignatedAssetToGetFocus, Focus, Host};
 use super::auxiliary_window_template::{AuxiliaryWindowSpec, AuxiliaryWindowTemplate, PanelAction};
 use super::independent_window_template::IndependentWindowTemplate;
@@ -47,7 +41,16 @@ use super::layered;
 use super::monitor;
 use super::painter::SharedPainter;
 use super::window_class::WindowClass;
-use text_host::{TextHostWindow, WM_TEXT_CHANGED, WM_TEXT_FOCUS, WM_TEXT_KEY};
+use cloudime_platform::LayoutMode;
+use cloudime_render::{
+    ButtonState, Color, Document, Element, FontSlot, HitShape, Region, ScrollAxis, TextBoxScroll,
+};
+use cloudime_script::{
+    AuxiliarySpec, ScriptWindowEvent, WindowAction, WindowId, WindowRequest, WindowSpec,
+};
+use text_host::{
+    ScrollInfo, TextHostWindow, WM_TEXT_CHANGED, WM_TEXT_FOCUS, WM_TEXT_KEY, WM_TEXT_SCROLL,
+};
 
 mod text_host;
 mod text_store;
@@ -313,6 +316,38 @@ struct ScrollDrag {
     offset: f32,
 }
 
+/// `text_box` 内部滚动条拖动：元素路径 + 轴向 + 按下点相对滑块起点的偏移（点）。
+struct TextScrollDrag {
+    path: Vec<usize>,
+    axis: ScrollAxis,
+    offset: f32,
+}
+
+/// `text_box` 内部滚动条的命中结果：轴向、滚动状态、轨道矩形、控件内坐标。
+type TextBarHit = (ScrollAxis, TextBoxScroll, (f32, f32, f32, f32), (f32, f32));
+
+/// 建 RichEdit 宿主前的统一参数（单行 / 多行共用）。
+struct TextHostJob {
+    path: Vec<usize>,
+    name: String,
+    origin: (f32, f32),
+    text: String,
+    font: FontSlot,
+    font_name: Option<String>,
+    size: Option<f32>,
+    fill: Option<Color>,
+    text_color: Option<Color>,
+    selection_background: Option<Color>,
+    selection_color: Option<Color>,
+    caret_color: Option<Color>,
+    font_flag: u8,
+    read_only: bool,
+    passkey: bool,
+    multiline: bool,
+    auto_wrap: bool,
+    line_spacing: u16,
+}
+
 /// 滚动条非拖拽改值（滚轮 / 点轨道）的过渡动画。
 const SCROLL_ANIM_MS: u64 = 140;
 const SCROLL_ANIM_FRAME_MS: u32 = 16;
@@ -384,6 +419,9 @@ pub(super) struct ScriptWindow {
     /// 滚动条拖动：正在拖哪个元素 + 按下点相对滑块起点的偏移。
     scrollbar_drag: Cell<Option<ScrollDrag>>,
 
+    /// `text_box` 内部滚动条拖动。
+    text_scroll_drag: RefCell<Option<TextScrollDrag>>,
+
     /// 滚动条过渡动画（元素下标 → 起止值 / 开始时间）。
     scroll_anims: RefCell<HashMap<usize, ScrollAnimation>>,
 
@@ -445,6 +483,7 @@ impl ScriptWindow {
             text_edits: RefCell::new(Vec::new()),
             drag: Cell::new(None),
             scrollbar_drag: Cell::new(None),
+            text_scroll_drag: RefCell::new(None),
             scroll_anims: RefCell::new(HashMap::new()),
             scroll_anim_timer: Cell::new(0),
             moved_since_press: Cell::new(false),
@@ -473,6 +512,7 @@ impl ScriptWindow {
         self.hover_button.set(None);
         self.pressed_button.set(None);
         self.scrollbar_drag.set(None);
+        *self.text_scroll_drag.borrow_mut() = None;
         self.scroll_anims.borrow_mut().clear();
         self.stop_scroll_anim_timer();
         self.last_click.set(None);
@@ -489,53 +529,120 @@ impl ScriptWindow {
     /// 按当前内容重建 windowless RichEdit 宿主窗（旧的全部销毁）。
     fn rebuild_text_edits(&self) {
         self.destroy_text_edits();
-        let mut edits = self.text_edits.borrow_mut();
-        let document = self.document.borrow();
-        for placement in document.text_edits() {
-            let Some(Element::TextEdit(edit)) = document.element_at_path(&placement.path) else {
-                continue;
-            };
-            if edit.region_name.is_empty() {
-                continue;
-            }
-            let (family, theme_size, background, text_color, selection_background, selection_text) =
-                match self.painter.borrow().as_ref() {
-                    Some(painter) => {
-                        let (family, size) = painter.text_font(edit.font);
-                        let (background, text) = painter.text_edit_colors();
-                        let (selection_background, selection_text) =
-                            painter.text_edit_selection_colors();
-                        (
-                            family,
-                            size,
-                            background,
-                            text,
-                            selection_background,
-                            selection_text,
-                        )
-                    }
-                    None => (
-                        None,
-                        14.0,
-                        cloudime_render::Color::rgba(255, 255, 255, 255),
-                        cloudime_render::Color::rgba(34, 34, 34, 255),
-                        cloudime_render::Color::rgba(204, 232, 255, 255),
-                        cloudime_render::Color::rgba(34, 34, 34, 255),
-                    ),
+        let mut jobs = Vec::new();
+        {
+            let document = self.document.borrow();
+            for placement in document.text_edits() {
+                let Some(Element::TextEdit(edit)) = document.element_at_path(&placement.path)
+                else {
+                    continue;
                 };
-            let size = edit.size.unwrap_or(theme_size);
-            let family = edit.font_name.clone().or(family);
-            let text_color = edit.text_color.unwrap_or(text_color);
-            let background = edit
+                if edit.region_name.is_empty() {
+                    continue;
+                }
+                jobs.push(TextHostJob {
+                    path: placement.path,
+                    name: edit.region_name.clone(),
+                    origin: (placement.x, placement.y),
+                    text: edit.text.clone(),
+                    font: edit.font,
+                    font_name: edit.font_name.clone(),
+                    size: edit.size,
+                    fill: edit.fill,
+                    text_color: edit.text_color,
+                    selection_background: edit.selection_background,
+                    selection_color: edit.selection_color,
+                    caret_color: edit.caret_color,
+                    font_flag: edit.font_flag,
+                    read_only: edit.read_only,
+                    passkey: edit.passkey,
+                    multiline: false,
+                    auto_wrap: false,
+                    line_spacing: 0,
+                });
+            }
+            for placement in document.text_boxes() {
+                let Some(Element::TextBox(edit)) = document.element_at_path(&placement.path) else {
+                    continue;
+                };
+                if edit.region_name.is_empty() {
+                    continue;
+                }
+                jobs.push(TextHostJob {
+                    path: placement.path,
+                    name: edit.region_name.clone(),
+                    origin: (placement.x, placement.y),
+                    text: edit.text.clone(),
+                    font: edit.font,
+                    font_name: edit.font_name.clone(),
+                    size: edit.size,
+                    fill: edit.fill,
+                    text_color: edit.text_color,
+                    selection_background: edit.selection_background,
+                    selection_color: edit.selection_color,
+                    caret_color: edit.caret_color,
+                    font_flag: edit.font_flag,
+                    read_only: edit.read_only,
+                    passkey: false,
+                    multiline: true,
+                    auto_wrap: edit.auto_line_wrap,
+                    line_spacing: edit.line_spacing,
+                });
+            }
+        }
+
+        let (
+            theme_family,
+            theme_size,
+            theme_background,
+            theme_text,
+            theme_selection_background,
+            theme_selection_text,
+        ) = match self.painter.borrow().as_ref() {
+            Some(painter) => {
+                let (family, size) = painter.text_font(FontSlot::Candidate);
+                let (background, text) = painter.text_edit_colors();
+                let (selection_background, selection_text) = painter.text_edit_selection_colors();
+                (
+                    family,
+                    size,
+                    background,
+                    text,
+                    selection_background,
+                    selection_text,
+                )
+            }
+            None => (
+                None,
+                14.0,
+                Color::rgba(255, 255, 255, 255),
+                Color::rgba(34, 34, 34, 255),
+                Color::rgba(204, 232, 255, 255),
+                Color::rgba(34, 34, 34, 255),
+            ),
+        };
+
+        let mut edits = self.text_edits.borrow_mut();
+        for job in jobs {
+            let (family, size) = match self.painter.borrow().as_ref() {
+                Some(painter) => painter.text_font(job.font),
+                None => (theme_family.clone(), theme_size),
+            };
+            let size = job.size.unwrap_or(size);
+            let family = job.font_name.clone().or(family);
+            let text_color = job.text_color.unwrap_or(theme_text);
+            let background = job
                 .fill
                 .filter(|color| color.a == 255)
-                .unwrap_or(background);
-            let selection_background = edit.selection_background.unwrap_or(selection_background);
-            let selection_text = edit.selection_color.unwrap_or(selection_text);
-            let caret_color = edit.caret_color.unwrap_or(text_color);
+                .unwrap_or(theme_background);
+            let selection_background = job
+                .selection_background
+                .unwrap_or(theme_selection_background);
+            let selection_text = job.selection_color.unwrap_or(theme_selection_text);
+            let caret_color = job.caret_color.unwrap_or(text_color);
             let host = TextHostWindow::create(
                 self.hwnd(),
-                &edit.text,
+                &job.text,
                 family.as_deref(),
                 size,
                 colorref(background),
@@ -543,24 +650,80 @@ impl ScriptWindow {
                 colorref(selection_background),
                 colorref(selection_text),
                 colorref(caret_color),
-                edit.font_flag,
-                edit.read_only,
-                edit.passkey,
+                job.font_flag,
+                job.read_only,
+                job.passkey,
+                job.multiline,
+                job.auto_wrap,
+                job.line_spacing,
                 self.dpi.get(),
             );
             match host {
-                Ok(host) => edits.push(TextEditWindow {
-                    path: placement.path,
-                    name: edit.region_name.clone(),
-                    origin: (placement.x, placement.y),
-                    last_text: RefCell::new(edit.text.clone()),
-                    host,
-                }),
+                Ok(host) => {
+                    if job.multiline {
+                        // 先用「没有滚动条」的文本区让 RichEdit 排一次，再把真实范围写回控件。
+                        let initial =
+                            self.document
+                                .borrow()
+                                .element_at_path(&job.path)
+                                .and_then(|element| match element {
+                                    Element::TextBox(edit) => Some(edit.edit_rect()),
+                                    _ => None,
+                                });
+                        if let Some((_, _, width, height)) = initial {
+                            let scale = self.dpi.get() as f32 / 96.0;
+                            host.set_bounds(
+                                0,
+                                0,
+                                (width * scale).round().max(1.0) as i32,
+                                (height * scale).round().max(1.0) as i32,
+                            );
+                        }
+                        host.ensure_layout();
+                        let (horizontal, vertical) = host.scroll_info();
+                        self.apply_text_box_scroll(&job.path, horizontal, vertical);
+                    }
+                    edits.push(TextEditWindow {
+                        path: job.path,
+                        name: job.name,
+                        origin: job.origin,
+                        last_text: RefCell::new(job.text),
+                        host,
+                    });
+                }
                 Err(error) => {
-                    tracing::warn!(id = self.id, path = ?placement.path, %error, "text_edit：建 windowless RichEdit 失败");
+                    tracing::warn!(id = self.id, path = ?job.path, %error, "text：建 windowless RichEdit 失败");
                 }
             }
         }
+    }
+
+    /// 把 RichEdit 的滚动范围写回 `text_box`，返回滚动条显隐是否变化。
+    fn apply_text_box_scroll(
+        &self,
+        path: &[usize],
+        horizontal: ScrollInfo,
+        vertical: ScrollInfo,
+    ) -> bool {
+        let mut document = self.document.borrow_mut();
+        let Some(Element::TextBox(edit)) = document.element_at_path_mut(path) else {
+            return false;
+        };
+        let horizontal = if edit.auto_line_wrap {
+            TextBoxScroll::default()
+        } else {
+            scroll_state(horizontal)
+        };
+        let vertical = scroll_state(vertical);
+        let changed = edit.h_scroll != horizontal || edit.v_scroll != vertical;
+        edit.h_scroll = horizontal;
+        edit.v_scroll = vertical;
+        changed
+    }
+
+    fn refresh_text_box_scroll(&self, path: &[usize], host: &TextHostWindow) -> bool {
+        let (horizontal, vertical) = host.scroll_info();
+        self.apply_text_box_scroll(path, horizontal, vertical)
     }
 
     /// 把 RichEdit 宿主摆到背景形状的文本区；隐藏时一起隐藏。
@@ -572,10 +735,14 @@ impl ScriptWindow {
         let shown = self.shown.get();
         let document = self.document.borrow();
         for edit in self.text_edits.borrow().iter() {
-            let Some(Element::TextEdit(control)) = document.element_at_path(&edit.path) else {
+            let Some(element) = document.element_at_path(&edit.path) else {
                 continue;
             };
-            let (x, y, width, height) = control.edit_rect();
+            let (x, y, width, height) = match element {
+                Element::TextEdit(control) => control.edit_rect(),
+                Element::TextBox(control) => control.edit_rect(),
+                _ => continue,
+            };
             let x = position.0 + ((edit.origin.0 + x) * scale).round() as i32;
             let y = position.1 + ((edit.origin.1 + y) * scale).round() as i32;
             let width = (width * scale).round().max(1.0) as i32;
@@ -670,16 +837,22 @@ impl ScriptWindow {
             return;
         }
         *edit.last_text.borrow_mut() = text.clone();
+        self.refresh_text_box_scroll(&edit.path, &edit.host);
         let document = self.document.borrow();
-        let Some(Element::TextEdit(control)) = document.element_at_path(&edit.path) else {
+        let Some(element) = document.element_at_path(&edit.path) else {
             return;
         };
-        let handler = self.region_handler(&control.region_name, WindowAction::TextChanged);
+        let region_name = match element {
+            Element::TextEdit(control) => &control.region_name,
+            Element::TextBox(control) => &control.region_name,
+            _ => return,
+        };
+        let handler = self.region_handler(region_name, WindowAction::TextChanged);
         let control_name = document
             .control_name_at_path(&edit.path)
             .map(str::to_owned)
-            .unwrap_or_else(|| control.region_name.clone());
-        let region = Some(control.region_name.clone());
+            .unwrap_or_else(|| region_name.clone());
+        let region = Some(region_name.clone());
         let element = (edit.path.len() == 1).then_some(edit.path[0] + 1);
         let (x, y) = self.last.get();
         let (ctrl, alt, shift) = modifiers();
@@ -717,15 +890,20 @@ impl ScriptWindow {
             return;
         };
         let document = self.document.borrow();
-        let Some(Element::TextEdit(control)) = document.element_at_path(&edit.path) else {
+        let Some(element) = document.element_at_path(&edit.path) else {
             return;
         };
-        let handler = self.region_handler(&control.region_name, action);
+        let region_name = match element {
+            Element::TextEdit(control) => &control.region_name,
+            Element::TextBox(control) => &control.region_name,
+            _ => return,
+        };
+        let handler = self.region_handler(region_name, action);
         let control_name = document
             .control_name_at_path(&edit.path)
             .map(str::to_owned)
-            .unwrap_or_else(|| control.region_name.clone());
-        let region = Some(control.region_name.clone());
+            .unwrap_or_else(|| region_name.clone());
+        let region = Some(region_name.clone());
         let element = (edit.path.len() == 1).then_some(edit.path[0] + 1);
         let (x, y) = self.last.get();
         let (ctrl, alt, shift) = modifiers();
@@ -772,6 +950,20 @@ impl ScriptWindow {
         );
     }
 
+    /// RichEdit 滚动位置变了：刷新内部滚动条并重画，让滑块跟上。
+    fn text_scrolled(&self, host_hwnd: HWND) {
+        let edits = self.text_edits.borrow();
+        let Some(edit) = edits.iter().find(|edit| edit.host.hwnd() == host_hwnd) else {
+            return;
+        };
+        let path = edit.path.clone();
+        let host = edit.host.clone();
+        drop(edits);
+        if self.refresh_text_box_scroll(&path, &host) {
+            self.repaint();
+        }
+    }
+
     /// 命中下标若是扁平按钮，返回它。
     fn button_index(&self, element: Option<usize>) -> Option<usize> {
         // `element_at` / 事件载荷里的 `element` 是 **1 起** 的；`hits` / `document.elements` 是 0 起。
@@ -790,6 +982,160 @@ impl ScriptWindow {
             Some(Element::ScrollBar(_))
         )
         .then_some(index)
+    }
+
+    fn text_box_index(&self, element: Option<usize>) -> Option<usize> {
+        let index = element?.checked_sub(1)?;
+        matches!(
+            self.document.borrow().elements.get(index),
+            Some(Element::TextBox(_))
+        )
+        .then_some(index)
+    }
+
+    /// 命中 `text_box` 的内部滚动条；返回轴向、滚动状态、轨道矩形和控件内坐标。
+    fn text_box_bar_at(&self, index: usize, x: f32, y: f32) -> Option<TextBarHit> {
+        let document = self.document.borrow();
+        let Some(Element::TextBox(edit)) = document.elements.get(index) else {
+            return None;
+        };
+        let local = (x - edit.x, y - edit.y);
+        for axis in [ScrollAxis::Horizontal, ScrollAxis::Vertical] {
+            let scroll = edit.scroll(axis);
+            if !scroll.visible {
+                continue;
+            }
+            let (bx, by, bw, bh) = edit.bar_rect(axis);
+            if local.0 >= bx && local.0 <= bx + bw && local.1 >= by && local.1 <= by + bh {
+                return Some((axis, scroll, (bx, by, bw, bh), local));
+            }
+        }
+        None
+    }
+
+    fn text_box_scroll_value(
+        &self,
+        index: usize,
+        axis: ScrollAxis,
+        point: (f32, f32),
+        offset: f32,
+    ) -> Option<u64> {
+        let document = self.document.borrow();
+        let Some(Element::TextBox(edit)) = document.elements.get(index) else {
+            return None;
+        };
+        let scroll = edit.scroll(axis);
+        if !scroll.visible || scroll.max <= scroll.min {
+            return None;
+        }
+        let (bx, by, bw, bh) = edit.bar_rect(axis);
+        let (thumb_x, thumb_y, thumb_w, thumb_h) = edit.thumb_rect(axis);
+        let (start, track, thumb) = match axis {
+            ScrollAxis::Horizontal => (bx, bw, thumb_w),
+            ScrollAxis::Vertical => (by, bh, thumb_h),
+        };
+        let position = match axis {
+            ScrollAxis::Horizontal => point.0,
+            ScrollAxis::Vertical => point.1,
+        };
+        let travel = (track - thumb).max(1.0);
+        let ratio = ((position - start - offset) / travel).clamp(0.0, 1.0);
+        let _ = (thumb_x, thumb_y);
+        Some(scroll.min + (ratio as f64 * (scroll.max - scroll.min) as f64).round() as u64)
+    }
+
+    fn set_text_box_scroll(&self, path: &[usize], axis: ScrollAxis, value: u64) {
+        let Some(host) = self
+            .text_edits
+            .borrow()
+            .iter()
+            .find(|edit| edit.path == path)
+            .map(|edit| edit.host.clone())
+        else {
+            return;
+        };
+        let (h, v) = host.scroll_info();
+        let (x, y) = match axis {
+            ScrollAxis::Horizontal => (value as i32, v.pos),
+            ScrollAxis::Vertical => (h.pos, value as i32),
+        };
+        host.set_scroll(x, y);
+        self.refresh_text_box_scroll(path, &host);
+        self.repaint();
+    }
+
+    fn begin_text_box_press(&self, client_x: i32, client_y: i32) -> bool {
+        let (x, y, element, _) = self.hit_at(client_x, client_y);
+        let Some(index) = self.text_box_index(element) else {
+            return false;
+        };
+        let Some((axis, scroll, _, local)) = self.text_box_bar_at(index, x, y) else {
+            return false;
+        };
+        let document = self.document.borrow();
+        let Some(Element::TextBox(edit)) = document.elements.get(index) else {
+            return false;
+        };
+        let (tx, ty, tw, th) = edit.thumb_rect(axis);
+        let in_thumb = local.0 >= tx && local.0 <= tx + tw && local.1 >= ty && local.1 <= ty + th;
+        let path = vec![index];
+        if in_thumb {
+            let offset = match axis {
+                ScrollAxis::Horizontal => local.0 - tx,
+                ScrollAxis::Vertical => local.1 - ty,
+            };
+            *self.text_scroll_drag.borrow_mut() = Some(TextScrollDrag { path, axis, offset });
+            let _ = unsafe { SetCapture(self.hwnd()) };
+        } else {
+            // 点轨道：翻一页。
+            let page = scroll.page.max(1) as i32;
+            let target = match axis {
+                ScrollAxis::Horizontal => {
+                    if local.0 < tx {
+                        scroll.value.saturating_sub(page as u64)
+                    } else {
+                        scroll.value.saturating_add(page as u64).min(scroll.max)
+                    }
+                }
+                ScrollAxis::Vertical => {
+                    if local.1 < ty {
+                        scroll.value.saturating_sub(page as u64)
+                    } else {
+                        scroll.value.saturating_add(page as u64).min(scroll.max)
+                    }
+                }
+            };
+            drop(document);
+            self.set_text_box_scroll(&path, axis, target);
+        }
+        true
+    }
+
+    fn update_text_box_drag(&self, client_x: i32, client_y: i32) -> bool {
+        let (path, axis, offset) = {
+            let drag = self.text_scroll_drag.borrow();
+            let Some(drag) = drag.as_ref() else {
+                return false;
+            };
+            (drag.path.clone(), drag.axis, drag.offset)
+        };
+        let (x, y, _, _) = self.hit_at(client_x, client_y);
+        let Some(index) = path.last().copied() else {
+            return false;
+        };
+        let Some(value) = self.text_box_scroll_value(index, axis, (x, y), offset) else {
+            return false;
+        };
+        self.set_text_box_scroll(&path, axis, value);
+        true
+    }
+
+    fn end_text_box_drag(&self) -> bool {
+        let drag = self.text_scroll_drag.borrow_mut().take();
+        if drag.is_some() {
+            let _ = unsafe { ReleaseCapture() };
+        }
+        drag.is_some()
     }
 
     fn scrollbar(&self, index: usize) -> Option<cloudime_render::ScrollBar> {
@@ -1011,6 +1357,9 @@ impl ScriptWindow {
     /// 滚轮落在滚动条上：按 ±1 步进值；返回是否吃掉了滚轮。
     fn scrollbar_wheel(&self, client_x: i32, client_y: i32, delta: i32) -> bool {
         let (x, y, element, _) = self.hit_at(client_x, client_y);
+        if self.text_box_wheel_at(element, x, y, delta) {
+            return true;
+        }
         let Some(index) = self.scrollbar_index(element) else {
             return false;
         };
@@ -1025,6 +1374,39 @@ impl ScriptWindow {
             current.saturating_add(bar.step).min(bar.max)
         };
         self.animate_scrollbar_value(index, value, x, y);
+        true
+    }
+
+    /// 滚轮落在 `text_box` 上：滚动其内部文本；落在文本区时宿主自己也会处理滚轮。
+    fn text_box_wheel_at(&self, element: Option<usize>, x: f32, y: f32, delta: i32) -> bool {
+        let Some(index) = self.text_box_index(element) else {
+            return false;
+        };
+        let (path, axis, target) = {
+            let document = self.document.borrow();
+            let Some(Element::TextBox(edit)) = document.elements.get(index) else {
+                return false;
+            };
+            if x < edit.x || x > edit.x + edit.width || y < edit.y || y > edit.y + edit.height {
+                return false;
+            }
+            let axis = if edit.v_scroll.visible {
+                ScrollAxis::Vertical
+            } else if edit.h_scroll.visible && !edit.auto_line_wrap {
+                ScrollAxis::Horizontal
+            } else {
+                return false;
+            };
+            let scroll = edit.scroll(axis);
+            let step = (scroll.page.max(16) / 4).max(8);
+            let target = if delta > 0 {
+                scroll.value.saturating_sub(step).max(scroll.min)
+            } else {
+                scroll.value.saturating_add(step).min(scroll.max)
+            };
+            (vec![index], axis, target)
+        };
+        self.set_text_box_scroll(&path, axis, target);
         true
     }
 
@@ -1300,6 +1682,7 @@ impl ScriptWindow {
         self.hits.borrow_mut().clear();
         self.hover.set(None);
         self.scrollbar_drag.set(None);
+        *self.text_scroll_drag.borrow_mut() = None;
         self.scroll_anims.borrow_mut().clear();
         self.stop_scroll_anim_timer();
         self.reset_button_states();
@@ -1849,6 +2232,21 @@ fn points(value: f32, dpi: u32) -> i32 {
 }
 
 /// 渲染器的 `Color` → Win32 `COLORREF`（0x00BBGGRR）。
+fn scroll_state(info: ScrollInfo) -> TextBoxScroll {
+    let min = info.min.max(0) as u64;
+    let max = info.max.max(info.min) as u64;
+    let page = info.page.max(0) as u64;
+    let value = (info.pos.max(info.min) as u64).clamp(min, max);
+    let visible = max.saturating_sub(min) > page;
+    TextBoxScroll {
+        min,
+        max,
+        value,
+        page,
+        visible,
+    }
+}
+
 fn colorref(color: cloudime_render::Color) -> windows::Win32::Foundation::COLORREF {
     windows::Win32::Foundation::COLORREF(
         color.r as u32 | ((color.g as u32) << 8) | ((color.b as u32) << 16),
@@ -1950,6 +2348,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 if window.begin_scrollbar_press(client_x(lparam), client_y(lparam)) {
                     return;
                 }
+                if window.begin_text_box_press(client_x(lparam), client_y(lparam)) {
+                    return;
+                }
                 let (_, _, element, region) = window.hit_at(client_x(lparam), client_y(lparam));
                 let region_name = window.region_name(region);
                 window.focus_text_edit(element, region_name);
@@ -1962,6 +2363,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             track_leave(hwnd);
             with_window(hwnd, |window| {
                 if window.update_scrollbar_drag(client_x(lparam), client_y(lparam)) {
+                    return;
+                }
+                if window.update_text_box_drag(client_x(lparam), client_y(lparam)) {
                     return;
                 }
                 if window.drag.get().is_some() {
@@ -2008,10 +2412,18 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             });
             LRESULT(0)
         }
+        WM_TEXT_SCROLL => {
+            let host = HWND(wparam.0 as *mut _);
+            with_window(hwnd, |window| window.text_scrolled(host));
+            LRESULT(0)
+        }
         // 拖过就不是点击（阈值在 `drag_to` 里判）。
         WM_LBUTTONUP => {
             with_window(hwnd, |window| {
                 if window.end_scrollbar_drag() {
+                    return;
+                }
+                if window.end_text_box_drag() {
                     return;
                 }
                 window.end_button_press(client_x(lparam), client_y(lparam));
@@ -2035,6 +2447,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 window.cancel_button_press();
                 window.drag.set(None);
                 window.scrollbar_drag.set(None);
+                *window.text_scroll_drag.borrow_mut() = None;
             });
             LRESULT(0)
         }
