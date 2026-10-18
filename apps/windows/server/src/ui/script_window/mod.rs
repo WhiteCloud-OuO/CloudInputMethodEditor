@@ -148,6 +148,32 @@ impl ScriptWindows {
                     tracing::warn!(id, control = name, "脚本窗口：set_text 时找不到这块窗口");
                 }
             }
+            WindowRequest::SelectAll { id, name, select } => {
+                if let Some(window) = self.windows.get(&id) {
+                    window.select_all(&name, select);
+                } else {
+                    tracing::warn!(id, control = name, "脚本窗口：select_all 时找不到这块窗口");
+                }
+            }
+            WindowRequest::ReplaceText {
+                id,
+                name,
+                find,
+                text,
+            } => {
+                if let Some(window) = self.windows.get(&id) {
+                    window.replace_text(&name, &find, &text);
+                } else {
+                    tracing::warn!(id, control = name, "脚本窗口：replace 时找不到这块窗口");
+                }
+            }
+            WindowRequest::ClearText { id, name } => {
+                if let Some(window) = self.windows.get(&id) {
+                    window.clear_text(&name);
+                } else {
+                    tracing::warn!(id, control = name, "脚本窗口：clear 时找不到这块窗口");
+                }
+            }
         }
     }
 
@@ -465,6 +491,8 @@ impl ScriptWindow {
                     ),
                 };
             let size = edit.size.unwrap_or(theme_size);
+            let family = edit.font_name.clone().or(family);
+            let text_color = edit.text_color.unwrap_or(text_color);
             let background = edit
                 .fill
                 .filter(|color| color.a == 255)
@@ -482,6 +510,9 @@ impl ScriptWindow {
                 colorref(selection_background),
                 colorref(selection_text),
                 colorref(caret_color),
+                edit.font_flag,
+                edit.read_only,
+                edit.passkey,
                 self.dpi.get(),
             );
             match host {
@@ -557,6 +588,41 @@ impl ScriptWindow {
                 control = name,
                 "text_edit：set_text 找不到控件"
             );
+        }
+    }
+
+    /// 全选 / 取消选择。
+    fn select_all(&self, name: &str, select: bool) {
+        if let Some(host) = self.text_edit_host(name) {
+            host.select_all(select);
+        } else {
+            tracing::warn!(
+                id = self.id,
+                control = name,
+                "text_edit：select_all 找不到控件"
+            );
+        }
+    }
+
+    /// 把文本里的 `find` 全部替换成 `text`。
+    fn replace_text(&self, name: &str, find: &str, text: &str) {
+        if let Some(host) = self.text_edit_host(name) {
+            host.replace_text(find, text);
+        } else {
+            tracing::warn!(
+                id = self.id,
+                control = name,
+                "text_edit：replace 找不到控件"
+            );
+        }
+    }
+
+    /// 清空文本。
+    fn clear_text(&self, name: &str) {
+        if let Some(host) = self.text_edit_host(name) {
+            host.set_text("");
+        } else {
+            tracing::warn!(id = self.id, control = name, "text_edit：clear 找不到控件");
         }
     }
 

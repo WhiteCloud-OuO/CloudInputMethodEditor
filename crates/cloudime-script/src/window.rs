@@ -318,6 +318,24 @@ pub enum Request {
         name: String,
         text: String,
     },
+
+    /// 全选（`true`）或取消选择（`false`）。
+    SelectAll {
+        id: WindowId,
+        name: String,
+        select: bool,
+    },
+
+    /// 把文本里的 `find` 全部替换成 `text`。
+    ReplaceText {
+        id: WindowId,
+        name: String,
+        find: String,
+        text: String,
+    },
+
+    /// 清空文本。
+    ClearText { id: WindowId, name: String },
 }
 
 /// 窗口句柄是「独立窗口」还是「辅助窗口」（同一套方法，落点不同）。
@@ -407,6 +425,64 @@ pub(crate) fn handle(
                 Ok(())
             },
         )?,
+    )?;
+
+    let select_requests = requests.clone();
+    handle.set(
+        "select_all",
+        lua.create_function(
+            move |_, (_this, name, select): (mlua::Table, String, Option<bool>)| {
+                select_requests.borrow_mut().push(Request::SelectAll {
+                    id,
+                    name,
+                    select: select.unwrap_or(true),
+                });
+                Ok(())
+            },
+        )?,
+    )?;
+
+    let replace_requests = requests.clone();
+    let replace_texts = texts.clone();
+    handle.set(
+        "replace",
+        lua.create_function(
+            move |_, (_this, name, find, text): (mlua::Table, String, String, String)| {
+                if find.is_empty() {
+                    return Ok(());
+                }
+                let current = replace_texts
+                    .borrow()
+                    .get(&(id, name.clone()))
+                    .cloned()
+                    .unwrap_or_default();
+                replace_texts
+                    .borrow_mut()
+                    .insert((id, name.clone()), current.replace(&find, &text));
+                replace_requests.borrow_mut().push(Request::ReplaceText {
+                    id,
+                    name,
+                    find,
+                    text,
+                });
+                Ok(())
+            },
+        )?,
+    )?;
+
+    let clear_requests = requests.clone();
+    let clear_texts = texts.clone();
+    handle.set(
+        "clear",
+        lua.create_function(move |_, (_this, name): (mlua::Table, String)| {
+            clear_texts
+                .borrow_mut()
+                .insert((id, name.clone()), String::new());
+            clear_requests
+                .borrow_mut()
+                .push(Request::ClearText { id, name });
+            Ok(())
+        })?,
     )?;
 
     let show_requests = requests.clone();
@@ -1216,27 +1292,60 @@ fn parse_text_edit(table: &mlua::Table) -> mlua::Result<Element> {
             }
         }
     };
+    let border_width = match table.get::<Option<f32>>("edge_width")? {
+        Some(width) => width,
+        None => number(table, "border_width", 1.0)?,
+    }
+    .clamp(0.0, 16.0);
+    let font_size = table
+        .get::<Option<f32>>("font_size")?
+        .or(table.get::<Option<f32>>("size")?)
+        .map(|size| size.clamp(1.0, 256.0));
+    let font_flag = table.get::<Option<u8>>("font_flag")?.unwrap_or(0);
+    if font_flag & !0x0F != 0 {
+        return Err(mlua::Error::RuntimeError(format!(
+            "font_flag 只能是 0–15 的组合（1 加粗 / 2 斜体 / 4 下划线 / 8 删除线），现在是 {font_flag}"
+        )));
+    }
+    let font_name = table
+        .get::<Option<String>>("font_name")?
+        .map(|name| name.trim().to_owned())
+        .filter(|name| !name.is_empty());
     Ok(Element::TextEdit(TextEdit {
         x: number(table, "x", 0.0)?,
         y: number(table, "y", 0.0)?,
         width,
         height,
         radius: number(table, "radius", height * 0.5)?.max(0.0),
-        fill: color(table, "fill", false)?,
-        border: color(table, "color", false)?,
-        border_width: number(table, "border_width", 1.0)?.clamp(0.0, 16.0),
+        fill: color(table, "back_color", false)?.or(color(table, "fill", false)?),
+        border: color(table, "edge_color", false)?.or(color(table, "color", false)?),
+        border_width,
         svg,
         svg_size,
         svg_align,
-        svg_tint: color(table, "svg_color", false)?,
-        selection_background: color(table, "selection_background", false)?,
-        selection_color: color(table, "selection_color", false)?,
-        caret_color: color(table, "caret_color", false)?,
+        svg_tint: color(table, "fill_color", false)?.or(color(table, "svg_color", false)?),
+        selection_background: color(table, "sel_back_color", false)?.or(color(
+            table,
+            "selection_background",
+            false,
+        )?),
+        selection_color: color(table, "sel_text_color", false)?.or(color(
+            table,
+            "selection_color",
+            false,
+        )?),
+        caret_color: color(table, "cursor_color", false)?.or(color(table, "caret_color", false)?),
+        text_color: color(table, "text_color", false)?,
+        read_only: table.get::<Option<bool>>("read_only")?.unwrap_or(false),
+        passkey: table
+            .get::<Option<bool>>("passkey")?
+            .or(table.get::<Option<bool>>("password")?)
+            .unwrap_or(false),
+        font_name,
+        font_flag,
         text: table.get::<Option<String>>("text")?.unwrap_or_default(),
         font: font_slot(table)?,
-        size: table
-            .get::<Option<f32>>("size")?
-            .map(|size| size.clamp(1.0, 256.0)),
+        size: font_size,
         region_name: table.get::<Option<String>>("name")?.unwrap_or_default(),
     }))
 }
@@ -1970,6 +2079,103 @@ mod tests {
             request,
             Request::SetText { name, text, .. } if name == "search" && text == "world"
         )));
+
+        lua.load("win:select_all('search', false)").exec().unwrap();
+        lua.load("win:replace('search', 'world', 'earth')")
+            .exec()
+            .unwrap();
+        assert_eq!(
+            lua.load("return win:get_text('search')")
+                .eval::<Option<String>>()
+                .unwrap()
+                .as_deref(),
+            Some("earth")
+        );
+        lua.load("win:clear('search')").exec().unwrap();
+        assert_eq!(
+            lua.load("return win:get_text('search')")
+                .eval::<Option<String>>()
+                .unwrap()
+                .as_deref(),
+            Some("")
+        );
+        let requests = requests.borrow();
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            Request::SelectAll { name, select: false, .. } if name == "search"
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            Request::ReplaceText { name, find, text, .. }
+                if name == "search" && find == "world" && text == "earth"
+        )));
+        assert!(requests.iter().any(|request| matches!(
+            request,
+            Request::ClearText { name, .. } if name == "search"
+        )));
+    }
+
+    /// 新属性名映射到编辑框字段；`font_flag` 只接受 0–15。
+    #[test]
+    fn text_edit_new_properties_are_parsed() {
+        let lua = mlua::Lua::new();
+        let content = lua
+            .load(
+                r##"
+                return {
+                    width = 120, height = 40,
+                    { type = "text_edit", name = "input", x = 0, y = 0, w = 120, h = 40,
+                      read_only = true, passkey = true,
+                      back_color = "#FF112233", edge_color = "#FF445566", edge_width = 0,
+                      text_color = "#FF778899", cursor_color = "#FFAABBCC",
+                      sel_back_color = "#FFDDEEFF", sel_text_color = "#FF010203",
+                      fill_color = "#FF0A0B0C", font_name = "Consolas",
+                      font_size = 20, font_flag = 3, text = "x" },
+                }
+            "##,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let document = parse_document(
+            &content,
+            (Some(120.0), Some(40.0)),
+            &mut ImageCache::default(),
+        )
+        .expect("读得出来");
+        let Element::TextEdit(edit) = &document.elements[0] else {
+            panic!("不是 text_edit");
+        };
+        assert!(edit.read_only);
+        assert!(edit.passkey);
+        assert_eq!(edit.fill, Some(Color::rgba(0x11, 0x22, 0x33, 0xFF)));
+        assert_eq!(edit.border, Some(Color::rgba(0x44, 0x55, 0x66, 0xFF)));
+        assert_eq!(edit.border_width, 0.0);
+        assert_eq!(edit.text_color, Some(Color::rgba(0x77, 0x88, 0x99, 0xFF)));
+        assert_eq!(edit.caret_color, Some(Color::rgba(0xAA, 0xBB, 0xCC, 0xFF)));
+        assert_eq!(
+            edit.selection_background,
+            Some(Color::rgba(0xDD, 0xEE, 0xFF, 0xFF))
+        );
+        assert_eq!(
+            edit.selection_color,
+            Some(Color::rgba(0x01, 0x02, 0x03, 0xFF))
+        );
+        assert_eq!(edit.svg_tint, Some(Color::rgba(0x0A, 0x0B, 0x0C, 0xFF)));
+        assert_eq!(edit.font_name.as_deref(), Some("Consolas"));
+        assert_eq!(edit.size, Some(20.0));
+        assert_eq!(edit.font_flag, 3);
+
+        let bad = lua
+            .load(
+                r#"return { width = 10, height = 10,
+                    { type = "text_edit", name = "bad", x = 0, y = 0, w = 10, h = 10,
+                      font_flag = 16 } }"#,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        assert!(
+            parse_document(&bad, (Some(10.0), Some(10.0)), &mut ImageCache::default()).is_err()
+        );
     }
 
     /// 扁平按钮的六个事件名。

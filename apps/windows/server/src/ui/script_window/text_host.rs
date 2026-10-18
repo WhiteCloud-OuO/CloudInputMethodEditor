@@ -25,7 +25,7 @@ use windows::Win32::UI::Controls::RichEdit::{
     ITextHost_Impl, ITextServices, PARAFORMAT, SCF_ALL, TXTBACK_TRANSPARENT, TXTBACKSTYLE,
     TXTBIT_RICHTEXT, TXTBIT_SAVESELECTION, TXTBIT_VIEWINSETCHANGE,
 };
-use windows::Win32::UI::Controls::{EM_GETSEL, EM_SETSEL};
+use windows::Win32::UI::Controls::{EM_GETSEL, EM_SETREADONLY, EM_SETSEL};
 
 use windows::Win32::UI::Input::Ime::{HIMC, ImmGetContext, ImmReleaseContext};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
@@ -92,6 +92,8 @@ pub(super) struct TextHostWindow {
     caret_timer: Cell<usize>,
     /// 横向滚动量（像素，内容向左移）：单行文本超过编辑区时跟随光标。
     scroll_x: Cell<i32>,
+    /// 密码输入：只影响显示，真实文本仍交给 API。
+    passkey: bool,
 }
 
 impl TextHostWindow {
@@ -107,6 +109,9 @@ impl TextHostWindow {
         selection_background: COLORREF,
         selection_text: COLORREF,
         caret_color: COLORREF,
+        font_flag: u8,
+        read_only: bool,
+        passkey: bool,
         dpi: u32,
     ) -> Result<Rc<Self>> {
         ensure_class()?;
@@ -127,8 +132,8 @@ impl TextHostWindow {
                 None,
             )
         }?;
-        let font = create_font(family, size, dpi);
-        let ellipsis_font = create_font(Some("Segoe UI"), size, dpi);
+        let font = create_font(family, size, dpi, font_flag);
+        let ellipsis_font = create_font(Some("Segoe UI"), size, dpi, font_flag);
         let brush = unsafe { CreateSolidBrush(background) };
         let highlight = unsafe { CreateSolidBrush(selection_background) };
         let caret_brush = unsafe { CreateSolidBrush(caret_color) };
@@ -137,6 +142,7 @@ impl TextHostWindow {
         let host: ITextHost = TextHost {
             hwnd,
             owner,
+            passkey,
             line_height,
             char_format: char_format(family, size, text_color),
             para_format: PARAFORMAT {
@@ -207,6 +213,7 @@ impl TextHostWindow {
             caret_visible: Cell::new(false),
             caret_timer: Cell::new(0),
             scroll_x: Cell::new(0),
+            passkey,
         });
         HOSTS.with(|map| map.borrow_mut().insert(hwnd.0 as isize, window.clone()));
         unsafe {
@@ -229,6 +236,14 @@ impl TextHostWindow {
                 LPARAM(&mut format as *mut _ as isize),
                 &mut result,
             );
+            if read_only {
+                let _ = window.services.TxSendMessage(
+                    EM_SETREADONLY,
+                    WPARAM(1),
+                    LPARAM(0),
+                    &mut result,
+                );
+            }
         }
         Ok(window)
     }
@@ -396,6 +411,15 @@ impl TextHostWindow {
         String::from_utf16_lossy(&self.text())
     }
 
+    /// 密码框显示文本：每个 UTF-16 单元画一个 `*`，真实 `text()` 不变。
+    fn display_text(&self, text: &[u16]) -> Vec<u16> {
+        if self.passkey {
+            vec![b'*' as u16; text.len()]
+        } else {
+            text.to_vec()
+        }
+    }
+
     /// 脚本 `set_text`：整份替换，光标放到末尾。
     pub(super) fn set_text(&self, text: &str) {
         let mut result = LRESULT(0);
@@ -416,6 +440,38 @@ impl TextHostWindow {
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
         }
+    }
+
+    /// 全选；`false` 时把选区收在末尾（取消选择，光标留在原处附近）。
+    pub(super) fn select_all(&self, select: bool) {
+        let length = self.text().len();
+        let mut result = LRESULT(0);
+        unsafe {
+            if select {
+                let _ = self
+                    .services
+                    .TxSendMessage(EM_SETSEL, WPARAM(0), LPARAM(-1), &mut result);
+            } else {
+                let (_, end) = self.selection(length);
+                let _ = self.services.TxSendMessage(
+                    EM_SETSEL,
+                    WPARAM(end),
+                    LPARAM(end as isize),
+                    &mut result,
+                );
+            }
+        }
+        self.notify_selection();
+        self.caret_visible.set(true);
+    }
+
+    /// 把文本里的 `find` 全部替换成 `text`。
+    pub(super) fn replace_text(&self, find: &str, text: &str) {
+        if find.is_empty() {
+            return;
+        }
+        let current = self.text_string();
+        self.set_text(&current.replace(find, text));
     }
 
     fn text(&self) -> Vec<u16> {
@@ -597,6 +653,7 @@ impl TextHostWindow {
             let old_font = SelectObject(hdc, self.font);
             let _ = SetBkMode(hdc, TRANSPARENT);
             let text = self.text();
+            let text = self.display_text(&text);
             let scroll = self.ensure_visible(hdc, &text, &client);
             let (start, end) = self.selection(text.len());
             if start < end {
@@ -658,6 +715,7 @@ impl Drop for TextHostWindow {
 struct TextHost {
     hwnd: HWND,
     owner: HWND,
+    passkey: bool,
     line_height: i32,
     char_format: CHARFORMATW,
     para_format: PARAFORMAT,
@@ -867,7 +925,7 @@ impl ITextHost_Impl for TextHost_Impl {
     }
 
     fn TxGetPasswordChar(&self) -> Result<i8> {
-        Ok(0)
+        Ok(if self.passkey { 42 } else { 0 })
     }
 
     fn TxGetAcceleratorPos(&self, pcp: *mut i32) -> Result<()> {
@@ -986,23 +1044,28 @@ fn font_line_height(font: HGDIOBJ, size: f32, dpi: u32) -> i32 {
     }
 }
 
-fn create_font(family: Option<&str>, size: f32, dpi: u32) -> HGDIOBJ {
+fn create_font(family: Option<&str>, size: f32, dpi: u32, font_flag: u8) -> HGDIOBJ {
     use windows::Win32::Graphics::Gdi::{
         CLEARTYPE_QUALITY, CLIP_DEFAULT_PRECIS, CreateFontW, DEFAULT_CHARSET, DEFAULT_PITCH,
-        FF_DONTCARE, FW_NORMAL, OUT_DEFAULT_PRECIS,
+        FF_DONTCARE, FW_BOLD, FW_NORMAL, OUT_DEFAULT_PRECIS,
     };
     let height = -((size * dpi as f32 / 72.0).round() as i32).max(1);
     let family = family.map(HSTRING::from).unwrap_or_default();
+    let weight = if font_flag & 1 != 0 {
+        FW_BOLD.0 as i32
+    } else {
+        FW_NORMAL.0 as i32
+    };
     unsafe {
         CreateFontW(
             height,
             0,
             0,
             0,
-            FW_NORMAL.0 as i32,
-            0,
-            0,
-            0,
+            weight,
+            u32::from(font_flag & 2 != 0),
+            u32::from(font_flag & 4 != 0),
+            u32::from(font_flag & 8 != 0),
             DEFAULT_CHARSET,
             OUT_DEFAULT_PRECIS,
             CLIP_DEFAULT_PRECIS,

@@ -273,6 +273,9 @@ local aux = cloudime.window.create_auxiliary{
 | `win:load_layout(path)` | 读 JSON 布局文件并整份替换；控件 / 尺寸 / 区域 / 事件都从文件来，见下 |
 | `win:get_text(name)` | 读某个 `text_edit` 的最近文本；没有 / 还没收到时给 `nil` |
 | `win:set_text(name, text)` | 设置某个 `text_edit` 的文本（按控件名找） |
+| `win:select_all(name[, all])` | 全选；`all = false` 取消选择 |
+| `win:replace(name, find, text)` | 把 `find` 的全部出现替换为 `text` |
+| `win:clear(name)` | 清空编辑框 |
 | `win:show{ x = …, y = … }` | 显示；`x` / `y` 是内容区左上角的**屏幕坐标（点）**，不写 = 上次的位置 / 光标右下 16 点 |
 | `win:hide()` | 收起（不销毁；内容留着，再 `show` 原样回来） |
 | `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
@@ -320,7 +323,7 @@ win:set_content{
 | `static_image` | `x` / `y` / `w` / `h`（可省）+ `image`（`cloudime.image.load` 句柄）或 `path`（PNG / BMP / JPG） |
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（边缘，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1）/ `fill`（可选）/ `children`（相对坐标） |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省 SVG 画板）；`svg` / `svg_path`；`shape` + `radius`；`name`；`normal` / `hovered` / `pressed = { background, svg }`；`events = { 动作名 = "处理器名" }` |
-| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`fill` / `color`（边框）/ `border_width`；`svg` / `svg_path` + `svg_align` + `svg_color`；`selection_background` / `selection_color` / `caret_color`；`text` / `font` / `size` / `name`；`events` |
+| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`read_only` / `passkey`；`back_color` / `edge_color` / `edge_width`；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align`；`font_name` / `font_size` / `font_flag`；`text` / `font` / `name` / `events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
 
 #### JSON 布局文件（前台 UI 文件）
 
@@ -417,6 +420,12 @@ win:set_content{
   `SetText` 请求；宿主 `EN_CHANGE` 通过 `WM_TEXT_CHANGED` 通知脚本窗，脚本窗把当前文本作为
   `text_changed` 事件（`event.control` / `event.text`）送回工人线程，运行时在派发前刷新缓存。
   初始 `text`、`set_text` 和输入都会更新缓存；读不到控件时 `get_text` 给 `nil`。
+  `select_all` / `replace` / `clear` 分别排 `SelectAll` / `ReplaceText` / `ClearText` 请求；
+  `replace` 替换全部出现，缓存同步做同样的字符串替换。
+  属性 `read_only` 走 RichEdit `EM_SETREADONLY`；`passkey` 让宿主显示 `*`（文本 API 仍读写原文）；
+  `back_color` / `edge_color` / `edge_width` 映射到背景填充与边框；`text_color` / `cursor_color` /
+  `sel_back_color` / `sel_text_color` 进宿主；`fill_color` 是 SVG 染色；`font_name` / `font_size` /
+  `font_flag` 控制 GDI 字体（1 加粗 / 2 斜体 / 4 下划线 / 8 删除线）。旧字段名仍兼容。
 - **区域（region）**：内容里可以声明 `regions = { … }` —— 区域是**鼠标点击 / 拖拽的命中范围**
   （元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true` = 按住它拖会移动整块窗口，
   `false` = 不拖窗口（点击照常）。后写的区域盖住先写的；事件里的 `event.region` 就是命中的区域名

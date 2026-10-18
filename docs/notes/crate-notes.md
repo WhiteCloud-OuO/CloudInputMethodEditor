@@ -1071,9 +1071,16 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   前补上 `scroll_x`，所以点击位置和显示一致。
   文本缓存 `TextCache` 存在运行时：`set_content` / `load_layout` 的初始 `text`、`set_text` 和
   `EN_CHANGE` 都会更新。`win:get_text(name)` 直接读缓存；`win:set_text(name, text)` 排 `SetText` 请求。
-  宿主 `TxNotify(EN_CHANGE)` `PostMessage` 自定义 `WM_TEXT_CHANGED` 给脚本窗，脚本窗读宿主文本后派
+  宿主 `TxNotify(EN_CHANGE)` / 输入消息 `PostMessage` 自定义 `WM_TEXT_CHANGED` 给脚本窗，脚本窗读宿主文本后派
   `text_changed` 事件（`event.control` / `event.text`），运行时在派发前刷新缓存，所以事件里再
-  `get_text` 能读到新值。辅助窗口的 `text_edit` 仍不建宿主（辅助窗口没有这套编辑宿主）。
+  `get_text` 能读到新值；同一文本的重复通知用 `last_text` 去重。
+  `select_all` / `replace` / `clear` 分别排 `SelectAll` / `ReplaceText` / `ClearText` 请求；
+  `replace` 替换全部出现，缓存同步替换。属性：`read_only` → `EM_SETREADONLY`，`passkey` → 宿主显示
+  `*` 并实现 `TxGetPasswordChar`，`back_color` / `edge_color` / `edge_width` → 背景 / 边框，
+  `text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` → 宿主颜色，`fill_color` → SVG 染色，
+  `font_name` / `font_size` / `font_flag` → `CreateFontW`（1 加粗 / 2 斜体 / 4 下划线 / 8 删除线）；
+  旧的 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` /
+  `svg_color` / `size` 仍兼容。辅助窗口的 `text_edit` 仍不建宿主（辅助窗口没有这套编辑宿主）。
 - **TSF 桥**（`script_window/text_store.rs` / `tsf.rs`，2026-10-18）：windowless RichEdit 自己只提供
   IMM32 的 `ITextHost::TxImmGetContext`，不直接参与 TSF；要让 CloudIME 的中文输入作用到它，必须补
   客户端文本存储。`text_store.rs` 实现 `ITextStoreACP`，把 `GetText` / `SetText` / 选区 / 插入 /
