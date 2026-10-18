@@ -21,9 +21,9 @@ use windows::Win32::Graphics::Gdi::{
 use windows::Win32::System::Com::DVASPECT_CONTENT;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
 use windows::Win32::UI::Controls::RichEdit::{
-    CFM_CHARSET, CFM_COLOR, CFM_FACE, CFM_SIZE, CHARFORMATW, ITextHost, ITextHost_Impl,
-    ITextServices, PARAFORMAT, TXTBACK_TRANSPARENT, TXTBACKSTYLE, TXTBIT_RICHTEXT,
-    TXTBIT_SAVESELECTION, TXTBIT_VIEWINSETCHANGE,
+    CFM_CHARSET, CFM_COLOR, CFM_FACE, CFM_SIZE, CHARFORMATW, EM_SETCHARFORMAT, ITextHost,
+    ITextHost_Impl, ITextServices, PARAFORMAT, SCF_ALL, TXTBACK_TRANSPARENT, TXTBACKSTYLE,
+    TXTBIT_RICHTEXT, TXTBIT_SAVESELECTION, TXTBIT_VIEWINSETCHANGE,
 };
 use windows::Win32::UI::Input::Ime::{HIMC, ImmGetContext, ImmReleaseContext};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
@@ -69,6 +69,7 @@ pub(super) struct TextHostWindow {
     /// 是否已 `OnTxInPlaceActivate` / `OnTxUIActivate`。
     active: Cell<bool>,
     in_place: Cell<bool>,
+    line_height: i32,
     services: ITextServices,
     /// 引擎的宿主接口；必须比 `services` 活得久。
     #[allow(dead_code)]
@@ -169,6 +170,7 @@ impl TextHostWindow {
             eaten: Cell::new(false),
             active: Cell::new(false),
             in_place: Cell::new(false),
+            line_height,
             services,
             host,
             font,
@@ -188,11 +190,23 @@ impl TextHostWindow {
                 Some(WPARAM(font.0 as usize)),
                 Some(LPARAM(1)),
             );
+            let mut format = char_format(family, size, text_color);
+            let mut result = LRESULT(0);
+            let _ = window.services.TxSendMessage(
+                EM_SETCHARFORMAT,
+                WPARAM(SCF_ALL as usize),
+                LPARAM(&mut format as *mut _ as isize),
+                &mut result,
+            );
         }
         Ok(window)
     }
 
     pub(super) fn set_bounds(&self, x: i32, y: i32, width: i32, height: i32) {
+        // RichEdit 单行文本默认贴顶；宿主窗本身只留一行高并垂直居中，避免依赖
+        // `TxGetViewInset` 在不同 RichEdit 版本里的差异。
+        let host_height = (self.line_height + 4).min(height.max(1)).max(1);
+        let y = y + (height.max(1) - host_height) / 2;
         unsafe {
             let _ = SetWindowPos(
                 self.hwnd,
@@ -200,7 +214,7 @@ impl TextHostWindow {
                 x,
                 y,
                 width.max(1),
-                height.max(1),
+                host_height,
                 SWP_NOACTIVATE,
             );
         }
