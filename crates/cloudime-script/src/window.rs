@@ -44,6 +44,9 @@ const MAX_REGION_PARTS: usize = 32;
 /// 一个标签最多几段不同颜色。
 const MAX_LABEL_RUNS: usize = 64;
 
+/// 一个区域 / 动态控件最多声明几个事件处理器。
+const MAX_EVENT_HANDLERS: usize = 32;
+
 /// 面板最多套几层（防止脚本写出无限嵌套）。
 const MAX_PANEL_DEPTH: usize = 8;
 
@@ -377,6 +380,28 @@ pub(crate) fn handle(
         )?,
     )?;
 
+    let layout_requests = requests.clone();
+    let layout_images = images.clone();
+    let layout_regions = regions.clone();
+    handle.set(
+        "load_layout",
+        lua.create_function(move |lua, (this, path): (mlua::Table, String)| {
+            let document = load_layout_document(
+                lua,
+                Path::new(&path),
+                fallback_size(&this),
+                &mut layout_images.borrow_mut(),
+            )?;
+            this.set("width", document.width)?;
+            this.set("height", document.height)?;
+            *layout_regions.borrow_mut() = document.regions.clone();
+            layout_requests
+                .borrow_mut()
+                .push(Request::SetContent(id, document));
+            Ok(())
+        })?,
+    )?;
+
     let hide_requests = requests.clone();
     handle.set(
         "hide",
@@ -575,6 +600,18 @@ fn fallback_size(handle: &mlua::Table) -> (Option<f32>, Option<f32>) {
     )
 }
 
+/// 读一份 JSON 布局并解析成 [`Document`]；错误里带上文件路径。
+pub(crate) fn load_layout_document(
+    lua: &mlua::Lua,
+    path: &Path,
+    fallback: (Option<f32>, Option<f32>),
+    images: &mut ImageCache,
+) -> mlua::Result<Document> {
+    let content = crate::layout_file::read(lua, path)?;
+    parse_document(&content, fallback, images)
+        .map_err(|error| mlua::Error::RuntimeError(format!("布局文件 {}：{error}", path.display())))
+}
+
 /// 内容表 → [`Document`]：`width` / `height` 可省（用句柄里那份），元素是 1 起的数组。
 fn parse_document(
     content: &mlua::Table,
@@ -609,6 +646,15 @@ fn parse_document(
             )));
         }
         let mut element = parse_element(&table, images, 0)?;
+        let handlers = parse_handlers(&table)?;
+        if !handlers.is_empty()
+            && !matches!(&element, Element::FlatSvgButton(_) | Element::TextEdit(_))
+        {
+            return Err(mlua::Error::RuntimeError(
+                "events 只能写在 flat_svg_button / text_edit 这类动态控件上；普通元素请用 regions"
+                    .to_owned(),
+            ));
+        }
         if let Element::FlatSvgButton(button) = &mut element {
             if button.region_name.trim().is_empty() {
                 button.region_name = format!("flat_svg_button_{}", elements.len() + 1);
@@ -623,11 +669,13 @@ fn parse_document(
                     button.region_name
                 )));
             }
-            button_regions.push(Region::new(
+            let mut region = Region::new(
                 button.region_name.clone(),
                 button.hit_shape((0.0, 0.0)),
                 false,
-            ));
+            );
+            region.handlers = handlers.clone();
+            button_regions.push(region);
         }
         if let Element::TextEdit(edit) = &mut element {
             if edit.region_name.trim().is_empty() {
@@ -643,11 +691,10 @@ fn parse_document(
                     edit.region_name
                 )));
             }
-            button_regions.push(Region::new(
-                edit.region_name.clone(),
-                edit.hit_shape((0.0, 0.0)),
-                false,
-            ));
+            let mut region =
+                Region::new(edit.region_name.clone(), edit.hit_shape((0.0, 0.0)), false);
+            region.handlers = handlers;
+            button_regions.push(region);
         }
         elements.push(element);
     }
@@ -694,6 +741,7 @@ fn parse_regions(content: &mlua::Table) -> mlua::Result<Vec<Region>> {
             shape,
             entry.get::<Option<bool>>("drag")?.unwrap_or(true),
         );
+        region.handlers = parse_handlers(&entry)?;
         for shape in parse_region_shapes(&entry, "combine")? {
             region.combine(shape);
         }
@@ -703,6 +751,43 @@ fn parse_regions(content: &mlua::Table) -> mlua::Result<Vec<Region>> {
         regions.push(region);
     }
     Ok(regions)
+}
+
+/// 事件表：`events = { mouse_clicked = "close", … }`；动作名必须是窗口事件认识的。
+fn parse_handlers(table: &mlua::Table) -> mlua::Result<Vec<(String, String)>> {
+    let Some(events) = table.get::<Option<mlua::Table>>("events")? else {
+        return Ok(Vec::new());
+    };
+    let mut handlers = Vec::new();
+    for entry in events.pairs::<String, String>() {
+        let (action, handler) = entry?;
+        let action = action.trim();
+        let handler = handler.trim();
+        if WindowAction::from_name(action).is_none() {
+            return Err(mlua::Error::RuntimeError(format!(
+                "events 的事件名不认识：{action}（可用：click / right_click / hover / leave / wheel / \
+                 focus / blur / mouse_enter / mouse_leave / mouse_pressed / mouse_released / \
+                 mouse_clicked / mouse_double_clicked）"
+            )));
+        }
+        if handler.is_empty() {
+            return Err(mlua::Error::RuntimeError(format!(
+                "events 的 {action} 处理器名不能为空"
+            )));
+        }
+        if handlers.iter().any(|(name, _)| name == action) {
+            return Err(mlua::Error::RuntimeError(format!(
+                "events 的事件名重复：{action}"
+            )));
+        }
+        if handlers.len() >= MAX_EVENT_HANDLERS {
+            return Err(mlua::Error::RuntimeError(format!(
+                "一个控件最多声明 {MAX_EVENT_HANDLERS} 个事件处理器"
+            )));
+        }
+        handlers.push((action.to_owned(), handler.to_owned()));
+    }
+    Ok(handlers)
 }
 
 /// 一个形状表 → [`HitShape`]（区域 / 合并 / 剪除共用）。
@@ -1547,6 +1632,27 @@ impl WindowAction {
             Self::MouseDoubleClicked => "mouse_double_clicked",
         }
     }
+
+    /// 事件名 → 动作；布局文件 / 区域的事件表用它校验。
+    pub fn from_name(name: &str) -> Option<Self> {
+        Some(match name {
+            "click" => Self::Click,
+            "right_click" => Self::RightClick,
+            "hover" => Self::Hover,
+            "leave" => Self::Leave,
+            "wheel" => Self::Wheel,
+            "focus" => Self::Focus,
+            "blur" => Self::Blur,
+            "mouse_enter" => Self::MouseEnter,
+            "mouse_leave" => Self::MouseLeave,
+            "mouse_pressed" => Self::MousePressed,
+            "mouse_released" => Self::MouseReleased,
+            "mouse_clicked" => Self::MouseClicked,
+            "mouse_double_clicked" => Self::MouseDoubleClicked,
+            "double_click" => Self::MouseDoubleClicked,
+            _ => return None,
+        })
+    }
 }
 
 /// 一次窗口鼠标 / 键盘事件：UI 线程 → 工人线程（经 `Work` 通道）。
@@ -1573,6 +1679,9 @@ pub struct ScriptWindowEvent {
     /// 命中的**区域**名（内容里 `regions` 那个 `name`）；没命中 / 没声明区域时是 `None`。
     pub region: Option<String>,
 
+    /// 区域 / 布局为这个事件声明的处理器名（`events` 表）；没声明是 `None`。
+    pub handler: Option<String>,
+
     /// 滚轮量（只有 `Wheel` 有）。
     pub delta: Option<i32>,
 
@@ -1582,7 +1691,7 @@ pub struct ScriptWindowEvent {
     pub shift: bool,
 }
 
-/// 事件的载荷：`{ window = 名字, id = 编号, action = …, x, y, element, region, delta }`。
+/// 事件的载荷：`{ window = 名字, id = 编号, action = …, x, y, element, region, handler, delta }`。
 pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result<mlua::Table> {
     let payload = lua.create_table()?;
     payload.set("window", event.name.clone())?;
@@ -1592,6 +1701,7 @@ pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result
     payload.set("y", event.y)?;
     payload.set("element", event.element)?;
     payload.set("region", event.region.clone())?;
+    payload.set("handler", event.handler.clone())?;
     payload.set("delta", event.delta)?;
     payload.set("ctrl", event.ctrl)?;
     payload.set("alt", event.alt)?;
@@ -1639,7 +1749,61 @@ mod tests {
             (WindowAction::MouseDoubleClicked, "mouse_double_clicked"),
         ] {
             assert_eq!(action.as_str(), name);
+            assert_eq!(WindowAction::from_name(name), Some(action));
         }
+    }
+
+    /// 动态控件的 `events` 会挂到自动区域上，事件载荷里据此给 `handler`。
+    #[test]
+    fn dynamic_control_events_land_on_the_auto_region() {
+        let lua = mlua::Lua::new();
+        let content = lua
+            .load(
+                r##"
+                return {
+                    width = 120, height = 48,
+                    { type = "flat_svg_button", name = "close", x = 96, y = 8, w = 16, h = 16,
+                      svg = [[<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 16 16">
+                                <rect width="16" height="16"/></svg>]],
+                      events = { mouse_clicked = "close_window", mouse_enter = "close_hover" } },
+                }
+            "##,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let document = parse_document(
+            &content,
+            (Some(120.0), Some(48.0)),
+            &mut ImageCache::default(),
+        )
+        .expect("读得出来");
+        assert_eq!(document.regions.len(), 1);
+        assert_eq!(document.regions[0].name, "close");
+        assert_eq!(
+            document.regions[0].handler("mouse_clicked"),
+            Some("close_window")
+        );
+        assert_eq!(
+            document.regions[0].handler("mouse_enter"),
+            Some("close_hover")
+        );
+        assert_eq!(document.regions[0].handler("mouse_leave"), None);
+
+        let bad = lua
+            .load(
+                r#"
+                return {
+                    width = 20, height = 20,
+                    { type = "text_edit", name = "q", x = 0, y = 0, w = 20, h = 20,
+                      events = { no_such_event = "x" } },
+                }
+            "#,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        assert!(
+            parse_document(&bad, (Some(20.0), Some(20.0)), &mut ImageCache::default()).is_err()
+        );
     }
 
     /// 图像缓存：同一份文件不重复解码（拿到同一个 `Arc`）；文件改过就重读。
@@ -1675,6 +1839,7 @@ mod tests {
             y: 8.0,
             element: Some(2),
             region: Some("plus".to_owned()),
+            handler: Some("plus_clicked".to_owned()),
             delta: Some(120),
             ctrl: true,
             alt: false,
@@ -1687,6 +1852,7 @@ mod tests {
         assert!(payload.get::<bool>("shift").unwrap());
         assert_eq!(payload.get::<String>("window").unwrap(), "面板");
         assert_eq!(payload.get::<String>("region").unwrap(), "plus");
+        assert_eq!(payload.get::<String>("handler").unwrap(), "plus_clicked");
         assert_eq!(payload.get::<u32>("id").unwrap(), 3);
         assert_eq!(payload.get::<i32>("delta").unwrap(), 120);
         assert_eq!(payload.get::<usize>("element").unwrap(), 2);

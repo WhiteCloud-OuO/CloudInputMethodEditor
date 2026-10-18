@@ -1524,11 +1524,31 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     window_table.set(
         "create",
         lua.create_function(move |lua, options: mlua::Table| {
-            let spec = window::parse_window(&options)?;
+            let mut spec = window::parse_window(&options)?;
+            let layout = options
+                .get::<Option<String>>("layout")?
+                .filter(|path| !path.trim().is_empty());
+            let mut document = None;
+            if let Some(path) = layout {
+                let parsed = window::load_layout_document(
+                    lua,
+                    Path::new(&path),
+                    (Some(spec.width), Some(spec.height)),
+                    &mut create_images.borrow_mut(),
+                )?;
+                spec.width = parsed.width;
+                spec.height = parsed.height;
+                document = Some(parsed);
+            }
             let id = next_window_id(&create_seq);
             create_requests
                 .borrow_mut()
                 .push(window::Request::Create(id, spec.clone()));
+            if let Some(document) = document {
+                create_requests
+                    .borrow_mut()
+                    .push(window::Request::SetContent(id, document));
+            }
             window::handle(
                 lua,
                 window::Kind::Independent,
@@ -1547,10 +1567,30 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
         "create_auxiliary",
         lua.create_function(move |lua, options: mlua::Table| {
             let id = next_window_id(&auxiliary_seq);
-            let spec = window::parse_auxiliary(&options, id)?;
+            let mut spec = window::parse_auxiliary(&options, id)?;
+            let layout = options
+                .get::<Option<String>>("layout")?
+                .filter(|path| !path.trim().is_empty());
+            let mut document = None;
+            if let Some(path) = layout {
+                let parsed = window::load_layout_document(
+                    lua,
+                    Path::new(&path),
+                    (spec.width, spec.height),
+                    &mut auxiliary_images.borrow_mut(),
+                )?;
+                spec.width = Some(parsed.width);
+                spec.height = Some(parsed.height);
+                document = Some(parsed);
+            }
             auxiliary_requests
                 .borrow_mut()
                 .push(window::Request::CreateAuxiliary(id, spec.clone()));
+            if let Some(document) = document {
+                auxiliary_requests
+                    .borrow_mut()
+                    .push(window::Request::SetContent(id, document));
+            }
             window::handle(
                 lua,
                 window::Kind::Auxiliary,
@@ -3795,6 +3835,115 @@ mod tests {
         assert!(matches!(&requests[6], window::Request::Focus(2, true)));
         assert!(matches!(&requests[7], window::Request::Hide(1)));
         assert!(matches!(&requests[8], window::Request::Close(1)));
+    }
+
+    /// `win:load_layout(path)`：运行中换布局，句柄尺寸跟着文件更新。
+    #[test]
+    fn load_layout_replaces_the_window_content() {
+        let dir = script_dir("window-load-layout");
+        let layout = dir.join("ui.json");
+        std::fs::write(
+            &layout,
+            r##"{
+                "width": 180,
+                "height": 70,
+                "controls": [
+                    { "type": "rect", "x": 0, "y": 0, "w": 180, "h": 70,
+                      "color": "#FF000000" }
+                ]
+            }"##,
+        )
+        .unwrap();
+        let path = layout.to_string_lossy();
+        write_script(
+            &dir,
+            "load.lua",
+            &format!(
+                "local win = cloudime.window.create{{ name = \"布局\", width = 100, height = 50 }}\n\
+                 win:load_layout([[{path}]])\n\
+                 after_width = win.width\n\
+                 after_height = win.height\n"
+            ),
+        );
+        let runtime = Runtime::load(&dir, &[]);
+        let requests = runtime.take_window_requests();
+        assert_eq!(requests.len(), 2, "建 / 换内容");
+        match &requests[0] {
+            window::Request::Create(id, spec) => {
+                assert_eq!(*id, 1);
+                assert_eq!((spec.width, spec.height), (100.0, 50.0));
+            }
+            other => panic!("第一条该是建独立窗口：{other:?}"),
+        }
+        match &requests[1] {
+            window::Request::SetContent(id, document) => {
+                assert_eq!(*id, 1);
+                assert_eq!((document.width, document.height), (180.0, 70.0));
+                assert_eq!(document.elements.len(), 1);
+            }
+            other => panic!("第二条该是换内容：{other:?}"),
+        }
+        let globals = runtime.lua().globals();
+        assert_eq!(globals.get::<f32>("after_width").unwrap(), 180.0);
+        assert_eq!(globals.get::<f32>("after_height").unwrap(), 70.0);
+    }
+
+    /// `create{ layout = path }`：JSON 布局直接成为初始内容，尺寸取布局文件。
+    #[test]
+    fn a_window_can_be_created_from_a_json_layout() {
+        let dir = script_dir("window-layout");
+        let layout = dir.join("ui.json");
+        std::fs::write(
+            &layout,
+            r##"{
+                "width": 260,
+                "height": 90,
+                "controls": [
+                    { "type": "rect", "x": 0, "y": 0, "w": 260, "h": 90,
+                      "radius": 8, "color": "#FFFFFFFF" },
+                    { "type": "flat_svg_button", "name": "close", "x": 232, "y": 8,
+                      "w": 20, "h": 20,
+                      "svg": "<svg xmlns=\"http://www.w3.org/2000/svg\" viewBox=\"0 0 20 20\"><rect width=\"20\" height=\"20\"/></svg>",
+                      "events": { "mouse_clicked": "close_window" } }
+                ]
+            }"##,
+        )
+        .unwrap();
+        let path = layout.to_string_lossy();
+        write_script(
+            &dir,
+            "layout.lua",
+            &format!(
+                "local win = cloudime.window.create{{ name = \"布局\", layout = [[{path}]] }}\n\
+                 win:show{{ x = 1, y = 2 }}\n"
+            ),
+        );
+        let runtime = Runtime::load(&dir, &[]);
+        let requests = runtime.take_window_requests();
+        assert_eq!(requests.len(), 3, "建 / 内容 / 显示");
+        match &requests[0] {
+            window::Request::Create(id, spec) => {
+                assert_eq!(*id, 1);
+                assert_eq!((spec.width, spec.height), (260.0, 90.0));
+            }
+            other => panic!("第一条该是建独立窗口：{other:?}"),
+        }
+        match &requests[1] {
+            window::Request::SetContent(id, document) => {
+                assert_eq!(*id, 1);
+                assert_eq!(document.elements.len(), 2);
+                assert_eq!(document.regions.len(), 1);
+                assert_eq!(
+                    document.regions[0].handler("mouse_clicked"),
+                    Some("close_window")
+                );
+            }
+            other => panic!("第二条该是换内容：{other:?}"),
+        }
+        assert!(matches!(
+            &requests[2],
+            window::Request::Show(1, Some((1.0, 2.0)))
+        ));
     }
 
     /// 内容写错（缺颜色 / 元素类型不认识）当场报错：这个脚本判无效，别的照常。

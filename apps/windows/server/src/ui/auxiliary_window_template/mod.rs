@@ -107,6 +107,19 @@ pub(super) enum PanelAction {
     Wheel,
 }
 
+impl PanelAction {
+    /// 与脚本窗口事件同名，布局的 `events` 表用它查处理器。
+    fn as_str(self) -> &'static str {
+        match self {
+            Self::Click => "click",
+            Self::RightClick => "right_click",
+            Self::Hover => "hover",
+            Self::Leave => "leave",
+            Self::Wheel => "wheel",
+        }
+    }
+}
+
 /// 一次面板鼠标事件：坐标是**内容区点**；`element` 是命中的元素（1 起，`None` = 没命中），
 /// `region` 是命中的区域名（`Document.regions` 里的 `name`）。
 #[derive(Debug, Clone)]
@@ -116,6 +129,7 @@ pub(super) struct PanelEvent {
     pub y: f32,
     pub element: Option<usize>,
     pub region: Option<String>,
+    pub handler: Option<String>,
     pub delta: Option<i32>,
 }
 
@@ -323,12 +337,16 @@ impl AuxiliaryWindowTemplate {
     /// 把一次鼠标动作交给出口（没装出口就什么也不做）。
     fn emit(&self, action: PanelAction, client_x: i32, client_y: i32, delta: Option<i32>) {
         let (x, y, element, region) = self.hit_at(client_x, client_y);
-        let region = region.and_then(|index| {
-            self.regions
-                .borrow()
-                .get(index)
-                .map(|region| region.name.clone())
-        });
+        let (region, handler) = region
+            .and_then(|index| {
+                let regions = self.regions.borrow();
+                let region = regions.get(index)?;
+                Some((
+                    Some(region.name.clone()),
+                    region.handler(action.as_str()).map(str::to_owned),
+                ))
+            })
+            .unwrap_or((None, None));
         if let Some(events) = self.events.borrow().as_ref() {
             events(PanelEvent {
                 action,
@@ -336,6 +354,7 @@ impl AuxiliaryWindowTemplate {
                 y,
                 element,
                 region,
+                handler,
                 delta,
             });
         }

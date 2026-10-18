@@ -11,6 +11,7 @@
 
 mod http;
 mod install;
+mod layout_file;
 mod runtime;
 mod window;
 

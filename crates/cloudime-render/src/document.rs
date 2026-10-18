@@ -64,6 +64,9 @@ pub struct Region {
     /// **剪除**掉的形状（差集）：任一命中就不命中（优先于原始形状与 `combined`）。
     pub pruned: Vec<HitShape>,
 
+    /// 事件响应表：事件名（`mouse_clicked` 等）→ 处理器名；窗口事件里带 `handler`。
+    pub handlers: Vec<(String, String)>,
+
     /// 拖这块区域时移动整块窗口；`false` = 按住它不拖窗口（留给以后元素自己处理，比如滑块）。
     pub draggable: bool,
 }
@@ -76,8 +79,31 @@ impl Region {
             shape,
             combined: Vec::new(),
             pruned: Vec::new(),
+            handlers: Vec::new(),
             draggable,
         }
+    }
+
+    /// 这个区域对某个事件声明的处理器名。扁平按钮的 `mouse_clicked` 也接受 `click` 别名，
+    /// 双击接受 `double_click`；真正派发的动作名仍是 `mouse_clicked` / `mouse_double_clicked`。
+    pub fn handler(&self, action: &str) -> Option<&str> {
+        if let Some(handler) = self
+            .handlers
+            .iter()
+            .find(|(name, _)| name == action)
+            .map(|(_, handler)| handler.as_str())
+        {
+            return Some(handler);
+        }
+        let alias = match action {
+            "mouse_clicked" => "click",
+            "mouse_double_clicked" => "double_click",
+            _ => return None,
+        };
+        self.handlers
+            .iter()
+            .find(|(name, _)| name == alias)
+            .map(|(_, handler)| handler.as_str())
     }
 
     /// 点是不是落在这个区域里：先看剪除（剪掉的优先），再看原始形状与合并进来的。

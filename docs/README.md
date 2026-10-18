@@ -18,6 +18,7 @@ README.md 只介绍项目，所有技术内容放在这里，分四类：前三�
 | [design/rendering.md](design/rendering.md) | UI 与自绘渲染器（2026-09-13）：显示面与控件面的区分、Flutter / Avalonia / WebView 的调研结论、主题的两条路、tiny-skia + cosmic-text 的 spike 结果与 Windows 接入 |
 | [design/theme.md](design/theme.md) | 主题（2026-10-09）：三个窗口的 21 个颜色收进一份 JSON，两个目录的优先级、从改色到热加载这条链、设置页「主题」页，以及还没做的（字体 / 布局 / 注解色） |
 | [design/script.md](design/script.md) | 用户脚本（2026-10-07）：脚本清单（manifest）与硬规则、没脚本就走老路、有脚本在固定四处跑、调用链路（一次按键走一遍）、能给脚本看到什么 / 改什么，以及出错、稳定性闸门与风险怎么兜 |
+| [design/ui-layout.md](design/ui-layout.md) | 前台 UI 布局文件（2026-10-18）：JSON 控件格式、与 `set_content` 元素表的字段对应、动态控件 / 区域的 `events` 响应、`create{ layout = … }` 与 `load_layout` 接口 |
 | [design/online-translate.md](design/online-translate.md) | 在线翻译（2026-10-07）：输入法里**没有**这个功能 —— 它只给 `http_get` / `http_post` 与候选窗底部那一行（`online` 动作），翻什么、按哪个键、怎么签名全由脚本自己实现；随包一份小牛翻译的完整示例 |
 | [design/input-schemes.md](design/input-schemes.md) | 输入方案（2026-10-10）：三种方案单选、**永不混输**；双键拼音的方案文件格式（INI/TOML 双格式与「同名认 toml」、目录与 `use_input_scheme.cfg`、Info / Auxiliary / Shengmu / Exchange / Remapping 五节、零声母写死在 `[Shengmu]` 里、按键变换流水线、校验与报错）与内置样例（首道 / 小鹤 / 自然码） |
 | [design/windows.md](design/windows.md) | Server 侧自绘窗口的模型（2026-10-14）：两类窗口（独立窗口 / 辅助窗口）、所有者唯一且不转移、桥接（bridging）、焦点（focus，2026-10-17：一组里任何时刻恰好一个 / 默认不具备焦点 / 允许获取焦点 / 指定资产获取焦点 / 同一所有者的两件资产经桥接转移 / 聚焦与失焦 / 归还给所有者 / 克隆窃取来的不抢焦点）、画法：渲染（rendering）与取舍、资产克隆与资产窃取（暂不用，先定规则）、两个模板与实现落点 |

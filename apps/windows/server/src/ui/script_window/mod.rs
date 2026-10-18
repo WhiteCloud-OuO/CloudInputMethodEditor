@@ -843,14 +843,33 @@ impl ScriptWindow {
         (x, y, element, region)
     }
 
-    /// 区域下标 → 区域名（事件里给人看的那个）。
-    fn region_name(&self, index: Option<usize>) -> Option<String> {
-        index.and_then(|index| {
-            self.regions
-                .borrow()
-                .get(index)
-                .map(|region| region.name.clone())
-        })
+    /// 命中的区域名 + 这个事件声明的处理器名。
+    fn region_details(
+        &self,
+        index: Option<usize>,
+        action: WindowAction,
+    ) -> (Option<String>, Option<String>) {
+        let Some(index) = index else {
+            return (None, None);
+        };
+        let regions = self.regions.borrow();
+        let Some(region) = regions.get(index) else {
+            return (None, None);
+        };
+        (
+            Some(region.name.clone()),
+            region.handler(action.as_str()).map(str::to_owned),
+        )
+    }
+
+    /// 按区域名找处理器名（扁平按钮事件不经过当前命中区域，单独查一次）。
+    fn region_handler(&self, name: &str, action: WindowAction) -> Option<String> {
+        self.regions
+            .borrow()
+            .iter()
+            .find(|region| region.name == name)
+            .and_then(|region| region.handler(action.as_str()))
+            .map(str::to_owned)
     }
 
     fn emit(&self, action: WindowAction, client_x: i32, client_y: i32) {
@@ -865,7 +884,7 @@ impl ScriptWindow {
         delta: Option<i32>,
     ) {
         let (x, y, element, region) = self.hit_at(client_x, client_y);
-        let region = self.region_name(region);
+        let (region, handler) = self.region_details(region, action);
         let (ctrl, alt, shift) = modifiers();
         (self.events)(ScriptWindowEvent {
             window: self.id,
@@ -875,6 +894,7 @@ impl ScriptWindow {
             y,
             element,
             region,
+            handler,
             delta,
             ctrl,
             alt,
@@ -915,6 +935,7 @@ impl ScriptWindow {
         let Some(region) = self.button_region(index) else {
             return;
         };
+        let handler = self.region_handler(&region, action);
         let (x, y, _, _) = self.hit_at(client_x, client_y);
         let (ctrl, alt, shift) = modifiers();
         (self.events)(ScriptWindowEvent {
@@ -925,6 +946,7 @@ impl ScriptWindow {
             y,
             element: Some(index + 1),
             region: Some(region),
+            handler,
             delta: None,
             ctrl,
             alt,
@@ -1135,6 +1157,7 @@ impl ScriptAuxiliary {
                 y: panel.y,
                 element: panel.element,
                 region: panel.region.clone(),
+                handler: panel.handler.clone(),
                 delta: panel.delta,
                 ctrl: false,
                 alt: false,

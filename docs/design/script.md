@@ -270,6 +270,7 @@ local aux = cloudime.window.create_auxiliary{
 | 方法 | 意思 |
 |---|---|
 | `win:set_content{…}` | 换一整份内容（整份替换；见下），尺寸可以跟着变 |
+| `win:load_layout(path)` | 读 JSON 布局文件并整份替换；控件 / 尺寸 / 区域 / 事件都从文件来，见下 |
 | `win:show{ x = …, y = … }` | 显示；`x` / `y` 是内容区左上角的**屏幕坐标（点）**，不写 = 上次的位置 / 光标右下 16 点 |
 | `win:hide()` | 收起（不销毁；内容留着，再 `show` 原样回来） |
 | `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
@@ -316,8 +317,53 @@ win:set_content{
 | `static_shape` | `shape = line / rect / round_rect / circle / path` + 对应字段 + `color` |
 | `static_image` | `x` / `y` / `w` / `h`（可省）+ `image`（`cloudime.image.load` 句柄）或 `path`（PNG / BMP / JPG） |
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（边缘，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1）/ `fill`（可选）/ `children`（相对坐标） |
-| `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省 SVG 画板）；`svg` / `svg_path`；`shape` + `radius`；`name`；`normal` / `hovered` / `pressed = { background, svg }` |
-| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`fill` / `color`（边框）/ `border_width`；`svg` / `svg_path` + `svg_align` + `svg_color`；`selection_background` / `selection_color` / `caret_color`；`text` / `font` / `size` / `name` |
+| `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省 SVG 画板）；`svg` / `svg_path`；`shape` + `radius`；`name`；`normal` / `hovered` / `pressed = { background, svg }`；`events = { 动作名 = "处理器名" }` |
+| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`fill` / `color`（边框）/ `border_width`；`svg` / `svg_path` + `svg_align` + `svg_color`；`selection_background` / `selection_color` / `caret_color`；`text` / `font` / `size` / `name`；`events` |
+
+#### JSON 布局文件（前台 UI 文件）
+
+2026-10-18 起，同一个窗口内容也可以写在 JSON 文件里：`win:load_layout(path)` 读入并整份替换，
+或在 `cloudime.window.create{ layout = path }` 时直接作为初始内容。布局解析在工人线程完成，
+产物仍是同一个 `Document`；UI 线程与渲染器不需要知道内容来自 Lua 还是 JSON。
+
+```json
+{
+  "width": 500,
+  "height": 360,
+  "controls": [
+    { "type": "rect", "x": 0, "y": 0, "w": 500, "h": 360, "radius": 12, "color": "#FFFFFFFF" },
+    { "type": "flat_svg_button", "name": "close", "x": 468, "y": 8, "w": 24, "h": 24,
+      "svg_path": "Images/SVG/打叉.svg", "shape": "round_rect", "radius": 4,
+      "normal": { "background": "#00000000", "svg": "#FF000000" },
+      "events": { "mouse_clicked": "close_window" } }
+  ],
+  "regions": [
+    { "name": "content", "x": 0, "y": 0, "w": 500, "h": 360, "drag": false }
+  ]
+}
+```
+
+- **字段与 Lua 元素表一一对应**：`type` 必写；非必填项省略或写 `null` 时走同一套缺省值。
+  顶层 `controls` 与 `elements` 等价；根也可以直接是控件数组。`width` / `height` / `regions` 可省，
+  缺省尺寸用窗口创建时那份（`create{ layout = … }` 时布局文件里的尺寸优先）。
+- **事件响应**：动态控件（`flat_svg_button` / `text_edit`）和 `regions` 条目可以写
+  `events = { 事件名 = "处理器名" }`。事件名必须是窗口事件已有的动作（`mouse_clicked`、
+  `mouse_enter`、`click` 等；扁平按钮的单击也接受 `click` / `double_click` 别名）；解析时校验，
+  写错整份布局失败。窗口事件载荷增加 `handler`，脚本按处理器名分发：
+
+  ```lua
+  cloudime.on("window", function(event)
+      if event.handler == "close_window" then
+          win:close()
+      end
+  end)
+  ```
+
+  没声明 `events` 时仍按 `event.region` / `event.element` + `event.action` 分发，完全兼容旧脚本。
+- **路径**：`svg_path` / `img.path` 仍按 Server 工作目录（安装目录）解析，与 Lua 一致；
+  布局文件本身不提供“相对布局文件目录”的自动换算。
+- **限额**：布局文件最大 **4 MB**；控件沿用内容限额（512 个元素、文字 4096 字符等）。
+  改文件后要再 `load_layout` 或重启 Server，不监听文件变化。
 
 - 坐标与尺寸一律是**点**（100% 缩放下 1 点 = 1 像素），随 DPI 一起放大；超出内容区的部分被裁掉。
 - **静态控件**（`label` / `text_block` / `static_shape` / `static_image` / `panel`）只用 traits 画、
@@ -388,6 +434,7 @@ cloudime.on("window", function(event)
     -- event.x, event.y   内容区坐标（点）
     -- event.element  命中的元素（内容是 1 起的数组，这里也是 1 起；没命中是 nil）
     -- event.region   命中的区域名（内容里的 regions；没命中是 nil）
+    -- event.handler  区域 / 布局声明的事件处理器名（events 表；没声明是 nil）
     -- event.delta    滚轮量（一格 ±120，正数往上；只有 wheel 有）
     if event.action == "wheel" then
         count = math.max(0, count + math.floor(event.delta / 120))

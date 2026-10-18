@@ -1090,6 +1090,15 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `TxGetPropertyBits` 返回 `TXTBIT_RICHTEXT | TXTBIT_SAVESELECTION`，RichEdit 只负责编辑模型、
   选区和 TSF，不再负责文字 / 插入符绘制。鼠标悬停的 `WM_MOUSEMOVE` 不转给 RichEdit，也不主动
   失效；只有按住左键拖选或键输入时才强制重绘，避免文字随鼠标移动高频闪烁。
+- **JSON 布局文件**（`cloudime-script/src/layout_file.rs`，2026-10-18）：`win:load_layout(path)` 与
+  `create{ layout = path }` 读 JSON 后**先转成 Lua 内容表**，再交给 `window.rs::parse_document`；
+  不复制元素解析逻辑，JSON 与 Lua 的字段 / 缺省值因此始终一致。支持顶层 `width` / `height` /
+  `controls`（或 `elements`）/ `regions`，根也可以直接是控件数组；`null` 转成 Lua `nil`，
+  数组转 1 起序列。单文件上限 4 MB，路径仍按 Server 工作目录解析。
+  动态控件 / `regions` 的 `events = { 动作名 = 处理器名 }` 解析成 `Region.handlers`；动作名用
+  `WindowAction::from_name` 校验。窗口事件载荷新增 `handler`（`ScriptWindowEvent.handler`），
+  独立窗口和辅助窗口的鼠标事件都会查区域表填它；没声明 `events` 时为 `nil`，旧脚本不受影响。
+  静态元素上写 `events` 会报错（它没有自动命中框），要接事件请显式加 `regions`。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

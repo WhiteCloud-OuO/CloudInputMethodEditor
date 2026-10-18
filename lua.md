@@ -430,6 +430,7 @@ local box = cloudime.ui.truncate(文本, 行宽 [, 选项])   -- → { text, lin
 -- 建一块 240 × 120 点的面板（interactive = true 才接鼠标）
 local win = cloudime.window.create{
     name = "统计", width = 240, height = 120, interactive = true,
+    -- layout = "Scripts/lib/main.json"  -- 也可以直接读 JSON 布局；尺寸以布局文件为准
     -- background = false  -- 不要输入法画的面板底色 / 圆角，改由元素表自己画背景
 }
 
@@ -458,6 +459,7 @@ aux:show()
 | 方法 | 说明 |
 |---|---|
 | `win:set_content{ … }` | 换一整份内容（整份替换；`width` / `height` 可省，缺省用建窗口时那份） |
+| `win:load_layout(path)` | 读一份 JSON 布局文件并换成整份内容；`width` / `height` / 控件 / 区域都从文件来 |
 | `win:show{ x = …, y = … }` | 显示；坐标是**内容区左上角**的屏幕坐标（点）。不写就沿用上次的位置，没有过就摆在光标右下 |
 | `win:hide()` | 收起（不销毁） |
 | `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
@@ -466,6 +468,46 @@ aux:show()
 | `win:prune_region(name, 形状)` | 从已有区域里挖掉形状（只改命中、不重画） |
 | `win:region_contains(name, x, y)` | 点是否在区域里（含边界）；没有这个区域给 `nil` |
 | `win:region_relation(a, b)` | 两块区域的关系：`{ relation = "disjoint" / "intersect" / "contains" / "coincide", contains = "a" / "b" }`；没有区域给 `nil` |
+
+**JSON 布局文件**：`win:load_layout(path)` 或 `cloudime.window.create{ layout = path }` 可以直接读一份前台 UI 文件，
+控件字段与上面的元素表一致（`type` 必写，其余没写的项用元素表缺省值）。顶层格式：
+
+```json
+{
+  "width": 500,
+  "height": 360,
+  "controls": [
+    { "type": "rect", "x": 0, "y": 0, "w": 500, "h": 360, "radius": 12, "color": "#FFFFFFFF" },
+    { "type": "flat_svg_button", "name": "close", "x": 468, "y": 8, "w": 24, "h": 24,
+      "svg_path": "Images/SVG/打叉.svg", "shape": "round_rect", "radius": 4,
+      "normal": { "background": "#00000000", "svg": "#FF000000" },
+      "events": { "mouse_clicked": "close_window" } }
+  ],
+  "regions": [
+    { "name": "content", "x": 0, "y": 0, "w": 500, "h": 360, "drag": false }
+  ]
+}
+```
+
+- `controls` 与 `elements` 等价；`width` / `height` / `regions` 可省（尺寸缺省用窗口那份）。根也可以直接写控件数组。
+- 动态控件（`flat_svg_button` / `text_edit`）可以写 `events = { 事件名 = "处理器名" }`；事件名用
+  `click` / `right_click` / `hover` / `leave` / `wheel` / `focus` / `blur` / `mouse_enter` / `mouse_leave` /
+  `mouse_pressed` / `mouse_released` / `mouse_clicked` / `mouse_double_clicked`（扁平按钮的单击也可写
+  `click`，双击也可写 `double_click`），处理器名由脚本自己分发。
+  窗口事件载荷里会多一个 `event.handler`（没声明时是 `nil`），例如：
+
+  ```lua
+  cloudime.on("window", function(event)
+      if event.handler == "close_window" then
+          win:close()
+      end
+  end)
+  ```
+
+  没有声明 `events` 的普通交互仍按 `event.region` / `event.element` + `event.action` 分发。
+- 布局文件里的 `svg_path` / `img.path` 与 Lua 一样按 Server 工作目录（安装目录）解析；相对路径建议用
+  `cloudime.install_path` 拼出绝对路径，或把文件放在安装目录下。
+- 改布局文件后要重新 `load_layout` 或重启输入法服务；不会自动监听文件变化。
 
 **元素表**（坐标 / 尺寸都是点，超出内容区的部分被裁掉）：
 
@@ -483,8 +525,8 @@ aux:show()
 | `static_shape` | `shape` = `line` / `rect` / `round_rect` / `circle` / `path`；字段与该形状同名（`from`/`to`/`x`/`y`/`w`/`h`/`radius`/`cx`/`cy`/`commands`）+ `color` |
 | `static_image` | `x` / `y` / `w` / `h`（可省，缺省图片像素尺寸）+ `image`（`cloudime.image.load` 的句柄）或 `path`（PNG / BMP / JPG） |
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（**边缘**颜色，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1 点）/ `fill`（可选填充，不写 = 无填充）/ `children = { …元素… }`；子控件用面板内相对坐标 |
-| `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省取 SVG 画板）；`svg`（整段 SVG）或 `svg_path`（文件）；`shape = rect / round_rect / circle / path` + `radius`；`name`（自动区域名）；`normal` / `hovered` / `pressed = { background = …, svg = … }` |
-| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 `h/2`，胶囊）；`fill`（可选）；`color`（边框，缺省主题角标色）；`border_width`（缺省 1）；`svg` / `svg_path` + `svg_align = left / right` + `svg_color`；`text` 初始文本；`font`（缺省 `candidate`）/ `size`（缺省用主题该字体字号）；`name`（自动区域名） |
+| `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省取 SVG 画板）；`svg`（整段 SVG）或 `svg_path`（文件）；`shape = rect / round_rect / circle / path` + `radius`；`name`（自动区域名）；`normal` / `hovered` / `pressed = { background = …, svg = … }`；`events = { 动作名 = "处理器名" }` |
+| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 `h/2`，胶囊）；`fill`（可选）；`color`（边框，缺省主题角标色）；`border_width`（缺省 1）；`svg` / `svg_path` + `svg_align = left / right` + `svg_color`；`text` 初始文本；`font`（缺省 `candidate`）/ `size`（缺省用主题该字体字号）；`name`（自动区域名）；`events` |
 
 颜色写 `"#RRGGBB"` / `"#AARRGGBB"` / `"#RGB"`，或 `{ r = …, g = …, b = …, a = … }`（0–255）。
 
@@ -659,6 +701,7 @@ cloudime.on("window", function(event)
     -- event.x / event.y            内容区坐标（点）
     -- event.element               命中的元素（内容数组里 1 起的下标；没命中是 nil）
     -- event.region                命中的区域名（内容里的 regions；没命中是 nil）
+    -- event.handler               区域 / 布局声明的事件处理器名（events 表；没声明是 nil）
     -- event.delta                 滚轮量（一格 ±120，正数往上；只有 wheel 有）
     if event.action == "wheel" then
         count = math.max(0, count + math.floor(event.delta / 120))
