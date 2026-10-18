@@ -30,15 +30,15 @@ use windows::Win32::UI::Controls::RichEdit::{
 use windows::Win32::UI::Input::Ime::{HIMC, ImmGetContext, ImmReleaseContext};
 use windows::Win32::UI::Input::KeyboardAndMouse::{ReleaseCapture, SetCapture, SetFocus};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CS_DBLCLKS, CreateCaret, CreateWindowExW, DefWindowProcW, DestroyWindow, GetClientRect,
+    CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow, GetCaretBlinkTime, GetClientRect,
     IDC_IBEAM, KillTimer, LoadCursorW, SCROLL_WINDOW_FLAGS, SCROLLBAR_CONSTANTS, SW_HIDE,
-    SW_SHOWNA, SWP_NOACTIVATE, SendMessageW, SetCaretPos, SetCursor, SetTimer, SetWindowPos,
-    ShowCaret, ShowWindow, WM_CHAR, WM_GETTEXT, WM_GETTEXTLENGTH, WM_IME_CHAR, WM_IME_COMPOSITION,
-    WM_IME_COMPOSITIONFULL, WM_IME_CONTROL, WM_IME_ENDCOMPOSITION, WM_IME_KEYDOWN, WM_IME_KEYUP,
-    WM_IME_NOTIFY, WM_IME_REQUEST, WM_IME_SELECT, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION,
-    WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_SYSCHAR,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    SW_SHOWNA, SWP_NOACTIVATE, SendMessageW, SetCursor, SetTimer, SetWindowPos, ShowWindow,
+    WM_CHAR, WM_GETTEXT, WM_GETTEXTLENGTH, WM_IME_CHAR, WM_IME_COMPOSITION, WM_IME_COMPOSITIONFULL,
+    WM_IME_CONTROL, WM_IME_ENDCOMPOSITION, WM_IME_KEYDOWN, WM_IME_KEYUP, WM_IME_NOTIFY,
+    WM_IME_REQUEST, WM_IME_SELECT, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_INPUTLANGCHANGE,
+    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{
     BOOL, Error, GUID, HSTRING, IUnknown_Vtbl, Interface, PCWSTR, Result, implement, w,
@@ -80,11 +80,16 @@ pub(super) struct TextHostWindow {
     ellipsis_font: HGDIOBJ,
     brush: HBRUSH,
     highlight: HBRUSH,
+    caret_brush: HBRUSH,
     text_color: COLORREF,
+    selection_text: COLORREF,
+    caret_visible: Cell<bool>,
+    caret_timer: Cell<usize>,
 }
 
 impl TextHostWindow {
     /// 建一块宿主窗；`family` / `size` 是候选词字体，`text` 是初始文本。
+    #[allow(clippy::too_many_arguments)]
     pub(super) fn create(
         owner: HWND,
         text: &str,
@@ -92,6 +97,9 @@ impl TextHostWindow {
         size: f32,
         background: COLORREF,
         text_color: COLORREF,
+        selection_background: COLORREF,
+        selection_text: COLORREF,
+        caret_color: COLORREF,
         dpi: u32,
     ) -> Result<Rc<Self>> {
         ensure_class()?;
@@ -115,7 +123,8 @@ impl TextHostWindow {
         let font = create_font(family, size, dpi);
         let ellipsis_font = create_font(Some("Segoe UI"), size, dpi);
         let brush = unsafe { CreateSolidBrush(background) };
-        let highlight = unsafe { CreateSolidBrush(COLORREF(0x00FFE8CC)) };
+        let highlight = unsafe { CreateSolidBrush(selection_background) };
+        let caret_brush = unsafe { CreateSolidBrush(caret_color) };
 
         let line_height = font_line_height(font, size, dpi);
         let host: ITextHost = TextHost {
@@ -183,7 +192,11 @@ impl TextHostWindow {
             ellipsis_font,
             brush,
             highlight,
+            caret_brush,
             text_color,
+            selection_text,
+            caret_visible: Cell::new(false),
+            caret_timer: Cell::new(0),
         });
         HOSTS.with(|map| map.borrow_mut().insert(hwnd.0 as isize, window.clone()));
         unsafe {
@@ -280,14 +293,29 @@ impl TextHostWindow {
         if let Some(tsf) = &self.tsf {
             tsf.focus();
         }
+        self.caret_visible.set(true);
+        if self.caret_timer.get() == 0 {
+            let blink = unsafe { GetCaretBlinkTime() };
+            let blink = if blink == 0 || blink == u32::MAX {
+                530
+            } else {
+                blink
+            };
+            let timer = unsafe { SetTimer(Some(self.hwnd), 0, blink, None) };
+            self.caret_timer.set(timer);
+        }
         unsafe {
             let _ = InvalidateRect(Some(self.hwnd), None, false);
         }
     }
 
     fn deactivate(&self) {
-        unsafe {
-            let _ = windows::Win32::UI::WindowsAndMessaging::HideCaret(Some(self.hwnd));
+        self.caret_visible.set(false);
+        let timer = self.caret_timer.replace(0);
+        if timer != 0 {
+            unsafe {
+                let _ = KillTimer(Some(self.hwnd), timer);
+            }
         }
         if let Some(tsf) = &self.tsf {
             tsf.blur();
@@ -316,6 +344,7 @@ impl TextHostWindow {
 
     /// TSF 先吃键；返回 `true` 表示这次按键别给 RichEdit。
     fn tsf_key(&self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> bool {
+        self.caret_visible.set(true);
         let eaten = self
             .tsf
             .as_ref()
@@ -329,6 +358,10 @@ impl TextHostWindow {
         if let Some(tsf) = &self.tsf {
             tsf.notify_selection();
         }
+    }
+
+    fn poke_caret(&self) {
+        self.caret_visible.set(true);
     }
 
     fn text(&self) -> Vec<u16> {
@@ -386,8 +419,16 @@ impl TextHostWindow {
         width
     }
 
-    fn draw_text(&self, hdc: HDC, text: &[u16], client: &RECT) {
-        if text.is_empty() {
+    fn draw_runs(
+        &self,
+        hdc: HDC,
+        text: &[u16],
+        client: &RECT,
+        start: usize,
+        end: usize,
+        color: COLORREF,
+    ) {
+        if text.is_empty() || start >= end {
             return;
         }
         unsafe {
@@ -395,15 +436,15 @@ impl TextHostWindow {
             let mut metrics = TEXTMETRICW::default();
             let _ = GetTextMetricsW(hdc, &mut metrics);
             let baseline = client.bottom / 2 + metrics.tmAscent / 2;
-            let mut x = 2;
-            let mut index = 0;
-            while index < text.len() {
+            let mut x = 2 + self.text_width(hdc, &text[..start]);
+            let mut index = start;
+            while index < end {
                 let ellipsis = text[index] == 0x2026;
-                let start = index;
+                let run_start = index;
                 if ellipsis {
                     index += 1;
                 } else {
-                    while index < text.len() && text[index] != 0x2026 {
+                    while index < end && text[index] != 0x2026 {
                         index += 1;
                     }
                 }
@@ -415,9 +456,15 @@ impl TextHostWindow {
                 let run_old = SelectObject(hdc, font);
                 let mut run_metrics = TEXTMETRICW::default();
                 let _ = GetTextMetricsW(hdc, &mut run_metrics);
-                let _ = TextOutW(hdc, x, baseline - run_metrics.tmAscent, &text[start..index]);
+                let _ = SetTextColor(hdc, color);
+                let _ = TextOutW(
+                    hdc,
+                    x,
+                    baseline - run_metrics.tmAscent,
+                    &text[run_start..index],
+                );
                 let mut size = SIZE::default();
-                let _ = GetTextExtentPoint32W(hdc, &text[start..index], &mut size);
+                let _ = GetTextExtentPoint32W(hdc, &text[run_start..index], &mut size);
                 let _ = SelectObject(hdc, run_old);
                 x += size.cx;
             }
@@ -425,33 +472,31 @@ impl TextHostWindow {
         }
     }
 
-    fn update_caret(&self, hdc: HDC, text: &[u16]) {
-        if !self.active.get() {
-            return;
+    fn caret_rect(&self, hdc: HDC, text: &[u16], client: &RECT) -> Option<RECT> {
+        if !self.active.get() || !self.caret_visible.get() {
+            return None;
         }
         let (start, end) = self.selection(text.len());
         if start != end {
-            unsafe {
-                let _ = windows::Win32::UI::WindowsAndMessaging::HideCaret(Some(self.hwnd));
-            }
-            return;
+            return None;
         }
-        let mut client = RECT::default();
         unsafe {
-            let _ = GetClientRect(self.hwnd, &mut client);
             let old = SelectObject(hdc, self.font);
             let mut metrics = TEXTMETRICW::default();
             let _ = GetTextMetricsW(hdc, &mut metrics);
             let _ = SelectObject(hdc, old);
             let x = 2 + self.text_width(hdc, &text[..start]);
             if x >= client.right {
-                let _ = windows::Win32::UI::WindowsAndMessaging::HideCaret(Some(self.hwnd));
-                return;
+                return None;
             }
             let baseline = client.bottom / 2 + metrics.tmAscent / 2;
-            let y = baseline - metrics.tmAscent;
-            let _ = SetCaretPos(x, y);
-            let _ = ShowCaret(Some(self.hwnd));
+            let top = baseline - metrics.tmAscent;
+            Some(RECT {
+                left: x,
+                top,
+                right: x + 1,
+                bottom: (top + metrics.tmHeight).min(client.bottom),
+            })
         }
     }
 
@@ -464,7 +509,6 @@ impl TextHostWindow {
             let _ = FillRect(hdc, &client, self.brush);
             let old_font = SelectObject(hdc, self.font);
             let _ = SetBkMode(hdc, TRANSPARENT);
-            let _ = SetTextColor(hdc, self.text_color);
             let text = self.text();
             let (start, end) = self.selection(text.len());
             if start < end {
@@ -478,8 +522,13 @@ impl TextHostWindow {
                 };
                 let _ = FillRect(hdc, &selection, self.highlight);
             }
-            self.draw_text(hdc, &text, &client);
-            self.update_caret(hdc, &text);
+            self.draw_runs(hdc, &text, &client, 0, text.len(), self.text_color);
+            if start < end {
+                self.draw_runs(hdc, &text, &client, start, end, self.selection_text);
+            }
+            if let Some(caret) = self.caret_rect(hdc, &text, &client) {
+                let _ = FillRect(hdc, &caret, self.caret_brush);
+            }
             let _ = SelectObject(hdc, old_font);
             let _ = EndPaint(self.hwnd, &ps);
         }
@@ -508,6 +557,7 @@ impl Drop for TextHostWindow {
             let _ = DeleteObject(self.ellipsis_font);
             let _ = DeleteObject(self.brush.into());
             let _ = DeleteObject(self.highlight.into());
+            let _ = DeleteObject(self.caret_brush.into());
         }
     }
 }
@@ -564,31 +614,18 @@ impl ITextHost_Impl for TextHost_Impl {
 
     fn TxCreateCaret(
         &self,
-        hbmp: windows::Win32::Graphics::Gdi::HBITMAP,
-        xwidth: i32,
-        yheight: i32,
+        _hbmp: windows::Win32::Graphics::Gdi::HBITMAP,
+        _xwidth: i32,
+        _yheight: i32,
     ) -> BOOL {
-        unsafe {
-            CreateCaret(self.hwnd, Some(hbmp), xwidth, yheight)
-                .is_ok()
-                .into()
-        }
+        false.into()
     }
 
-    fn TxShowCaret(&self, fshow: BOOL) -> BOOL {
-        unsafe {
-            if fshow.as_bool() {
-                ShowCaret(Some(self.hwnd)).is_ok().into()
-            } else {
-                windows::Win32::UI::WindowsAndMessaging::HideCaret(Some(self.hwnd))
-                    .is_ok()
-                    .into()
-            }
-        }
+    fn TxShowCaret(&self, _fshow: BOOL) -> BOOL {
+        false.into()
     }
 
     fn TxSetCaretPos(&self, _x: i32, _y: i32) -> BOOL {
-        // 位置由宿主按 GDI 字体度量设置，RichEdit 自己的 x/y 不用。
         false.into()
     }
 
@@ -895,6 +932,21 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     if msg == WM_CHAR && with_host(hwnd, |host| host.eaten.get()).unwrap_or(false) {
         return LRESULT(0);
     }
+    if msg == WM_TIMER {
+        let ours = with_host(hwnd, |host| {
+            host.caret_timer.get() != 0 && wparam.0 == host.caret_timer.get()
+        })
+        .unwrap_or(false);
+        if ours {
+            with_host(hwnd, |host| {
+                host.caret_visible.set(!host.caret_visible.get());
+                unsafe {
+                    let _ = InvalidateRect(Some(host.hwnd), None, false);
+                }
+            });
+            return LRESULT(0);
+        }
+    }
     // 悬停移动只保留给宿主判断光标；不再转给 RichEdit，免得它每次移动都失效重绘。
     if msg == WM_MOUSEMOVE && (wparam.0 as u32 & 0x0001) == 0 {
         return LRESULT(0);
@@ -947,6 +999,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         ) || (msg == WM_MOUSEMOVE && left_button)
         {
             with_host(hwnd, |host| unsafe {
+                host.poke_caret();
                 let _ = InvalidateRect(Some(host.hwnd), None, false);
             });
         }

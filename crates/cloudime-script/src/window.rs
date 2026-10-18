@@ -1029,6 +1029,9 @@ fn parse_text_edit(table: &mlua::Table) -> mlua::Result<Element> {
         svg_size,
         svg_align,
         svg_tint: color(table, "svg_color", false)?,
+        selection_background: color(table, "selection_background", false)?,
+        selection_color: color(table, "selection_color", false)?,
+        caret_color: color(table, "caret_color", false)?,
         text: table.get::<Option<String>>("text")?.unwrap_or_default(),
         font: font_slot(table)?,
         size: table
@@ -1990,7 +1993,9 @@ mod tests {
                     { type = "text_edit", name = "with_icon", x = 10, y = 50, w = 300, h = 24,
                       svg = [[<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32">
                                 <rect width="32" height="32"/></svg>]],
-                      svg_align = "left" },
+                      svg_align = "left", svg_color = "#FF00AA00",
+                      selection_background = "#FF112233", selection_color = "#FF445566",
+                      caret_color = "#FF778899" },
                 }
             "##,
             )
@@ -2015,6 +2020,9 @@ mod tests {
         assert!(plain.svg.is_none());
         assert_eq!(plain.font, FontSlot::Candidate, "缺省候选项字体");
         assert!(plain.size.is_none(), "字号缺省跟主题");
+        assert!(plain.selection_background.is_none());
+        assert!(plain.selection_color.is_none());
+        assert!(plain.caret_color.is_none());
         assert_eq!(plain.edit_rect(), (12.0, 1.0, 176.0, 22.0));
 
         let Element::TextEdit(with_icon) = &document.elements[1] else {
@@ -2022,7 +2030,17 @@ mod tests {
         };
         assert!(with_icon.svg.is_some());
         assert_eq!(with_icon.svg_width(), 24.0, "图标按背景高度缩放");
-        assert_eq!(with_icon.edit_rect(), (30.0, 1.0, 264.0, 22.0));
+        assert_eq!(with_icon.edit_rect(), (30.0, 1.0, 248.0, 22.0));
+        assert_eq!(with_icon.svg_tint, Some(Color::rgba(0, 170, 0, 255)));
+        assert_eq!(
+            with_icon.selection_background,
+            Some(Color::rgba(17, 34, 51, 255))
+        );
+        assert_eq!(
+            with_icon.selection_color,
+            Some(Color::rgba(68, 85, 102, 255))
+        );
+        assert_eq!(with_icon.caret_color, Some(Color::rgba(119, 136, 153, 255)));
 
         assert!(matches!(
             &document.regions[0],

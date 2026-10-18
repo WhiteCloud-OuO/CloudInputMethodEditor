@@ -410,6 +410,12 @@ pub struct TextEdit {
     pub svg_align: SvgAlign,
     /// SVG 染色；`None` 保留 SVG 自己的颜色。
     pub svg_tint: Option<Color>,
+    /// 选中文字的背景；`None` = 主题高亮色。
+    pub selection_background: Option<Color>,
+    /// 选中文字的颜色；`None` = 主题高亮文字色。
+    pub selection_color: Option<Color>,
+    /// 插入符颜色；`None` = 正文颜色。
+    pub caret_color: Option<Color>,
     /// 初始文本（真正输入由 Windowless RichEdit 负责）。
     pub text: String,
     /// 字体槽位；缺省候选词字体。
@@ -436,7 +442,7 @@ impl TextEdit {
         }
         let svg_width = self.svg_width();
         let gutter = self.height * 0.25;
-        let width = (self.width - self.height * 0.5 - svg_width).max(0.0);
+        let width = (self.width - self.height - svg_width - 4.0).max(0.0);
         match self.svg_align {
             SvgAlign::Left => (gutter + svg_width, inset, width, height),
             SvgAlign::Right => (gutter, inset, width, height),

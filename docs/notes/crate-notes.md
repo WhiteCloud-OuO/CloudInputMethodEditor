@@ -1052,7 +1052,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   先派 clicked 再派 double。
 - **单行编辑框**（`text_edit`，2026-10-18）：`control::TextEdit` 负责背景胶囊 / 边框（缺省厚度 1、
   颜色取 `theme.colors.badge`）、可选 SVG（按背景高度缩放、`SvgAlign` 左右）和文本区几何
-  （无 SVG：`w-h` 居中；有 SVG：`w-h/2-svg宽度`；高度向内缩 1 点边框）。实际的编辑控件是
+  （无 SVG：`w-h` 居中；有 SVG：`w-h-svg宽度-4`；高度向内缩 1 点边框）。实际的编辑控件是
   **windowless RichEdit**（`script_window/text_host.rs`）：每块 `text_edit` 建一个普通顶层宿主窗
   （owner = 脚本窗，`WS_EX_TOOLWINDOW | WS_EX_TOPMOST`），从 `Msftedit.dll` 取 `CreateTextServices`，
   用 `IID_ITextServices` 做 `QueryInterface` 拿 `ITextServices`，再把自己的 `ITextHost` 实现接上去；
@@ -1060,7 +1060,9 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `TxGetExtent` 必须返回 **HIMETRIC**（`像素 * 2540 / dpi`），返回像素会导致 RichEdit 布局成零宽、
   文字完全看不见；`TxGetCharFormat` 的 `yHeight`（twips）和 `szFaceName` 也要填，否则默认字号为 0。
   宿主窗的底色 / 文字色取 `Painter::text_edit_colors()`（候选窗主题），字体取 `Painter::text_font`
-  （`font` 槽位可换，`size` 缺省取主题字号）。`sync_text_edits` 在显示 / 拖动 / DPI 重画时按内容区坐标
+  （`font` 槽位可换，`size` 缺省取主题字号）；`selection_background` / `selection_color` / `caret_color`
+  不写时取主题 `highlight` / `highlight_text` / 正文色，`svg_color` 继续由渲染器给 SVG 染色。
+  `sync_text_edits` 在显示 / 拖动 / DPI 重画时按内容区坐标
   + scale 摆位；`focus_text_edit` 在点到胶囊边距时把焦点交给宿主。
   `TextEdit` 仍是可交互元素（返回命中框），自动区域和按钮一样在解析时加进 `Document.regions`。
   ⚠️ 文本值目前只做了初始 `text` + 宿主输入，脚本读写 API 还没加；嵌套在 `panel` 里的 `text_edit`

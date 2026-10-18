@@ -317,7 +317,7 @@ win:set_content{
 | `static_image` | `x` / `y` / `w` / `h`（可省）+ `image`（`cloudime.image.load` 句柄）或 `path`（PNG / BMP / JPG） |
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（边缘，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1）/ `fill`（可选）/ `children`（相对坐标） |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省 SVG 画板）；`svg` / `svg_path`；`shape` + `radius`；`name`；`normal` / `hovered` / `pressed = { background, svg }` |
-| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`fill` / `color`（边框）/ `border_width`；`svg` / `svg_path` + `svg_align` + `svg_color`；`text` / `font` / `size` / `name` |
+| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`fill` / `color`（边框）/ `border_width`；`svg` / `svg_path` + `svg_align` + `svg_color`；`selection_background` / `selection_color` / `caret_color`；`text` / `font` / `size` / `name` |
 
 - 坐标与尺寸一律是**点**（100% 缩放下 1 点 = 1 像素），随 DPI 一起放大；超出内容区的部分被裁掉。
 - **静态控件**（`label` / `text_block` / `static_shape` / `static_image` / `panel`）只用 traits 画、
@@ -348,9 +348,10 @@ win:set_content{
   （缺省主题角标色、1 点）和 SVG 由渲染器画；文本区由 UI 线程建一个普通顶层宿主窗（owner = 脚本窗），
   里面用 `Msftedit.dll` 的 `CreateTextServices` / `ITextServices` 承载编辑（不是 `EDIT` 控件），
   键盘、鼠标、IME、剪贴板和选区都交给 RichEdit。文本区几何：无 SVG 时 `w - h` 居中；有 SVG 时宽
-  `w - h/2 - svg宽度`、放在图标旁；高度向内缩 1 点边框，避免盖住边框 / 溢出胶囊。SVG 按背景高度缩放。
+  `w - h - svg宽度 - 4`、放在图标旁；高度向内缩 1 点边框，避免盖住边框 / 溢出胶囊。SVG 按背景高度缩放。
   RichEdit 字体缺省用候选词字体（`font` 可换槽位），字号缺省取主题里该槽位的字号（`size` 可覆盖）；
-  宿主窗底色 / 文字色跟随候选窗主题。自动区域与按钮同一套（`drag = false`）。
+  宿主窗底色 / 文字色跟随候选窗主题；`selection_background` / `selection_color` / `caret_color` /
+  `svg_color` 不写时分别跟主题高亮背景 / 高亮文字 / 正文颜色 / SVG 原色。自动区域与按钮同一套（`drag = false`）。
   TSF 输入由 `script_window/tsf.rs` + `text_store.rs` 接管：每个宿主窗建一个 `ITfContext`，
   `ITextStoreACP` 把文本、选区、光标矩形桥到 RichEdit；键盘先给 `ITfKeystrokeMgr`，被输入法吃掉
   就不再交给 RichEdit。CloudIME 的中文组合、候选窗和提交都走这条路。焦点进入时按 windowless

@@ -419,25 +419,39 @@ impl ScriptWindow {
             let Element::TextEdit(edit) = element else {
                 continue;
             };
-            let (family, theme_size, background, text_color) = match self.painter.borrow().as_ref()
-            {
-                Some(painter) => {
-                    let (family, size) = painter.text_font(edit.font);
-                    let (background, text) = painter.text_edit_colors();
-                    (family, size, background, text)
-                }
-                None => (
-                    None,
-                    14.0,
-                    cloudime_render::Color::rgba(255, 255, 255, 255),
-                    cloudime_render::Color::rgba(34, 34, 34, 255),
-                ),
-            };
+            let (family, theme_size, background, text_color, selection_background, selection_text) =
+                match self.painter.borrow().as_ref() {
+                    Some(painter) => {
+                        let (family, size) = painter.text_font(edit.font);
+                        let (background, text) = painter.text_edit_colors();
+                        let (selection_background, selection_text) =
+                            painter.text_edit_selection_colors();
+                        (
+                            family,
+                            size,
+                            background,
+                            text,
+                            selection_background,
+                            selection_text,
+                        )
+                    }
+                    None => (
+                        None,
+                        14.0,
+                        cloudime_render::Color::rgba(255, 255, 255, 255),
+                        cloudime_render::Color::rgba(34, 34, 34, 255),
+                        cloudime_render::Color::rgba(204, 232, 255, 255),
+                        cloudime_render::Color::rgba(34, 34, 34, 255),
+                    ),
+                };
             let size = edit.size.unwrap_or(theme_size);
             let background = edit
                 .fill
                 .filter(|color| color.a == 255)
                 .unwrap_or(background);
+            let selection_background = edit.selection_background.unwrap_or(selection_background);
+            let selection_text = edit.selection_color.unwrap_or(selection_text);
+            let caret_color = edit.caret_color.unwrap_or(text_color);
             let host = TextHostWindow::create(
                 self.hwnd(),
                 &edit.text,
@@ -445,6 +459,9 @@ impl ScriptWindow {
                 size,
                 colorref(background),
                 colorref(text_color),
+                colorref(selection_background),
+                colorref(selection_text),
+                colorref(caret_color),
                 self.dpi.get(),
             );
             match host {

@@ -187,6 +187,14 @@ impl Painter {
         (self.theme.colors.background, self.theme.colors.text)
     }
 
+    /// `text_edit` 选中文字的背景 / 文字色：跟随候选窗高亮色。
+    pub(super) fn text_edit_selection_colors(&self) -> (Color, Color) {
+        (
+            self.theme.colors.highlight,
+            self.theme.colors.highlight_text,
+        )
+    }
+
     /// 某个字体槽位的字族与字号（点）：`text_edit` 的字体用。
     pub(super) fn text_font(&self, slot: FontSlot) -> (Option<String>, f32) {
         match slot {
