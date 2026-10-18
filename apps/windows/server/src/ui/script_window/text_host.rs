@@ -5,7 +5,7 @@
 //! 这样文本编辑、选区、剪贴板、IME 仍由 RichEdit 引擎负责，但窗口本身、背景、字体和位置都由
 //! 脚本窗口控制；不再是系统 `EDIT` 的白底矩形。
 
-use std::cell::RefCell;
+use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::ffi::c_void;
 use std::mem::size_of;
@@ -33,14 +33,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
     WM_IME_CONTROL, WM_IME_ENDCOMPOSITION, WM_IME_KEYDOWN, WM_IME_KEYUP, WM_IME_NOTIFY,
     WM_IME_REQUEST, WM_IME_SELECT, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_INPUTLANGCHANGE,
     WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_TIMER,
-    WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    WM_MOUSEMOVE, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN,
+    WM_SYSKEYUP, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
 };
 use windows::core::{
     BOOL, Error, GUID, HSTRING, IUnknown_Vtbl, Interface, PCWSTR, Result, implement, w,
 };
 
 use super::super::window_class::WindowClass;
+use super::tsf;
 
 /// `Msftedit.dll!CreateTextServices` 的原始签名。
 type CreateTextServicesFn =
@@ -59,6 +60,10 @@ thread_local! {
 /// 一块 windowless RichEdit 宿主窗口。
 pub(super) struct TextHostWindow {
     hwnd: HWND,
+    /// TSF 上下文；初始化失败时为 `None`，退化为普通 RichEdit 输入。
+    tsf: Option<tsf::TsfContext>,
+    /// 本次按键是否被 TSF 吃掉（用来吞掉后续 WM_CHAR）。
+    eaten: Cell<bool>,
     services: ITextServices,
     /// 引擎的宿主接口；必须比 `services` 活得久。
     #[allow(dead_code)]
@@ -144,8 +149,18 @@ impl TextHostWindow {
             return Err(Error::from(hr));
         }
         let services: ITextServices = unsafe { ITextServices::from_raw(services_ptr) };
+        let line_height = ((size * dpi as f32 / 72.0).ceil() as i32).max(1);
+        let tsf = match tsf::TsfContext::create(hwnd, services.clone(), line_height) {
+            Ok(context) => Some(context),
+            Err(error) => {
+                tracing::warn!(%error, "text_edit：建 TSF 上下文失败，退化为普通 RichEdit 输入");
+                None
+            }
+        };
         let window = Rc::new(Self {
             hwnd,
+            tsf,
+            eaten: Cell::new(false),
             services,
             host,
             font,
@@ -181,11 +196,17 @@ impl TextHostWindow {
                 SWP_NOACTIVATE,
             );
         }
+        if let Some(tsf) = &self.tsf {
+            tsf.notify_layout();
+        }
     }
 
     pub(super) fn show(&self, show: bool) {
         unsafe {
             let _ = ShowWindow(self.hwnd, if show { SW_SHOWNA } else { SW_HIDE });
+        }
+        if !show {
+            self.blur_tsf();
         }
     }
 
@@ -193,6 +214,32 @@ impl TextHostWindow {
         unsafe {
             let _ = windows::Win32::UI::WindowsAndMessaging::SetForegroundWindow(self.hwnd);
             let _ = SetFocus(Some(self.hwnd));
+        }
+        if let Some(tsf) = &self.tsf {
+            tsf.focus();
+        }
+    }
+
+    fn blur_tsf(&self) {
+        if let Some(tsf) = &self.tsf {
+            tsf.blur();
+        }
+    }
+
+    /// TSF 先吃键；返回 `true` 表示这次按键别给 RichEdit。
+    fn tsf_key(&self, msg: u32, wparam: WPARAM, lparam: LPARAM) -> bool {
+        let eaten = self
+            .tsf
+            .as_ref()
+            .map(|tsf| tsf.key(msg, wparam, lparam))
+            .unwrap_or(false);
+        self.eaten.set(eaten);
+        eaten
+    }
+
+    fn notify_selection(&self) {
+        if let Some(tsf) = &self.tsf {
+            tsf.notify_selection();
         }
     }
 
@@ -597,6 +644,26 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         with_host(hwnd, |host| host.paint());
         return LRESULT(0);
     }
+    // 输入法先看键；被吃掉就不再给 RichEdit（WM_CHAR 也跟着吞）。
+    if matches!(msg, WM_KEYDOWN | WM_KEYUP | WM_SYSKEYDOWN | WM_SYSKEYUP) {
+        let eaten = with_host(hwnd, |host| host.tsf_key(msg, wparam, lparam)).unwrap_or(false);
+        if eaten {
+            return LRESULT(0);
+        }
+    }
+    if msg == WM_CHAR && with_host(hwnd, |host| host.eaten.get()).unwrap_or(false) {
+        return LRESULT(0);
+    }
+    if msg == WM_SETFOCUS {
+        with_host(hwnd, |host| {
+            if let Some(tsf) = &host.tsf {
+                tsf.focus();
+            }
+        });
+    }
+    if msg == WM_KILLFOCUS {
+        with_host(hwnd, |host| host.blur_tsf());
+    }
     if matches!(
         msg,
         WM_KEYDOWN
@@ -616,6 +683,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             | WM_IME_CHAR
             | WM_INPUTLANGCHANGE
             | WM_SYSKEYDOWN
+            | WM_SYSKEYUP
             | WM_SYSCHAR
             | WM_LBUTTONDOWN
             | WM_LBUTTONUP
@@ -628,6 +696,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             | WM_SIZE
     ) && let Some(result) = with_host(hwnd, |host| host.send(msg, wparam, lparam))
     {
+        if matches!(msg, WM_LBUTTONUP | WM_KEYUP) {
+            with_host(hwnd, |host| host.notify_selection());
+        }
         return result;
     }
     unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }

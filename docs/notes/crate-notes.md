@@ -1064,9 +1064,19 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   + scale 摆位；`focus_text_edit` 在点到胶囊边距时把焦点交给宿主。
   `TextEdit` 仍是可交互元素（返回命中框），自动区域和按钮一样在解析时加进 `Document.regions`。
   ⚠️ 文本值目前只做了初始 `text` + 宿主输入，脚本读写 API 还没加；嵌套在 `panel` 里的 `text_edit`
-  目前不会建宿主（仅顶层元素扫描）——测试脚本放在顶层。windowless RichEdit 只走 IMM32 的
-  `TxImmGetContext`，不实现 TSF 文本存储；Server UI 进程里能用系统输入法，但 CloudIME 自己的 TSF
-  不会注入这个文本框（它只处理外部应用）。
+  目前不会建宿主（仅顶层元素扫描）——测试脚本放在顶层。
+- **TSF 桥**（`script_window/text_store.rs` / `tsf.rs`，2026-10-18）：windowless RichEdit 自己只提供
+  IMM32 的 `ITextHost::TxImmGetContext`，不直接参与 TSF；要让 CloudIME 的中文输入作用到它，必须补
+  客户端文本存储。`text_store.rs` 实现 `ITextStoreACP`，把 `GetText` / `SetText` / 选区 / 插入 /
+  `GetTextExt` 桥到 RichEdit 的 `TxSendMessage(WM_GETTEXT / EM_GETSEL / EM_SETSEL / EM_REPLACESEL /
+  EM_POSFROMCHAR)`；`AdviseSink` 保存 `ITextStoreACPSink`，`RequestLock` 同步回调 `OnLockGranted`，
+  `SetText` / `InsertTextAtSelection` 后按 mask 发 `OnTextChange`。
+  `tsf.rs` 在 UI 线程按需建 `ITfThreadMgr`（STA，`CoInitializeEx` + `CoCreateInstance(CLSID_TF_ThreadMgr)`），
+  每个 `text_edit` 宿主窗一个 `ITfDocumentMgr` + `ITfContext`；`WM_SETFOCUS` 时 `SetFocus` 到对应文档，
+  失焦时清空。`WM_KEYDOWN` / `WM_KEYUP` 先经 `ITfKeystrokeMgr::TestKeyDown` / `KeyDown`，被输入法吃掉
+  就跳过 RichEdit，`WM_CHAR` 跟着吞；没被吃掉的键仍走 RichEdit。候选窗位置由 `GetTextExt` 返回的
+  RichEdit 光标屏幕矩形决定。CloudIME 的中文组合、候选窗和提交已在测试窗口验证；英文模式仍由
+  RichEdit 直接输入。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

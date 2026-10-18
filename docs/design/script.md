@@ -351,8 +351,9 @@ win:set_content{
   `w - h/2 - svg宽度`、放在图标旁；高度向内缩 1 点边框，避免盖住边框 / 溢出胶囊。SVG 按背景高度缩放。
   RichEdit 字体缺省用候选词字体（`font` 可换槽位），字号缺省取主题里该槽位的字号（`size` 可覆盖）；
   宿主窗底色 / 文字色跟随候选窗主题。自动区域与按钮同一套（`drag = false`）。
-  宿主只实现 `ITextHost` 的 IMM32 接口，没有 TSF 文本存储；Server UI 进程里 CloudIME 自己的 TSF
-  不会作用到这个文本框。
+  TSF 输入由 `script_window/tsf.rs` + `text_store.rs` 接管：每个宿主窗建一个 `ITfContext`，
+  `ITextStoreACP` 把文本、选区、光标矩形桥到 RichEdit；键盘先给 `ITfKeystrokeMgr`，被输入法吃掉
+  就不再交给 RichEdit。CloudIME 的中文组合、候选窗和提交都走这条路。
 - **区域（region）**：内容里可以声明 `regions = { … }` —— 区域是**鼠标点击 / 拖拽的命中范围**
   （元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true` = 按住它拖会移动整块窗口，
   `false` = 不拖窗口（点击照常）。后写的区域盖住先写的；事件里的 `event.region` 就是命中的区域名

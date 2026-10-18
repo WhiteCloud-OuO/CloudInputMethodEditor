@@ -49,6 +49,8 @@ use super::window_class::WindowClass;
 use text_host::TextHostWindow;
 
 mod text_host;
+mod text_store;
+mod tsf;
 
 /// 脚本独立窗口的窗口类（所有脚本窗口共用）。
 const CLASS_NAME: PCWSTR = w!("CloudIMEScriptWindow");

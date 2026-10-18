@@ -570,7 +570,7 @@ icon:use_path_mask({ { "M", 0, 0 }, { "L", 16, 0 }, { "L", 16, 16 }, { "L", 0, 1
 - 背景缺省是**胶囊**（`radius = h/2`）、透明填充、边框用主题的候选角标色（`candidate.badge`）、
   线宽 1 点；可以写 `fill` / `color` / `border_width` 覆盖。
 - 文本区由 **RichEdit** 承载（Windowless RichEdit，不是系统 `EDIT` 控件），点一下就能用鼠标 / 键盘输入，
-  支持选区、剪贴板和系统输入法。`text` 是初始文本；字体缺省用**候选词字体**，`font` 可换成
+  支持选区、剪贴板和 **CloudIME / 系统 TSF 输入法**。`text` 是初始文本；字体缺省用**候选词字体**，`font` 可换成
   `pinyin` / `item_number` / `translate`，`size` 不写就跟主题里该字体的字号。
 - 没有 SVG：文本区宽 `w - h`，在背景里水平居中。
 - 有 SVG：SVG 按 `h` 缩放，文本区宽 `w - h/2 - svg宽度`，放在图标旁边；`svg_align` 决定图标在左 / 右。
