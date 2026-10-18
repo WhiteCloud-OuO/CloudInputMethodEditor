@@ -1037,10 +1037,11 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   它们落在 `Element` 的控件变体上，`draw_element` 返回 `None`（**没有命中框**，不参与 hover / click /
   `element` 编号）；面板的子控件用 `origin` 平移递归绘制。Lua 端 `set_content` 解析 `label` /
   `text_block` / `static_shape` / `static_image` / `panel`（面板嵌套上限 8 层）。
-  **静态文本更新**（2026-10-18）：`Label::update_content` 把多段 run 合并成一段并沿用第一段颜色，
-  `TextBlock::update_content` 换 `text`；`Document::update_static_text(name, text)` 按
-  `control_names` 找路径，只接受这两类元素。脚本 `win:update_content(name, text)` 走
-  `WindowRequest::UpdateContent`，独立窗口直接重画，辅助窗口经模板改文档；不重建宿主、不产生命中框。
+  **静态文本更新**（2026-10-18）：`Label::update_content` 接收带颜色的 `Vec<LabelRun>`（不猜颜色），
+  `TextBlock::update_content` 换 `text`；`Document::update_static_content(name, StaticTextContent)` 按
+  `control_names` 找路径，`label` 只接 `Runs`、`text_block` 只接 `Text`。脚本
+  `win:update_content(name, content)` 走 `WindowRequest::UpdateContent`，独立窗口直接重画，辅助窗口经
+  模板改文档；不重建宿主、不产生命中框。
   `cloudime.image.load` 返回的用户数据持有 `Arc<Pixmap>`，脚本丢掉后元素仍持有；文件解码在
   `image::decode_image` 里先试 tiny-skia PNG，再交给 `image` crate（BMP / JPG，只开解码特性）。
   图像句柄方法（`scale` / `rotate` / `flip` / `to_gray` / `use_path_mask`）直接换掉内部位图：

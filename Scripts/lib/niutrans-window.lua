@@ -52,6 +52,7 @@ local CONFIGURED = APP_ID ~= ""
 local md5 = dofile("Scripts/lib/md5.lua").hex
 
 local WARNING = "请先在脚本文件中配置小牛翻译 API 和 KEY"
+local WARNING_COLOR = "#FFCC3333"
 
 local win = nil
 local waiting = false
@@ -198,7 +199,9 @@ local function make_window(source)
     if source and source ~= "" then
         win:set_text("source", clamp_source(source))
     end
-    win:update_content("warning", CONFIGURED and "" or WARNING)
+    win:update_content("warning", {
+        { text = CONFIGURED and "" or WARNING, color = WARNING_COLOR },
+    })
     win:show()
     win:focus(true)
     if CONFIGURED and source and source ~= "" then

@@ -284,7 +284,7 @@ local aux = cloudime.window.create_auxiliary{
 | `win:load_layout(path)` | 读 JSON 布局文件并整份替换；控件 / 尺寸 / 区域 / 事件都从文件来，见下 |
 | `win:get_text(name)` | 读某个 `text_edit` / `text_box` 的最近文本；没有 / 还没收到时给 `nil` |
 | `win:set_text(name, text)` | 设置某个 `text_edit` / `text_box` 的文本（按控件名找） |
-| `win:update_content(name, text)` | 更新静态 `label` / `text_block` 的文字；不改尺寸、不参与交互，`label` 沿用第一段颜色 |
+| `win:update_content(name, content)` | 更新静态 `label` / `text_block`：`text_block` 传字符串，`label` 传带颜色的 runs；不改尺寸、不参与交互 |
 | `win:select_all(name[, all])` | 全选；`all = false` 取消选择 |
 | `win:replace(name, find, text)` | 把 `find` 的全部出现替换为 `text` |
 | `win:clear(name)` | 清空编辑框 |

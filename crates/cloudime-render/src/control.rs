@@ -34,18 +34,9 @@ pub struct Label {
 }
 
 impl Label {
-    /// 更新静态标签的文字。颜色沿用第一个 run 的颜色；多色 run 会被合并成一段。
-    pub fn update_content(&mut self, text: &str) {
-        let color = self
-            .runs
-            .first()
-            .map(|run| run.color)
-            .unwrap_or(Color::rgb(0, 0, 0));
-        self.runs.clear();
-        self.runs.push(LabelRun {
-            text: text.to_owned(),
-            color,
-        });
+    /// 更新静态标签的文字；每个 run 自带颜色，调用方必须给出每段颜色。
+    pub fn update_content(&mut self, runs: Vec<LabelRun>) {
+        self.runs = runs;
     }
 
     pub(crate) fn draw<R: ControlRender>(

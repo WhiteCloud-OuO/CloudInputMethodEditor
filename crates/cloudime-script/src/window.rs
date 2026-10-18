@@ -17,8 +17,8 @@ use std::time::SystemTime;
 use cloudime_render::{
     ButtonColors, ButtonShape, ButtonState, Color, Document, Element, FlatSvgButton, FontSlot,
     HitRect, HitShape, Label, LabelRun, Panel, PathCommand, Pixmap, Region, ScrollAxis, ScrollBar,
-    StaticImage, StaticShape, SvgAlign, TextBlock, TextBox, TextBoxScroll, TextEdit, flip_image,
-    gray_image, load_image, mask_image, rotate_image, scale_image, svg_size,
+    StaticImage, StaticShape, StaticTextContent, SvgAlign, TextBlock, TextBox, TextBoxScroll,
+    TextEdit, flip_image, gray_image, load_image, mask_image, rotate_image, scale_image, svg_size,
 };
 
 use crate::mlua;
@@ -319,11 +319,11 @@ pub enum Request {
         text: String,
     },
 
-    /// 更新静态 `label` / `text_block` 的显示文本（不参与交互）。
+    /// 更新静态 `label` / `text_block` 的显示内容（不参与交互）。
     UpdateContent {
         id: WindowId,
         name: String,
-        text: String,
+        content: StaticTextContent,
     },
 
     /// 全选（`true`）或取消选择（`false`）。
@@ -438,10 +438,11 @@ pub(crate) fn handle(
     handle.set(
         "update_content",
         lua.create_function(
-            move |_, (_this, name, text): (mlua::Table, String, String)| {
+            move |_, (_this, name, value): (mlua::Table, String, mlua::Value)| {
+                let content = parse_static_content(value)?;
                 update_requests
                     .borrow_mut()
-                    .push(Request::UpdateContent { id, name, text });
+                    .push(Request::UpdateContent { id, name, content });
                 Ok(())
             },
         )?,
@@ -1028,6 +1029,33 @@ fn parse_regions(content: &mlua::Table) -> mlua::Result<Vec<Region>> {
         regions.push(region);
     }
     Ok(regions)
+}
+
+/// 静态文本更新参数：`text_block` 用字符串；`label` 用 `{ { text=…, color=… }, … }`。
+fn parse_static_content(value: mlua::Value) -> mlua::Result<StaticTextContent> {
+    match value {
+        mlua::Value::String(text) => Ok(StaticTextContent::Text(text.to_str()?.to_owned())),
+        mlua::Value::Table(table) => {
+            let mut runs = Vec::new();
+            for entry in table.sequence_values::<mlua::Table>() {
+                let entry = entry?;
+                let text: String = entry.get("text").map_err(|_| {
+                    mlua::Error::RuntimeError("label 的每一段都必须写 text".to_owned())
+                })?;
+                let color = color(&entry, "color", false)?.ok_or_else(|| {
+                    mlua::Error::RuntimeError(
+                        "label 的每一段都必须写 color（update_content 不猜颜色）".to_owned(),
+                    )
+                })?;
+                runs.push(LabelRun { text, color });
+            }
+            Ok(StaticTextContent::Runs(runs))
+        }
+        other => Err(mlua::Error::RuntimeError(format!(
+            "update_content 只接受字符串或 label runs 表，现在是 {}",
+            other.type_name()
+        ))),
+    }
 }
 
 /// 事件表：`events = { mouse_clicked = "close", … }`；动作名必须是窗口事件认识的。
@@ -2359,13 +2387,16 @@ mod tests {
         )));
         drop(taken);
 
-        lua.load("win:update_content('hint', '新提示')")
+        lua.load("win:update_content('hint', { { text = '新提示', color = '#FF112233' } })")
             .exec()
             .unwrap();
         assert!(requests.borrow().iter().any(|request| matches!(
             request,
-            Request::UpdateContent { name, text, .. }
-                if name == "hint" && text == "新提示"
+            Request::UpdateContent { name, content: StaticTextContent::Runs(runs), .. }
+                if name == "hint"
+                    && runs.len() == 1
+                    && runs[0].text == "新提示"
+                    && runs[0].color == Color::rgba(0x11, 0x22, 0x33, 0xFF)
         )));
     }
 

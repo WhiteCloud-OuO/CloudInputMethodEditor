@@ -15,8 +15,16 @@ use tiny_skia::{PathBuilder, Pixmap};
 
 use crate::color::Color;
 use crate::control::{
-    FlatSvgButton, Label, Panel, ScrollBar, StaticImage, StaticShape, TextBlock, TextBox, TextEdit,
+    FlatSvgButton, Label, LabelRun, Panel, ScrollBar, StaticImage, StaticShape, TextBlock, TextBox,
+    TextEdit,
 };
+
+/// 一个静态文本控件的新内容：`label` 要带每段颜色的 runs，`text_block` 是整段文字。
+#[derive(Debug, Clone)]
+pub enum StaticTextContent {
+    Text(String),
+    Runs(Vec<LabelRun>),
+}
 
 /// 一份内容：内容区尺寸（点）+ 元素表（按顺序画，后面的盖前面的）。
 #[derive(Clone)]
@@ -107,10 +115,10 @@ impl Document {
             .map(|control| control.name.as_str())
     }
 
-    /// 更新一个静态 `label` / `text_block` 的显示文本；只改内容，不参与命中或编辑。
+    /// 更新一个静态 `label` / `text_block` 的显示内容；只改内容，不参与命中或编辑。
     ///
-    /// 控件名来自 JSON 布局的 `control_names`；找不到、名字不是静态文本控件时返回 `false`。
-    pub fn update_static_text(&mut self, name: &str, text: &str) -> bool {
+    /// `label` 只接受带颜色的 `Runs`，`text_block` 只接受 `Text`；找不到、名字或内容类型不匹配时返回 `false`。
+    pub fn update_static_content(&mut self, name: &str, content: StaticTextContent) -> bool {
         let Some(path) = self
             .control_names
             .iter()
@@ -119,13 +127,13 @@ impl Document {
         else {
             return false;
         };
-        match self.element_at_path_mut(&path) {
-            Some(Element::Label(label)) => {
-                label.update_content(text);
+        match (self.element_at_path_mut(&path), content) {
+            (Some(Element::Label(label)), StaticTextContent::Runs(runs)) => {
+                label.update_content(runs);
                 true
             }
-            Some(Element::TextBlock(block)) => {
-                block.update_content(text);
+            (Some(Element::TextBlock(block)), StaticTextContent::Text(text)) => {
+                block.update_content(&text);
                 true
             }
             _ => false,
@@ -1301,19 +1309,38 @@ mod tests {
                 },
             ],
         };
-        assert!(document.update_static_text("hint", "新提示"));
-        assert!(document.update_static_text("note", "新块"));
+        assert!(document.update_static_content(
+            "hint",
+            StaticTextContent::Runs(vec![
+                crate::control::LabelRun {
+                    text: "新".to_owned(),
+                    color: Color::rgb(7, 8, 9),
+                },
+                crate::control::LabelRun {
+                    text: "提示".to_owned(),
+                    color: Color::rgb(10, 11, 12),
+                },
+            ])
+        ));
+        assert!(document.update_static_content("note", StaticTextContent::Text("新块".to_owned())));
         let Some(Element::Label(label)) = document.element_at_path(&[0]) else {
             panic!("不是 label");
         };
-        assert_eq!(label.runs.len(), 1);
-        assert_eq!(label.runs[0].text, "新提示");
-        assert_eq!(label.runs[0].color, Color::rgb(1, 2, 3));
+        assert_eq!(label.runs.len(), 2);
+        assert_eq!(label.runs[0].text, "新");
+        assert_eq!(label.runs[0].color, Color::rgb(7, 8, 9));
+        assert_eq!(label.runs[1].text, "提示");
+        assert_eq!(label.runs[1].color, Color::rgb(10, 11, 12));
         let Some(Element::TextBlock(block)) = document.element_at_path(&[1]) else {
             panic!("不是 text_block");
         };
         assert_eq!(block.text, "新块");
-        assert!(!document.update_static_text("missing", "x"));
+        assert!(
+            !document.update_static_content("missing", StaticTextContent::Text("x".to_owned()))
+        );
+        assert!(
+            !document.update_static_content("hint", StaticTextContent::Text("错误类型".to_owned()))
+        );
     }
 
     /// 圆 / 圆角 / 带洞的区域也能判关系（多边形近似）。

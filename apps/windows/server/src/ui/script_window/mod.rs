@@ -43,7 +43,8 @@ use super::painter::SharedPainter;
 use super::window_class::WindowClass;
 use cloudime_platform::LayoutMode;
 use cloudime_render::{
-    ButtonState, Color, Document, Element, FontSlot, HitShape, Region, ScrollAxis, TextBoxScroll,
+    ButtonState, Color, Document, Element, FontSlot, HitShape, Region, ScrollAxis,
+    StaticTextContent, TextBoxScroll,
 };
 use cloudime_script::{
     AuxiliarySpec, ScriptWindowEvent, WindowAction, WindowId, WindowRequest, WindowSpec,
@@ -152,11 +153,11 @@ impl ScriptWindows {
                     tracing::warn!(id, control = name, "脚本窗口：set_text 时找不到这块窗口");
                 }
             }
-            WindowRequest::UpdateContent { id, name, text } => {
+            WindowRequest::UpdateContent { id, name, content } => {
                 if let Some(window) = self.windows.get(&id) {
-                    window.update_static_content(&name, &text);
+                    window.update_static_content(&name, content);
                 } else if let Some(aux) = self.auxiliaries.get(&id).cloned() {
-                    aux.update_static_content(&name, &text);
+                    aux.update_static_content(&name, content);
                     self.sync_owner(&aux);
                 } else {
                     tracing::warn!(
@@ -806,14 +807,14 @@ impl ScriptWindow {
     }
 
     /// 更新静态 `label` / `text_block` 的文字；只重画，不重建编辑框。
-    fn update_static_content(&self, name: &str, text: &str) -> bool {
+    fn update_static_content(&self, name: &str, content: StaticTextContent) -> bool {
         {
             let mut document = self.document.borrow_mut();
-            if !document.update_static_text(name, text) {
+            if !document.update_static_content(name, content) {
                 tracing::warn!(
                     id = self.id,
                     control = name,
-                    "静态文本：找不到 label / text_block"
+                    "静态文本：名字或内容类型不匹配"
                 );
                 return false;
             }
@@ -2155,8 +2156,8 @@ impl ScriptAuxiliary {
         self.template.set_document(document);
     }
 
-    fn update_static_content(&self, name: &str, text: &str) -> bool {
-        self.template.update_static_content(name, text)
+    fn update_static_content(&self, name: &str, content: StaticTextContent) -> bool {
+        self.template.update_static_content(name, content)
     }
 
     /// 动态改一个区域的命中范围（合并 / 剪除）。

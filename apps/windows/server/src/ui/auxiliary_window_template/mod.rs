@@ -46,7 +46,7 @@ use windows::core::{PCWSTR, Result, w};
 
 use cloudime_platform::LayoutMode;
 use cloudime_platform::input_schemes;
-use cloudime_render::{ControlName, Layout, key_map_cell};
+use cloudime_render::{ControlName, Layout, StaticTextContent, key_map_cell};
 
 use super::layered;
 use super::monitor;
@@ -284,14 +284,14 @@ impl AuxiliaryWindowTemplate {
     }
 
     /// 更新静态 `label` / `text_block` 的文字；只影响内容，不重建窗口。
-    pub(super) fn update_static_content(&self, name: &str, text: &str) -> bool {
-        let mut content = self.content.borrow_mut();
-        let Content::Document(document) = &mut *content else {
+    pub(super) fn update_static_content(&self, name: &str, content: StaticTextContent) -> bool {
+        let mut document = self.content.borrow_mut();
+        let Content::Document(document) = &mut *document else {
             tracing::warn!("辅助窗口：只有脚本内容才能更新静态文本");
             return false;
         };
-        if !document.update_static_text(name, text) {
-            tracing::warn!(control = name, "辅助窗口：找不到 label / text_block");
+        if !document.update_static_content(name, content) {
+            tracing::warn!(control = name, "辅助窗口：名字或内容类型不匹配");
             return false;
         }
         self.revision.set(self.revision.get() + 1);
