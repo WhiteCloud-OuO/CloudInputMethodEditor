@@ -5,6 +5,8 @@
 --   * 光标上方 30 点摆一块 180 × 140 的独立窗口；
 --   * 上方放不下（会超出显示器工作区）就改到光标下方 30 点；
 --   * 右上角 20 × 20、圆角 3 的区域里画 `Images\SVG\打叉.svg`，点它关闭并销毁窗口；
+--   * 窗口内容用静态控件搭：`panel` / `label`（每段颜色不同）/ `text_block`（多行 + 行距）/
+--     `static_shape`（分隔线 + 圆角色块）/ `static_image`（`Images\cloud.png`）；
 --   * 鼠标不在这个区域里：叉是黑色、没有底色；移进去：底色变成 `#FFFF3300`、叉变成白色（模拟关闭按钮）；
 --   * 窗口背景 / 圆角由脚本画（`background = false`），颜色取自 `cloudime.get_theme()` 的当前主题；
 --     阴影与候选窗同一套（`shadow` 缺省开启）。
@@ -41,12 +43,24 @@ local win = nil
 local waiting = false
 local hovering = false
 local close_svg = nil
+local cloud_image = nil
 
 local function svg_path()
     if close_svg == nil then
         close_svg = cloudime.install_path("Images/SVG/打叉.svg")
     end
     return close_svg
+end
+
+-- 安装目录里的云朵图：拿一次句柄（`Arc<Pixmap>`）反复用。
+local function cloud_icon()
+    if cloud_image == nil then
+        local path = cloudime.install_path("Images/cloud.png")
+        if path then
+            cloud_image = cloudime.image.load(path)
+        end
+    end
+    return cloud_image
 end
 
 -- 当前主题的候选窗配色（`cloudime.get_theme()`）；没接上主题时用浅色兜底。
@@ -58,6 +72,7 @@ local function palette()
         text       = candidate.text or "#FF222222",
         muted      = candidate.page_number or "#FF888888",
         accent     = candidate.extra or "#FF4A90E2",
+        highlight  = candidate.highlight or "#FFF0C8FF",
     }
 end
 
@@ -77,12 +92,23 @@ local function draw()
         -- 窗口背景由脚本画（`create` 用了 background = false）；颜色跟随当前主题。
         { type = "rect", x = 0, y = 0, w = WIDTH, h = HEIGHT, radius = PANEL_RADIUS,
           color = color.background },
-        -- 静态控件：label 每段颜色不同；text_block 多行 + 行距。
-        { type = "label", x = MARGIN + 8, y = 18, size = 16,
-          runs = { { text = "云朵", color = color.accent },
-                   { text = "输入法", color = color.text } } },
-        { type = "text_block", x = MARGIN + 8, y = 44, size = 12, line_spacing = 4,
-          text = "180 × 140\nCtrl+Alt+F3 只创建", color = color.muted },
+        -- 面板：把下面这些静态控件分组；不写 color / radius 就用缺省的浅灰 + 圆角 6。
+        { type = "panel", x = MARGIN, y = MARGIN, w = WIDTH - MARGIN * 2, h = HEIGHT - MARGIN * 2,
+          children = {
+              { type = "static_image", x = 8, y = 8, w = 40, h = 40,
+                image = cloud_icon() },
+              { type = "label", x = 56, y = 10, size = 16,
+                runs = { { text = "云朵", color = color.accent },
+                         { text = "输入法", color = color.text } } },
+              { type = "text_block", x = 56, y = 36, size = 12, line_spacing = 4,
+                text = "180 × 140\nCtrl+Alt+F3 只创建", color = color.muted },
+              { type = "static_shape", shape = "line", from = { x = 8, y = 78 },
+                to = { x = WIDTH - MARGIN * 2 - 8, y = 78 }, thickness = 1, color = color.muted },
+              { type = "static_shape", shape = "round_rect", x = 8, y = 86, w = 148, h = 26,
+                radius = 6, color = color.highlight },
+              { type = "label", x = 16, y = 91, size = 12,
+                runs = { { text = "静态控件演示", color = color.text } } },
+          } },
     }
     -- 鼠标在关闭区域里才画按钮底色；先画它、再画叉（叉在上面）。
     if hovering then
