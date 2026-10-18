@@ -1571,7 +1571,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
         "load",
         lua.create_function(move |_, path: String| {
             let pixmap = image_cache.borrow_mut().load(Path::new(&path))?;
-            Ok(window::ImageHandle(pixmap))
+            Ok(window::ImageHandle::new(pixmap))
         })?,
     )?;
     table.set("image", image)?;

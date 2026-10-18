@@ -481,7 +481,7 @@ aux:show()
 | `label` | `x` / `y` / `size` / `font`（缺省 `candidate`）；`runs = { { text = "云朵", color = "#FF0000FF" }, … }`，每段可单独着色 |
 | `text_block` | `x` / `y` / `text`（可含 `\n`）/ `size` / `font`（缺省 `item_number`）/ `line_spacing`（点，缺省 2）/ `color`（整块同色） |
 | `static_shape` | `shape` = `line` / `rect` / `round_rect` / `circle` / `path`；字段与该形状同名（`from`/`to`/`x`/`y`/`w`/`h`/`radius`/`cx`/`cy`/`commands`）+ `color` |
-| `static_image` | `x` / `y` / `w` / `h` + `image`（`cloudime.image.load` 的句柄）或 `path`（PNG / BMP / JPG） |
+| `static_image` | `x` / `y` / `w` / `h`（可省，缺省图片像素尺寸）+ `image`（`cloudime.image.load` 的句柄）或 `path`（PNG / BMP / JPG） |
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（**边缘**颜色，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1 点）/ `fill`（可选填充，不写 = 无填充）/ `children = { …元素… }`；子控件用面板内相对坐标 |
 
 颜色写 `"#RRGGBB"` / `"#AARRGGBB"` / `"#RGB"`，或 `{ r = …, g = …, b = …, a = … }`（0–255）。
@@ -509,6 +509,18 @@ win:set_content{
 `static_image` 的 `image` 句柄：`local icon = cloudime.image.load(cloudime.install_path("Images/a.png"))`，
 之后 `{ type = "static_image", x = 8, y = 8, w = 32, h = 32, image = icon }`。句柄是用户数据，Lua 丢掉它
 之后已经放进内容的位图仍由元素持有；`path` 直接给文件也行（只解码一次，按文件长度 + 修改时间缓存）。
+`w` / `h` 可省，缺省用图片自身像素尺寸。
+
+图像句柄上的方法（**直接改句柄里的位图**，下次 `set_content` 生效；坐标 / 尺寸都是图片像素）：
+
+```lua
+icon:scale(0.5)                 -- 按比例；也可以 icon:scale(64, 64) 指定宽高
+icon:rotate(90)                 -- 顺时针 90 / 180 / 270
+icon:flip("horizontal")         -- 或 "vertical"
+icon:to_gray()                  -- BT.601 灰度（0–255），alpha 不变
+icon:use_path_mask({ { "M", 0, 0 }, { "L", 16, 0 }, { "L", 16, 16 }, { "L", 0, 16 }, { "Z" } })
+-- use_path_mask 也接受 { commands = { … } }；只保留路径内部（非零环绕）
+```
 
 **区域（region）**：一块可以被鼠标**点击 / 拖拽**的范围 —— 元素只管画，交互看区域：
 

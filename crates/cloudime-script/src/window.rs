@@ -15,7 +15,8 @@ use std::time::SystemTime;
 
 use cloudime_render::{
     Color, Document, Element, FontSlot, HitRect, HitShape, Label, LabelRun, Panel, PathCommand,
-    Pixmap, Region, StaticImage, StaticShape, TextBlock, load_image,
+    Pixmap, Region, StaticImage, StaticShape, TextBlock, flip_image, gray_image, load_image,
+    mask_image, rotate_image, scale_image,
 };
 
 use crate::mlua;
@@ -70,12 +71,93 @@ pub(crate) struct ImageCache {
     pixels: u64,
 }
 
-/// 脚本拿在手里的图像句柄（`cloudime.image.load`）：`Arc` 与元素共享位图，Lua 丢掉句柄后
-/// 已经放进内容里的图仍然活着。
+/// 脚本拿在手里的图像句柄（`cloudime.image.load`）：内部是可变的 `Arc<Pixmap>`，
+/// 与元素共享位图；Lua 丢掉句柄后，已经放进内容里的图仍然活着。
 #[derive(Clone)]
-pub(crate) struct ImageHandle(pub(crate) Arc<Pixmap>);
+pub(crate) struct ImageHandle {
+    image: Rc<RefCell<Arc<Pixmap>>>,
+}
 
-impl mlua::UserData for ImageHandle {}
+impl ImageHandle {
+    pub(crate) fn new(image: Arc<Pixmap>) -> Self {
+        Self {
+            image: Rc::new(RefCell::new(image)),
+        }
+    }
+
+    pub(crate) fn snapshot(&self) -> Arc<Pixmap> {
+        self.image.borrow().clone()
+    }
+}
+
+impl mlua::UserData for ImageHandle {
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method("scale", |_, this, (a, b): (f32, Option<f32>)| {
+            let current = this.snapshot();
+            let (width, height) = match b {
+                Some(height) => {
+                    if !a.is_finite() || !height.is_finite() || a < 1.0 || height < 1.0 {
+                        return Err(mlua::Error::RuntimeError(
+                            "scale(width, height) 要两个正数".to_owned(),
+                        ));
+                    }
+                    (a.round() as u32, height.round() as u32)
+                }
+                None => {
+                    if !a.is_finite() || a <= 0.0 {
+                        return Err(mlua::Error::RuntimeError(
+                            "scale(factor) 要给正数".to_owned(),
+                        ));
+                    }
+                    (
+                        (current.width() as f32 * a).round().max(1.0) as u32,
+                        (current.height() as f32 * a).round().max(1.0) as u32,
+                    )
+                }
+            };
+            let next = scale_image(&current, width, height)
+                .map_err(|error| mlua::Error::RuntimeError(format!("缩放图像失败：{error}")))?;
+            *this.image.borrow_mut() = Arc::new(next);
+            Ok(())
+        });
+        methods.add_method("rotate", |_, this, degrees: u16| {
+            let next = rotate_image(&this.snapshot(), degrees)
+                .map_err(|error| mlua::Error::RuntimeError(format!("旋转图像失败：{error}")))?;
+            *this.image.borrow_mut() = Arc::new(next);
+            Ok(())
+        });
+        methods.add_method("flip", |_, this, direction: String| {
+            let horizontal = match direction.to_ascii_lowercase().as_str() {
+                "horizontal" | "h" => true,
+                "vertical" | "v" => false,
+                other => {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "flip 只支持 horizontal / vertical，给的是 {other}"
+                    )));
+                }
+            };
+            let next = flip_image(&this.snapshot(), horizontal);
+            *this.image.borrow_mut() = Arc::new(next);
+            Ok(())
+        });
+        methods.add_method("to_gray", |_, this, ()| {
+            let next = gray_image(&this.snapshot());
+            *this.image.borrow_mut() = Arc::new(next);
+            Ok(())
+        });
+        methods.add_method("use_path_mask", |_, this, path: mlua::Table| {
+            let commands = if path.get::<Option<mlua::Table>>("commands")?.is_some() {
+                parse_path(&path)?
+            } else {
+                parse_path_commands(&path)?
+            };
+            let next = mask_image(&this.snapshot(), &commands)
+                .map_err(|error| mlua::Error::RuntimeError(format!("路径蒙版失败：{error}")))?;
+            *this.image.borrow_mut() = Arc::new(next);
+            Ok(())
+        });
+    }
+}
 
 struct CachedImage {
     path: PathBuf,
@@ -888,7 +970,7 @@ fn parse_static_shape(table: &mlua::Table) -> mlua::Result<Element> {
 /// `static_image`：`image` 给 `cloudime.image.load` 的句柄，或 `path` 给文件（PNG / BMP / JPG）。
 fn parse_static_image(table: &mlua::Table, images: &mut ImageCache) -> mlua::Result<Element> {
     let image = match table.get::<mlua::Value>("image")? {
-        mlua::Value::UserData(handle) => handle.borrow::<ImageHandle>()?.0.clone(),
+        mlua::Value::UserData(handle) => handle.borrow::<ImageHandle>()?.snapshot(),
         mlua::Value::Nil => {
             let path: String = table.get("path").map_err(|_| {
                 mlua::Error::RuntimeError("static_image 缺 image 或 path".to_owned())
@@ -905,8 +987,8 @@ fn parse_static_image(table: &mlua::Table, images: &mut ImageCache) -> mlua::Res
     Ok(Element::StaticImage(StaticImage {
         x: number(table, "x", 0.0)?,
         y: number(table, "y", 0.0)?,
-        width: positive(table, "w", "width")?,
-        height: positive(table, "h", "height")?,
+        width: optional_positive(table, "w")?.unwrap_or(image.width() as f32),
+        height: optional_positive(table, "h")?.unwrap_or(image.height() as f32),
         image,
     }))
 }
@@ -1007,6 +1089,11 @@ fn parse_path(table: &mlua::Table) -> mlua::Result<Vec<PathCommand>> {
     let list: mlua::Table = table
         .get("commands")
         .map_err(|_| mlua::Error::RuntimeError("path 缺 commands".to_owned()))?;
+    parse_path_commands(&list)
+}
+
+/// 路径命令数组 → [`PathCommand`]（`path` 元素与图像蒙版共用）。
+fn parse_path_commands(list: &mlua::Table) -> mlua::Result<Vec<PathCommand>> {
     let mut commands = Vec::new();
     for entry in list.sequence_values::<mlua::Table>() {
         let entry = entry?;
@@ -1031,7 +1118,7 @@ fn parse_path(table: &mlua::Table) -> mlua::Result<Vec<PathCommand>> {
     }
     if commands.is_empty() {
         return Err(mlua::Error::RuntimeError(
-            "path 元素的 commands 是空的".to_owned(),
+            "path 的 commands 是空的".to_owned(),
         ));
     }
     Ok(commands)
@@ -1086,6 +1173,19 @@ fn positive(table: &mlua::Table, first: &str, second: &str) -> mlua::Result<f32>
         )));
     }
     Ok(value)
+}
+
+/// 可选的正尺寸；没写返回 `None`，写了但 <= 0 / 非有限数报错。
+fn optional_positive(table: &mlua::Table, key: &str) -> mlua::Result<Option<f32>> {
+    let Some(value) = table.get::<Option<f32>>(key)? else {
+        return Ok(None);
+    };
+    if !(value.is_finite() && value > 0.0) {
+        return Err(mlua::Error::RuntimeError(format!(
+            "元素的尺寸 {key} 要是正数（现在是 {value}）"
+        )));
+    }
+    Ok(Some(value))
 }
 
 fn size(table: &mlua::Table, key: &str, default: f32) -> mlua::Result<f32> {
@@ -1558,7 +1658,8 @@ mod tests {
         }
     }
 
-    /// `cloudime.image.load` 的句柄可以直接放进 `static_image`（生命周期由 Arc 持有）。
+    /// `cloudime.image.load` 的句柄可以直接放进 `static_image`（生命周期由 Arc 持有）；
+    /// 不写 `w` / `h` 时用图片自身尺寸。
     #[test]
     fn static_images_accept_a_memory_handle() {
         use crate::Runtime;
@@ -1581,7 +1682,7 @@ mod tests {
         let content = lua
             .load(
                 r#"return { width = 40, height = 40,
-                    { type = "static_image", x = 0, y = 0, w = 10, h = 10 } }"#,
+                    { type = "static_image", x = 0, y = 0 } }"#,
             )
             .eval::<mlua::Table>()
             .unwrap();
@@ -1596,9 +1697,53 @@ mod tests {
         match &document.elements[0] {
             Element::StaticImage(image) => {
                 assert_eq!((image.image.width(), image.image.height()), (3, 4));
+                assert_eq!((image.width, image.height), (3.0, 4.0));
             }
             other => panic!("不是 static_image：{other:?}"),
         }
+    }
+
+    /// 图像句柄的变换方法：scale / rotate / flip / to_gray / use_path_mask。
+    #[test]
+    fn image_handles_expose_transformations() {
+        use crate::Runtime;
+
+        let dir = std::env::temp_dir().join("cloudime-script-image-transform");
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let image_path = dir.join("dot.png");
+        Pixmap::new(4, 2).unwrap().save_png(&image_path).unwrap();
+
+        let runtime = Runtime::none();
+        let lua = runtime.lua();
+        let handle = lua
+            .load(format!(
+                "return cloudime.image.load([[{}]])",
+                image_path.display()
+            ))
+            .eval::<mlua::AnyUserData>()
+            .expect("图像句柄");
+        lua.globals().set("img", handle.clone()).unwrap();
+        lua.load(
+            r#"
+            img:scale(2)                       -- 8 × 4
+            img:rotate(90)                     -- 4 × 8
+            img:flip("horizontal")
+            img:to_gray()
+            img:use_path_mask({ { "M", 0, 0 }, { "L", 4, 0 }, { "L", 4, 8 },
+                                { "L", 0, 8 }, { "Z" } })
+            "#,
+        )
+        .exec()
+        .unwrap();
+        let image = handle.borrow::<ImageHandle>().unwrap().snapshot();
+        assert_eq!((image.width(), image.height()), (4, 8));
+        let pixel = image.pixel(0, 0).unwrap();
+        assert_eq!(
+            (pixel.red(), pixel.green(), pixel.blue()),
+            (pixel.red(), pixel.red(), pixel.red()),
+            "to_gray 之后 RGB 相等"
+        );
     }
 
     /// `svg` 元素可以给 `path` 直接读文件；文件不存在时整份内容报错。

@@ -1032,6 +1032,10 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `text_block` / `static_shape` / `static_image` / `panel`（面板嵌套上限 8 层）。
   `cloudime.image.load` 返回的用户数据持有 `Arc<Pixmap>`，脚本丢掉后元素仍持有；文件解码在
   `image::decode_image` 里先试 tiny-skia PNG，再交给 `image` crate（BMP / JPG，只开解码特性）。
+  图像句柄方法（`scale` / `rotate` / `flip` / `to_gray` / `use_path_mask`）直接换掉内部位图：
+  `image::scale_image` 双线性重采样、`rotate_image` 只收 90/180/270、`flip_image`、`gray_image`
+  按 BT.601、`mask_image` 用 `tiny_skia::Mask` + `Pixmap::apply_mask`（路径坐标按图片像素）。
+  `static_image` 的 `w` / `h` 可省，缺省取位图尺寸。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

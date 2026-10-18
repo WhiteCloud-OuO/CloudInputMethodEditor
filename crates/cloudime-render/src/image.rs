@@ -10,8 +10,11 @@
 use std::io::Read;
 use std::path::Path;
 
-use tiny_skia::{BlendMode, FilterQuality, Pixmap, PixmapPaint, PremultipliedColorU8, Transform};
+use tiny_skia::{
+    BlendMode, FillRule, FilterQuality, Mask, Pixmap, PixmapPaint, PremultipliedColorU8, Transform,
+};
 
+use crate::document::{PathCommand, build_path};
 use crate::error::RenderError;
 
 /// 从**文件**读一张图并解码（PNG / BMP / JPG）。
@@ -53,6 +56,99 @@ pub fn decode_image(bytes: &[u8]) -> Result<Pixmap, RenderError> {
     Ok(pixmap)
 }
 
+/// **缩放**：按目标宽高重采样（双线性）；尺寸至少 1，像素数不能超过 [`MAX_IMAGE_PIXELS`]。
+pub fn scale_image(image: &Pixmap, width: u32, height: u32) -> Result<Pixmap, RenderError> {
+    let width = width.max(1);
+    let height = height.max(1);
+    if u64::from(width) * u64::from(height) > u64::from(MAX_IMAGE_PIXELS) {
+        return Err(RenderError::InvalidSize { width, height });
+    }
+    let mut target =
+        Pixmap::new(width, height).ok_or(RenderError::InvalidSize { width, height })?;
+    draw_image(&mut target, image, 0.0, 0.0, width as f32, height as f32);
+    Ok(target)
+}
+
+/// **几何旋转**：只支持 90 / 180 / 270 度（顺时针）。
+pub fn rotate_image(image: &Pixmap, degrees: u16) -> Result<Pixmap, RenderError> {
+    let (width, height) = (image.width(), image.height());
+    let (new_width, new_height) = match degrees {
+        90 | 270 => (height, width),
+        180 => (width, height),
+        other => {
+            return Err(RenderError::InvalidImage {
+                message: format!("旋转只支持 90 / 180 / 270 度，给的是 {other}"),
+            });
+        }
+    };
+    let mut target = Pixmap::new(new_width, new_height).ok_or(RenderError::InvalidSize {
+        width: new_width,
+        height: new_height,
+    })?;
+    for y in 0..new_height {
+        for x in 0..new_width {
+            let (sx, sy) = match degrees {
+                90 => (y, height - 1 - x),
+                180 => (width - 1 - x, height - 1 - y),
+                _ => (width - 1 - y, x),
+            };
+            if let Some(pixel) = image.pixel(sx, sy) {
+                target.pixels_mut()[(y * new_width + x) as usize] = pixel;
+            }
+        }
+    }
+    Ok(target)
+}
+
+/// **几何翻转**：水平 / 垂直。
+pub fn flip_image(image: &Pixmap, horizontal: bool) -> Pixmap {
+    let (width, height) = (image.width(), image.height());
+    let mut target = Pixmap::new(width, height).expect("同尺寸位图");
+    for y in 0..height {
+        for x in 0..width {
+            let (sx, sy) = if horizontal {
+                (width - 1 - x, y)
+            } else {
+                (x, height - 1 - y)
+            };
+            if let Some(pixel) = image.pixel(sx, sy) {
+                target.pixels_mut()[(y * width + x) as usize] = pixel;
+            }
+        }
+    }
+    target
+}
+
+/// **灰度化**：按 BT.601 权重（0.299 / 0.587 / 0.114）把 RGB 算成 0–255，alpha 不变。
+pub fn gray_image(image: &Pixmap) -> Pixmap {
+    let mut target = Pixmap::new(image.width(), image.height()).expect("同尺寸位图");
+    for (source, destination) in image.pixels().iter().zip(target.pixels_mut()) {
+        let gray = (299 * u32::from(source.red())
+            + 587 * u32::from(source.green())
+            + 114 * u32::from(source.blue()))
+            / 1000;
+        let gray = gray as u8;
+        *destination = PremultipliedColorU8::from_rgba(gray, gray, gray, source.alpha())
+            .unwrap_or(PremultipliedColorU8::TRANSPARENT);
+    }
+    target
+}
+
+/// **路径蒙版**：路径坐标按**图片像素**算，只留下路径内部（非零环绕）。
+pub fn mask_image(image: &Pixmap, commands: &[PathCommand]) -> Result<Pixmap, RenderError> {
+    let Some(path) = build_path(commands, 1.0, 0.0, 0.0) else {
+        return Err(RenderError::InvalidImage {
+            message: "路径蒙版画不出轮廓".to_owned(),
+        });
+    };
+    let (width, height) = (image.width(), image.height());
+    let mut mask = Mask::new(width, height).ok_or(RenderError::InvalidSize { width, height })?;
+    mask.fill_path(&path, FillRule::Winding, true, Transform::identity());
+    let mut target = image.clone();
+    target.apply_mask(&mask);
+    Ok(target)
+}
+
 /// 把一张图按**目标矩形**（像素）缩放画到 `target` 上：左上角 `(x, y)`、宽 `width`、高 `height`。
 /// 超出 `target` 的部分自然裁掉（与别的元素一样，「画得下多少算多少」）。
 ///
@@ -74,6 +170,9 @@ pub fn draw_image(target: &mut Pixmap, image: &Pixmap, x: f32, y: f32, width: f3
 
 /// 读图的上限（防一份坏文件把内存吃光）。
 const MAX_IMAGE_BYTES: u64 = 64 * 1024 * 1024;
+
+/// 缩放后的像素数上限（与脚本窗口的图像上限一致）。
+const MAX_IMAGE_PIXELS: u32 = 16 * 1024 * 1024;
 
 #[cfg(test)]
 mod tests {
@@ -168,6 +267,50 @@ mod tests {
             (255, 0, 0),
             "底行是红色"
         );
+    }
+
+    /// 缩放 / 旋转 / 翻转 / 灰度 / 路径蒙版：尺寸与颜色都按定义走。
+    #[test]
+    fn image_transformations_do_what_they_say() {
+        let source = quarters();
+        let scaled = scale_image(&source, 4, 4).expect("缩放");
+        assert_eq!((scaled.width(), scaled.height()), (4, 4));
+
+        let rotated = rotate_image(&source, 90).expect("旋转");
+        assert_eq!((rotated.width(), rotated.height()), (2, 2));
+        let top_left = rotated.pixel(0, 0).unwrap();
+        assert_eq!(
+            (top_left.red(), top_left.green(), top_left.blue()),
+            (0, 0, 255),
+            "顺时针 90 度后左上角是原图左下角（蓝）"
+        );
+
+        let flipped = flip_image(&source, true);
+        let top_left = flipped.pixel(0, 0).unwrap();
+        assert_eq!(
+            (top_left.red(), top_left.green(), top_left.blue()),
+            (0, 255, 0),
+            "水平翻转后左上角是原图右上角（绿）"
+        );
+
+        let gray = gray_image(&source);
+        let red = gray.pixel(0, 0).unwrap();
+        assert_eq!((red.red(), red.green(), red.blue()), (76, 76, 76));
+        assert_eq!(red.alpha(), 255);
+
+        let masked = mask_image(
+            &source,
+            &[
+                PathCommand::MoveTo(0.0, 0.0),
+                PathCommand::LineTo(1.0, 0.0),
+                PathCommand::LineTo(1.0, 2.0),
+                PathCommand::LineTo(0.0, 2.0),
+                PathCommand::Close,
+            ],
+        )
+        .expect("蒙版");
+        assert_eq!(masked.pixel(0, 0).unwrap().alpha(), 255, "左半边保留");
+        assert_eq!(masked.pixel(1, 0).unwrap().alpha(), 0, "右半边被蒙掉");
     }
 
     /// 不是 PNG 就报 `InvalidImage`（不 panic、不画半张）。

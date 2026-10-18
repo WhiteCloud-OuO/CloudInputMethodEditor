@@ -50,7 +50,10 @@ pub use frame::{
     Auxiliary, Frame, HighlightAnimation, HighlightRect, Preedit, PreeditSegment, PreeditStyle,
     Row, TipSegment, Tone,
 };
-pub use image::{decode_image, draw_image, load_image, read_image};
+pub use image::{
+    decode_image, draw_image, flip_image, gray_image, load_image, mask_image, read_image,
+    rotate_image, scale_image,
+};
 pub use layout::Layout;
 /// **渲染**：先画进一块内存区域，画完整块交给窗口，内容持久。
 pub use render::Render;

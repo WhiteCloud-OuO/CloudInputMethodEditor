@@ -192,9 +192,12 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
   换主题后跟着变），返回 `{ candidate = { … }, bar = { … }, tip = { … } }`，颜色是 `#AARRGGBB`。
   字段与主题文件一一对应（`candidate` 15 项 / `bar` 3 项 / `tip` 3 项），可以直接喂给元素的
   `color` / `tint`。加载期钩子还没接上时是 `nil`，事件派发时一定有。
-- **图像句柄**：`cloudime.image.load(路径)` → 用户数据（内部 `Arc<Pixmap>`），给 `static_image` 的
+- **图像句柄**：`cloudime.image.load(路径)` → 用户数据（内部可变的 `Arc<Pixmap>`），给 `static_image` 的
   `image` 字段；Lua 丢掉句柄后已放进内容的位图仍由文档持有。路径可用 `install_path` 拼；
-  文件解码 PNG / BMP / JPG，按长度 + 修改时间缓存。
+  文件解码 PNG / BMP / JPG，按长度 + 修改时间缓存。句柄方法都直接改位图（下次 `set_content` 生效）：
+  `scale(factor | w, h)`、`rotate(90|180|270)`（顺时针）、`flip("horizontal"|"vertical")`、
+  `to_gray()`（BT.601，0–255）、`use_path_mask(commands)`（坐标按图片像素，非零环绕）。
+  `static_image` 的 `w` / `h` 可省，缺省用图片自身像素尺寸。
   **阴影**：`create{ shadow = true }`（缺省）与候选窗同一套阴影；`background = false` 只关面板填充，
   不影响阴影，两者可以自由组合。
 - **输入法自己的组合键优先**：`Ctrl + 数字`（主键盘 / 小键盘）、`Ctrl + Enter`、`Ctrl + 反引号`、
@@ -311,7 +314,7 @@ win:set_content{
 | `label` | `x` / `y` / `size` / `font`（缺省 `candidate`）；`runs = { { text, color }, … }`（每段独立颜色，缺省黑） |
 | `text_block` | `x` / `y` / `text`（可含 `\n`）/ `size` / `font`（缺省 `item_number`）/ `line_spacing`（点，缺省 2）/ `color`（整块同色） |
 | `static_shape` | `shape = line / rect / round_rect / circle / path` + 对应字段 + `color` |
-| `static_image` | `x` / `y` / `w` / `h` + `image`（`cloudime.image.load` 句柄）或 `path`（PNG / BMP / JPG） |
+| `static_image` | `x` / `y` / `w` / `h`（可省）+ `image`（`cloudime.image.load` 句柄）或 `path`（PNG / BMP / JPG） |
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（边缘，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1）/ `fill`（可选）/ `children`（相对坐标） |
 
 - 坐标与尺寸一律是**点**（100% 缩放下 1 点 = 1 像素），随 DPI 一起放大；超出内容区的部分被裁掉。
