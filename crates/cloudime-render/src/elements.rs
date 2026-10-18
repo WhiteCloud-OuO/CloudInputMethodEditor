@@ -10,7 +10,7 @@
 //!
 //! 坐标一律是**像素**、左上角原点；`text` 的 `(x, y)` 是行框左上角（`y` 不是基线）。
 
-use tiny_skia::{Path, Pixmap};
+use tiny_skia::{Path, Pixmap, Rect};
 
 use crate::color::Color;
 use crate::error::RenderError;
@@ -65,16 +65,27 @@ pub trait PathElement {
     fn path(&mut self, path: &Path, color: Color);
 }
 
+/// **描边**：给圆角矩形画一圈线（面板缺省的边框用它）。
+pub trait StrokeElement {
+    fn stroke_round_rect(&mut self, rect: Rect, radius: f32, thickness: f32, color: Color);
+}
+
 /// 控件绘制用的一整套原语：能画控件的地方必须同时实现上面这些 trait。
 ///
 /// `Render` 全实现了，所以控件在内存渲染器上直接可用；以后加别的后端（比如直接画 DC）
 /// 只要也实现这几个 trait，控件代码不用改。
 pub trait ControlRender:
-    TextElement + SvgElement + ImageElement + LineElement + RectElement + PathElement
+    TextElement + SvgElement + ImageElement + LineElement + RectElement + PathElement + StrokeElement
 {
 }
 
 impl<T> ControlRender for T where
-    T: TextElement + SvgElement + ImageElement + LineElement + RectElement + PathElement
+    T: TextElement
+        + SvgElement
+        + ImageElement
+        + LineElement
+        + RectElement
+        + PathElement
+        + StrokeElement
 {
 }

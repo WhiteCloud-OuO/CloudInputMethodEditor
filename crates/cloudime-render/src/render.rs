@@ -16,7 +16,7 @@ use tiny_skia::{BlendMode, Path, Pixmap};
 use crate::canvas::Canvas;
 use crate::color::Color;
 use crate::elements::{
-    ImageElement, LineElement, PathElement, RectElement, SvgElement, TextElement,
+    ImageElement, LineElement, PathElement, RectElement, StrokeElement, SvgElement, TextElement,
 };
 use crate::error::RenderError;
 use crate::image;
@@ -126,6 +126,19 @@ impl RectElement for Render {
 impl PathElement for Render {
     fn path(&mut self, path: &Path, color: Color) {
         self.canvas.fill_path(path, color, BlendMode::SourceOver);
+    }
+}
+
+impl StrokeElement for Render {
+    fn stroke_round_rect(
+        &mut self,
+        rect: tiny_skia::Rect,
+        radius: f32,
+        thickness: f32,
+        color: Color,
+    ) {
+        self.canvas
+            .stroke_round_rect(rect, radius, thickness, color);
     }
 }
 

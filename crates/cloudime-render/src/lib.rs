@@ -38,7 +38,8 @@ pub use document::{Document, Element, FontSlot, HitRect, HitShape, PathCommand, 
 /// **能画的元素**的 traits：`text` / `svg` / `img` / `line` / `rect`（含圆角与圆）/ `path`；
 /// 以及控件绘制用的一整套 [`ControlRender`]。
 pub use elements::{
-    ControlRender, ImageElement, LineElement, PathElement, RectElement, SvgElement, TextElement,
+    ControlRender, ImageElement, LineElement, PathElement, RectElement, StrokeElement, SvgElement,
+    TextElement,
 };
 pub use error::RenderError;
 /// Windows 的字体登记：按字族名找文件、列字族名（设置页用）。

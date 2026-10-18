@@ -57,6 +57,30 @@ impl Canvas {
         }
     }
 
+    /// 圆角矩形描边（线宽 `thickness` 像素，居中在路径上）。
+    pub(crate) fn stroke_round_rect(
+        &mut self,
+        rect: Rect,
+        radius: f32,
+        thickness: f32,
+        color: Color,
+    ) {
+        let Some(path) = round_rect(rect.x(), rect.y(), rect.width(), rect.height(), radius) else {
+            return;
+        };
+        let stroke = tiny_skia::Stroke {
+            width: thickness.max(0.0),
+            ..tiny_skia::Stroke::default()
+        };
+        self.pixmap.stroke_path(
+            &path,
+            &paint(color, BlendMode::SourceOver),
+            &stroke,
+            Transform::identity(),
+            None,
+        );
+    }
+
     pub(crate) fn fill_path(&mut self, path: &Path, color: Color, blend: BlendMode) {
         self.pixmap.fill_path(
             path,

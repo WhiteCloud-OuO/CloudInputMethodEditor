@@ -828,7 +828,7 @@ fn parse_text_block(table: &mlua::Table) -> mlua::Result<Element> {
         x: number(table, "x", 0.0)?,
         y: number(table, "y", 0.0)?,
         size,
-        slot: font_slot(table)?,
+        slot: font_slot_or(table, FontSlot::ItemNumber)?,
         line_spacing: number(table, "line_spacing", 2.0)?.clamp(-size * 2.0, size * 4.0),
         color: color(table, "color", false)?.unwrap_or(Color::rgb(0, 0, 0)),
         text,
@@ -939,7 +939,10 @@ fn parse_panel(
         width: positive(table, "w", "width")?,
         height: positive(table, "h", "height")?,
         radius: number(table, "radius", 6.0)?.max(0.0),
+        // 缺省只画边缘：`#FFE0E0E0`、1 点；要填色才写 `fill`。
         color: color(table, "color", false)?.unwrap_or(Color::rgba(0xE0, 0xE0, 0xE0, 0xFF)),
+        border_width: number(table, "border_width", 1.0)?.clamp(0.0, 16.0),
+        fill: color(table, "fill", false)?,
         children,
     }))
 }
@@ -954,10 +957,15 @@ fn check_text(text: &str) -> mlua::Result<()> {
     Ok(())
 }
 
-/// 控件与 `text` 元素共用的字体槽位解析。
+/// 控件与 `text` 元素共用的字体槽位解析（缺省 [`FontSlot::Candidate`]）。
 fn font_slot(table: &mlua::Table) -> mlua::Result<FontSlot> {
+    font_slot_or(table, FontSlot::Candidate)
+}
+
+/// 同上，但可以指定缺省槽位（`text_block` 缺省用序号字体）。
+fn font_slot_or(table: &mlua::Table, default: FontSlot) -> mlua::Result<FontSlot> {
     match table.get::<Option<String>>("font")? {
-        None => Ok(FontSlot::Candidate),
+        None => Ok(default),
         Some(name) => FontSlot::from_name(&name).ok_or_else(|| {
             mlua::Error::RuntimeError(format!(
                 "font 不认识：{name}（可用：candidate / pinyin / item_number / translate）"
@@ -1510,6 +1518,7 @@ mod tests {
                 assert_eq!(label.runs.len(), 2);
                 assert_eq!(label.runs[0].color, Color::rgba(0, 0, 255, 255));
                 assert_eq!(label.runs[1].color, Color::rgb(0, 0, 0), "缺省黑色");
+                assert_eq!(label.slot, FontSlot::Candidate);
             }
             other => panic!("不是 label：{other:?}"),
         }
@@ -1518,6 +1527,7 @@ mod tests {
                 assert_eq!(block.text, "第一行\n第二行");
                 assert_eq!(block.line_spacing, 4.0);
                 assert_eq!(block.color, Color::rgb(0x33, 0x33, 0x33));
+                assert_eq!(block.slot, FontSlot::ItemNumber);
             }
             other => panic!("不是 text_block：{other:?}"),
         }
@@ -1536,6 +1546,8 @@ mod tests {
                 assert_eq!(panel.children.len(), 1);
                 assert_eq!(panel.radius, 6.0);
                 assert_eq!(panel.color, Color::rgba(0xE0, 0xE0, 0xE0, 0xFF));
+                assert_eq!(panel.border_width, 1.0);
+                assert!(panel.fill.is_none(), "面板缺省无填充");
                 assert!(matches!(
                     &panel.children[0],
                     Element::StaticShape(StaticShape::RoundRect { radius, .. })

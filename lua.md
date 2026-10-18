@@ -478,17 +478,17 @@ aux:show()
 | `svg` | `x` / `y` / `size`（见方）/ `source`（整段 SVG 文本）**或** `path`（SVG 文件，常用 `cloudime.install_path`）/ `tint`（可选，按 alpha 染色） |
 | `img` | `x` / `y` / `w` / `h` / `path`（PNG / BMP / JPG；相对路径按安装目录算） |
 | `path` | `commands` = `{ {"M",x,y}, {"L",x,y}, {"Q",cx,cy,x,y}, {"C",…}, {"Z"} }`、`color` |
-| `label` | `x` / `y` / `size` / `font`；`runs = { { text = "云朵", color = "#FF0000FF" }, … }`，每段可单独着色 |
-| `text_block` | `x` / `y` / `text`（可含 `\n`）/ `size` / `font` / `line_spacing`（点，缺省 2）/ `color`（整块同色） |
+| `label` | `x` / `y` / `size` / `font`（缺省 `candidate`）；`runs = { { text = "云朵", color = "#FF0000FF" }, … }`，每段可单独着色 |
+| `text_block` | `x` / `y` / `text`（可含 `\n`）/ `size` / `font`（缺省 `item_number`）/ `line_spacing`（点，缺省 2）/ `color`（整块同色） |
 | `static_shape` | `shape` = `line` / `rect` / `round_rect` / `circle` / `path`；字段与该形状同名（`from`/`to`/`x`/`y`/`w`/`h`/`radius`/`cx`/`cy`/`commands`）+ `color` |
 | `static_image` | `x` / `y` / `w` / `h` + `image`（`cloudime.image.load` 的句柄）或 `path`（PNG / BMP / JPG） |
-| `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（缺省 `#FFE0E0E0`）/ `children = { …元素… }`；子控件用面板内相对坐标 |
+| `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（**边缘**颜色，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1 点）/ `fill`（可选填充，不写 = 无填充）/ `children = { …元素… }`；子控件用面板内相对坐标 |
 
 颜色写 `"#RRGGBB"` / `"#AARRGGBB"` / `"#RGB"`，或 `{ r = …, g = …, b = …, a = … }`（0–255）。
 
 **静态控件**（`label` / `text_block` / `static_shape` / `static_image` / `panel`）只是显示内容：
 **没有命中框**，不参与 hover / click / `event.element`。面板只做分组：`children` 的坐标相对面板左上角，
-绘制时整体平移；面板自己按 `color` / `radius` 画圆角背景。
+绘制时整体平移；面板缺省**无填充**，只画 `#FFE0E0E0`、1 点的圆角边框（要底色写 `fill`）。
 
 ```lua
 win:set_content{

@@ -18,7 +18,7 @@ use std::rc::Rc;
 use crate::color::Color;
 use crate::document::{self, Document, Element, HitRect, HitShape};
 use crate::elements::{
-    ImageElement, LineElement, PathElement, RectElement, SvgElement, TextElement,
+    ImageElement, LineElement, PathElement, RectElement, StrokeElement, SvgElement, TextElement,
 };
 use crate::error::RenderError;
 use crate::fonts::FontLibrary;
@@ -935,21 +935,38 @@ fn draw_element(
             None
         }
         Element::Panel(panel) => {
-            if panel.radius > 0.0 {
-                render.round_rect(
+            if let Some(fill) = panel.fill {
+                if panel.radius > 0.0 {
+                    render.round_rect(
+                        x_at(panel.x),
+                        y_at(panel.y),
+                        len(panel.width),
+                        len(panel.height),
+                        len(panel.radius),
+                        fill,
+                    );
+                } else {
+                    render.rect(
+                        x_at(panel.x),
+                        y_at(panel.y),
+                        len(panel.width),
+                        len(panel.height),
+                        fill,
+                    );
+                }
+            }
+            if panel.border_width > 0.0
+                && let Some(rect) = tiny_skia::Rect::from_xywh(
                     x_at(panel.x),
                     y_at(panel.y),
                     len(panel.width),
                     len(panel.height),
+                )
+            {
+                render.stroke_round_rect(
+                    rect,
                     len(panel.radius),
-                    panel.color,
-                );
-            } else {
-                render.rect(
-                    x_at(panel.x),
-                    y_at(panel.y),
-                    len(panel.width),
-                    len(panel.height),
+                    len(panel.border_width),
                     panel.color,
                 );
             }
@@ -1351,6 +1368,8 @@ mod tests {
                     height: 60.0,
                     radius: 6.0,
                     color: Color::rgb(0xE0, 0xE0, 0xE0),
+                    border_width: 1.0,
+                    fill: Some(Color::rgb(0xE0, 0xE0, 0xE0)),
                     children: vec![
                         Element::Label(Label {
                             x: 4.0,

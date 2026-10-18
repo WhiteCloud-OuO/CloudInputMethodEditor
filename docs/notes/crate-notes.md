@@ -1025,7 +1025,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 - **静态控件**（2026-10-18）：`cloudime-render/src/control.rs` 用元素 traits（`ControlRender` =
   `TextElement` + `SvgElement` + `ImageElement` + `LineElement` + `RectElement` + `PathElement`）
   组合出 `Label`（多段彩色）/ `TextBlock`（多行、行距）/ `StaticShape`（线 / 矩形 / 圆角矩形 / 圆 / 路径）/
-  `StaticImage`（`Arc<Pixmap>`，文件或句柄）/ `Panel`（背景 + 相对坐标子控件，缺省 `#FFE0E0E0` 圆角 6）。
+  `StaticImage`（`Arc<Pixmap>`，文件或句柄）/ `Panel`（相对坐标子控件；缺省无填充，边缘
+  `#FFE0E0E0`、1 点，`fill` 可选）。`Label` 缺省候选词字体，`TextBlock` 缺省序号字体。
   它们落在 `Element` 的控件变体上，`draw_element` 返回 `None`（**没有命中框**，不参与 hover / click /
   `element` 编号）；面板的子控件用 `origin` 平移递归绘制。Lua 端 `set_content` 解析 `label` /
   `text_block` / `static_shape` / `static_image` / `panel`（面板嵌套上限 8 层）。

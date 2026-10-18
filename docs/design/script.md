@@ -308,16 +308,18 @@ win:set_content{
 | `svg` | `x` / `y` / `size`（见方）/ `source`（整段 SVG 文本）或 `path`（SVG 文件）；`tint` 可选（按 alpha 染色） |
 | `img` | `x` / `y` / `w` / `h` / `path`（PNG / BMP / JPG；相对路径按 Server 的工作目录 = 安装目录算） |
 | `path` | `commands`（`{"M",x,y}` / `{"L",x,y}` / `{"Q",cx,cy,x,y}` / `{"C",…}` / `{"Z"}`）；`color` 必给 |
-| `label` | `x` / `y` / `size` / `font`；`runs = { { text, color }, … }`（每段独立颜色，缺省黑） |
-| `text_block` | `x` / `y` / `text`（可含 `\n`）/ `size` / `font` / `line_spacing`（点，缺省 2）/ `color`（整块同色） |
+| `label` | `x` / `y` / `size` / `font`（缺省 `candidate`）；`runs = { { text, color }, … }`（每段独立颜色，缺省黑） |
+| `text_block` | `x` / `y` / `text`（可含 `\n`）/ `size` / `font`（缺省 `item_number`）/ `line_spacing`（点，缺省 2）/ `color`（整块同色） |
 | `static_shape` | `shape = line / rect / round_rect / circle / path` + 对应字段 + `color` |
 | `static_image` | `x` / `y` / `w` / `h` + `image`（`cloudime.image.load` 句柄）或 `path`（PNG / BMP / JPG） |
-| `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（缺省 `#FFE0E0E0`）/ `children`（相对坐标） |
+| `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（边缘，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1）/ `fill`（可选）/ `children`（相对坐标） |
 
 - 坐标与尺寸一律是**点**（100% 缩放下 1 点 = 1 像素），随 DPI 一起放大；超出内容区的部分被裁掉。
 - **静态控件**（`label` / `text_block` / `static_shape` / `static_image` / `panel`）只用 traits 画、
   **不产生命中框**：不参与 hover / click / `event.element`，窗口交互仍只认 `regions` 与普通元素。
-  面板只做分组：`children` 用面板内相对坐标，绘制时整体平移；嵌套上限 8 层。
+  面板只做分组：`children` 用面板内相对坐标，绘制时整体平移；缺省**无填充**，只画
+  `#FFE0E0E0`、1 点的圆角边框（`fill` 可选）；嵌套上限 8 层。`label` 缺省用候选词字体、
+  `text_block` 缺省用序号字体，两者都可以用 `font` 覆盖。
 - 颜色：`"#RRGGBB"` / `"#AARRGGBB"` / `"#RGB"`，或 `{ r = …, g = …, b = …, a = … }`（0–255，`a` 缺省 255）。
 - **限额**（当场报错，这一次调用中止、窗口保持原样）：一份内容最多 **512** 个元素；一段文字最多 **4096** 字符；
   图像解码后不超过 **4096 × 4096**（约 1600 万像素）；内容区尺寸夹到 **8–2048 点**。

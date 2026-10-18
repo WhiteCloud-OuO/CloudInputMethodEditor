@@ -210,7 +210,7 @@ impl StaticImage {
     }
 }
 
-/// **面板**：容器 + 缺省浅灰圆角背景；子控件用面板内坐标，绘制时整体平移。
+/// **面板**：容器 + 边框；缺省**无填充**，边缘 `#FFE0E0E0`、线宽 1 点。子控件用面板内坐标，绘制时整体平移。
 #[derive(Clone)]
 pub struct Panel {
     pub x: f32,
@@ -218,7 +218,12 @@ pub struct Panel {
     pub width: f32,
     pub height: f32,
     pub radius: f32,
+    /// 边缘颜色。
     pub color: Color,
+    /// 边缘线宽（点）。
+    pub border_width: f32,
+    /// 内部填充；`None` = 不填充。
+    pub fill: Option<Color>,
     pub children: Vec<crate::document::Element>,
 }
 
