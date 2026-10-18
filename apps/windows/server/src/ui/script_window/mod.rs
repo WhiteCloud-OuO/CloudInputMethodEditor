@@ -26,10 +26,11 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     TrackMouseEvent, VK_CONTROL, VK_MENU, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, GetSystemMetrics, HTCLIENT, HTTRANSPARENT, IDC_ARROW, LoadCursorW, MA_NOACTIVATE,
-    SM_CXDOUBLECLK, SM_CYDOUBLECLK, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
-    SetWindowPos, ShowWindow, WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_RBUTTONUP,
+    DefWindowProcW, GetCursorPos, GetSystemMetrics, HTCLIENT, HTTRANSPARENT, IDC_ARROW, KillTimer,
+    LoadCursorW, MA_NOACTIVATE, SM_CXDOUBLECLK, SM_CYDOUBLECLK, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE,
+    SWP_NOSIZE, SWP_NOZORDER, SetTimer, SetWindowPos, ShowWindow, WM_CAPTURECHANGED,
+    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
+    WM_RBUTTONUP, WM_TIMER,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -312,6 +313,16 @@ struct ScrollDrag {
     offset: f32,
 }
 
+/// 滚动条非拖拽改值（滚轮 / 点轨道）的过渡动画。
+const SCROLL_ANIM_MS: u64 = 140;
+const SCROLL_ANIM_FRAME_MS: u32 = 16;
+
+struct ScrollAnimation {
+    from: u64,
+    to: u64,
+    start: Instant,
+}
+
 /// 一次拖动要移动超过多少像素才算「拖」而不是「点」。
 const DRAG_THRESHOLD: i32 = 4;
 
@@ -373,6 +384,12 @@ pub(super) struct ScriptWindow {
     /// 滚动条拖动：正在拖哪个元素 + 按下点相对滑块起点的偏移。
     scrollbar_drag: Cell<Option<ScrollDrag>>,
 
+    /// 滚动条过渡动画（元素下标 → 起止值 / 开始时间）。
+    scroll_anims: RefCell<HashMap<usize, ScrollAnimation>>,
+
+    /// 动画定时器（0 = 没启动）。
+    scroll_anim_timer: Cell<usize>,
+
     /// 这一次按下之后有没有真拖动过（系统可能在 `WM_LBUTTONUP` 之前就撤掉捕获，
     /// 所以「拖过就不算点击」得单独记）。
     moved_since_press: Cell<bool>,
@@ -428,6 +445,8 @@ impl ScriptWindow {
             text_edits: RefCell::new(Vec::new()),
             drag: Cell::new(None),
             scrollbar_drag: Cell::new(None),
+            scroll_anims: RefCell::new(HashMap::new()),
+            scroll_anim_timer: Cell::new(0),
             moved_since_press: Cell::new(false),
             last: Cell::new((0, 0)),
             scale: Cell::new(1.0),
@@ -453,6 +472,9 @@ impl ScriptWindow {
         self.hover.set(None);
         self.hover_button.set(None);
         self.pressed_button.set(None);
+        self.scrollbar_drag.set(None);
+        self.scroll_anims.borrow_mut().clear();
+        self.stop_scroll_anim_timer();
         self.last_click.set(None);
         self.rebuild_text_edits();
         self.revision.set(self.revision.get() + 1);
@@ -789,6 +811,107 @@ impl ScriptWindow {
         true
     }
 
+    /// 滚动条当前逻辑目标（动画中是 `to`，否则是显示值）。
+    fn scrollbar_target(&self, index: usize) -> Option<u64> {
+        if let Some(anim) = self.scroll_anims.borrow().get(&index) {
+            return Some(anim.to);
+        }
+        self.scrollbar(index).map(|bar| bar.value)
+    }
+
+    fn ensure_scroll_anim_timer(&self) {
+        if self.scroll_anim_timer.get() != 0 {
+            return;
+        }
+        let timer = unsafe { SetTimer(Some(self.hwnd()), 0, SCROLL_ANIM_FRAME_MS, None) };
+        self.scroll_anim_timer.set(timer);
+    }
+
+    fn stop_scroll_anim_timer(&self) {
+        let timer = self.scroll_anim_timer.replace(0);
+        if timer != 0 {
+            let _ = unsafe { KillTimer(Some(self.hwnd()), timer) };
+        }
+    }
+
+    fn cancel_scroll_animation(&self, index: usize) {
+        let mut anims = self.scroll_anims.borrow_mut();
+        anims.remove(&index);
+        let empty = anims.is_empty();
+        drop(anims);
+        if empty {
+            self.stop_scroll_anim_timer();
+        }
+    }
+
+    /// 非拖拽改值：从当前显示值平滑过渡到目标，并立刻派一次目标值事件。
+    fn animate_scrollbar_value(&self, index: usize, target: u64, x: f32, y: f32) {
+        let Some(bar) = self.scrollbar(index) else {
+            return;
+        };
+        let current = bar.value;
+        let logical = self
+            .scroll_anims
+            .borrow()
+            .get(&index)
+            .map(|anim| anim.to)
+            .unwrap_or(current);
+        if logical == target {
+            return;
+        }
+        self.emit_scrollbar_value(index, target, x, y);
+        if current == target {
+            self.cancel_scroll_animation(index);
+            return;
+        }
+        self.scroll_anims.borrow_mut().insert(
+            index,
+            ScrollAnimation {
+                from: current,
+                to: target,
+                start: Instant::now(),
+            },
+        );
+        self.ensure_scroll_anim_timer();
+    }
+
+    fn step_scroll_animations(&self) {
+        let now = Instant::now();
+        let mut finished = Vec::new();
+        let mut changed = false;
+        {
+            let mut document = self.document.borrow_mut();
+            let mut anims = self.scroll_anims.borrow_mut();
+            for (index, anim) in anims.iter() {
+                let elapsed = now.duration_since(anim.start).as_millis() as u64;
+                let progress = (elapsed as f64 / SCROLL_ANIM_MS as f64).min(1.0);
+                let eased = 1.0 - (1.0 - progress).powi(3);
+                let delta = anim.to as i128 - anim.from as i128;
+                let value = (anim.from as i128 + (delta as f64 * eased).round() as i128)
+                    .clamp(0, u64::MAX as i128) as u64;
+                if let Some(Element::ScrollBar(bar)) = document.elements.get_mut(*index)
+                    && bar.value != value
+                {
+                    bar.value = value;
+                    changed = true;
+                }
+                if progress >= 1.0 {
+                    finished.push(*index);
+                }
+            }
+            for index in finished {
+                anims.remove(&index);
+            }
+            if anims.is_empty() {
+                drop(anims);
+                self.stop_scroll_anim_timer();
+            }
+        }
+        if changed {
+            self.repaint();
+        }
+    }
+
     fn emit_scrollbar_value(&self, index: usize, value: u64, x: f32, y: f32) {
         let document = self.document.borrow();
         let Some(Element::ScrollBar(bar)) = document.elements.get(index) else {
@@ -839,16 +962,16 @@ impl ScriptWindow {
                 cloudime_render::ScrollAxis::Vertical => y < ty,
             };
             let value = if before {
-                bar.value.saturating_sub(bar.step).max(bar.min)
+                let current = self.scrollbar_target(index).unwrap_or(bar.value);
+                current.saturating_sub(bar.step).max(bar.min)
             } else {
-                bar.value.saturating_add(bar.step).min(bar.max)
+                let current = self.scrollbar_target(index).unwrap_or(bar.value);
+                current.saturating_add(bar.step).min(bar.max)
             };
-            if self.set_scrollbar_value(index, value) {
-                self.repaint();
-                self.emit_scrollbar_value(index, value, x, y);
-            }
+            self.animate_scrollbar_value(index, value, x, y);
             return true;
         }
+        self.cancel_scroll_animation(index);
         let offset = match bar.axis {
             cloudime_render::ScrollAxis::Horizontal => x - tx,
             cloudime_render::ScrollAxis::Vertical => y - ty,
@@ -867,6 +990,7 @@ impl ScriptWindow {
             self.scrollbar_drag.set(None);
             return true;
         };
+        self.cancel_scroll_animation(drag.index);
         let value = bar.value_at((x, y), drag.offset);
         if self.set_scrollbar_value(drag.index, value) {
             self.repaint();
@@ -894,14 +1018,13 @@ impl ScriptWindow {
             return false;
         };
         let value = if delta > 0 {
-            bar.value.saturating_sub(bar.step).max(bar.min)
+            let current = self.scrollbar_target(index).unwrap_or(bar.value);
+            current.saturating_sub(bar.step).max(bar.min)
         } else {
-            bar.value.saturating_add(bar.step).min(bar.max)
+            let current = self.scrollbar_target(index).unwrap_or(bar.value);
+            current.saturating_add(bar.step).min(bar.max)
         };
-        if self.set_scrollbar_value(index, value) {
-            self.repaint();
-            self.emit_scrollbar_value(index, value, x, y);
-        }
+        self.animate_scrollbar_value(index, value, x, y);
         true
     }
 
@@ -1177,6 +1300,8 @@ impl ScriptWindow {
         self.hits.borrow_mut().clear();
         self.hover.set(None);
         self.scrollbar_drag.set(None);
+        self.scroll_anims.borrow_mut().clear();
+        self.stop_scroll_anim_timer();
         self.reset_button_states();
         for edit in self.text_edits.borrow().iter() {
             edit.host.show(false);
@@ -1505,6 +1630,7 @@ impl Bridge for ScriptWindow {
 impl Drop for ScriptWindow {
     fn drop(&mut self) {
         self.destroy_text_edits();
+        self.stop_scroll_anim_timer();
         REGISTRY.with(|map| {
             map.borrow_mut().remove(&(self.hwnd().0 as isize));
         });
@@ -1849,6 +1975,20 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_MOUSELEAVE => {
             with_window(hwnd, ScriptWindow::emit_leave);
             LRESULT(0)
+        }
+        WM_TIMER => {
+            let ours = Cell::new(false);
+            with_window(hwnd, |window| {
+                if window.scroll_anim_timer.get() != 0 && wparam.0 == window.scroll_anim_timer.get()
+                {
+                    ours.set(true);
+                    window.step_scroll_animations();
+                }
+            });
+            if ours.get() {
+                return LRESULT(0);
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_TEXT_CHANGED => {
             let host = HWND(wparam.0 as *mut _);
