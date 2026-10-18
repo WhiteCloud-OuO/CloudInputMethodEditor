@@ -338,6 +338,11 @@ win:set_content{
   SVG 不做固定：脚本重新 `set_content` 换 `svg` / `svg_path` 即可（按钮状态重新从 normal 开始）。
   背景在 `cloudime-render::control::FlatSvgButton` 里按 `ButtonShape` 画，命中框由 `hit_shape` 给出；
   自动区域在解析内容时加到 `Document.regions`（`drag = false`）。
+  **事件**：走 `window` 事件，动作是 `mouse_enter` / `mouse_leave` / `mouse_pressed` /
+  `mouse_released` / `mouse_clicked` / `mouse_double_clicked`。`mouse_pressed` 总是派并带
+  `ctrl` / `alt` / `shift`；`mouse_clicked` / `mouse_double_clicked` 只在没有修饰键且没拖动时派。
+  双击由窗口自己按 `GetDoubleClickTime` + 系统双击距离判：第二次单击先派 `mouse_clicked`、
+  再派 `mouse_double_clicked`。
 - **区域（region）**：内容里可以声明 `regions = { … }` —— 区域是**鼠标点击 / 拖拽的命中范围**
   （元素只管画）。`name` 必写、同一份内容里唯一；`drag` 缺省 `true` = 按住它拖会移动整块窗口，
   `false` = 不拖窗口（点击照常）。后写的区域盖住先写的；事件里的 `event.region` 就是命中的区域名

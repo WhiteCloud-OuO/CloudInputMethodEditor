@@ -153,7 +153,7 @@ fn the_caret_window_script_draws_and_closes_itself() {
                 ("id", mlua::Value::Integer(i64::from(id))),
                 (
                     "action",
-                    mlua::Value::String(runtime.lua().create_string("click").unwrap()),
+                    mlua::Value::String(runtime.lua().create_string("mouse_clicked").unwrap()),
                 ),
                 (
                     "region",

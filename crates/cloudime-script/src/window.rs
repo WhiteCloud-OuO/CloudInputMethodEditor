@@ -1423,6 +1423,24 @@ pub enum WindowAction {
 
     /// 键盘焦点离开（点了别的窗口、收起 / 销毁、或脚本 `win:focus(false)`）。
     Blur,
+
+    /// 鼠标进入扁平按钮区域。
+    MouseEnter,
+
+    /// 鼠标离开扁平按钮区域。
+    MouseLeave,
+
+    /// 在扁平按钮上按下鼠标（修饰键在载荷 `ctrl` / `alt` / `shift` 里）。
+    MousePressed,
+
+    /// 在扁平按钮上松开鼠标。
+    MouseReleased,
+
+    /// 在扁平按钮上单击（没有拖拽、没有修饰键）。
+    MouseClicked,
+
+    /// 在扁平按钮上双击（第二次 `mouse_clicked`，没有修饰键）。
+    MouseDoubleClicked,
 }
 
 impl WindowAction {
@@ -1436,6 +1454,12 @@ impl WindowAction {
             Self::Wheel => "wheel",
             Self::Focus => "focus",
             Self::Blur => "blur",
+            Self::MouseEnter => "mouse_enter",
+            Self::MouseLeave => "mouse_leave",
+            Self::MousePressed => "mouse_pressed",
+            Self::MouseReleased => "mouse_released",
+            Self::MouseClicked => "mouse_clicked",
+            Self::MouseDoubleClicked => "mouse_double_clicked",
         }
     }
 }
@@ -1466,6 +1490,11 @@ pub struct ScriptWindowEvent {
 
     /// 滚轮量（只有 `Wheel` 有）。
     pub delta: Option<i32>,
+
+    /// 鼠标事件发生时的 Ctrl / Alt / Shift 状态。
+    pub ctrl: bool,
+    pub alt: bool,
+    pub shift: bool,
 }
 
 /// 事件的载荷：`{ window = 名字, id = 编号, action = …, x, y, element, region, delta }`。
@@ -1479,6 +1508,9 @@ pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result
     payload.set("element", event.element)?;
     payload.set("region", event.region.clone())?;
     payload.set("delta", event.delta)?;
+    payload.set("ctrl", event.ctrl)?;
+    payload.set("alt", event.alt)?;
+    payload.set("shift", event.shift)?;
     Ok(payload)
 }
 
@@ -1508,6 +1540,21 @@ mod tests {
         );
         assert_eq!(parse_hex_color("#12345"), None);
         assert_eq!(parse_hex_color("gggggg"), None);
+    }
+
+    /// 扁平按钮的六个事件名。
+    #[test]
+    fn flat_button_actions_have_stable_payload_names() {
+        for (action, name) in [
+            (WindowAction::MouseEnter, "mouse_enter"),
+            (WindowAction::MouseLeave, "mouse_leave"),
+            (WindowAction::MousePressed, "mouse_pressed"),
+            (WindowAction::MouseReleased, "mouse_released"),
+            (WindowAction::MouseClicked, "mouse_clicked"),
+            (WindowAction::MouseDoubleClicked, "mouse_double_clicked"),
+        ] {
+            assert_eq!(action.as_str(), name);
+        }
     }
 
     /// 图像缓存：同一份文件不重复解码（拿到同一个 `Arc`）；文件改过就重读。
@@ -1544,9 +1591,15 @@ mod tests {
             element: Some(2),
             region: Some("plus".to_owned()),
             delta: Some(120),
+            ctrl: true,
+            alt: false,
+            shift: true,
         };
         let payload = event_payload(&lua, &event).unwrap();
         assert_eq!(payload.get::<String>("action").unwrap(), "wheel");
+        assert!(payload.get::<bool>("ctrl").unwrap());
+        assert!(!payload.get::<bool>("alt").unwrap());
+        assert!(payload.get::<bool>("shift").unwrap());
         assert_eq!(payload.get::<String>("window").unwrap(), "面板");
         assert_eq!(payload.get::<String>("region").unwrap(), "plus");
         assert_eq!(payload.get::<u32>("id").unwrap(), 3);

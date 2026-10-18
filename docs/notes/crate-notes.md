@@ -1044,6 +1044,12 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `hover_button` / `pressed_button` 两个下标在 `WM_MOUSEMOVE` / `WM_LBUTTONDOWN` / `WM_LBUTTONUP`
   时切状态并 `repaint`（`render_and_present`），脚本不用自己跟踪 hover / press；点击仍走原来的
   `window` 事件。SVG 换图靠重新 `set_content`。
+  **事件**：`WindowAction` 新增 `MouseEnter` / `MouseLeave` / `MousePressed` / `MouseReleased` /
+  `MouseClicked` / `MouseDoubleClicked`；`ScriptWindowEvent` 多了 `ctrl` / `alt` / `shift`。
+  enter / leave 在 `update_hover_button` 变按钮时派；pressed / released 在按下 / 抬起派，
+  pressed 总是带修饰键；clicked / double 只在无修饰键且 `moved_since_press == false` 时派，
+  双击用 `Instant` + `GetDoubleClickTime` + `SM_CXDOUBLECLK` / `SM_CYDOUBLECLK` 判，第二次
+  先派 clicked 再派 double。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。
   `Asset::name`（同一所有者名下唯一，`Assets::add` 里 `debug_assert` 查重）是**跨资产指认**用的名字 ——

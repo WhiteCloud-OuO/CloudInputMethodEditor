@@ -544,6 +544,20 @@ icon:use_path_mask({ { "M", 0, 0 }, { "L", 16, 0 }, { "L", 16, 16 }, { "L", 0, 1
 - **SVG 可以随时换**：重新 `set_content` 时给新的 `svg` / `svg_path` 即可（例如 hover 时把叉换成勾）。
   按钮状态会从 normal 重新开始，下一次鼠标移动再按位置切换。
 
+**按钮事件**（仍走 `cloudime.on("window", …)`，用 `event.action` 区分）：
+
+| action | 什么时候 |
+|---|---|
+| `mouse_enter` | 鼠标进入按钮区域 |
+| `mouse_leave` | 鼠标离开按钮区域 |
+| `mouse_pressed` | 在按钮上按下左键；载荷带 `ctrl` / `alt` / `shift`，任意组合都派 |
+| `mouse_released` | 在按钮上松开左键 |
+| `mouse_clicked` | 单击（没有拖拽、**没有修饰键**） |
+| `mouse_double_clicked` | 双击（第二次单击，仍要求没有修饰键） |
+
+`event.element` / `event.region` 都指向这个按钮；`mouse_clicked` 在每次单击都派，双击时第二次会依次收到
+`mouse_clicked` 和 `mouse_double_clicked`。按下 / 松开 / 单击 / 双击的载荷都带 `ctrl` / `alt` / `shift`。
+
 **区域（region）**：一块可以被鼠标**点击 / 拖拽**的范围 —— 元素只管画，交互看区域：
 
 ```lua

@@ -15,19 +15,21 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::{Rc, Weak};
 use std::sync::Arc;
+use std::time::Instant;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+    GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT,
+    TrackMouseEvent, VK_CONTROL, VK_MENU, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    GetCursorPos, HTCLIENT, HTTRANSPARENT, IDC_ARROW, LoadCursorW, MA_NOACTIVATE, SW_HIDE,
-    SW_SHOWNA, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetWindowPos, ShowWindow,
-    WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCHITTEST, WM_RBUTTONUP,
+    GetCursorPos, GetSystemMetrics, HTCLIENT, HTTRANSPARENT, IDC_ARROW, LoadCursorW, MA_NOACTIVATE,
+    SM_CXDOUBLECLK, SM_CYDOUBLECLK, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER,
+    SetWindowPos, ShowWindow, WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE,
+    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_RBUTTONUP,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -238,6 +240,9 @@ impl ScriptWindows {
 /// 脚本窗口上一次贴上去的那一幅：位置 + 内容尺寸 + 内容版本 + DPI + 渲染器代号。
 type Painted = ((i32, i32), (i32, i32), u64, u64, u64);
 
+/// 上一次按钮单击：时间、按钮下标、客户区坐标（判双击用）。
+type LastClick = (Instant, usize, (i32, i32));
+
 /// 拖动状态：按下时的光标屏幕坐标 + 窗口左上角（物理像素）。
 #[derive(Debug, Clone, Copy)]
 struct Drag {
@@ -294,6 +299,9 @@ pub(super) struct ScriptWindow {
     /// 当前按下的扁平按钮元素下标（按下态）。
     pressed_button: Cell<Option<usize>>,
 
+    /// 上一次按钮单击：时间、按钮下标、客户区坐标（判双击用）。
+    last_click: Cell<Option<LastClick>>,
+
     /// 拖动中：按下时的光标屏幕坐标 + 窗口左上角。
     drag: Cell<Option<Drag>>,
 
@@ -348,6 +356,7 @@ impl ScriptWindow {
             hover: Cell::new(None),
             hover_button: Cell::new(None),
             pressed_button: Cell::new(None),
+            last_click: Cell::new(None),
             drag: Cell::new(None),
             moved_since_press: Cell::new(false),
             last: Cell::new((0, 0)),
@@ -374,6 +383,7 @@ impl ScriptWindow {
         self.hover.set(None);
         self.hover_button.set(None);
         self.pressed_button.set(None);
+        self.last_click.set(None);
         self.revision.set(self.revision.get() + 1);
         if self.shown.get()
             && let Some(position) = self.position.get()
@@ -441,6 +451,13 @@ impl ScriptWindow {
         if changed {
             self.repaint();
         }
+        let (x, y) = self.last.get();
+        if let Some(old) = previous {
+            self.emit_button(WindowAction::MouseLeave, old, x, y);
+        }
+        if let Some(new) = hovered {
+            self.emit_button(WindowAction::MouseEnter, new, x, y);
+        }
     }
 
     /// 左键在按钮上按下：进入 pressed。
@@ -453,13 +470,17 @@ impl ScriptWindow {
         if self.set_button_state(index, ButtonState::Pressed) {
             self.repaint();
         }
+        self.emit_button(WindowAction::MousePressed, index, client_x, client_y);
     }
 
     /// 左键抬起：pressed 结束；鼠标还在按钮上就回到 hovered，否则 normal。
-    fn end_button_press(&self) {
+    fn end_button_press(&self, client_x: i32, client_y: i32) {
         let Some(index) = self.pressed_button.replace(None) else {
+            // 不是按钮上的点击：双击链断开。
+            self.last_click.set(None);
             return;
         };
+        let clicked = !self.moved_since_press.get();
         let state = if self.hover_button.get() == Some(index) {
             ButtonState::Hovered
         } else {
@@ -468,6 +489,36 @@ impl ScriptWindow {
         if self.set_button_state(index, state) {
             self.repaint();
         }
+        self.emit_button(WindowAction::MouseReleased, index, client_x, client_y);
+        if !clicked {
+            self.last_click.set(None);
+            return;
+        }
+        let (ctrl, alt, shift) = modifiers();
+        if ctrl || alt || shift {
+            // 单击 / 双击都禁用修饰键。
+            self.last_click.set(None);
+            return;
+        }
+        self.emit_button(WindowAction::MouseClicked, index, client_x, client_y);
+        let now = Instant::now();
+        let double_ms = unsafe { GetDoubleClickTime() };
+        let double_dx = unsafe { GetSystemMetrics(SM_CXDOUBLECLK) }.max(1);
+        let double_dy = unsafe { GetSystemMetrics(SM_CYDOUBLECLK) }.max(1);
+        let double = self
+            .last_click
+            .get()
+            .is_some_and(|(then, last_index, (last_x, last_y))| {
+                last_index == index
+                    && now.duration_since(then).as_millis() <= u128::from(double_ms)
+                    && (client_x - last_x).abs() <= double_dx
+                    && (client_y - last_y).abs() <= double_dy
+            });
+        if double {
+            self.emit_button(WindowAction::MouseDoubleClicked, index, client_x, client_y);
+        }
+        self.last_click
+            .set(Some((now, index, (client_x, client_y))));
     }
 
     /// 捕获丢失 / 窗口收起：按下态直接退回 normal。
@@ -484,6 +535,7 @@ impl ScriptWindow {
     fn reset_button_states(&self) {
         self.hover_button.set(None);
         self.pressed_button.set(None);
+        self.last_click.set(None);
         let mut document = self.document.borrow_mut();
         for element in &mut document.elements {
             if let Element::FlatSvgButton(button) = element {
@@ -687,6 +739,7 @@ impl ScriptWindow {
     ) {
         let (x, y, element, region) = self.hit_at(client_x, client_y);
         let region = self.region_name(region);
+        let (ctrl, alt, shift) = modifiers();
         (self.events)(ScriptWindowEvent {
             window: self.id,
             name: self.name.clone(),
@@ -696,6 +749,9 @@ impl ScriptWindow {
             element,
             region,
             delta,
+            ctrl,
+            alt,
+            shift,
         });
     }
 
@@ -717,6 +773,36 @@ impl ScriptWindow {
         self.update_hover_button(None);
         let (x, y) = self.last.get();
         self.emit(WindowAction::Leave, x, y);
+    }
+
+    /// 某个扁平按钮的自动区域名（事件载荷用）。
+    fn button_region(&self, index: usize) -> Option<String> {
+        match self.document.borrow().elements.get(index) {
+            Some(Element::FlatSvgButton(button)) => Some(button.region_name.clone()),
+            _ => None,
+        }
+    }
+
+    /// 给某个扁平按钮发事件（`element` / `region` 固定成它，不被当前命中覆盖）。
+    fn emit_button(&self, action: WindowAction, index: usize, client_x: i32, client_y: i32) {
+        let Some(region) = self.button_region(index) else {
+            return;
+        };
+        let (x, y, _, _) = self.hit_at(client_x, client_y);
+        let (ctrl, alt, shift) = modifiers();
+        (self.events)(ScriptWindowEvent {
+            window: self.id,
+            name: self.name.clone(),
+            action,
+            x,
+            y,
+            element: Some(index + 1),
+            region: Some(region),
+            delta: None,
+            ctrl,
+            alt,
+            shift,
+        });
     }
 
     /// 这块窗口拿到了键盘焦点（点它 / `win:focus()`）：告诉工人线程，`key` 载荷据此带上 `window`。
@@ -921,6 +1007,9 @@ impl ScriptAuxiliary {
                 element: panel.element,
                 region: panel.region.clone(),
                 delta: panel.delta,
+                ctrl: false,
+                alt: false,
+                shift: false,
             });
         }));
         Ok(Self {
@@ -1091,6 +1180,14 @@ fn default_position() -> ((i32, i32), u32) {
 }
 
 /// 客户区坐标：`lparam` 低 16 位是 x、高 16 位是 y（带符号）。
+/// 当前键盘修饰键状态（鼠标事件载荷用）。
+fn modifiers() -> (bool, bool, bool) {
+    let pressed = |key: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY| unsafe {
+        GetKeyState(key.0 as i32) < 0
+    };
+    (pressed(VK_CONTROL), pressed(VK_MENU), pressed(VK_SHIFT))
+}
+
 fn client_x(lparam: LPARAM) -> i32 {
     (lparam.0 & 0xFFFF) as u16 as i16 as i32
 }
@@ -1156,7 +1253,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         // 拖过就不是点击（阈值在 `drag_to` 里判）。
         WM_LBUTTONUP => {
             with_window(hwnd, |window| {
-                window.end_button_press();
+                window.end_button_press(client_x(lparam), client_y(lparam));
                 if window.end_drag() {
                     // 拖到另一块显示器：DPI 变了就按新 DPI 重画
                     window.refresh_after_move();

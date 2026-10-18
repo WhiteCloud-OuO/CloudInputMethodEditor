@@ -169,7 +169,7 @@ cloudime.on("window", function(event)
     if not win or event.id ~= win.id then
         return
     end
-    if event.action == "click" and event.region == "close" then
+    if event.action == "mouse_clicked" and event.region == "close" then
         win:close()
         win = nil
     end
