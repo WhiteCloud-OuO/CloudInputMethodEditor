@@ -15,6 +15,15 @@ use crate::elements::ControlRender;
 use crate::text::TextStyle;
 use crate::theme::{FontSpec, Theme};
 
+/// 缺省滚动条轨道颜色（独立滚动条和 `text_box` 内部滚动条共用）。
+const DEFAULT_SCROLLBAR_BACKGROUND: Color = Color::rgb(0xC8, 0xC8, 0xC8);
+
+/// 缺省滚动条滑块颜色。
+const DEFAULT_SCROLLBAR_THUMB: Color = Color::rgb(0x88, 0x88, 0x88);
+
+/// 缺省编辑框边框颜色。
+const DEFAULT_EDIT_BORDER: Color = Color::rgb(0xC8, 0xC8, 0xC8);
+
 /// 标签里的一小段：文字 + 自己的颜色。
 #[derive(Debug, Clone)]
 pub struct LabelRun {
@@ -281,9 +290,9 @@ pub struct ScrollBar {
     pub y: f32,
     pub width: f32,
     pub height: f32,
-    /// 背景颜色；`None` = 主题角标色。
+    /// 背景颜色；`None` = 缺省 `#FFC8C8C8`。
     pub background: Option<Color>,
-    /// 滑块颜色；`None` = 主题高亮色。
+    /// 滑块颜色；`None` = 缺省 `#FF888888`。
     pub thumb: Option<Color>,
     pub axis: ScrollAxis,
     pub value: u64,
@@ -371,13 +380,13 @@ impl ScrollBar {
     pub(crate) fn draw<R: ControlRender>(
         &self,
         render: &mut R,
-        theme: &Theme,
+        _theme: &Theme,
         scale: f32,
         origin: (f32, f32),
         margin: f32,
     ) {
-        let bg = self.background.unwrap_or(theme.colors.badge);
-        let thumb = self.thumb.unwrap_or(theme.colors.highlight);
+        let bg = self.background.unwrap_or(DEFAULT_SCROLLBAR_BACKGROUND);
+        let thumb = self.thumb.unwrap_or(DEFAULT_SCROLLBAR_THUMB);
         let x = |value: f32| margin + (origin.0 + value) * scale;
         let y = |value: f32| margin + (origin.1 + value) * scale;
         let len = |value: f32| value * scale;
@@ -576,8 +585,11 @@ pub struct TextBox {
     pub height: f32,
     pub radius: f32,
     pub fill: Option<Color>,
+    /// 边框颜色；`None` = 缺省 `#FFC8C8C8`。
     pub border: Option<Color>,
     pub border_width: f32,
+    /// 缺省边框按 1 物理像素画，不随缩放；显式 `edge_width` 仍按点缩放。
+    pub border_width_fixed: bool,
     pub selection_background: Option<Color>,
     pub selection_color: Option<Color>,
     pub caret_color: Option<Color>,
@@ -709,7 +721,7 @@ impl TextBox {
     pub(crate) fn draw<R: ControlRender>(
         &self,
         render: &mut R,
-        theme: &Theme,
+        _theme: &Theme,
         scale: f32,
         origin: (f32, f32),
         margin: f32,
@@ -727,15 +739,20 @@ impl TextBox {
                 fill,
             );
         }
-        let border = self.border.unwrap_or(theme.colors.badge);
+        let border = self.border.unwrap_or(DEFAULT_EDIT_BORDER);
         if self.border_width > 0.0
             && let Some(rect) =
                 tiny_skia::Rect::from_xywh(x(self.x), y(self.y), len(self.width), len(self.height))
         {
-            render.stroke_round_rect(rect, len(self.radius), len(self.border_width), border);
+            let stroke = if self.border_width_fixed {
+                1.0
+            } else {
+                len(self.border_width)
+            };
+            render.stroke_round_rect(rect, len(self.radius), stroke, border);
         }
-        let background = theme.colors.badge;
-        let thumb = theme.colors.highlight;
+        let background = DEFAULT_SCROLLBAR_BACKGROUND;
+        let thumb = DEFAULT_SCROLLBAR_THUMB;
         for axis in [ScrollAxis::Horizontal, ScrollAxis::Vertical] {
             let scroll = self.scroll(axis);
             if !scroll.visible {
@@ -776,9 +793,11 @@ pub struct TextEdit {
     pub radius: f32,
     /// 内部填充；`None` = 透明。
     pub fill: Option<Color>,
-    /// 边框颜色；`None` = 主题的候选角标色。
+    /// 边框颜色；`None` = 缺省 #FFC8C8C8。
     pub border: Option<Color>,
     pub border_width: f32,
+    /// 缺省边框按 1 物理像素画，不随缩放；显式 `edge_width` 仍按点缩放。
+    pub border_width_fixed: bool,
     pub svg: Option<String>,
     /// SVG 画板尺寸（点）。
     pub svg_size: (f32, f32),
@@ -857,7 +876,7 @@ impl TextEdit {
     pub(crate) fn draw<R: ControlRender>(
         &self,
         render: &mut R,
-        theme: &Theme,
+        _theme: &Theme,
         scale: f32,
         origin: (f32, f32),
         margin: f32,
@@ -869,11 +888,16 @@ impl TextEdit {
         if let Some(fill) = self.fill {
             render.round_rect(x, y, width, height, self.radius * scale, fill);
         }
-        let border = self.border.unwrap_or(theme.colors.badge);
+        let border = self.border.unwrap_or(DEFAULT_EDIT_BORDER);
         if self.border_width > 0.0
             && let Some(rect) = tiny_skia::Rect::from_xywh(x, y, width, height)
         {
-            render.stroke_round_rect(rect, self.radius * scale, self.border_width * scale, border);
+            let stroke = if self.border_width_fixed {
+                1.0
+            } else {
+                self.border_width * scale
+            };
+            render.stroke_round_rect(rect, self.radius * scale, stroke, border);
         }
         if let Some(svg) = &self.svg {
             let gutter = self.height * 0.25;
@@ -926,4 +950,17 @@ fn build_path(commands: &[PathCommand], scale: f32, origin: (f32, f32)) -> Optio
         }
     }
     builder.finish()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 缺省滚动条 / 编辑框边框颜色是界面规范里的固定值，不跟主题走。
+    #[test]
+    fn default_control_colors_are_fixed() {
+        assert_eq!(DEFAULT_SCROLLBAR_BACKGROUND, Color::rgb(0xC8, 0xC8, 0xC8));
+        assert_eq!(DEFAULT_SCROLLBAR_THUMB, Color::rgb(0x88, 0x88, 0x88));
+        assert_eq!(DEFAULT_EDIT_BORDER, Color::rgb(0xC8, 0xC8, 0xC8));
+    }
 }

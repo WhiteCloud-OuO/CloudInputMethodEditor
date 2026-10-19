@@ -1062,8 +1062,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   pressed 总是带修饰键；clicked / double 只在无修饰键且 `moved_since_press == false` 时派，
   双击用 `Instant` + `GetDoubleClickTime` + `SM_CXDOUBLECLK` / `SM_CYDOUBLECLK` 判，第二次
   先派 clicked 再派 double。
-- **单行编辑框**（`text_edit`，2026-10-18）：`control::TextEdit` 负责背景胶囊 / 边框（缺省厚度 1、
-  颜色取 `theme.colors.badge`）、可选 SVG（按背景高度缩放、`SvgAlign` 左右）和文本区几何
+- **单行编辑框**（`text_edit`，2026-10-18）：`control::TextEdit` 负责背景胶囊 / 边框（缺省颜色
+  `#FFC8C8C8`、1 物理像素且不随缩放；显式 `edge_width` 仍按点缩放）、可选 SVG（按背景高度缩放、`SvgAlign` 左右）和文本区几何
   （无 SVG：`w-h` 居中；有 SVG：`w-h-svg宽度-4`；高度向内缩 1 点边框）。实际的编辑控件是
   **windowless RichEdit**（`script_window/text_host.rs`）：每块 `text_edit` 建一个普通顶层宿主窗
   （owner = 脚本窗，`WS_EX_TOOLWINDOW | WS_EX_TOPMOST`），从 `Msftedit.dll` 取 `CreateTextServices`，
@@ -1104,7 +1104,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `TxGetScrollBars` 返回 `WS_VSCROLL`（不换行时加 `WS_HSCROLL`），宿主 `TxSetScrollRange` 等仍不画
   原生条；RichEdit 需要一次 `OnTxInPlaceActivate` 才会排版，`TextHostWindow::ensure_layout` 在
   建好后做这件事，`TxGetHScroll` / `TxGetVScroll` 才有行数 / 范围。`line_spacing` 映射成
-  `PARAFORMAT2` 的 `PFM_LINESPACING`（精确行距，u16 点，缺省 8）。
+  `PARAFORMAT2` 的 `PFM_LINESPACING`（精确行距，u16 点，缺省 8）。边框缺省颜色 `#FFC8C8C8`；
+  不写 `edge_width` / `border_width` 时按 1 物理像素画、不随缩放，显式宽度仍按点缩放。
   `ScriptWindow` 在 `rebuild_text_edits` 里同时收集 `text_edits()` 和 `text_boxes()`；滚动范围写回
   `Element::TextBox.h_scroll` / `v_scroll`，渲染器按可见性扣文本区并画 8 点厚、4 点间隙的滚动条。
   注意 `TxGetHScroll` / `TxGetVScroll` 的 `max` 是内容总高度 / 总宽度，不是可滚到的最大位置；
@@ -1166,7 +1167,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   右/下加一个 `step`；滚轮同理（向上减、向下加）并吞掉滚轮。拖拽外的改值用
   `ScrollAnimation` + 16 ms 定时器做约 140 ms ease-out，拖动则立即跟手；值变化派
   `value_changed`（`ScriptWindowEvent.value`），布局事件名 `value_changed` / `on_value_changed`
-  归一。渲染器 `Element::ScrollBar` 画两段 `round_rect`，默认色取主题 `badge` / `highlight`。
+  归一。渲染器 `Element::ScrollBar` 画两段 `round_rect`；不写颜色时背景 `#FFC8C8C8`、滑块
+  `#FF888888`，与 `text_box` 内部滚动条共用同一组缺省值（不再取主题 `badge` / `highlight`）。
   当前只支持顶层滚动条，面板里的滚动条还没有命中 / 拖动宿主。
 - **焦点**（`auxiliary/mod.rs` 的 `Focus`、`auxiliary_window_template` 的 `set_focused`）：一组（独立窗口 +
   名下资产）里**任何时刻恰好一个**持有者，状态存在 `Assets` 里（`Cell<Focus>`），缺省 `Focus::Owner`。

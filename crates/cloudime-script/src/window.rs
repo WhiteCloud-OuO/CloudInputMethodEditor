@@ -1419,11 +1419,7 @@ fn parse_text_edit(table: &mlua::Table) -> mlua::Result<Element> {
             }
         }
     };
-    let border_width = match table.get::<Option<f32>>("edge_width")? {
-        Some(width) => width,
-        None => number(table, "border_width", DEFAULT_BORDER_WIDTH)?,
-    }
-    .clamp(0.0, 16.0);
+    let (border_width, border_width_fixed) = parse_edit_border(table)?;
     let font_size = table
         .get::<Option<f32>>("font_size")?
         .or(table.get::<Option<f32>>("size")?)
@@ -1447,6 +1443,7 @@ fn parse_text_edit(table: &mlua::Table) -> mlua::Result<Element> {
         fill: color(table, "back_color", false)?.or(color(table, "fill", false)?),
         border: color(table, "edge_color", false)?.or(color(table, "color", false)?),
         border_width,
+        border_width_fixed,
         svg,
         svg_size,
         svg_align,
@@ -1478,14 +1475,24 @@ fn parse_text_edit(table: &mlua::Table) -> mlua::Result<Element> {
     }))
 }
 
+/// 编辑框边框：显式 `edge_width` / `border_width` 按点缩放；完全不写时固定 1 物理像素。
+fn parse_edit_border(table: &mlua::Table) -> mlua::Result<(f32, bool)> {
+    let edge = table.get::<Option<f32>>("edge_width")?;
+    let legacy = if edge.is_none() {
+        table.get::<Option<f32>>("border_width")?
+    } else {
+        None
+    };
+    match edge.or(legacy) {
+        Some(width) => Ok((width.clamp(0.0, 16.0), false)),
+        None => Ok((DEFAULT_BORDER_WIDTH, true)),
+    }
+}
+
 fn parse_text_box(table: &mlua::Table) -> mlua::Result<Element> {
     let width = positive(table, "w", "width")?;
     let height = positive(table, "h", "height")?;
-    let border_width = match table.get::<Option<f32>>("edge_width")? {
-        Some(width) => width,
-        None => number(table, "border_width", DEFAULT_BORDER_WIDTH)?,
-    }
-    .clamp(0.0, 16.0);
+    let (border_width, border_width_fixed) = parse_edit_border(table)?;
     let font_size = table
         .get::<Option<f32>>("font_size")?
         .or(table.get::<Option<f32>>("size")?)
@@ -1513,6 +1520,7 @@ fn parse_text_box(table: &mlua::Table) -> mlua::Result<Element> {
         fill: color(table, "back_color", false)?.or(color(table, "fill", false)?),
         border: color(table, "edge_color", false)?.or(color(table, "color", false)?),
         border_width,
+        border_width_fixed,
         selection_background: color(table, "sel_back_color", false)?.or(color(
             table,
             "selection_background",
@@ -2441,6 +2449,7 @@ mod tests {
         assert_eq!(edit.fill, Some(Color::rgba(0x11, 0x22, 0x33, 0xFF)));
         assert_eq!(edit.border, Some(Color::rgba(0x44, 0x55, 0x66, 0xFF)));
         assert_eq!(edit.border_width, 0.0);
+        assert!(!edit.border_width_fixed, "显式 edge_width 仍按点缩放");
         assert_eq!(edit.text_color, Some(Color::rgba(0x77, 0x88, 0x99, 0xFF)));
         assert_eq!(edit.caret_color, Some(Color::rgba(0xAA, 0xBB, 0xCC, 0xFF)));
         assert_eq!(
@@ -2548,10 +2557,12 @@ mod tests {
             panic!("不是 text_edit");
         };
         assert_eq!(edit.border_width, 1.0);
+        assert!(edit.border_width_fixed, "缺省边框固定 1 物理像素");
         let Element::TextBox(text_box) = &document.elements[3] else {
             panic!("不是 text_box");
         };
         assert_eq!(text_box.border_width, 1.0);
+        assert!(text_box.border_width_fixed, "缺省边框固定 1 物理像素");
     }
 
     /// 水平 / 垂直滚动条：值域、区域、事件处理器和 u64 夹取。
@@ -3116,8 +3127,9 @@ mod tests {
         assert_eq!(plain.region_name, "plain");
         assert_eq!(plain.radius, 12.0, "缺省胶囊：高的一半");
         assert!(plain.fill.is_none());
-        assert!(plain.border.is_none(), "缺省用主题角标色");
+        assert!(plain.border.is_none(), "缺省用 #FFC8C8C8");
         assert_eq!(plain.border_width, 1.0);
+        assert!(plain.border_width_fixed, "缺省边框固定 1 物理像素");
         assert!(plain.svg.is_none());
         assert_eq!(plain.font, FontSlot::Candidate, "缺省候选项字体");
         assert!(plain.size.is_none(), "字号缺省跟主题");

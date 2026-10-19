@@ -335,9 +335,9 @@ win:set_content{
 | `static_image` | `x` / `y` / `w` / `h`（可省）+ `image`（`cloudime.image.load` 句柄）或 `path`（PNG / BMP / JPG） |
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（边缘，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1 点，100% 缩放下 1 像素）/ `fill`（可选）/ `children`（相对坐标） |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省 SVG 画板）；`svg` / `svg_path`；`shape` + `radius`；`name`；`normal` / `hovered` / `pressed = { background, svg }`；`events = { 动作名 = "处理器名" }` |
-| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`read_only` / `passkey`；`back_color` / `edge_color` / `edge_width`（缺省 1 点，100% 缩放下 1 像素）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align`；`font_name` / `font_size` / `font_flag`；`text` / `font` / `name` / `events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
-| `text_box` | `x` / `y` / `w` / `h`；`radius`（缺省 6）；`read_only`；`back_color` / `edge_color` / `edge_width`（缺省 1 点，100% 缩放下 1 像素）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color`；`font_name` / `font_size` / `font_flag`；`auto_line_wrap`（缺省 true）/ `line_spacing`（u16，缺省 8）；`text` / `font` / `name` / `events`；没有 `passkey` / SVG 属性，旧名兼容同 `text_edit` |
-| `hscroll_bar` | `x` / `y`；`w` / `h` 缺省都是 8；`value` / `min_value` / `max_value`（u64，缺省 0 / 0 / 100）/ `step`（u64，缺省 1，不能为 0）；`background_color` / `thumb_color`；`name` / `events`；背景与滑块都是胶囊纯填充 |
+| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`read_only` / `passkey`；`back_color` / `edge_color`（缺省 `#FFC8C8C8`）/ `edge_width`（缺省 1 物理像素且不缩放；显式数值按点缩放）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align`；`font_name` / `font_size` / `font_flag`；`text` / `font` / `name` / `events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
+| `text_box` | `x` / `y` / `w` / `h`；`radius`（缺省 6）；`read_only`；`back_color` / `edge_color`（缺省 `#FFC8C8C8`）/ `edge_width`（缺省 1 物理像素且不缩放；显式数值按点缩放）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color`；`font_name` / `font_size` / `font_flag`；`auto_line_wrap`（缺省 true）/ `line_spacing`（u16，缺省 8）；`text` / `font` / `name` / `events`；没有 `passkey` / SVG 属性，旧名兼容同 `text_edit` |
+| `hscroll_bar` | `x` / `y`；`w` / `h` 缺省都是 8；`value` / `min_value` / `max_value`（u64，缺省 0 / 0 / 100）/ `step`（u64，缺省 1，不能为 0）；`background_color`（缺省 `#FFC8C8C8`）/ `thumb_color`（缺省 `#FF888888`）；`name` / `events`；背景与滑块都是胶囊纯填充 |
 | `vscroll_bar` | 同 `hscroll_bar`，`w` / `h` 缺省都是 8；`vhscroll_bar` / `vhsroll_bar` 是兼容拼写 |
 
 #### JSON 布局文件（前台 UI 文件）
@@ -415,10 +415,10 @@ win:set_content{
   双击由窗口自己按 `GetDoubleClickTime` + 系统双击距离判：第二次单击先派 `mouse_clicked`、
   再派 `mouse_double_clicked`。
 - **单行编辑框**（`text_edit`）：背景胶囊 / 边框 + 可选 SVG + **windowless RichEdit 宿主窗**。背景、边框
-  （缺省主题角标色、1 点）和 SVG 由渲染器画；文本区由 UI 线程建一个普通顶层宿主窗（owner = 脚本窗），
+  （缺省 `#FFC8C8C8`、1 物理像素且不缩放）和 SVG 由渲染器画；文本区由 UI 线程建一个普通顶层宿主窗（owner = 脚本窗），
   里面用 `Msftedit.dll` 的 `CreateTextServices` / `ITextServices` 承载编辑（不是 `EDIT` 控件），
   键盘、鼠标、IME、剪贴板和选区都交给 RichEdit。文本区几何：无 SVG 时 `w - h` 居中；有 SVG 时宽
-  `w - h - svg宽度 - 4`、放在图标旁；高度向内缩 1 点边框，避免盖住边框 / 溢出胶囊。SVG 按背景高度缩放。
+  `w - h - svg宽度 - 4`、放在图标旁；高度向内缩 1 点，避免盖住缺省 1 像素边框 / 溢出胶囊。SVG 按背景高度缩放。
   RichEdit 字体缺省用候选词字体（`font` 可换槽位），字号缺省取主题里该槽位的字号（`size` 可覆盖）；
   宿主窗底色 / 文字色跟随候选窗主题；`selection_background` / `selection_color` / `caret_color` /
   `svg_color` 不写时分别跟主题高亮背景 / 高亮文字 / 正文颜色 / SVG 原色。自动区域与按钮同一套（`drag = false`）。
