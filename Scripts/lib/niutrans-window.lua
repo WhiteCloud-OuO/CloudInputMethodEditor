@@ -19,7 +19,7 @@
 
 cloudime.script{
     name                  = "小牛英汉互译窗口",
-    description           = "Ctrl+Alt+Y：复制当前选中文本，在光标旁打开小牛英汉互译窗口",
+    description           = "Ctrl+Alt+Y：复制当前选中文本，在光标旁打开小牛英汉互译窗口（初次使用点击编辑，然后填写user_id和user_key）",
     api                   = 2,
     trigger_condition     = "combination_key",
     combination_modifiers = "ctrl+alt",
