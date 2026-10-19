@@ -127,6 +127,8 @@ pub(crate) enum Message {
     ScriptEdit(String),
     /// 新建一个脚本：建文件、写模板、用记事本打开。
     ScriptNew,
+    /// 为脚本提供全局热键（`[script] global_hotkeys`）。
+    ScriptGlobalHotkeys(bool),
 
     // 主题页
     /// 选中的主题（下拉下标；`None` 是取消选中，忽略）。

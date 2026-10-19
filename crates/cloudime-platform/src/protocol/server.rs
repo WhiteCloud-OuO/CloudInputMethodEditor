@@ -7,6 +7,18 @@ use super::mode::InputMode;
 use super::session::SessionId;
 use crate::config::SwitchKeys;
 
+/// 脚本组合热键（由 Server 从脚本清单收集，DLL 用来登记 TSF 保留键）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
+pub struct ScriptHotkey {
+    /// 修饰键位图：bit0 ctrl / bit1 alt / bit2 shift / bit3 win。
+    pub modifiers: u16,
+    /// 虚拟键码。
+    pub key: u32,
+}
+
+/// 一次下发给 DLL 的脚本全局热键上限；超过的脚本键仍走普通按键 sink，不注册保留键。
+pub const MAX_SCRIPT_HOTKEYS: usize = 32;
+
 /// Server 下发给 DLL 的「按键行为」设置。
 ///
 /// DLL 跑在每个应用的进程里，拿不到 Server 那份 [`Config`](crate::Config)，但有几项在**按键到达之前**
@@ -48,6 +60,14 @@ pub struct InputSettings {
     #[serde(default)]
     pub script_key_modifiers: u16,
 
+    /// 「为脚本提供全局热键」：把下面的脚本组合键注册成 TSF 保留键。
+    #[serde(default)]
+    pub script_global_hotkeys: bool,
+
+    /// 脚本组合热键列表；`key == 0` 的空槽表示结束。只在 `script_global_hotkeys` 为真时使用。
+    #[serde(default)]
+    pub script_hotkeys: [ScriptHotkey; MAX_SCRIPT_HOTKEYS],
+
     /// 脚本声明的那些键（清单 `combination_key` 的 `keys`）：按虚拟键码占的位图
     /// （第 `vk / 64` 个 `u64` 的第 `vk % 64` 位）。DLL 据此在**没组句时**也把这些键送来问一趟 ——
     /// 脚本不吃就回 Passthrough、按键重放回应用。全 0 = 没有这类脚本，按键路径与以前逐字节一致。
@@ -83,6 +103,8 @@ impl Default for InputSettings {
             raw_input: false,
             auto_disable_without_text_input: false,
             script_key_modifiers: 0,
+            script_global_hotkeys: false,
+            script_hotkeys: [ScriptHotkey::default(); MAX_SCRIPT_HOTKEYS],
             script_keys: [0; 4],
             script_wants_text: false,
             key_map_modifiers: 0,

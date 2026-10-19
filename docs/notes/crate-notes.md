@@ -826,6 +826,12 @@ Chromium 把「物理键还按着时注入的同名键」当自动重复，宿�
 任务栏图标用 `mode/off-*.alpha`（`icon.rs` 的 `Glyph::Off`）。Caps Lock 亮着时单击 Shift 会先 `SendInput` 补一次 Caps Lock 清掉锁定、再切英文。
 内置热键（固定，不落配置）：`Shift + Space` 翻全角 / 半角（DLL 在 `OnTestKeyDown` / `OnKeyDown` 里拦，发 `IndicatorCommand::ToggleCharWidthType`）、
 `Ctrl + Alt + .` 简繁与 `Ctrl + Alt + ,` 标点（两个 TSF 保留键，发 `ToggleSimpTrad` / `TogglePunctuation`，Server 都走 `handle_status_event` 那条路）。
+这两个固定保留键现在在 `Activate` 里**明确登记一次**（`sync_preserved_hotkeys`，停用时撤销），不再等按键设置下发。
+「为脚本提供全局热键」（`[script] global_hotkeys`，缺省关）打开后，Server 把脚本清单里的「修饰键 + 键」
+配成 `InputSettings::script_hotkeys`（最多 32 个）下发；DLL 在 `sync_script_hotkeys` 里用
+`ITfKeystrokeMgr::PreserveKey` 逐个登记（每个槽位一个 GUID）。`OnPreservedKey` 命中脚本 GUID 时，
+只在中文状态调用 `handle_key` 把键送 Server；英文 / 禁用 / 键盘禁用时返回 `FALSE` 放行。
+`combination_modifiers = "none"` 的单键不注册，仍走原来的 `script_keys` 按键 sink。
 状态全局一份、存在 Server（`Router.mode: InputMode`），DLL 激活 / 得到焦点 / 轮询时 `SyncMode` 取回，用户切了 `ModeChanged` 报上去。会话号用线程 id（`com::session_id`）——TSF 的 client id
 各进程都是同样那几个值，拿它当会话号会在 Server 那边撞号。四条切换入口都汇到
 `service/mode.rs::switch_mode` 一处拦住（内置英文模式下发为关时才拦英文，协议值现在恒开）；状态条点击在 Server 侧（`dispatch/status/mod.rs`）走同一条路，

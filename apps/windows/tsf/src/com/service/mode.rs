@@ -11,9 +11,9 @@ use windows::Win32::UI::TextServices::{ITfKeystrokeMgr, ITfLangBarItemMgr};
 use windows::core::Interface;
 
 use cloudime_platform::SwitchKeys;
-use cloudime_platform::protocol::{InputMode, InputSettings};
+use cloudime_platform::protocol::{InputMode, InputSettings, ScriptHotkey};
 
-use super::TextService_Impl;
+use super::{ScriptPreservedKey, TextService_Impl};
 use crate::com::context;
 use crate::com::key::preserved;
 use crate::com::log::log;
@@ -54,7 +54,7 @@ impl TextService_Impl {
     }
 
     /// 两个固定内置热键（Ctrl + Alt + . 简 / 繁、Ctrl + Alt + , 标点）登记为保留键，只登记一次。
-    fn sync_preserved_hotkeys(&self) {
+    pub(super) fn sync_preserved_hotkeys(&self) {
         if self.hotkeys_preserved.get() {
             return;
         }
@@ -70,6 +70,66 @@ impl TextService_Impl {
                 log("内置热键 Ctrl + Alt + . / Ctrl + Alt + , 已登记为保留键");
             }
             Err(error) => log(&format!("登记内置热键失败: {error}")),
+        }
+    }
+
+    /// 按 Server 下发的列表登记 / 撤销脚本组合热键（TSF 保留键）。
+    /// 只在设置打开时登记；英文 / 禁用状态由 `OnPreservedKey` 放行，不在这里频繁注销。
+    fn sync_script_hotkeys(&self, input: &InputSettings) {
+        let Some(thread_mgr) = self.thread_mgr.borrow().clone() else {
+            return;
+        };
+        let Ok(keystroke) = thread_mgr.cast::<ITfKeystrokeMgr>() else {
+            return;
+        };
+        self.unregister_script_hotkeys(&keystroke);
+        if !input.script_global_hotkeys {
+            return;
+        }
+
+        let mut registered: Vec<ScriptPreservedKey> = Vec::new();
+        for (index, hotkey) in input.script_hotkeys.iter().enumerate() {
+            if hotkey.key == 0 || hotkey.modifiers == 0 {
+                continue;
+            }
+            let guid = preserved::script_hotkey_guid(index);
+            let key = preserved::script_hotkey_key(*hotkey);
+            let description = preserved::script_hotkey_description(*hotkey);
+            if let Err(error) =
+                unsafe { keystroke.PreserveKey(self.client_id.get(), &guid, &key, &description) }
+            {
+                log(&format!("登记脚本全局热键失败（槽位 {index}）: {error}"));
+                for entry in registered {
+                    let old = ScriptHotkey {
+                        modifiers: entry.modifiers,
+                        key: entry.key,
+                    };
+                    let old_key = preserved::script_hotkey_key(old);
+                    let _ = unsafe { keystroke.UnpreserveKey(&entry.guid, &old_key) };
+                }
+                return;
+            }
+            registered.push(ScriptPreservedKey {
+                guid,
+                modifiers: hotkey.modifiers,
+                key: hotkey.key,
+            });
+        }
+        *self.script_preserved.borrow_mut() = registered;
+        log(&format!(
+            "脚本全局热键已登记 {} 个（仅中文输入状态抢占）",
+            self.script_preserved.borrow().len()
+        ));
+    }
+
+    fn unregister_script_hotkeys(&self, keystroke: &ITfKeystrokeMgr) {
+        for entry in self.script_preserved.borrow_mut().drain(..) {
+            let hotkey = ScriptHotkey {
+                modifiers: entry.modifiers,
+                key: entry.key,
+            };
+            let key = preserved::script_hotkey_key(hotkey);
+            let _ = unsafe { keystroke.UnpreserveKey(&entry.guid, &key) };
         }
     }
 
@@ -92,6 +152,7 @@ impl TextService_Impl {
             input.shift_letter_compose
         ));
         self.apply_mode_settings(input.english_mode, input.switch_mode);
+        self.sync_script_hotkeys(&input);
         // 「不处于输入状态时自动禁用输入法」：刚打开开关（且当前就不在输入状态）时立刻生效，
         // 关掉开关时把自己之前关的放回去。
         self.sync_auto_disable();
@@ -154,6 +215,7 @@ impl TextService_Impl {
 
     /// 停用时撤掉保留键登记（切换键与两个内置热键）。
     pub(super) fn drop_switch_preserved_key(&self, keystroke: &ITfKeystrokeMgr) {
+        self.unregister_script_hotkeys(keystroke);
         if self.switch_preserved.replace(false) {
             preserved::unregister_switch_mode(keystroke);
         }

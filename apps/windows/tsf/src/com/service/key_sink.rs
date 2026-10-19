@@ -93,6 +93,19 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         if self.keyboard_disabled(&pic) || self.mode_state.disabled() {
             return Ok(FALSE);
         }
+        // 脚本全局热键：只在中文输入状态抢占；英文状态放行给应用。
+        if let Some(hotkey) = self
+            .script_preserved
+            .borrow()
+            .iter()
+            .find(|hotkey| hotkey.guid == guid)
+            .copied()
+        {
+            if self.mode_state.english() {
+                return Ok(FALSE);
+            }
+            return Ok(self.handle_key(pic, self.key_event(hotkey.key)).into());
+        }
         if guid == preserved::GUID_SWITCH_MODE {
             self.switch_source.set("保留键 Ctrl + Alt + Space");
             self.set_english_mode(!self.mode_state.english());
@@ -196,15 +209,20 @@ impl TextService_Impl {
         let input = self.input_settings.get();
         let shift_letter_compose = input.is_some_and(|input| input.shift_letter_compose);
         let full_width_chars = input.is_some_and(|input| input.full_width_chars);
+        // 「为脚本提供全局热键」只在中文状态抢占：英文状态交给应用，别在按键 sink 里再吃掉。
+        let script_global = input.is_some_and(|input| input.script_global_hotkeys);
+        let script_key_allowed = !script_global || !event.modifiers.english_mode;
         // 脚本声明要的键（清单 `keys`）：没组句也先问一趟 Server —— 脚本不吃就重放回应用。
         // 只认**不带修饰键**的按键（见 [`wants_declared_key`]）：`Shift+Enter` 这类组合原样归应用。
-        if input.is_some_and(|input| wants_declared_key(event, input.script_keys)) {
+        if script_key_allowed
+            && input.is_some_and(|input| wants_declared_key(event, input.script_keys))
+        {
             return true;
         }
         // 脚本在清单里声明的那几套修饰键（`combination_modifiers`）：组句与否都命中就送来问一趟，
         // 脚本不吃就回 Passthrough、按键原样归应用。一个组合键脚本都没有（`wanted` 为 0）时这条不生效。
         let wanted = input.map_or(0, |input| input.script_key_modifiers);
-        if wants_script_key(event, wanted) {
+        if script_key_allowed && wants_script_key(event, wanted) {
             return true;
         }
         // 「键位映射参考」那套组合键（`InputSettings::key_map_modifiers` / `key_map_key`）：

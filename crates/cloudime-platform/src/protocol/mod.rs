@@ -95,5 +95,5 @@ pub use indicator::{IndicatorCommand, IndicatorState};
 pub use key::{KeyEvent, KeyModifiers, KeyOutcome};
 pub use mode::InputMode;
 pub use screen_rect::ScreenRect;
-pub use server::{InputSettings, ServerMessage};
+pub use server::{InputSettings, MAX_SCRIPT_HOTKEYS, ScriptHotkey, ServerMessage};
 pub use session::SessionId;

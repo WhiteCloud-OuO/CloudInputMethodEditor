@@ -638,6 +638,12 @@ DLL（应用进程）                     Server 工人线程（独占 Router + 
   设置程序里**不执行脚本**（Lua 运行时只在 Server）。
 - 「删除此脚本」先用 `rfd` 确认一次；删完顺手把它从 `[script] disabled` 里去掉（不留永远不起作用的条目）。
 - 开关写 `[script] disabled`（`Config::set_array`，配置里缺 `[script]` 分节会补出来）。
+- 「新建脚本」下面有「为脚本提供全局热键」开关（`[script] global_hotkeys`）：打开后 Server 把组合键脚本的
+  「修饰键 + 键」列表随 `InputSettings` 下发，TSF 用 `ITfKeystrokeMgr::PreserveKey` 逐个注册（每个槽位一个 GUID）。
+  `OnPreservedKey` 只在中文状态把键送回 Server；英文 / 禁用 / 键盘禁用时返回 `FALSE` 放行。
+  只注册带修饰键的组合，`combination_modifiers = "none"` 的单键不注册；改完要重启输入法服务。
+- 两个固定快捷键 `Ctrl + Alt + .`（简 / 繁）和 `Ctrl + Alt + ,`（中文 / 西文标点）在 `Activate` 时明确登记为 TSF 保留键，
+  不再依赖设置是否已下发；停用时一起撤销。
 - 操作那一列（开关 + 两个按钮）钉死 **300 DIP**，三个控件都放开最小宽度（`min_width(0)`），开关再用
   `ToggleSwitchSlot::OnContent` / `OffContent` 置空自带的「开 / 关」文字：WinUI 的 `Button` 默认最小宽度是 120、
   开关默认还带一段文字，三个控件按默认宽度加起来会顶出列外，最后那个按钮被右边缘切掉一截。

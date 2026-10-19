@@ -44,6 +44,8 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         // 激活时线程已有焦点的话，不会再来一次「得到焦点」。
         let focused = unsafe { thread_mgr.IsThreadFocus() }.is_ok_and(|focus| focus.as_bool());
         *self.thread_mgr.borrow_mut() = Some(thread_mgr);
+        // 固定内置热键（Ctrl + Alt + . / ,）在激活时明确登记一次，不依赖设置是否已经下发。
+        self.sync_preserved_hotkeys();
         // 连 Server：它随 `OpenSession` 的回包把按键行为设置带下来，就地应用。那两个值在按键到达之前
         // 就要有，而且应用时要登记 Ctrl + Alt + Space 保留键，所以这一步必须排在 `thread_mgr` 就绪之后。
         self.connect();

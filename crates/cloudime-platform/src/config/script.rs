@@ -13,4 +13,7 @@ pub struct ScriptConfig {
     /// 设置页的「启用 / 禁用」开关写这里。Server **启动时**按它跳过（改完要重启 Server，
     /// 与「改脚本要重启」同一条）。
     pub disabled: Vec<String>,
+
+    /// 把脚本声明的组合快捷键注册成 TSF 全局热键（只在中文输入状态抢占）。
+    pub global_hotkeys: bool,
 }

@@ -21,7 +21,7 @@ use windows::Win32::UI::TextServices::{
     ITfDisplayAttributeProvider, ITfKeyEventSink, ITfLangBarItemButton, ITfSource,
     ITfTextInputProcessor, ITfThreadMgr,
 };
-use windows::core::{ComObject, implement};
+use windows::core::{ComObject, GUID, implement};
 
 use cloudime_platform::protocol::{InputMode, InputSettings};
 
@@ -88,6 +88,9 @@ pub struct TextService {
     /// 两个固定内置热键（Ctrl + Alt + . 简繁、Ctrl + Alt + , 标点）是否已登记为保留键。
     hotkeys_preserved: Cell<bool>,
 
+    /// 当前登记成 TSF 保留键的脚本组合热键（GUID + 虚拟键码）。
+    script_preserved: RefCell<Vec<ScriptPreservedKey>>,
+
     /// 上一次应用过的按键行为设置；与 Server 下发的一致时就不重复应用
     /// （每一拍 `SyncMode` 都带着它，见 [`TextService_Impl::apply_input_settings`]）。
     input_settings: Cell<Option<InputSettings>>,
@@ -109,6 +112,14 @@ thread_local! {
 
     /// Server 要不要整篇文本快照（`ServerMessage::ModeSync` 的 `want_document`）：下一次起组句时读一份。
     static WANT_DOCUMENT: Cell<bool> = const { Cell::new(false) };
+}
+
+/// 已登记的脚本全局热键；`OnPreservedKey` 按 GUID 找回虚拟键码。
+#[derive(Clone, Copy)]
+struct ScriptPreservedKey {
+    guid: GUID,
+    modifiers: u16,
+    key: u32,
 }
 
 /// Server 在一次同步里请我们下次带上整篇文本（脚本要用 `cloudime.text.*`）。
@@ -215,6 +226,7 @@ impl TextService {
             profile_cookie: Cell::new(None),
             switch_preserved: Cell::new(false),
             hotkeys_preserved: Cell::new(false),
+            script_preserved: RefCell::new(Vec::new()),
             input_settings: Cell::new(None),
             auto_disabled: Cell::new(false),
             conversion_guard_until: Cell::new(None),

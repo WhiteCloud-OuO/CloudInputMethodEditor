@@ -2,6 +2,7 @@ use std::path::PathBuf;
 
 use cloudime_platform::{
     Config, ItemNumberStyle, LayoutMode, MouseWordSelection, PreeditMode, SimpTrad,
+    protocol::{MAX_SCRIPT_HOTKEYS, ScriptHotkey},
 };
 
 use super::RenderSettings;
@@ -127,6 +128,9 @@ pub struct RouterConfig {
     /// 禁用的脚本文件名（`[script] disabled`，大小写不敏感）：加载时跳过它们。
     pub script_disabled: Vec<String>,
 
+    /// 为脚本提供全局热键（`[script] global_hotkeys`）。
+    pub script_global_hotkeys: bool,
+
     /// 脚本在本组句里要的候选窗**最小宽度**（`cloudime.candidate.set_min_width`，物理像素）：
     /// `None` = 用配置里的 `min_width_pixels`。**只在本次组句内有效**，组句结束清掉。
     pub script_min_width: Option<f32>,
@@ -142,6 +146,18 @@ pub struct RouterConfig {
     ///
     /// **会话内状态**：不写 `config.toml`，热加载时保留（与 `script_scale` 同样处理），重启回配置值。
     pub script_theme: Option<String>,
+}
+
+/// 脚本声明的组合热键 → DLL 的定长数组（空槽 `key == 0`）。
+pub(super) fn script_hotkeys(hotkeys: &[(u8, u32)]) -> [ScriptHotkey; MAX_SCRIPT_HOTKEYS] {
+    let mut result = [ScriptHotkey::default(); MAX_SCRIPT_HOTKEYS];
+    for (slot, (modifiers, key)) in hotkeys.iter().take(MAX_SCRIPT_HOTKEYS).enumerate() {
+        result[slot] = ScriptHotkey {
+            modifiers: u16::from(*modifiers),
+            key: *key,
+        };
+    }
+    result
 }
 
 /// 脚本声明的按键（虚拟键码）→ 256 位位图（`InputSettings.script_keys`）。
@@ -295,6 +311,7 @@ impl From<&Config> for RouterConfig {
             key_map_hotkey: cloudime_platform::input_schemes::key_map_hotkey(),
             scripts_dir: None,
             script_disabled: config.script.disabled.clone(),
+            script_global_hotkeys: config.script.global_hotkeys,
             // 脚本设的候选窗尺寸：会话内状态，配置（热）加载时保留，只有 `Router::reset_composition` 清
             script_min_width: None,
             script_page_size: None,

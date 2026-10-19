@@ -354,6 +354,10 @@ impl Component for Settings {
             Message::ScriptRemove(file) => scripts::remove(self, &file),
             Message::ScriptEdit(file) => scripts::edit(self, &file),
             Message::ScriptNew => scripts::create(self),
+            Message::ScriptGlobalHotkeys(on) => {
+                self.save("script", "global_hotkeys", on);
+                self.script_status = "全局热键设置已更新，重启输入法服务后生效。".to_owned();
+            }
             Message::RestartServer => {
                 self.script_status = match crate::server::restart() {
                     Ok(()) => "已请输入法服务重启：几秒后新实例接管，正在打字的应用会重新连上。"

@@ -747,6 +747,9 @@ pub struct Runtime {
     /// 各 `combination_key` 脚本要的修饰键位图（清单 `combination_modifiers`）。
     combination_modifiers: Vec<u8>,
 
+    /// 各 `combination_key` 脚本的「修饰键 + 键」配对；给 DLL 注册 TSF 全局热键用。
+    combination_hotkeys: Vec<(u8, u32)>,
+
     /// 各 `combination_key` 脚本声明的键（虚拟键码，清单 `keys`）。
     wanted_keys: Vec<u32>,
 
@@ -798,6 +801,7 @@ impl Runtime {
             scripts: Vec::new(),
             triggers: Vec::new(),
             combination_modifiers: Vec::new(),
+            combination_hotkeys: Vec::new(),
             wanted_keys: Vec::new(),
             needs_context: false,
             window_requests: Rc::new(RefCell::new(Vec::new())),
@@ -923,6 +927,10 @@ impl Runtime {
                 .extend(manifest.wanted_keys.iter().copied());
             self.combination_modifiers
                 .push(manifest.combination_modifiers);
+            for key in &manifest.wanted_keys {
+                self.combination_hotkeys
+                    .push((manifest.combination_modifiers, *key));
+            }
         }
     }
 
@@ -1100,6 +1108,16 @@ impl Runtime {
         keys.sort_unstable();
         keys.dedup();
         keys
+    }
+
+    /// 脚本声明的「修饰键 + 键」配对（只含带修饰键的组合键），给 DLL 注册 TSF 保留键。
+    /// `combination_modifiers = "none"` 的单键仍走 `script_keys` / 按键 sink，不在这里抢占。
+    pub fn combination_hotkeys(&self) -> Vec<(u8, u32)> {
+        let mut hotkeys = self.combination_hotkeys.clone();
+        hotkeys.retain(|(modifiers, _)| *modifiers != 0);
+        hotkeys.sort_unstable();
+        hotkeys.dedup();
+        hotkeys
     }
 
     /// 组合键脚本们要的那几套修饰键（清单 `combination_modifiers` 的并集）：

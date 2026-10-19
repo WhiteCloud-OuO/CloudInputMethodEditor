@@ -11,7 +11,9 @@ use std::path::{Path, PathBuf};
 
 use windows_reactor::*;
 
-use crate::panel::controls::{feedback, grid_row, header_row, note, page, table, text_cell};
+use crate::panel::controls::{
+    feedback, grid_row, header_row, labeled, note, page, table, text_cell,
+};
 use crate::panel::notepad;
 use crate::panel::{Message, Settings};
 
@@ -300,6 +302,23 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
                     .on_click(context.message(Message::RestartServer))
                     .content("重启输入法服务"),
             )),
+        StackPanel::new().spacing(4.0).children([
+            labeled(
+                "为脚本提供全局热键",
+                ToggleSwitch::new()
+                    .is_on(settings.config.script.global_hotkeys)
+                    .min_width(0.0)
+                    .on_toggled(context.callback(Message::ScriptGlobalHotkeys))
+                    .slots([
+                        SlotView::new(ToggleSwitchSlot::OnContent, ""),
+                        SlotView::new(ToggleSwitchSlot::OffContent, ""),
+                    ]),
+            ),
+            note(
+                "通过 TSF 把脚本声明的组合快捷键注册为全局热键，只在中文输入状态抢占；\
+                 英文或禁用输入时放行按键，不吞键。修改后重启输入法服务生效。",
+            ),
+        ]),
         note(&settings.script_status),
         feedback(&settings.notice),
     ]);
