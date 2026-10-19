@@ -287,6 +287,7 @@ local aux = cloudime.window.create_auxiliary{
 | `win:set_text(name, text)` | 设置某个 `text_edit` / `text_box` 的文本（按控件名找） |
 | `win:update_content(name, content)` | 更新静态 `label` / `text_block`：`text_block` 传字符串，`label` 传带颜色的 runs；不改尺寸、不参与交互 |
 | `win:set_button_background(name, color)` | 改一个 `flat_svg_button` 三个状态的背景色，SVG 染色不动；颜色 `#RRGGBB` / `#AARRGGBB` |
+| `win:set_selection_background(name, color)` | 改一个 `text_edit` / `text_box` 的选区背景色（单选 / 多行都支持） |
 | `win:select_all(name[, all])` | 全选；`all = false` 取消选择 |
 | `win:replace(name, find, text)` | 把 `find` 的全部出现替换为 `text` |
 | `win:clear(name)` | 清空编辑框 |

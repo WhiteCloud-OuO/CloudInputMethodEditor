@@ -189,6 +189,17 @@ impl ScriptWindows {
                     );
                 }
             }
+            WindowRequest::SetSelectionBackground { id, name, color } => {
+                if let Some(window) = self.windows.get(&id) {
+                    window.set_selection_background(&name, color);
+                } else {
+                    tracing::warn!(
+                        id,
+                        control = name,
+                        "脚本窗口：set_selection_background 时找不到这块窗口"
+                    );
+                }
+            }
             WindowRequest::SelectAll { id, name, select } => {
                 if let Some(window) = self.windows.get(&id) {
                     window.select_all(&name, select);
@@ -873,6 +884,21 @@ impl ScriptWindow {
             self.render_and_present(position);
         }
         true
+    }
+
+    /// 改编辑框的选区背景色（RichEdit 宿主里画选区）。
+    fn set_selection_background(&self, name: &str, color: Color) -> bool {
+        if let Some(host) = self.text_edit_host(name) {
+            host.set_selection_background(colorref(color));
+            true
+        } else {
+            tracing::warn!(
+                id = self.id,
+                control = name,
+                "text_edit：set_selection_background 找不到控件"
+            );
+            false
+        }
     }
 
     /// 更新静态 `label` / `text_block` 的文字；只重画，不重建编辑框。

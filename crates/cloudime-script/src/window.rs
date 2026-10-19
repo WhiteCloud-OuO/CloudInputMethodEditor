@@ -342,6 +342,13 @@ pub enum Request {
         color: Color,
     },
 
+    /// 改一个 `text_edit` / `text_box` 的选区背景色。
+    SetSelectionBackground {
+        id: WindowId,
+        name: String,
+        color: Color,
+    },
+
     /// 全选（`true`）或取消选择（`false`）。
     SelectAll {
         id: WindowId,
@@ -477,6 +484,24 @@ pub(crate) fn handle(
                 button_requests
                     .borrow_mut()
                     .push(Request::SetButtonBackground { id, name, color });
+                Ok(())
+            },
+        )?,
+    )?;
+
+    let selection_requests = requests.clone();
+    handle.set(
+        "set_selection_background",
+        lua.create_function(
+            move |_, (_this, name, color): (mlua::Table, String, String)| {
+                let color = parse_hex_color(&color).ok_or_else(|| {
+                    mlua::Error::RuntimeError(format!(
+                        "set_selection_background 的颜色写法不认识：{color}（要 \"#RRGGBB\" 或 \"#AARRGGBB\"）"
+                    ))
+                })?;
+                selection_requests
+                    .borrow_mut()
+                    .push(Request::SetSelectionBackground { id, name, color });
                 Ok(())
             },
         )?,

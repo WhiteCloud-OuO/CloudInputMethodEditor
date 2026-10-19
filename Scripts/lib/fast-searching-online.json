@@ -31,10 +31,10 @@
       "h": 24,
       "svg_path": "Images/SVG/打叉.svg",
       "shape": "round_rect",
-      "radius": 6,
-      "normal": { "background": "#00000000", "svg": "#FF666666" },
-      "hovered": { "background": "#FFE8E8E8", "svg": "#FF222222" },
-      "pressed": { "background": "#FFD0D0D0", "svg": "#FF000000" },
+      "radius": 4,
+      "normal": { "background": "#00000000", "svg": "#FF222222" },
+      "hovered": { "background": "#FFFF3300", "svg": "#FFFFFFFF" },
+      "pressed": { "background": "#FFCC2900", "svg": "#FFFFFFFF" },
       "events": { "mouse_clicked": "close" }
     },
     {
@@ -49,7 +49,7 @@
       "edge_color": "#FFC8C8C8",
       "text_color": "#FF222222",
       "cursor_color": "#FF0F6CBD",
-      "sel_back_color": "#384A90E2",
+      "sel_back_color": "#F0C8F1FF",
       "sel_text_color": "#FF222222",
       "text": "",
       "events": { "on_key_pressed": "query_key" }
@@ -94,7 +94,7 @@
       "back_color": "#FFF7F7F7",
       "edge_color": "#FFC8C8C8",
       "text_color": "#FF222222",
-      "sel_back_color": "#384A90E2",
+      "sel_back_color": "#F0C8F1FF",
       "sel_text_color": "#FF222222",
       "text": "输入中文词语、汉字或英文单词后按回车，或点搜索按钮。"
     }

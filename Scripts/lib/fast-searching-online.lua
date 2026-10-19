@@ -234,17 +234,7 @@ local function parse_zdic(html, word)
     local guoyu = collect_html(html, '<p class="gy%-sense__def">(.-)</p>')
     append_items(lines, "【国语辞典】", guoyu)
 
-    local english = first_html(html, '<span class="xxjs%-english__text">(.-)</span>')
-    if english then
-        lines[#lines + 1] = "英文：" .. english
-    end
-
-    local translations = collect_html(html, '<dd class="word%-trans__text">(.-)</dd>')
-    if #translations > 0 then
-        lines[#lines + 1] = "翻译：" .. table.concat(translations, "；")
-    end
-
-    if #definitions == 0 and #guoyu == 0 and #translations == 0 then
+    if #definitions == 0 and #guoyu == 0 then
         return nil
     end
     return table.concat(lines, "\n")
@@ -521,6 +511,84 @@ local function parse_youdao(body, word)
     return table.concat(lines, "\n")
 end
 
+local function collect_texts(value, output)
+    if type(value) == "string" then
+        local text = trim(value)
+        if text ~= "" then
+            output[#output + 1] = text
+        end
+    elseif type(value) == "table" then
+        if type(value["#text"]) == "string" then
+            local text = trim(value["#text"])
+            if text ~= "" then
+                output[#output + 1] = text
+            end
+        end
+        for _, item in ipairs(value) do
+            collect_texts(item, output)
+        end
+    end
+end
+
+-- 中文词条额外查一次有道，补英文 / 翻译；返回给汉典结果拼在末尾。
+local function parse_youdao_cn(body, word)
+    local ok, data = pcall(json_decode, body)
+    if not ok or type(data) ~= "table" then
+        return nil
+    end
+
+    local english, translations = {}, {}
+    local seen = {}
+    local function add(output, value)
+        value = trim(value or "")
+        if value ~= "" and not seen[value] then
+            seen[value] = true
+            table.insert(output, value)
+        end
+    end
+
+    local ce_words = data.ce and data.ce.word
+    if type(ce_words) == "table" then
+        for _, entry in ipairs(ce_words) do
+            for _, group in ipairs(entry.trs or {}) do
+                for _, translation in ipairs(group.tr or {}) do
+                    local line = translation.l
+                    if line then
+                        local values = {}
+                        collect_texts(line.i, values)
+                        for _, value in ipairs(values) do
+                            add(english, value)
+                        end
+                    end
+                end
+            end
+        end
+    end
+
+    local web = data.web_trans and data.web_trans["web-translation"]
+    if type(web) == "table" then
+        for _, entry in ipairs(web) do
+            if entry.key == word or entry["@same"] == "true" then
+                for _, translation in ipairs(entry.trans or {}) do
+                    add(translations, text_value(translation.value))
+                end
+            end
+        end
+    end
+
+    local lines = {}
+    if #english > 0 then
+        lines[#lines + 1] = "英文：" .. table.concat(english, "；")
+    end
+    if #translations > 0 then
+        lines[#lines + 1] = "翻译：" .. table.concat(translations, "；")
+    end
+    if #lines == 0 then
+        return nil
+    end
+    return table.concat(lines, "\n")
+end
+
 local function set_status(text, color)
     if not win then
         return
@@ -535,13 +603,30 @@ local function apply_theme()
         return
     end
     local theme = cloudime.get_theme()
-    local extra = theme and theme.candidate and theme.candidate.extra
-    if not extra or not win.set_button_background then
+    if not theme or not theme.candidate then
         return
     end
-    local ok, error = pcall(win.set_button_background, win, "search", extra)
-    if not ok then
-        cloudime.log("在线查询：设置搜索按钮主题色失败：" .. tostring(error))
+    local extra = theme.candidate.extra
+    if extra and win.set_button_background then
+        local ok, error = pcall(win.set_button_background, win, "search", extra)
+        if not ok then
+            cloudime.log("在线查询：设置搜索按钮主题色失败：" .. tostring(error))
+        end
+    end
+    local highlight = theme.candidate.highlight
+    if highlight and win.set_selection_background then
+        local query_ok, query_error = pcall(
+            win.set_selection_background, win, "query", highlight
+        )
+        local result_ok, result_error = pcall(
+            win.set_selection_background, win, "result", highlight
+        )
+        if not query_ok then
+            cloudime.log("在线查询：设置输入框选区颜色失败：" .. tostring(query_error))
+        end
+        if not result_ok then
+            cloudime.log("在线查询：设置结果框选区颜色失败：" .. tostring(result_error))
+        end
     end
 end
 
@@ -669,9 +754,9 @@ local function request_query(text)
         return
     end
 
-    if last_result_word == text and last_result_source == source and last_result_text then
+    if last_result_word == text and last_result_text then
         win:set_text("result", last_result_text)
-        set_status("来自" .. source .. "词典", "#FF888888")
+        set_status("来自" .. (last_result_source or source) .. "词典", "#FF888888")
         return
     end
 
@@ -690,40 +775,72 @@ local function request_query(text)
     win:set_text("result", "正在查询「" .. text .. "」…")
     set_status("正在连接" .. source .. "…", "#FF888888")
 
-    cloudime.http_get(url, HTTP_TIMEOUT_MS, function(result)
+    local function finish(parsed, result_source)
         if sequence == request_seq then
             pending_query_text = nil
         end
         if sequence ~= request_seq or not win then
             return
         end
+        win:set_text("result", parsed)
+        last_result_word = text
+        last_result_source = result_source
+        last_result_text = parsed
+        set_status("来自" .. result_source .. "词典", "#FF888888")
+    end
+
+    cloudime.http_get(url, HTTP_TIMEOUT_MS, function(result)
+        if sequence ~= request_seq or not win then
+            return
+        end
         if result.error then
+            pending_query_text = nil
             win:set_text("result", "网络请求失败：" .. tostring(result.error))
             set_status("查询失败", "#FFCC3333")
             return
         end
         if result.status ~= 200 then
+            pending_query_text = nil
             win:set_text("result", source .. "返回 HTTP " .. tostring(result.status))
             set_status("没有找到词条", "#FFCC3333")
             return
         end
 
-        local parsed
         if source == "汉典" then
-            parsed = parse_zdic(result.body, text)
-        else
-            parsed = parse_youdao(result.body, text)
+            local parsed = parse_zdic(result.body, text)
+            if not parsed then
+                pending_query_text = nil
+                win:set_text("result", "页面里没有找到可显示的释义。\n" .. url)
+                set_status("未找到释义", "#FFCC3333")
+                return
+            end
+            set_status("正在补充有道…", "#FF888888")
+            local youdao_url = "https://dict.youdao.com/jsonapi?q=" .. url_encode(text)
+            cloudime.http_get(youdao_url, HTTP_TIMEOUT_MS, function(youdao)
+                if sequence ~= request_seq or not win then
+                    return
+                end
+                local extra = nil
+                if not youdao.error and youdao.status == 200 then
+                    extra = parse_youdao_cn(youdao.body, text)
+                end
+                if extra then
+                    finish(parsed .. "\n\n" .. extra, "汉典 + 有道")
+                else
+                    finish(parsed, "汉典")
+                end
+            end)
+            return
         end
+
+        local parsed = parse_youdao(result.body, text)
         if not parsed then
+            pending_query_text = nil
             win:set_text("result", "页面里没有找到可显示的释义。\n" .. url)
             set_status("未找到释义", "#FFCC3333")
             return
         end
-        win:set_text("result", parsed)
-        last_result_word = text
-        last_result_source = source
-        last_result_text = parsed
-        set_status("来自" .. source .. "词典", "#FF888888")
+        finish(parsed, "有道")
     end)
 end
 

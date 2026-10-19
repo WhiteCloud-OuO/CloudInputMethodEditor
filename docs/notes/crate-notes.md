@@ -513,7 +513,8 @@ LuaJIT 源码随 crate 编译进二进制，装机包不依赖机器上装的 Lu
 4096 字符 / 4096² 图 / 8–2048 点）在解析时查，违规当场报 Lua 错（这一次调用中止，窗口保持原样）。
 `update_content` 只改静态 `label` / `text_block`；`set_button_background(name, color)` 改
 `flat_svg_button` 三个状态的背景色（主题色动态套用时用它）。`focus_text(name)` 把键盘焦点交给
-对应 RichEdit 宿主（面板打开后自动聚焦输入框）。`candidate.width()` / `height()`
+对应 RichEdit 宿主（面板打开后自动聚焦输入框）；`set_selection_background(name, color)` 改编辑框
+选区底色（跟随候选高亮背景）。`candidate.width()` / `height()`
 读 Server 刷进来的候选窗内容区尺寸（点），给脚本按候选窗位置摆独立窗口。
 `img` 元素走 `ImageCache`（`Runtime::image_cache`）：按「文件长度 + 修改时间」判新旧，命中就复用同一个
 `Arc<Pixmap>`（`Element::Image` 存 `Arc`，多份内容共享像素、不复制），最多 8 张 / 32M 像素，超了丢最久没用的。

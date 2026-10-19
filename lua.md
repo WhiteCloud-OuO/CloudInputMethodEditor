@@ -485,6 +485,7 @@ aux:show()
 | `win:set_text(name, text)` | 设置某个 `text_edit` / `text_box` 的文本（按控件名找，整份替换、光标放到末尾） |
 | `win:update_content(name, content)` | 更新静态控件显示内容：`text_block` 传字符串；`label` 传 `{ { text = …, color = … }, … }`，每段都必须带颜色。控件仍是静态的，不参与鼠标 / 键盘交互 |
 | `win:set_button_background(name, color)` | 改一个 `flat_svg_button` 的背景色（normal / hovered / pressed 一起改，SVG 染色不变）；颜色写 `#RRGGBB` 或 `#AARRGGBB` |
+| `win:set_selection_background(name, color)` | 改一个 `text_edit` / `text_box` 的选区背景色 |
 | `win:select_all(name, all?)` | 全选；`all` 缺省 `true`，传 `false` 取消选择（选区收在末尾） |
 | `win:replace(name, find, text)` | 把文本里的 `find` **全部**替换成 `text`（`find` 为空不做事） |
 | `win:clear(name)` | 清空某个 `text_edit` / `text_box` |

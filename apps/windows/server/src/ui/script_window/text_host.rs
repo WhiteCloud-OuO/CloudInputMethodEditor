@@ -116,7 +116,9 @@ pub(super) struct TextHostWindow {
     font: HGDIOBJ,
     ellipsis_font: HGDIOBJ,
     brush: HBRUSH,
-    highlight: HBRUSH,
+    highlight: Cell<HBRUSH>,
+    /// 与 `TextHost` 共享的选区背景色；脚本可在窗口打开后跟随主题更新。
+    selection_background: Rc<Cell<COLORREF>>,
     caret_brush: HBRUSH,
     text_color: COLORREF,
     selection_text: COLORREF,
@@ -177,7 +179,8 @@ impl TextHostWindow {
         let font = create_font(family, size, dpi, font_flag);
         let ellipsis_font = create_font(Some("Segoe UI"), size, dpi, font_flag);
         let brush = unsafe { CreateSolidBrush(background) };
-        let highlight = unsafe { CreateSolidBrush(selection_background) };
+        let selection_background = Rc::new(Cell::new(selection_background));
+        let highlight = unsafe { CreateSolidBrush(selection_background.get()) };
         let caret_brush = unsafe { CreateSolidBrush(caret_color) };
 
         let line_height = font_line_height(font, size, dpi);
@@ -189,7 +192,7 @@ impl TextHostWindow {
             auto_wrap,
             background,
             text_color,
-            selection_background,
+            selection_background: selection_background.clone(),
             selection_text,
             line_height,
             char_format: char_format(family, size, text_color),
@@ -254,7 +257,8 @@ impl TextHostWindow {
             font,
             ellipsis_font,
             brush,
-            highlight,
+            highlight: Cell::new(highlight),
+            selection_background,
             caret_brush,
             text_color,
             selection_text,
@@ -404,6 +408,17 @@ impl TextHostWindow {
         }
         if let Some(tsf) = &self.tsf {
             tsf.focus();
+        }
+    }
+
+    /// 改选区背景色（脚本跟随候选高亮色用）；同时重画当前选中文本。
+    pub(super) fn set_selection_background(&self, color: COLORREF) {
+        self.selection_background.set(color);
+        let brush = unsafe { CreateSolidBrush(color) };
+        let old = self.highlight.replace(brush);
+        unsafe {
+            let _ = DeleteObject(old.into());
+            let _ = InvalidateRect(Some(self.hwnd), None, true);
         }
     }
 
@@ -904,7 +919,7 @@ impl TextHostWindow {
                         .min(client.right),
                     bottom: client.bottom.max(1),
                 };
-                let _ = FillRect(hdc, &selection, self.highlight);
+                let _ = FillRect(hdc, &selection, self.highlight.get());
             }
             self.draw_runs(hdc, &text, &client, 0, text.len(), self.text_color);
             if start < end {
@@ -997,7 +1012,7 @@ impl Drop for TextHostWindow {
             let _ = DeleteObject(self.font);
             let _ = DeleteObject(self.ellipsis_font);
             let _ = DeleteObject(self.brush.into());
-            let _ = DeleteObject(self.highlight.into());
+            let _ = DeleteObject(self.highlight.get().into());
             let _ = DeleteObject(self.caret_brush.into());
         }
     }
@@ -1013,7 +1028,7 @@ struct TextHost {
     auto_wrap: bool,
     background: COLORREF,
     text_color: COLORREF,
-    selection_background: COLORREF,
+    selection_background: Rc<Cell<COLORREF>>,
     selection_text: COLORREF,
     line_height: i32,
     char_format: CHARFORMATW,
@@ -1233,7 +1248,7 @@ impl ITextHost_Impl for TextHost_Impl {
                 return self.text_color;
             }
             if nindex == COLOR_HIGHLIGHT {
-                return self.selection_background;
+                return self.selection_background.get();
             }
             if nindex == COLOR_HIGHLIGHTTEXT {
                 return self.selection_text;
