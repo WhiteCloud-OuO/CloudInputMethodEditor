@@ -17,7 +17,7 @@ cloudime.script{
     trigger_condition     = "combination_key",
     combination_modifiers = "ctrl+alt",
     keys                  = { "q" },
-    timeout               = 12000,
+    timeout               = 40000,
     sync                  = false,
     handover              = "callback",
     on_error              = function(event, message)
@@ -27,7 +27,8 @@ cloudime.script{
 
 local WIDTH, HEIGHT = 440, 360
 local EDGE_GAP = 8
-local HTTP_TIMEOUT_MS = 6000
+local HTTP_TIMEOUT_MS = 5000
+local MAX_REQUEST_ATTEMPTS = 3
 
 local win = nil
 local waiting_caret = false
@@ -789,23 +790,51 @@ local function request_query(text)
         set_status("来自" .. result_source .. "词典", "#FF888888")
     end
 
-    cloudime.http_get(url, HTTP_TIMEOUT_MS, function(result)
+    local function fail_request(label_for_status, failure_url, attempts)
         if sequence ~= request_seq or not win then
             return
         end
-        if result.error then
-            pending_query_text = nil
-            win:set_text("result", "网络请求失败：" .. tostring(result.error))
-            set_status("查询失败", "#FFCC3333")
-            return
-        end
-        if result.status ~= 200 then
-            pending_query_text = nil
-            win:set_text("result", source .. "返回 HTTP " .. tostring(result.status))
-            set_status("没有找到词条", "#FFCC3333")
-            return
-        end
+        pending_query_text = nil
+        win:set_text("result", "请求失败（已尝试 " .. tostring(attempts) .. " 次）\n" .. failure_url)
+        set_status(label_for_status, "#FFCC3333")
+    end
 
+    -- 网络错误 / 5xx / 429 视为请求失败；最多尝试 3 次。
+    local function fetch_with_retry(fetch_url, on_success, on_failure)
+        local attempts = 0
+        local function run()
+            if sequence ~= request_seq or not win then
+                return
+            end
+            attempts = attempts + 1
+            cloudime.http_get(fetch_url, HTTP_TIMEOUT_MS, function(result)
+                if sequence ~= request_seq or not win then
+                    return
+                end
+                local failed = result.error ~= nil
+                    or result.status == nil
+                    or result.status >= 500
+                    or result.status == 429
+                    or result.status == 408
+                if failed and attempts < MAX_REQUEST_ATTEMPTS then
+                    set_status(
+                        "请求失败，正在重试 " .. tostring(attempts) .. "/" .. tostring(MAX_REQUEST_ATTEMPTS) .. "…",
+                        "#FFCC3333"
+                    )
+                    run()
+                    return
+                end
+                if failed then
+                    on_failure(attempts)
+                    return
+                end
+                on_success(result)
+            end)
+        end
+        run()
+    end
+
+    fetch_with_retry(url, function(result)
         if source == "汉典" then
             local parsed = parse_zdic(result.body, text)
             if not parsed then
@@ -816,12 +845,9 @@ local function request_query(text)
             end
             set_status("正在补充有道…", "#FF888888")
             local youdao_url = "https://dict.youdao.com/jsonapi?q=" .. url_encode(text)
-            cloudime.http_get(youdao_url, HTTP_TIMEOUT_MS, function(youdao)
-                if sequence ~= request_seq or not win then
-                    return
-                end
+            fetch_with_retry(youdao_url, function(youdao)
                 local extra = nil
-                if not youdao.error and youdao.status == 200 then
+                if youdao.status == 200 then
                     extra = parse_youdao_cn(youdao.body, text)
                 end
                 if extra then
@@ -829,6 +855,10 @@ local function request_query(text)
                 else
                     finish(parsed, "汉典")
                 end
+            end, function(attempts)
+                -- 有道只是补充：失败也保留汉典正文，但停止继续请求。
+                finish(parsed, "汉典")
+                set_status("有道补充失败（已尝试 " .. tostring(attempts) .. " 次）", "#FFCC3333")
             end)
             return
         end
@@ -841,6 +871,8 @@ local function request_query(text)
             return
         end
         finish(parsed, "有道")
+    end, function(attempts)
+        fail_request("查询失败（已尝试 " .. tostring(attempts) .. " 次）", url, attempts)
     end)
 end
 
