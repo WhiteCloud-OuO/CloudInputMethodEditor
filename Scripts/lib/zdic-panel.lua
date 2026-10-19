@@ -36,6 +36,9 @@ local request_seq = 0
 local pending_query_text = nil
 local last_query_text = nil
 local last_query_at = 0
+-- 同词查询结果缓存：热键 / Enter 自动重复时不再把已经显示的结果打回“正在查询”。
+local last_result_word = nil
+local last_result_text = nil
 
 local function trim(text)
     return (text:gsub("^%s+", ""):gsub("%s+$", ""))
@@ -369,11 +372,17 @@ local function request_query(text)
         return
     end
 
+    if last_result_word == text and last_result_text then
+        win:set_text("result", last_result_text)
+        set_status("来自汉典 zdic.net", "#FF888888")
+        return
+    end
+
     if pending_query_text == text then
         return
     end
     local now = os.time()
-    if last_query_text == text and now - last_query_at < 1 then
+    if last_query_text == text and now - last_query_at < 2 then
         return
     end
     last_query_text = text
@@ -410,21 +419,30 @@ local function request_query(text)
             return
         end
         win:set_text("result", parsed)
+        last_result_word = text
+        last_result_text = parsed
         set_status("来自汉典 zdic.net", "#FF888888")
     end)
 end
 
 local function open_panel(pos)
+    local was_open = win ~= nil
     if not ensure_window() then
         return
     end
-    request_seq = request_seq + 1
-    pending_query_text = nil
 
     local word = trim(pending_word)
+    local same_query = word ~= ""
+        and word == last_query_text
+        and os.time() - last_query_at < 2
+    if not same_query then
+        request_seq = request_seq + 1
+        pending_query_text = nil
+    end
+
     if word ~= "" then
         win:set_text("query", word)
-    else
+    elseif not was_open then
         win:set_text("query", "")
     end
 
@@ -437,7 +455,7 @@ local function open_panel(pos)
     elseif word ~= "" then
         win:set_text("result", "当前候选不是中文词语 / 汉字。\n英文单词查询暂未支持。")
         set_status("目前只支持中文词语 / 汉字", "#FFCC3333")
-    else
+    elseif not was_open then
         win:set_text("result", "输入中文词语后按回车，或点搜索按钮。")
         set_status("请输入中文词语 / 汉字", "#FF888888")
     end
@@ -445,6 +463,9 @@ end
 
 cloudime.on("key", function(event)
     if event.vk ~= 0x51 then -- Q
+        return {}
+    end
+    if waiting_caret then
         return {}
     end
     pending_word = event.highlight or ""
@@ -469,6 +490,10 @@ cloudime.on("window", function(event)
     if event.handler == "close" then
         request_seq = request_seq + 1
         pending_query_text = nil
+        last_query_text = nil
+        last_query_at = 0
+        last_result_word = nil
+        last_result_text = nil
         win:close()
         win = nil
         return
