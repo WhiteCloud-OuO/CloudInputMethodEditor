@@ -1426,6 +1426,16 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
             Ok(width)
         })?,
     )?;
+    let height_state = viewport.clone();
+    let height_current = current.clone();
+    candidate.set(
+        "height",
+        lua.create_function(move |_, ()| {
+            let height = height_state.borrow().map(|(_, height)| height);
+            tracing::debug!(script = %height_current.borrow(), ?height, "脚本问候选窗高度");
+            Ok(height)
+        })?,
+    )?;
     candidate.set(
         "redraw",
         lua.create_function(move |_, ()| {
@@ -3557,12 +3567,25 @@ mod tests {
             "没刷过该给 nil"
         );
 
+        assert!(
+            lua.load("return cloudime.candidate.height() == nil")
+                .eval::<bool>()
+                .unwrap(),
+            "没刷过该给 nil"
+        );
+
         runtime.set_viewport(Some((312.0, 140.0)));
         assert_eq!(
             lua.load("return cloudime.candidate.width()")
                 .eval::<f32>()
                 .unwrap(),
             312.0
+        );
+        assert_eq!(
+            lua.load("return cloudime.candidate.height()")
+                .eval::<f32>()
+                .unwrap(),
+            140.0
         );
     }
 

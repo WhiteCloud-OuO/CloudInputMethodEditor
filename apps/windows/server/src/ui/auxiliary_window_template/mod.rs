@@ -46,7 +46,7 @@ use windows::core::{PCWSTR, Result, w};
 
 use cloudime_platform::LayoutMode;
 use cloudime_platform::input_schemes;
-use cloudime_render::{ControlName, Layout, StaticTextContent, key_map_cell};
+use cloudime_render::{Color, ControlName, Layout, StaticTextContent, key_map_cell};
 
 use super::layered;
 use super::monitor;
@@ -292,6 +292,21 @@ impl AuxiliaryWindowTemplate {
         };
         if !document.update_static_content(name, content) {
             tracing::warn!(control = name, "辅助窗口：名字或内容类型不匹配");
+            return false;
+        }
+        self.revision.set(self.revision.get() + 1);
+        true
+    }
+
+    /// 改一个扁平 SVG 按钮的背景色；只影响内容，不重建窗口。
+    pub(super) fn set_button_background(&self, name: &str, color: Color) -> bool {
+        let mut document = self.content.borrow_mut();
+        let Content::Document(document) = &mut *document else {
+            tracing::warn!("辅助窗口：只有脚本内容才能改按钮颜色");
+            return false;
+        };
+        if !document.set_button_background(name, color) {
+            tracing::warn!(control = name, "辅助窗口：按钮名字或类型不匹配");
             return false;
         }
         self.revision.set(self.revision.get() + 1);

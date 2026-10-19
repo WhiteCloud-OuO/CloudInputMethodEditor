@@ -11,6 +11,7 @@
 | [`docs/design/online-translate.md`](docs/design/online-translate.md) | 「在线翻译由脚本自己实现」这一条的来龙去脉 |
 | [`docs/notes/crate-notes.md`](docs/notes/crate-notes.md) | 实现要点（`crates/cloudime-script`、Server 的「用户脚本」两节） |
 | [`Scripts/template.lua`](Scripts/template.lua) | 「新建脚本」用的模板（只有清单骨架） |
+| [`Scripts/lib/zdic-panel.lua`](Scripts/lib/zdic-panel.lua) | 汉典查询面板：Ctrl+Alt+Q 查询高亮候选 / 输入中文，独立窗口显示释义；布局在同目录 `zdic-panel.json` |
 | [`Scripts/lib/example-niutrans.lua`](Scripts/lib/example-niutrans.lua) | 完整示例：小牛英汉互译（签名、表单编码、折行、多行显示） |
 | [`Scripts/lib/niutrans-window.lua`](Scripts/lib/niutrans-window.lua) | 小牛英汉互译窗口：Ctrl+Alt+Y 复制选中文本、光标旁多行编辑窗口、自动翻译；静态布局在同目录 `niutrans-window.json` |
 | [`Scripts/lib/example-theme-by-app.lua`](Scripts/lib/example-theme-by-app.lua) | 示例：按前台程序换主题（组合键触发 + `cloudime.foreground_app()` / `cloudime.apply_theme()`） |
@@ -395,6 +396,7 @@ cloudime.http_post(url, body, {
 | 方法 | 说明 |
 |---|---|
 | `cloudime.candidate.width()` | 候选窗**内容区宽度**（单位点）。不在组句 / 还没画过时是 `nil`，脚本自己回退。折行就按它来 |
+| `cloudime.candidate.height()` | 候选窗**内容区高度**（单位点）。不在组句 / 还没画过时是 `nil`；用于把独立窗口摆在候选窗旁边 |
 | `cloudime.candidate.redraw()` | 请 Server 把当前这一屏**重算一遍再重画**（会重新派发 `candidates`）。异步回调里改了自己的状态之后用它；在 `candidates` 里调没意义（那一拍本来就在重算） |
 | `cloudime.candidate.set_min_width(点)` | 候选窗口的最小宽度（竖排、横排都生效）。范围 `0`–`2000`；**不带参数（`nil`）恢复默认** |
 | `cloudime.candidate.set_page_size(5–9)` | 一页几个候选（直接改窗口高度）。不带参数恢复默认 |
@@ -482,6 +484,7 @@ aux:show()
 | `win:get_text(name)` | 读某个 `text_edit` / `text_box` 最近一次文本；控件不存在 / 还没有文本时给 `nil` |
 | `win:set_text(name, text)` | 设置某个 `text_edit` / `text_box` 的文本（按控件名找，整份替换、光标放到末尾） |
 | `win:update_content(name, content)` | 更新静态控件显示内容：`text_block` 传字符串；`label` 传 `{ { text = …, color = … }, … }`，每段都必须带颜色。控件仍是静态的，不参与鼠标 / 键盘交互 |
+| `win:set_button_background(name, color)` | 改一个 `flat_svg_button` 的背景色（normal / hovered / pressed 一起改，SVG 染色不变）；颜色写 `#RRGGBB` 或 `#AARRGGBB` |
 | `win:select_all(name, all?)` | 全选；`all` 缺省 `true`，传 `false` 取消选择（选区收在末尾） |
 | `win:replace(name, find, text)` | 把文本里的 `find` **全部**替换成 `text`（`find` 为空不做事） |
 | `win:clear(name)` | 清空某个 `text_edit` / `text_box` |

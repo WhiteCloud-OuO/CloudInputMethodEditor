@@ -148,6 +148,7 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
   （整个窗口按倍数缩放，等同 `Ctrl + 滚轮`）。**只在本次组句内有效**：组句结束回配置 / 滚轮的值，
   与 `Ctrl + 滚轮` 同级；三项都可以不带参数（`nil`）单独恢复默认。越界会被夹取（宽度 0–2000、
   一页 5–9、缩放 0.58–2.99）；用户一滚滚轮就由滚轮接管缩放（脚本那边再设一次又会盖回来）。
+  读尺寸用 `width()` / `height()`，单位点；候选窗没显示 / 没画过时给 `nil`。
 - **量文字**：`cloudime.ui.measure(文本, 字体名?)` → `{ width = 点, height = 点 }`；字体名可选
   `pinyin` / `candidate`（缺省）/ `item_number` / `translate`。`cloudime.ui.measure_tip(文本)` 是
   「底部那一行（翻译 Tip / 在线译文）」那个字体的捷径。量出来的**点**可以直接喂 `set_min_width`
@@ -285,6 +286,7 @@ local aux = cloudime.window.create_auxiliary{
 | `win:get_text(name)` | 读某个 `text_edit` / `text_box` 的最近文本；没有 / 还没收到时给 `nil` |
 | `win:set_text(name, text)` | 设置某个 `text_edit` / `text_box` 的文本（按控件名找） |
 | `win:update_content(name, content)` | 更新静态 `label` / `text_block`：`text_block` 传字符串，`label` 传带颜色的 runs；不改尺寸、不参与交互 |
+| `win:set_button_background(name, color)` | 改一个 `flat_svg_button` 三个状态的背景色，SVG 染色不动；颜色 `#RRGGBB` / `#AARRGGBB` |
 | `win:select_all(name[, all])` | 全选；`all = false` 取消选择 |
 | `win:replace(name, find, text)` | 把 `find` 的全部出现替换为 `text` |
 | `win:clear(name)` | 清空编辑框 |

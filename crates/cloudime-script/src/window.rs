@@ -332,6 +332,13 @@ pub enum Request {
         content: StaticTextContent,
     },
 
+    /// 改一个 `flat_svg_button` 的背景色（三个状态一起改，SVG 染色不动）。
+    SetButtonBackground {
+        id: WindowId,
+        name: String,
+        color: Color,
+    },
+
     /// 全选（`true`）或取消选择（`false`）。
     SelectAll {
         id: WindowId,
@@ -449,6 +456,24 @@ pub(crate) fn handle(
                 update_requests
                     .borrow_mut()
                     .push(Request::UpdateContent { id, name, content });
+                Ok(())
+            },
+        )?,
+    )?;
+
+    let button_requests = requests.clone();
+    handle.set(
+        "set_button_background",
+        lua.create_function(
+            move |_, (_this, name, color): (mlua::Table, String, String)| {
+                let color = parse_hex_color(&color).ok_or_else(|| {
+                    mlua::Error::RuntimeError(format!(
+                        "set_button_background 的颜色写法不认识：{color}（要 \"#RRGGBB\" 或 \"#AARRGGBB\"）"
+                    ))
+                })?;
+                button_requests
+                    .borrow_mut()
+                    .push(Request::SetButtonBackground { id, name, color });
                 Ok(())
             },
         )?,
@@ -2411,6 +2436,15 @@ mod tests {
                     && runs.len() == 1
                     && runs[0].text == "新提示"
                     && runs[0].color == Color::rgba(0x11, 0x22, 0x33, 0xFF)
+        )));
+
+        lua.load("win:set_button_background('search', '#FF123456')")
+            .exec()
+            .unwrap();
+        assert!(requests.borrow().iter().any(|request| matches!(
+            request,
+            Request::SetButtonBackground { name, color, .. }
+                if name == "search" && *color == Color::rgba(0x12, 0x34, 0x56, 0xFF)
         )));
     }
 

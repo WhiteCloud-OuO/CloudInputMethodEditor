@@ -168,6 +168,20 @@ impl ScriptWindows {
                     );
                 }
             }
+            WindowRequest::SetButtonBackground { id, name, color } => {
+                if let Some(window) = self.windows.get(&id) {
+                    window.set_button_background(&name, color);
+                } else if let Some(aux) = self.auxiliaries.get(&id).cloned() {
+                    aux.set_button_background(&name, color);
+                    self.sync_owner(&aux);
+                } else {
+                    tracing::warn!(
+                        id,
+                        control = name,
+                        "脚本窗口：set_button_background 时找不到这块窗口"
+                    );
+                }
+            }
             WindowRequest::SelectAll { id, name, select } => {
                 if let Some(window) = self.windows.get(&id) {
                     window.select_all(&name, select);
@@ -817,6 +831,28 @@ impl ScriptWindow {
                 "text_edit：set_text 找不到控件"
             );
         }
+    }
+
+    /// 改一个扁平 SVG 按钮的背景色；只重画，不重建控件。
+    fn set_button_background(&self, name: &str, color: Color) -> bool {
+        {
+            let mut document = self.document.borrow_mut();
+            if !document.set_button_background(name, color) {
+                tracing::warn!(
+                    id = self.id,
+                    control = name,
+                    "flat_svg_button：set_button_background 名字或类型不匹配"
+                );
+                return false;
+            }
+        }
+        self.revision.set(self.revision.get() + 1);
+        if self.shown.get()
+            && let Some(position) = self.position.get()
+        {
+            self.render_and_present(position);
+        }
+        true
     }
 
     /// 更新静态 `label` / `text_block` 的文字；只重画，不重建编辑框。
@@ -2305,6 +2341,10 @@ impl ScriptAuxiliary {
 
     fn update_static_content(&self, name: &str, content: StaticTextContent) -> bool {
         self.template.update_static_content(name, content)
+    }
+
+    fn set_button_background(&self, name: &str, color: Color) -> bool {
+        self.template.set_button_background(name, color)
     }
 
     /// 动态改一个区域的命中范围（合并 / 剪除）。

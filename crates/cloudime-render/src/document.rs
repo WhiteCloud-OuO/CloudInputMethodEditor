@@ -139,6 +139,25 @@ impl Document {
             _ => false,
         }
     }
+
+    /// 改一个 `flat_svg_button` 的背景色（三个状态一起改，SVG 染色不动）。
+    pub fn set_button_background(&mut self, name: &str, color: Color) -> bool {
+        let Some(path) = self
+            .control_names
+            .iter()
+            .find(|control| control.name == name)
+            .map(|control| control.path.clone())
+        else {
+            return false;
+        };
+        let Some(Element::FlatSvgButton(button)) = self.element_at_path_mut(&path) else {
+            return false;
+        };
+        button.normal.background = color;
+        button.hovered.background = color;
+        button.pressed.background = color;
+        true
+    }
 }
 
 fn collect_text_edits(
