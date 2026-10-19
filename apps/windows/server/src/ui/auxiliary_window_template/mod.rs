@@ -46,7 +46,7 @@ use windows::core::{PCWSTR, Result, w};
 
 use cloudime_platform::LayoutMode;
 use cloudime_platform::input_schemes;
-use cloudime_render::{Color, ControlName, Layout, StaticTextContent, key_map_cell};
+use cloudime_render::{Color, ControlName, Layout, StaticTextContent, key_map_cell, key_map_size};
 
 use super::layered;
 use super::monitor;
@@ -487,8 +487,21 @@ impl AuxiliaryWindowTemplate {
                 Content::KeyMap(layout_map, fixed_cell) if !layout_map.rows.is_empty() => {
                     let render_layout = to_render_layout(layout_map);
                     let nine_rows = painter.key_map_height_nine(dpi);
-                    let cell = fixed_cell
+                    let mut cell = fixed_cell
                         .unwrap_or_else(|| key_map_cell(key_map_height(target, nine_rows, dpi)));
+                    // 符号窗口至少和键位映射参考一样高（316 物理像素）；固定格子不够高时放大。
+                    if fixed_cell.is_some() {
+                        let scale = dpi.max(96) as f32 / 96.0;
+                        let min_height = MIN_KEY_MAP_HEIGHT / scale;
+                        for _ in 0..3 {
+                            let height = key_map_size(&render_layout, cell).1;
+                            if height >= min_height {
+                                break;
+                            }
+                            let rows = render_layout.rows.len().max(1) as f32;
+                            cell += (min_height - height) / rows;
+                        }
+                    }
                     (
                         painter.render_key_map(&render_layout, cell, dpi),
                         Vec::new(),

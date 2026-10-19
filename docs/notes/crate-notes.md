@@ -1236,9 +1236,11 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 将来要它接鼠标 / 键盘时把那个 `false` 改成 `true`，再由宿主 `designate_focus` 指定给它。
 `Ctrl+F1` 那条路由 UI 线程递给候选窗口（`toggle_assets`）。
 u 模式复用同一件资产，但走 `CandidateSink::set_symbol_aux(Option<KeyMapLayout>)`：`Some` 时临时显示四排符号格子
-（固定 52 逻辑点格子、不跟候选窗同高），`None` 时收起并恢复用户配置的键位映射参考；`symbol_assets_on` 与
-`assets_on` 取或，两套开关互不影响。符号格子的键帽 / 正常与 Shift 符号在
-`server/src/dispatch/u_mode/mapping.rs`，日文假名的底部提示由 `KeyMapLayout::footer` 画在窗口左下角。
+（从 52 逻辑点起算，再按 `MIN_KEY_MAP_HEIGHT` 316 物理像素补足最小高度、不跟候选窗同高），`None` 时收起并恢复
+用户配置的键位映射参考；`symbol_assets_on` 与 `assets_on` 取或，两套开关互不影响。支持中英混输时进入 u 模式
+先是字母输入（`UMode::symbol_ui = false`，不显示资产），`Space` 切符号输入；没有混输时直接符号输入。
+`Space` 在符号输入里切回字母输入。符号格子左下角始终留一行 `KeyMapLayout::footer`（假名 / 西里尔提示或空行），
+正常符号画在格子下方、Shift 符号画在上方；键帽与符号表在 `server/src/dispatch/u_mode/mapping.rs`。
 ⚠️ `auxiliary_toggle` / `set_auxiliary` / `set_symbol_aux` 必须写在 `impl CandidateSink for UiHandle` 里：Router 拿的是
 `Box<dyn CandidateSink>`，写成固有方法会落到 trait 的**空默认体**上（真机踩过，有回归测试盯着）。
 显示方式与组合键在 `use_input_scheme.cfg` 的 `key_map_reference`（`off` / `hotkey` / `always`）与 `key_map_hotkey`

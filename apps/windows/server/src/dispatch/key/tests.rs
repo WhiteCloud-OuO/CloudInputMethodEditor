@@ -1538,21 +1538,29 @@ fn a_sync_mode_from_another_app_moves_the_focus() {
 
 /// u 模式：全拼裸 u 进六类符号候选，第二个字母退出符号窗口接普通混输。
 #[test]
-fn full_pinyin_u_enters_symbol_mode_and_a_letter_leaves_it() {
+fn full_pinyin_u_starts_in_letter_mode_and_space_toggles_symbols() {
     let normal = KeyModifiers::default();
     let mut r = router(9);
-    let (outcome, commit, frame) = key(&mut r, 0x55, Some('u'), normal);
+    let (outcome, commit, _) = key(&mut r, 0x55, Some('u'), normal);
     assert_eq!(outcome, KeyOutcome::Consumed);
     assert_eq!(commit, None);
-    assert_eq!(frame.candidates.items.len(), 6, "六类符号");
-    assert_eq!(frame.candidates.items[0].text, "① 常用符号");
-    assert!(r.u_mode.is_some());
+    assert!(!r.u_mode.expect("进了 u 模式").symbol_ui, "默认字母输入");
     let tip = r.self_drawn_frame().tip.expect("混输提示");
     assert_eq!(tip.joined(), "可输入英文单词");
 
+    // Space：切到符号输入，六类候选且不带序号。
+    let (_, _, frame) = key(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(frame.candidates.items.len(), 6);
+    assert_eq!(frame.candidates.items[0].text, "常用符号");
+    assert!(r.u_mode.expect("还在 u 模式").symbol_ui);
+
+    // 再按 Space：回字母输入。
+    let (_, _, _) = key(&mut r, 0x20, Some(' '), normal);
+    assert!(!r.u_mode.expect("还在 u 模式").symbol_ui);
+
     let (_, _, frame) = key(&mut r, 0x4E, Some('n'), normal);
     assert_eq!(frame.preedit[0].text, "un");
-    assert!(r.u_mode.is_none(), "第二个字母后关闭符号窗口");
+    assert!(r.u_mode.is_some(), "字母输入仍留在 u 模式");
 }
 
 /// u 模式退出符号窗口后，普通候选窗仍按同一光标位置继续显示。
@@ -1563,6 +1571,7 @@ fn u_mode_transition_keeps_the_candidate_window_shown() {
     let recorded = Arc::new(Recorded::default());
     r.set_candidate_sink(Box::new(RecordingSink(recorded.clone())));
     key(&mut r, 0x55, Some('u'), normal);
+    key(&mut r, 0x20, Some(' '), normal); // 切到符号输入
     r.handle(ClientMessage::PositionCandidates {
         session: SessionId(1),
         rect: ScreenRect {
@@ -1578,15 +1587,16 @@ fn u_mode_transition_keeps_the_candidate_window_shown() {
     assert_eq!(shows.last().unwrap().0.preedit[0].text, "un");
 }
 
-/// 不支持中英混输时第二个字母被吞掉，u 模式不退出。
+/// 不支持中英混输时直接进符号输入，字母键按符号表上屏。
 #[test]
-fn u_mode_swallows_the_second_letter_when_mixture_input_is_off() {
+fn u_mode_without_mixture_input_goes_straight_to_symbols() {
     let normal = KeyModifiers::default();
     let mut r = router(9);
     r.engine.set_mixture_input(false);
     key(&mut r, 0x55, Some('u'), normal);
-    let (_, _, frame) = key(&mut r, 0x4E, Some('n'), normal);
-    assert!(r.u_mode.is_some());
+    let (_, commit, frame) = key(&mut r, 0x4E, Some('n'), normal);
+    assert_eq!(commit.as_deref(), Some("≠"));
+    assert!(r.u_mode.expect("还在 u 模式").symbol_ui);
     assert_eq!(frame.candidates.items.len(), 6);
     assert_eq!(frame.preedit[0].text, "u");
 }
@@ -1597,6 +1607,7 @@ fn u_mode_moves_the_category_and_escape_closes_it() {
     let normal = KeyModifiers::default();
     let mut r = router(9);
     key(&mut r, 0x55, Some('u'), normal);
+    key(&mut r, 0x20, Some(' '), normal); // 切到符号输入
     let (_, _, frame) = key(&mut r, 0x28, None, normal);
     assert_eq!(frame.highlight, 1);
     let (_, _, frame) = key(&mut r, 0x1B, None, normal);

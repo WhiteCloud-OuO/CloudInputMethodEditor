@@ -83,8 +83,13 @@ impl Router {
         if let Some(effect) = self.u_mode_hotkey(event) {
             return effect;
         }
-        if self.u_mode.is_some() {
-            return self.u_mode_key(event);
+        if let Some(u_mode) = self.u_mode {
+            if u_mode.symbol_ui {
+                return self.u_mode_key(event);
+            }
+            if let Some(effect) = self.u_mode_letter_key(event) {
+                return effect;
+            }
         }
         if let Some(effect) = self.ctrl_digit(event) {
             return effect;

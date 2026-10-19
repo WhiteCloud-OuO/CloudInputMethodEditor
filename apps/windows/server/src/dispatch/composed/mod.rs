@@ -59,9 +59,12 @@ impl Router {
             // 这次组句完了：下一段拼音的候选窗从收起来的样子出现（展开只活在一次组句里）
             self.show_more = false;
             self.hover_cell = None;
+            if self.u_mode.take().is_some() {
+                self.candidates.set_symbol_aux(None);
+            }
             return;
         }
-        if let Some(u_mode) = self.u_mode {
+        if let Some(u_mode) = self.u_mode.filter(|u_mode| u_mode.symbol_ui) {
             self.highlight = u_mode.category_index();
             self.navigated = false;
             self.composed = Some(Composed::Candidates {
@@ -269,7 +272,7 @@ impl Router {
     /// 选中第 `index` 个候选：候选把整段转换完时返回要上屏的文本，只吃一部分时返回 `None`
     /// （这一选择并进组句，壳重画预编辑即可）。没有这一格也返回 `None`。
     pub(super) fn commit_index(&mut self, index: usize) -> Option<String> {
-        if let Some(mut u_mode) = self.u_mode {
+        if let Some(mut u_mode) = self.u_mode.filter(|u_mode| u_mode.symbol_ui) {
             if index < 6 {
                 u_mode.set_category(index);
                 self.u_mode = Some(u_mode);

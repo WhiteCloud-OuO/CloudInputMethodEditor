@@ -22,6 +22,8 @@ pub(super) struct UMode {
     kana: Kana,
     variant: usize,
     greek: GreekState,
+    /// `true` = 符号输入（候选六类 + 符号窗口）；`false` = 默认的字母输入。
+    pub(super) symbol_ui: bool,
 }
 
 impl UMode {
@@ -78,14 +80,15 @@ impl UMode {
             .map(|row| row.chars().map(|key| self.key_cap(key)).collect())
             .collect();
         let footer = match self.category() {
-            SymbolCategory::Kana => Some("按下Tab切换平假名/片假名".to_owned()),
-            SymbolCategory::Cyrillic => Some("Ё/ё 在前斜杠键".to_owned()),
-            _ => None,
+            SymbolCategory::Kana => "按下Tab切换平假名/片假名".to_owned(),
+            SymbolCategory::Cyrillic => "Ё/ё 在前斜杠键".to_owned(),
+            // 没有提示也留一行，符号窗口高度不随分类跳。
+            _ => String::new(),
         };
         KeyMapLayout {
             rows,
             zero_initials: Vec::new(),
-            footer,
+            footer: Some(footer),
             symbol: true,
         }
     }
@@ -175,7 +178,11 @@ impl Router {
             return;
         }
         self.engine.push('u');
-        self.u_mode = Some(UMode::default());
+        self.u_mode = Some(UMode {
+            // 支持混输时先进字母输入；不支持混输直接进符号输入。
+            symbol_ui: !self.mixture_enabled(),
+            ..UMode::default()
+        });
         self.highlight = 0;
         self.update_u_aux();
     }
@@ -195,7 +202,26 @@ impl Router {
         Some(Effect::Changed(None))
     }
 
-    /// u 模式里的按键。返回 `Effect`；不在 u 模式时调用方不会走到这里。
+    /// 字母输入状态的按键：只拦 Space 切符号、Esc 退出，其余交给普通流程。
+    pub(super) fn u_mode_letter_key(&mut self, event: &KeyEvent) -> Option<Effect> {
+        let u = self.u_mode?;
+        if event.virtual_key == 0x1B {
+            self.u_mode = None;
+            self.candidates.set_symbol_aux(None);
+            self.engine.clear();
+            return Some(Effect::Changed(None));
+        }
+        if event.virtual_key == 0x20 && self.mixture_enabled() {
+            let mut next = u;
+            next.symbol_ui = true;
+            self.u_mode = Some(next);
+            self.update_u_aux();
+            return Some(Effect::Changed(None));
+        }
+        None
+    }
+
+    /// 符号输入状态的按键。返回 `Effect`；不在 u 模式时调用方不会走到这里。
     pub(super) fn u_mode_key(&mut self, event: &KeyEvent) -> Effect {
         let Some(mut u) = self.u_mode else {
             return Effect::Passthrough;
@@ -215,7 +241,13 @@ impl Router {
             return Effect::Passthrough;
         }
         if event.virtual_key == 0x20 {
-            // Space 吞键，不选分类、也不上屏。
+            // 支持混输时 Space 切回字母输入；没有混输时仍只吞键。
+            if self.mixture_enabled() {
+                u.symbol_ui = false;
+                self.u_mode = Some(u);
+                self.update_u_aux();
+                return Effect::Changed(None);
+            }
             return Effect::Navigated;
         }
         if event.virtual_key == 0x09 {
@@ -250,8 +282,9 @@ impl Router {
             && !u.greek.diaeresis
         {
             // 第二个键是字母：离开符号窗口，接回普通拼音 / 英文词匹配。
-            self.u_mode = None;
-            self.candidates.set_symbol_aux(None);
+            u.symbol_ui = false;
+            self.u_mode = Some(u);
+            self.update_u_aux();
             self.engine.push(c);
             return Effect::Changed(None);
         }
@@ -274,7 +307,7 @@ impl Router {
     }
 
     pub(super) fn update_u_aux(&mut self) {
-        let layout = self.u_mode.map(|u| u.layout());
+        let layout = self.u_mode.filter(|u| u.symbol_ui).map(|u| u.layout());
         self.candidates.set_symbol_aux(layout);
     }
 }
@@ -326,7 +359,7 @@ mod tests {
             .map(|candidate| candidate.text)
             .collect();
         assert_eq!(labels.len(), 6);
-        assert!(labels[0].starts_with('①'));
+        assert_eq!(labels[0], "常用符号");
         assert!(labels[5].contains("制表符"));
     }
 

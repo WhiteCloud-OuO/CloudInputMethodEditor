@@ -32,15 +32,15 @@ impl SymbolCategory {
         Self::TabArrow,
     ];
 
-    /// 分类在候选窗口里的显示名（带圈序号）。
+    /// 分类在候选窗口里的显示名。
     pub(super) fn label(self) -> &'static str {
         match self {
-            Self::Common => "① 常用符号",
-            Self::Number => "② 序号|角标",
-            Self::Greek => "③ 希腊字母",
-            Self::Cyrillic => "④ 西里尔字母",
-            Self::Kana => "⑤ 日文假名",
-            Self::TabArrow => "⑥ 制表符|箭头",
+            Self::Common => "常用符号",
+            Self::Number => "序号|角标",
+            Self::Greek => "希腊字母",
+            Self::Cyrillic => "西里尔字母",
+            Self::Kana => "日文假名",
+            Self::TabArrow => "制表符|箭头",
         }
     }
 }
