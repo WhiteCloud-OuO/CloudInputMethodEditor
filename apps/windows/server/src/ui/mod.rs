@@ -188,6 +188,11 @@ impl CandidateSink for UiHandle {
     fn set_auxiliary(&self, layout: KeyMapLayout) {
         self.post(UiCommand::AuxiliaryKeyMap(layout));
     }
+
+    /// u 模式符号窗口：`Some` 显示并换内容，`None` 收起。
+    fn set_symbol_aux(&self, layout: Option<KeyMapLayout>) {
+        self.post(UiCommand::SymbolAux(layout));
+    }
 }
 
 impl ScriptWindowSink for UiHandle {
@@ -387,6 +392,13 @@ fn apply(
                 "辅助窗口：换内容（键位映射参考）"
             );
             window.set_asset_key_map(layout);
+        }
+        UiCommand::SymbolAux(layout) => {
+            tracing::debug!(
+                rows = layout.as_ref().map_or(0, |layout| layout.rows.len()),
+                "辅助窗口：u 模式符号窗口"
+            );
+            window.set_symbol_key_map(layout);
         }
         UiCommand::StatusShow(view) => {
             if let Some(status) = status {

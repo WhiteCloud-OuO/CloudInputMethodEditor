@@ -59,6 +59,10 @@ impl Asset for KeyMapWindow {
         self.template.set_key_map(layout);
     }
 
+    fn set_symbol_key_map(&self, layout: KeyMapLayout) {
+        self.template.set_symbol_key_map(layout);
+    }
+
     /// 这件资产的名字：同一所有者名下唯一（宿主的 `Assets::add` 盯着），跨资产指认与日志用它。
     fn name(&self) -> &'static str {
         "key_map"

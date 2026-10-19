@@ -131,6 +131,9 @@ pub struct RouterConfig {
     /// 为脚本提供全局热键（`[script] global_hotkeys`）。
     pub script_global_hotkeys: bool,
 
+    /// 当前输入方案是不是全拼：全拼直接按 `u` 进 u 模式，别的方案用 `Ctrl+Alt+U`。
+    pub full_pinyin: bool,
+
     /// 脚本在本组句里要的候选窗**最小宽度**（`cloudime.candidate.set_min_width`，物理像素）：
     /// `None` = 用配置里的 `min_width_pixels`。**只在本次组句内有效**，组句结束清掉。
     pub script_min_width: Option<f32>,
@@ -312,6 +315,7 @@ impl From<&Config> for RouterConfig {
             scripts_dir: None,
             script_disabled: config.script.disabled.clone(),
             script_global_hotkeys: config.script.global_hotkeys,
+            full_pinyin: input.input_schemes == cloudime_platform::InputScheme::FullPinyin,
             // 脚本设的候选窗尺寸：会话内状态，配置（热）加载时保留，只有 `Router::reset_composition` 清
             script_min_width: None,
             script_page_size: None,

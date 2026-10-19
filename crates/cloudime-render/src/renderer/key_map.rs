@@ -31,6 +31,15 @@ const MIN_CELL: f32 = 24.0;
 /// 键盘与**下方**零声母表之间的间距（点）。
 const TABLE_GAP: f32 = 8.0;
 
+/// ????????????????
+const FOOTER_GAP: f32 = 4.0;
+
+/// ??????????????????
+const FOOTER_HEIGHT_RATIO: f32 = 0.3;
+
+/// ???????????????
+const FOOTER_FONT_RATIO: f32 = 0.22;
+
 /// 零声母表的列数：`[Shengmu]` 最多 12 项 → 6 列 × 2 行。
 const TABLE_COLUMNS: usize = 6;
 
@@ -92,6 +101,9 @@ pub struct KeyMapLayout {
 
     /// 零声母表：从左上往下填，每列 [`TABLE_ROWS`] 个。
     pub zero_initials: Vec<KeyCap>,
+
+    /// 面板底部的一行提示（u 模式日文假名用）；普通键位映射参考没有。
+    pub footer: Option<String>,
 }
 
 impl KeyMapLayout {
@@ -158,6 +170,9 @@ pub fn key_map_cell(target_height: f32) -> f32 {
 pub fn key_map_size(layout: &KeyMapLayout, cell: f32) -> (f32, f32) {
     let rows = layout.rows.len().max(1);
     let mut height = PADDING * 2.0 + KeyMapLayout::span(rows, cell);
+    if layout.footer.is_some() {
+        height += FOOTER_GAP + cell * FOOTER_HEIGHT_RATIO;
+    }
     let mut width = PADDING * 2.0 + layout.keyboard_width(cell);
     if layout.table_rows() > 0 {
         height += TABLE_GAP + layout.table_height(cell);
@@ -239,6 +254,14 @@ pub fn draw_key_map<T: RectElement + TextElement>(
                 (x, y, zero_width, zero_height),
             );
         }
+    }
+    if let Some(footer) = &layout.footer {
+        let mut footer_top =
+            top + KeyMapLayout::span(layout.rows.len(), cell) + metrics.px(FOOTER_GAP);
+        if layout.table_rows() > 0 {
+            footer_top += layout.table_height(cell) + metrics.px(TABLE_GAP);
+        }
+        target.text(footer, &styles.footer, left, footer_top);
     }
 }
 
@@ -375,6 +398,8 @@ struct KeyMapStyles {
     key: TextStyle,
     initial: TextStyle,
     mapping: TextStyle,
+    /// 底部提示（u 模式日文假名用）。
+    footer: TextStyle,
     /// 有 `Some` 表示韵母首字母要单独上色（颜色按字母现取）。
     head: Option<()>,
 }
@@ -400,6 +425,9 @@ impl KeyMapStyles {
             mapping: metrics
                 .style(FontSpec::with_size(cell * MAPPING_FONT_RATIO), colors.text)
                 .with_family(metrics.theme.pinyin_family.as_ref()),
+            footer: metrics
+                .style(FontSpec::with_size(cell * FOOTER_FONT_RATIO), colors.badge)
+                .with_family(family),
             head: Some(()),
         }
     }
@@ -441,6 +469,7 @@ mod tests {
                 (0..7).map(|_| cap("Z")).collect(),
             ],
             zero_initials: (0..zero).map(|_| cap("AA")).collect(),
+            footer: None,
         }
     }
 
@@ -536,6 +565,7 @@ mod tests {
         let layout = KeyMapLayout {
             rows: vec![vec![cap("Q")]],
             zero_initials: (0..5).map(|_| cap("AA")).collect(),
+            footer: None,
         };
         assert_eq!(
             layout.table_rows(),

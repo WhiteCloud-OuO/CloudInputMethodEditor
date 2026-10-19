@@ -30,6 +30,9 @@ pub struct KeyMapLayout {
 
     /// 零声母表：`[Shengmu]` 里的每一项一格（两键 + 韵母），最多 12 项（6 列 × 2 行）。
     pub zero_initials: Vec<KeyCap>,
+
+    /// 面板底部的一行提示（u 模式日文假名用）；普通键位映射参考没有。
+    pub footer: Option<String>,
 }
 
 /// 什么时候显示「键位映射参考」（`use_input_scheme.cfg` 的 `key_map_reference`）。

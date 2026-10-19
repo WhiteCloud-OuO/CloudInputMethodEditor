@@ -72,6 +72,9 @@ const VERTICAL_ROWS: usize = 9;
 /// 横排的默认宽度按「候选窗口装 6 个候选项」量（每个候选假定两个字）。
 const HORIZONTAL_ROWS: usize = 6;
 
+/// u 模式符号窗口的格子边长（逻辑点）：四排 × 12 列，固定大小，不跟候选窗同高。
+const SYMBOL_CELL: f32 = 52.0;
+
 /// 窗口模板的三个属性（**物理像素**）；`None` = 用按候选窗口形状算出来的默认值。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct AuxiliaryWindowSpec {
@@ -90,8 +93,8 @@ enum Content {
     /// 空面板：主题背景 + 圆角 + 阴影，尺寸按宿主形状 / 用户设的属性算。
     Empty,
 
-    /// 键位映射参考（候选窗口的资产）：格子边长按目标高度反推。
-    KeyMap(input_schemes::KeyMapLayout),
+    /// 键位映射参考 / u 模式符号窗口：格子边长按目标高度反推；`Some` 是固定的逻辑点边长。
+    KeyMap(input_schemes::KeyMapLayout, Option<f32>),
 
     /// 脚本给的一份内容（`cloudime.window.create_auxiliary` + `set_content`）。
     Document(cloudime_render::Document),
@@ -271,8 +274,14 @@ impl AuxiliaryWindowTemplate {
 
     /// 换面板里要画的键位映射参考版面（当前方案变了一整份重送）；空版面就是一块空面板。
     pub(super) fn set_key_map(&self, layout: input_schemes::KeyMapLayout) {
-        *self.content.borrow_mut() = Content::KeyMap(layout);
+        *self.content.borrow_mut() = Content::KeyMap(layout, None);
         // 版面变了：下次 `show` 一定重画
+        self.revision.set(self.revision.get() + 1);
+    }
+
+    /// u 模式符号窗口：四排方形格子，边长固定（逻辑点），不与候选窗同高。
+    pub(super) fn set_symbol_key_map(&self, layout: input_schemes::KeyMapLayout) {
+        *self.content.borrow_mut() = Content::KeyMap(layout, Some(SYMBOL_CELL));
         self.revision.set(self.revision.get() + 1);
     }
 
@@ -475,10 +484,11 @@ impl AuxiliaryWindowTemplate {
             };
             let generation = painter.generation();
             match &*content {
-                Content::KeyMap(layout_map) if !layout_map.rows.is_empty() => {
+                Content::KeyMap(layout_map, fixed_cell) if !layout_map.rows.is_empty() => {
                     let render_layout = to_render_layout(layout_map);
                     let nine_rows = painter.key_map_height_nine(dpi);
-                    let cell = key_map_cell(key_map_height(target, nine_rows, dpi));
+                    let cell = fixed_cell
+                        .unwrap_or_else(|| key_map_cell(key_map_height(target, nine_rows, dpi)));
                     (
                         painter.render_key_map(&render_layout, cell, dpi),
                         Vec::new(),
@@ -650,6 +660,7 @@ fn to_render_layout(layout: &input_schemes::KeyMapLayout) -> cloudime_render::Ke
             .map(|row| row.iter().map(cap).collect())
             .collect(),
         zero_initials: layout.zero_initials.iter().map(cap).collect(),
+        footer: layout.footer.clone(),
     }
 }
 

@@ -129,6 +129,7 @@ impl DoubleKeysScheme {
         KeyMapLayout {
             rows,
             zero_initials,
+            footer: None,
         }
     }
 

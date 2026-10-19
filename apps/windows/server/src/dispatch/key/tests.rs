@@ -1535,3 +1535,110 @@ fn a_sync_mode_from_another_app_moves_the_focus() {
     });
     assert!(!r.composing(), "切到别的应用该清掉上一段的组句");
 }
+
+/// u 模式：全拼裸 u 进六类符号候选，第二个字母退出符号窗口接普通混输。
+#[test]
+fn full_pinyin_u_enters_symbol_mode_and_a_letter_leaves_it() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    let (outcome, commit, frame) = key(&mut r, 0x55, Some('u'), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit, None);
+    assert_eq!(frame.candidates.items.len(), 6, "六类符号");
+    assert_eq!(frame.candidates.items[0].text, "① 常用符号");
+    assert!(r.u_mode.is_some());
+    let tip = r.self_drawn_frame().tip.expect("混输提示");
+    assert_eq!(tip.joined(), "可输入英文单词");
+
+    let (_, _, frame) = key(&mut r, 0x4E, Some('n'), normal);
+    assert_eq!(frame.preedit[0].text, "un");
+    assert!(r.u_mode.is_none(), "第二个字母后关闭符号窗口");
+}
+
+/// u 模式退出符号窗口后，普通候选窗仍按同一光标位置继续显示。
+#[test]
+fn u_mode_transition_keeps_the_candidate_window_shown() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    let recorded = Arc::new(Recorded::default());
+    r.set_candidate_sink(Box::new(RecordingSink(recorded.clone())));
+    key(&mut r, 0x55, Some('u'), normal);
+    r.handle(ClientMessage::PositionCandidates {
+        session: SessionId(1),
+        rect: ScreenRect {
+            left: 10,
+            top: 20,
+            right: 30,
+            bottom: 40,
+        },
+    });
+    key(&mut r, 0x4E, Some('n'), normal);
+    let shows = recorded.shows.lock().unwrap();
+    assert!(shows.len() >= 2, "u 模式与第二个字母都要显示候选窗");
+    assert_eq!(shows.last().unwrap().0.preedit[0].text, "un");
+}
+
+/// 不支持中英混输时第二个字母被吞掉，u 模式不退出。
+#[test]
+fn u_mode_swallows_the_second_letter_when_mixture_input_is_off() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    r.engine.set_mixture_input(false);
+    key(&mut r, 0x55, Some('u'), normal);
+    let (_, _, frame) = key(&mut r, 0x4E, Some('n'), normal);
+    assert!(r.u_mode.is_some());
+    assert_eq!(frame.candidates.items.len(), 6);
+    assert_eq!(frame.preedit[0].text, "u");
+}
+
+/// u 模式方向键按排布方向换分类，Esc 关符号窗与候选窗。
+#[test]
+fn u_mode_moves_the_category_and_escape_closes_it() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    key(&mut r, 0x55, Some('u'), normal);
+    let (_, _, frame) = key(&mut r, 0x28, None, normal);
+    assert_eq!(frame.highlight, 1);
+    let (_, _, frame) = key(&mut r, 0x1B, None, normal);
+    assert!(frame.is_empty());
+    assert!(r.u_mode.is_none());
+}
+
+/// 全拼的裸 u 只在空组句时进模式；`nu` 里的 u 仍是拼音。
+#[test]
+fn u_inside_a_pinyin_syllable_is_not_a_mode_key() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    compose(&mut r, "n", normal);
+    let (_, _, frame) = key(&mut r, 0x55, Some('u'), normal);
+    assert!(r.u_mode.is_none());
+    assert_eq!(frame.preedit[0].text, "nu");
+}
+
+/// 非全拼用 Ctrl+Alt+U；全拼不抢这个组合。
+#[test]
+fn only_non_full_pinyin_uses_the_ctrl_alt_u_hotkey() {
+    let hotkey = KeyModifiers {
+        ctrl: true,
+        alt: true,
+        ..KeyModifiers::default()
+    };
+    let mut full = router(9);
+    key(&mut full, 0x55, Some('\u{15}'), hotkey);
+    assert!(full.u_mode.is_none(), "全拼的 u 已经在裸键上");
+
+    let mut dual = Router::new(
+        Engine::new(Dictionary::parse("你\tni\t100\n").unwrap()),
+        RouterConfig {
+            full_pinyin: false,
+            ..Default::default()
+        },
+    );
+    dual.handle(ClientMessage::OpenSession {
+        session: SessionId(1),
+        app: None,
+        protocol: PROTOCOL_VERSION,
+    });
+    key(&mut dual, 0x55, Some('\u{15}'), hotkey);
+    assert!(dual.u_mode.is_some());
+}

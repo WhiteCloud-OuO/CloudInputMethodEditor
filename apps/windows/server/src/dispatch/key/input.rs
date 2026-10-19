@@ -80,6 +80,12 @@ impl Router {
             self.caret_shift = 1;
             return Effect::Changed(None);
         }
+        if let Some(effect) = self.u_mode_hotkey(event) {
+            return effect;
+        }
+        if self.u_mode.is_some() {
+            return self.u_mode_key(event);
+        }
         if let Some(effect) = self.ctrl_digit(event) {
             return effect;
         }
@@ -400,6 +406,16 @@ impl Router {
     /// Caps Lock 亮着的字母仍然直通给应用（应用自己按大小写位插入；全角字符开着时由我们转全角）。
     /// 没在组句时的其他字符走全角标点与全角字符（组句中的标点仍进英文直输段）。
     fn apply_chinese(&mut self, c: char, event: &KeyEvent) -> Effect {
+        // 全拼在组句开始前直接按 u 进 u 模式；双拼 / 形码的 u 还要当拼音键，走 Ctrl+Alt+U。
+        if !self.composing()
+            && self.config.full_pinyin
+            && c == 'u'
+            && !event.modifiers.shift
+            && !event.modifiers.caps
+        {
+            self.enter_u_mode();
+            return Effect::Changed(None);
+        }
         if c.is_ascii_alphabetic() {
             if !event.modifiers.caps {
                 self.engine.push(c);

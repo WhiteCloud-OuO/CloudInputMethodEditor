@@ -147,6 +147,9 @@ pub(super) trait Asset {
     /// 换「文字 / 版面类资产」的内容（键位映射参考的键盘版面）。
     fn set_key_map(&self, _layout: KeyMapLayout) {}
 
+    /// u 模式符号窗口：四排固定大小的符号格子。
+    fn set_symbol_key_map(&self, _layout: KeyMapLayout) {}
+
     /// 创建时声明自己**允不允许获取焦点**（`able_to_get_focus`）：`false`（缺省）= **不具备焦点** ——
     /// 鼠标 / 键盘一律不响应（所有辅助窗口默认如此）。允许也只是「能」，真拿到还要所有者**指定**
     /// （[`DesignatedAssetToGetFocus`]）。
@@ -264,6 +267,13 @@ impl Assets {
     pub(super) fn set_key_map(&self, layout: KeyMapLayout) {
         for asset in &self.items {
             asset.set_key_map(layout.clone());
+        }
+    }
+
+    /// u 模式符号窗口：四排固定大小的符号格子。
+    pub(super) fn set_symbol_key_map(&self, layout: KeyMapLayout) {
+        for asset in &self.items {
+            asset.set_symbol_key_map(layout.clone());
         }
     }
 

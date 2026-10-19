@@ -167,11 +167,12 @@ impl Router {
         // 脚本先看一眼这一键：返回的表能改这一拍的结果（见 `script`）。
         // **输入法自己占用的组合键（`Ctrl+数字` / `Ctrl+Enter` / `Ctrl+反引号` / `Shift+反引号`）
         // 不派发给脚本** —— 谁先定义谁优先，脚本抢不走（见 `docs/design/script.md`）。
-        let actions = if reserved_combo(&event) || self.is_key_map_hotkey(&event) {
-            ScriptActions::default()
-        } else {
-            self.script_actions(&event)
-        };
+        let actions =
+            if self.u_mode.is_some() || reserved_combo(&event) || self.is_key_map_hotkey(&event) {
+                ScriptActions::default()
+            } else {
+                self.script_actions(&event)
+            };
         // 脚本在这次（或之前某次回调里）要过光标位置：这一拍的 KeyResult 顺路请 DLL 量一次。
         let want_caret = self.scripts.take_caret_request();
         // 脚本给的加权 / 降权：排序仍在 Core，这里只把参数递过去（没给就不动 Core 那份）

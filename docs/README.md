@@ -22,6 +22,7 @@ README.md 只介绍项目，所有技术内容放在这里，分四类：前三�
 | [design/text-box.md](design/text-box.md) | 多行编辑框 `text_box`（2026-10-18 设计）：背景 / 文本区 / 内部水平与垂直滚动条的组成，自动换行、行距、两遍布局、复用 RichEdit 与文本 API / 事件的规则 |
 | [design/edit-todo.md](design/edit-todo.md) | 自绘文本编辑器待办（暂缓）：去掉 Windowless RichEdit / `EDIT` 的可行性结论、目标架构、TSF composition 风险、分阶段任务和启动条件 |
 | [design/online-translate.md](design/online-translate.md) | 在线翻译（2026-10-07）：输入法里**没有**这个功能 —— 它只给 `http_get` / `http_post` 与候选窗底部那一行（`online` 动作），翻什么、按哪个键、怎么签名全由脚本自己实现；随包一份小牛翻译的完整示例 |
+| [design/input-modes.md](design/input-modes.md) | v / u / i 模式（2026-10-19）：进入方式（全拼裸键 / 非全拼 `Ctrl+Alt`）、u 模式六类符号、符号输入窗口与按键、日文假名 Tab、中英混输规则，以及 v 模式将来开放 Lua 接口的 TODO |
 | [design/input-schemes.md](design/input-schemes.md) | 输入方案（2026-10-10）：三种方案单选、**永不混输**；双键拼音的方案文件格式（INI/TOML 双格式与「同名认 toml」、目录与 `use_input_scheme.cfg`、Info / Auxiliary / Shengmu / Exchange / Remapping 五节、零声母写死在 `[Shengmu]` 里、按键变换流水线、校验与报错）与内置样例（首道 / 小鹤 / 自然码） |
 | [design/windows.md](design/windows.md) | Server 侧自绘窗口的模型（2026-10-14）：两类窗口（独立窗口 / 辅助窗口）、所有者唯一且不转移、桥接（bridging）、焦点（focus，2026-10-17：一组里任何时刻恰好一个 / 默认不具备焦点 / 允许获取焦点 / 指定资产获取焦点 / 同一所有者的两件资产经桥接转移 / 聚焦与失焦 / 归还给所有者 / 克隆窃取来的不抢焦点）、画法：渲染（rendering）与取舍、资产克隆与资产窃取（暂不用，先定规则）、两个模板与实现落点 |
 | [plan/roadmap.md](plan/roadmap.md) | 分阶段路线图、各阶段的依赖关系与已完成项 |

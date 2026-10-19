@@ -259,6 +259,7 @@ fn key_map_layout() -> KeyMapLayout {
             .map(|row| row.iter().copied().map(cap).collect())
             .collect(),
         zero_initials: ZERO.iter().copied().map(zero).collect(),
+        footer: None,
     }
 }
 

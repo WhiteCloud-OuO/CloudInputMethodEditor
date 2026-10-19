@@ -832,6 +832,9 @@ Chromium 把「物理键还按着时注入的同名键」当自动重复，宿�
 `ITfKeystrokeMgr::PreserveKey` 逐个登记（每个槽位一个 GUID）。`OnPreservedKey` 命中脚本 GUID 时，
 只在中文状态调用 `handle_key` 把键送 Server；英文 / 禁用 / 键盘禁用时返回 `FALSE` 放行。
 `combination_modifiers = "none"` 的单键不注册，仍走原来的 `script_keys` 按键 sink。
+非全拼的 `Ctrl+Alt+U` 另登记为固定保留键 `GUID_MODE_U`；`InputSettings::full_pinyin` 告诉 DLL 当前是不是全拼
+（全拼裸 `u`，不抢这个组合）。`OnPreservedKey` 命中它时直接 `forward_key` 送 Server，不走 `OnTestKeyDown` 的
+`would_eat`，免得同一个键被 test / preserved 两条路各送一次；英文 / 禁用 / 键盘禁用 / 全拼时返回 `FALSE`。
 状态全局一份、存在 Server（`Router.mode: InputMode`），DLL 激活 / 得到焦点 / 轮询时 `SyncMode` 取回，用户切了 `ModeChanged` 报上去。会话号用线程 id（`com::session_id`）——TSF 的 client id
 各进程都是同样那几个值，拿它当会话号会在 Server 那边撞号。四条切换入口都汇到
 `service/mode.rs::switch_mode` 一处拦住（内置英文模式下发为关时才拦英文，协议值现在恒开）；状态条点击在 Server 侧（`dispatch/status/mod.rs`）走同一条路，
@@ -1232,7 +1235,11 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 `KeyMapWindow::able_to_get_focus` 读的就是模板那份），所以这一组一直由候选窗口持有焦点；
 将来要它接鼠标 / 键盘时把那个 `false` 改成 `true`，再由宿主 `designate_focus` 指定给它。
 `Ctrl+F1` 那条路由 UI 线程递给候选窗口（`toggle_assets`）。
-⚠️ `auxiliary_toggle` / `set_auxiliary` 必须写在 `impl CandidateSink for UiHandle` 里：Router 拿的是
+u 模式复用同一件资产，但走 `CandidateSink::set_symbol_aux(Option<KeyMapLayout>)`：`Some` 时临时显示四排符号格子
+（固定 52 逻辑点格子、不跟候选窗同高），`None` 时收起并恢复用户配置的键位映射参考；`symbol_assets_on` 与
+`assets_on` 取或，两套开关互不影响。符号格子的键帽 / 正常与 Shift 符号在
+`server/src/dispatch/u_mode/mapping.rs`，日文假名的底部提示由 `KeyMapLayout::footer` 画在窗口左下角。
+⚠️ `auxiliary_toggle` / `set_auxiliary` / `set_symbol_aux` 必须写在 `impl CandidateSink for UiHandle` 里：Router 拿的是
 `Box<dyn CandidateSink>`，写成固有方法会落到 trait 的**空默认体**上（真机踩过，有回归测试盯着）。
 显示方式与组合键在 `use_input_scheme.cfg` 的 `key_map_reference`（`off` / `hotkey` / `always`）与 `key_map_hotkey`
 （`RouterConfig::from` 从方案目录读，热加载跟着刷新；`always` 经 `CandidateSink::set_auxiliary_mode` 告诉候选窗口，

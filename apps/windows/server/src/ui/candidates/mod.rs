@@ -242,6 +242,12 @@ pub(crate) struct CandidateWindow {
     /// 名下资产的显示方式（`use_input_scheme.cfg` 的 `key_map_reference`）：
     /// 「始终跟随候选窗口」时每次 `show` 都把开关打开（不用按键）。
     assets_mode: Cell<KeyMapReference>,
+
+    /// u 模式符号窗口的临时开关与内容：与配置的「键位映射参考」互不影响。
+    symbol_assets_on: Cell<bool>,
+
+    /// 配置那份键位映射参考版面；u 模式退出后恢复它。
+    normal_key_map: RefCell<Option<KeyMapLayout>>,
 }
 
 impl CandidateWindow {
@@ -291,6 +297,8 @@ impl CandidateWindow {
             content_rect: Cell::new(None),
             assets_on: Cell::new(false),
             assets_mode: Cell::new(KeyMapReference::Off),
+            symbol_assets_on: Cell::new(false),
+            normal_key_map: RefCell::new(None),
         })
     }
 
@@ -427,7 +435,33 @@ impl CandidateWindow {
 
     /// 换名下资产的内容（键位映射参考的键盘版面；方案换了就重送一份）。
     pub(crate) fn set_asset_key_map(&self, layout: KeyMapLayout) {
-        self.template.assets().set_key_map(layout);
+        *self.normal_key_map.borrow_mut() = Some(layout.clone());
+        if !self.symbol_assets_on.get() {
+            self.template.assets().set_key_map(layout);
+        }
+    }
+
+    /// u 模式符号窗口：`Some` 时显示并换内容，`None` 时收掉并恢复配置那份键位映射。
+    pub(crate) fn set_symbol_key_map(&self, layout: Option<KeyMapLayout>) {
+        match layout {
+            Some(layout) => {
+                self.symbol_assets_on.set(true);
+                self.template.assets().set_symbol_key_map(layout);
+            }
+            None => {
+                self.symbol_assets_on.set(false);
+                // 先把那份布局取出来，drop 掉 `RefCell` 的借用再写回去；否则 if-let 的临时借用
+                // 会活到分支末尾，第二次 `borrow_mut` 直接 panic，UI 线程就停在这里。
+                let normal = self.normal_key_map.borrow_mut().take();
+                if let Some(layout) = normal {
+                    self.template.assets().set_key_map(layout.clone());
+                    *self.normal_key_map.borrow_mut() = Some(layout);
+                } else {
+                    self.template.assets().set_key_map(KeyMapLayout::default());
+                }
+            }
+        }
+        self.sync_assets();
     }
 
     /// 按光标矩形定位并显示：贴光标下方（放不下放上方），四周留出阴影。
@@ -451,6 +485,7 @@ impl CandidateWindow {
         // 这一轮组句结束：名下的资产一起收起（带焦点的那件会先把焦点**自动归还**给候选窗），
         // 开关也回到「关」（下次弹出要看得再按一次 `Ctrl+F1`）
         self.assets_on.set(false);
+        self.symbol_assets_on.set(false);
         self.template.hide_assets();
         self.last_rects.borrow_mut().clear();
         // 收起态的宽度也跟着作废：换了个应用（窗口宽度不同）不该拿上一段组句的宽度当最小宽度。
@@ -781,7 +816,7 @@ impl Bridge for CandidateWindow {
     }
 
     fn asset_on(&self) -> bool {
-        self.assets_on.get()
+        self.assets_on.get() || self.symbol_assets_on.get()
     }
 
     /// 资产经桥请所有者**把焦点交给别件资产**（同一所有者的辅助窗口之间转移焦点走这条，§4 规则 2）。

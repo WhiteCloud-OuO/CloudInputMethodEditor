@@ -61,6 +61,19 @@ impl Router {
             self.hover_cell = None;
             return;
         }
+        if let Some(u_mode) = self.u_mode {
+            self.highlight = u_mode.category_index();
+            self.navigated = false;
+            self.composed = Some(Composed::Candidates {
+                preedit: vec![PreeditSegment {
+                    text: "u".to_owned(),
+                    kind: PreeditKind::Typed,
+                }],
+                cursor: 1,
+                layout: CandidateLayout::new(u_mode.candidates(), page_size),
+            });
+            return;
+        }
         self.attach_loaded_model();
         // 只有脚本可能要看 Core 的排序数字时才把权重留一份（没脚本就完全不多花这一步）
         let wants_weights =
@@ -256,6 +269,15 @@ impl Router {
     /// 选中第 `index` 个候选：候选把整段转换完时返回要上屏的文本，只吃一部分时返回 `None`
     /// （这一选择并进组句，壳重画预编辑即可）。没有这一格也返回 `None`。
     pub(super) fn commit_index(&mut self, index: usize) -> Option<String> {
+        if let Some(mut u_mode) = self.u_mode {
+            if index < 6 {
+                u_mode.set_category(index);
+                self.u_mode = Some(u_mode);
+                self.highlight = index;
+                self.update_u_aux();
+            }
+            return None;
+        }
         let candidate = self.layout_candidate(index)?;
         self.engine.commit(&candidate)
     }
@@ -288,6 +310,10 @@ impl Router {
         // 没有意义（候选是算出来的），提示同时告诉用户这一模式能敲什么。
         if let Some(hint) = self.expression_hint() {
             frame.tip = Some(hint);
+        }
+        // u 模式：支持中英混输时在翻译 Tip 那一行告诉用户可以直接打英文单词。
+        if self.u_mode.is_some() {
+            frame.tip = self.mixture_enabled().then(|| hint_tip("可输入英文单词"));
         }
         // 表达式计算面板：只有一条「结果」候选，不画序号
         frame.hide_index = self.engine.calculator();

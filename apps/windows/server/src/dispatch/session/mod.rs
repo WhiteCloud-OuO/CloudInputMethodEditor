@@ -80,6 +80,9 @@ impl Router {
         self.engine.break_chain();
         self.engine.clear();
         self.stop_rescoring();
+        if self.u_mode.take().is_some() {
+            self.candidates.set_symbol_aux(None);
+        }
         self.composed = None;
         self.notice = None;
         self.highlight = 0;

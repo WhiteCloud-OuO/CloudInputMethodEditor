@@ -71,6 +71,10 @@ pub trait CandidateSink: Send {
     /// 换「辅助窗口」显示的内容（键位映射参考的键盘版面，按当前方案准备好）；方案变了重送一次。
     /// 不画的实现（[`NoopSink`]）默认什么都不做。
     fn set_auxiliary(&self, _layout: KeyMapLayout) {}
+
+    /// u 模式符号窗口：`Some` 显示并换内容，`None` 收起。与配置的键位映射参考互不影响。
+    /// 不画的实现（[`NoopSink`]）默认什么都不做。
+    fn set_symbol_aux(&self, _layout: Option<KeyMapLayout>) {}
 }
 
 /// 不画候选窗口的空实现。
