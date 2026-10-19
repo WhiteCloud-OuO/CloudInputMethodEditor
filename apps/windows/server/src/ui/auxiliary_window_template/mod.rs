@@ -652,6 +652,7 @@ fn to_render_layout(layout: &input_schemes::KeyMapLayout) -> cloudime_render::Ke
         key: cap.key.clone(),
         initial: cap.initial.clone(),
         mapping: cap.mapping.clone(),
+        shifted: cap.shifted.clone(),
     };
     cloudime_render::KeyMapLayout {
         rows: layout
@@ -661,6 +662,7 @@ fn to_render_layout(layout: &input_schemes::KeyMapLayout) -> cloudime_render::Ke
             .collect(),
         zero_initials: layout.zero_initials.iter().map(cap).collect(),
         footer: layout.footer.clone(),
+        symbol: layout.symbol,
     }
 }
 

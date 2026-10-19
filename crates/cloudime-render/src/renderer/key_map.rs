@@ -78,6 +78,9 @@ pub struct KeyCap {
 
     /// 中间那几行**韵母**，一义一行（用换行符分开）；每行第一颗字母按 [`head_color`] 上色。
     pub mapping: String,
+
+    /// u 模式符号窗口的 Shift 符号；普通键位映射参考为空。
+    pub shifted: String,
 }
 
 /// 韵母**第一个字母**的颜色：a 红、o 橙、e 绿、i 蓝、u 紫、ü 棕；其余字母用普通文字色（黑）。
@@ -104,6 +107,9 @@ pub struct KeyMapLayout {
 
     /// 面板底部的一行提示（u 模式日文假名用）；普通键位映射参考没有。
     pub footer: Option<String>,
+
+    /// u 模式符号窗口：普通符号画在格子下方、Shift 符号画在上方。
+    pub symbol: bool,
 }
 
 impl KeyMapLayout {
@@ -235,7 +241,14 @@ pub fn draw_key_map<T: RectElement + TextElement>(
         for (column, cap) in caps.iter().enumerate() {
             let x = row_left + column as f32 * pitch;
             let y = top + row as f32 * pitch;
-            draw_key_cap(target, cap, &styles, &metrics, (x, y, cell, cell));
+            draw_key_cap(
+                target,
+                cap,
+                &styles,
+                &metrics,
+                (x, y, cell, cell),
+                layout.symbol,
+            );
         }
     }
     // 零声母表：键盘**下方**、隔 [`TABLE_GAP`]，6 列 × 最多 2 行；格子矮一点、宽一点（放「按键=韵母」一行）
@@ -316,6 +329,7 @@ fn draw_key_cap<T: RectElement + TextElement>(
     styles: &KeyMapStyles,
     metrics: &Metrics,
     (x, y, width, height): (f32, f32, f32, f32),
+    symbol: bool,
 ) {
     let line = metrics.px(LINE).max(1.0);
     // 边框：先铺一层格线色，再把里面挖成背景色
@@ -343,6 +357,20 @@ fn draw_key_cap<T: RectElement + TextElement>(
         );
     }
     let budget = width - inset * 2.0;
+    if symbol {
+        let line_height = styles.mapping.line_height;
+        let draw_centered = |target: &mut T, text: &str, top: f32| {
+            let text_width = target.measure(text, &styles.mapping).width;
+            target.text(text, &styles.mapping, x + (width - text_width) / 2.0, top);
+        };
+        if !cap.mapping.is_empty() {
+            draw_centered(target, &cap.mapping, y + height - inset - line_height);
+        }
+        if !cap.shifted.is_empty() {
+            draw_centered(target, &cap.shifted, y + inset);
+        }
+        return;
+    }
     if cap.mapping.is_empty() || budget <= 0.0 {
         return;
     }
@@ -458,6 +486,7 @@ mod tests {
             key: key.to_owned(),
             initial: String::new(),
             mapping: String::new(),
+            shifted: String::new(),
         }
     }
 
@@ -470,6 +499,7 @@ mod tests {
             ],
             zero_initials: (0..zero).map(|_| cap("AA")).collect(),
             footer: None,
+            symbol: false,
         }
     }
 
@@ -566,6 +596,7 @@ mod tests {
             rows: vec![vec![cap("Q")]],
             zero_initials: (0..5).map(|_| cap("AA")).collect(),
             footer: None,
+            symbol: false,
         };
         assert_eq!(
             layout.table_rows(),

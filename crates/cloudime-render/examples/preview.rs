@@ -247,11 +247,13 @@ fn key_map_layout() -> KeyMapLayout {
         key: key.to_owned(),
         initial: initial.to_owned(),
         mapping: mapping.to_owned(),
+        shifted: String::new(),
     };
     let zero = |(key, mapping): (&str, &str)| KeyCap {
         key: key.to_owned(),
         initial: String::new(),
         mapping: mapping.to_owned(),
+        shifted: String::new(),
     };
     KeyMapLayout {
         rows: ROWS
@@ -260,6 +262,7 @@ fn key_map_layout() -> KeyMapLayout {
             .collect(),
         zero_initials: ZERO.iter().copied().map(zero).collect(),
         footer: None,
+        symbol: false,
     }
 }
 

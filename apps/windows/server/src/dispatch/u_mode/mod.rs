@@ -11,16 +11,17 @@ use cloudime_platform::LayoutMode;
 use cloudime_platform::input_schemes::{KeyCap, KeyMapLayout};
 use cloudime_platform::protocol::KeyEvent;
 
-use self::mapping::{KEY_ROWS, Kana, SymbolCategory};
+use self::mapping::{GreekState, KEY_ROWS, Kana, SymbolCategory};
 use super::Router;
 use super::key::Effect;
 
-/// u 模式的状态：当前高亮分类、假名种类、制表符/箭头映射套数。
+/// u 模式的状态：当前高亮分类、假名种类、制表符/箭头映射套数、希腊重音/隔音状态。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub(super) struct UMode {
     category: usize,
     kana: Kana,
     variant: usize,
+    greek: GreekState,
 }
 
 impl UMode {
@@ -76,42 +77,76 @@ impl UMode {
             .iter()
             .map(|row| row.chars().map(|key| self.key_cap(key)).collect())
             .collect();
+        let footer = match self.category() {
+            SymbolCategory::Kana => Some("按下Tab切换平假名/片假名".to_owned()),
+            SymbolCategory::Cyrillic => Some("Ё/ё 在前斜杠键".to_owned()),
+            _ => None,
+        };
         KeyMapLayout {
             rows,
             zero_initials: Vec::new(),
-            footer: (self.category() == SymbolCategory::Kana)
-                .then(|| "按下Tab切换平假名/片假名".to_owned()),
+            footer,
+            symbol: true,
         }
     }
 
     fn key_cap(&self, key: char) -> KeyCap {
         let label = key.to_string();
-        let normal = mapping::symbol(self.category(), self.kana, self.variant, &label, false)
-            .unwrap_or_default();
-        let shifted = mapping::symbol(self.category(), self.kana, self.variant, &label, true)
-            .unwrap_or_default();
-        let mapping = if !shifted.is_empty() && shifted != normal {
-            format!("{normal}\n{shifted}")
-        } else {
-            normal.to_owned()
-        };
+        let normal = mapping::symbol(
+            self.category(),
+            self.kana,
+            self.variant,
+            self.greek,
+            &label,
+            false,
+        )
+        .unwrap_or_default();
+        let shifted = mapping::symbol(
+            self.category(),
+            self.kana,
+            self.variant,
+            self.greek,
+            &label,
+            true,
+        )
+        .unwrap_or_default();
         KeyCap {
             key: label,
             initial: String::new(),
-            mapping,
+            mapping: normal.to_owned(),
+            shifted: shifted.to_owned(),
         }
     }
 
-    /// 当前分类里这个键对应的上屏符号（Shift 优先取上档）。
+    /// 当前分类里这个键对应的上屏符号（Shift 取上档；没有上档就不出符号）。
     pub(super) fn symbol(&self, event: &KeyEvent) -> Option<&'static str> {
         let key = key_label(event.virtual_key)?;
         mapping::symbol(
             self.category(),
             self.kana,
             self.variant,
+            self.greek,
             &key,
             event.modifiers.shift,
         )
+    }
+
+    /// 希腊字母里 `;` / `'` 是重音 / 隔音状态开关；命中返回 `true`。
+    pub(super) fn greek_toggle(&mut self, event: &KeyEvent) -> bool {
+        if self.category() != SymbolCategory::Greek {
+            return false;
+        }
+        match event.virtual_key {
+            0xBA => {
+                self.greek.accent = !self.greek.accent;
+                true
+            }
+            0xDE => {
+                self.greek.diaeresis = !self.greek.diaeresis;
+                true
+            }
+            _ => false,
+        }
     }
 }
 
@@ -134,7 +169,7 @@ fn key_label(virtual_key: u32) -> Option<String> {
 }
 
 impl Router {
-    /// ȫƴֱ�Ӱ� u / ��ȫƴ Ctrl+Alt+U���ӿ����� u ģʽ��
+    /// 全拼直接按 u / 非全拼 Ctrl+Alt+U：从空组句进 u 模式。
     pub(super) fn enter_u_mode(&mut self) {
         if self.composing() {
             return;
@@ -145,7 +180,7 @@ impl Router {
         self.update_u_aux();
     }
 
-    /// ��ȫƴ�� `Ctrl+Alt+U`��ȫƴ�� `apply_chinese` ���� u��
+    /// 非全拼的 `Ctrl+Alt+U`；全拼走 `apply_chinese` 的裸 u。
     pub(super) fn u_mode_hotkey(&mut self, event: &KeyEvent) -> Option<Effect> {
         if self.config.full_pinyin
             || self.composing()
@@ -160,13 +195,13 @@ impl Router {
         Some(Effect::Changed(None))
     }
 
-    /// u ģʽ��İ��������� `None` ��ʾ���� u ģʽ��������ͨ���̡�
+    /// u 模式里的按键。返回 `Effect`；不在 u 模式时调用方不会走到这里。
     pub(super) fn u_mode_key(&mut self, event: &KeyEvent) -> Effect {
         let Some(mut u) = self.u_mode else {
             return Effect::Passthrough;
         };
         if event.virtual_key == 0x1B {
-            // Esc���ط��Ŵ��ڡ��غ�ѡ�������� u ģʽ���ϡ�
+            // Esc：关符号窗口、关候选窗，整段 u 模式作废。
             self.u_mode = None;
             self.candidates.set_symbol_aux(None);
             self.engine.clear();
@@ -176,11 +211,11 @@ impl Router {
             return Effect::Passthrough;
         }
         if matches!(event.virtual_key, 0x08 | 0x2E) {
-            // Backspace / Delete ����Ӧ�����ɾ����Ϊ��u ģʽ����Ŵ����˳���
+            // Backspace / Delete 保持应用里的删除行为；u 模式与符号窗不退出。
             return Effect::Passthrough;
         }
         if event.virtual_key == 0x20 {
-            // Space �̼�����ѡ���ࡢҲ��������
+            // Space 吞键，不选分类、也不上屏。
             return Effect::Navigated;
         }
         if event.virtual_key == 0x09 {
@@ -204,27 +239,32 @@ impl Router {
             self.update_u_aux();
             return Effect::Navigated;
         }
-        if let Some(c) = event.character.filter(char::is_ascii_alphabetic) {
-            if self.mixture_enabled() {
-                // �ڶ���������ĸ���뿪���Ŵ��ڣ��ӻ���ͨƴ�� / Ӣ�Ĵ�ƥ�䡣
-                self.u_mode = None;
-                self.candidates.set_symbol_aux(None);
-                self.engine.push(c);
-                return Effect::Changed(None);
-            }
-            // ��֧����Ӣ���䣺�̵������ĸ�����Ŵ��ڲ�����
+        if u.greek_toggle(event) {
+            self.u_mode = Some(u);
+            self.update_u_aux();
             return Effect::Navigated;
         }
+        if let Some(c) = event.character.filter(char::is_ascii_alphabetic)
+            && self.mixture_enabled()
+            && !u.greek.accent
+            && !u.greek.diaeresis
+        {
+            // 第二个键是字母：离开符号窗口，接回普通拼音 / 英文词匹配。
+            self.u_mode = None;
+            self.candidates.set_symbol_aux(None);
+            self.engine.push(c);
+            return Effect::Changed(None);
+        }
         if let Some(symbol) = u.symbol(event) {
-            // ����һ�����ţ������� u ģʽ����Ŵ��ڡ�
+            // 上屏一个符号，但保留 u 模式与符号窗口。
             self.u_mode = Some(u);
             return Effect::Changed(Some(symbol.to_owned()));
         }
-        // ���������س� / ���ܼ��ȣ���u ģʽ��һ���̵�����©��Ӧ�á�
+        // 其它键（回车 / 功能键等）：u 模式里一律吞掉，别漏进应用。
         Effect::Navigated
     }
 
-    /// ���Ŵ����Ƿ�Ӧ��ʾ��������Ӣ�ĵ��ʡ���ʾ��
+    /// 符号窗口是否应显示「可输入英文单词」提示。
     pub(super) fn mixture_enabled(&self) -> bool {
         if self.engine.shuangpin().is_some() {
             self.engine.shuangpin_mixture_input()
@@ -243,6 +283,17 @@ impl Router {
 mod tests {
     use super::*;
 
+    fn key(vk: u32, c: char, shift: bool) -> KeyEvent {
+        KeyEvent::new(
+            vk,
+            Some(c),
+            cloudime_platform::protocol::KeyModifiers {
+                shift,
+                ..Default::default()
+            },
+        )
+    }
+
     #[test]
     fn the_symbol_window_has_four_keyboard_rows() {
         let layout = UMode::default().layout();
@@ -252,6 +303,7 @@ mod tests {
         assert_eq!(layout.rows[2].len(), 11);
         assert_eq!(layout.rows[3].len(), 10);
         assert!(layout.zero_initials.is_empty());
+        assert!(layout.symbol);
     }
 
     #[test]
@@ -276,5 +328,48 @@ mod tests {
         assert_eq!(labels.len(), 6);
         assert!(labels[0].starts_with('①'));
         assert!(labels[5].contains("制表符"));
+    }
+
+    #[test]
+    fn normal_and_shift_symbols_come_from_the_tables() {
+        let mode = UMode::default();
+        assert_eq!(mode.symbol(&key(0x31, '1', false)), Some("〈"));
+        assert_eq!(mode.symbol(&key(0x31, '!', true)), None, "常用符号没有上档");
+
+        let mut number = UMode::default();
+        number.set_category(1);
+        assert_eq!(number.symbol(&key(0xBD, '-', false)), Some("₋"));
+        assert_eq!(number.symbol(&key(0xBD, '_', true)), Some("⁻"));
+
+        let mut cyrillic = UMode::default();
+        cyrillic.set_category(3);
+        assert_eq!(cyrillic.symbol(&key(0xBF, '/', false)), Some("ё"));
+        assert_eq!(cyrillic.symbol(&key(0xBF, '?', true)), Some("Ё"));
+    }
+
+    #[test]
+    fn greek_accent_and_diaeresis_states_are_toggled_by_semicolon_and_quote() {
+        let mut mode = UMode::default();
+        mode.set_category(2);
+        assert_eq!(mode.symbol(&key(0x45, 'e', false)), Some("ε"));
+
+        assert!(mode.greek_toggle(&key(0xBA, ';', false)));
+        assert_eq!(mode.symbol(&key(0x45, 'e', false)), Some("έ"));
+        assert_eq!(
+            mode.symbol(&key(0x51, 'q', false)),
+            None,
+            "重音态只允许指定键"
+        );
+
+        assert!(mode.greek_toggle(&key(0xDE, '\'', false)));
+        assert_eq!(mode.symbol(&key(0x49, 'i', false)), Some("ΐ"));
+        assert_eq!(mode.symbol(&key(0x59, 'y', false)), Some("ΰ"));
+    }
+
+    #[test]
+    fn cyrillic_has_the_slash_footer_hint() {
+        let mut mode = UMode::default();
+        mode.set_category(3);
+        assert_eq!(mode.layout().footer.as_deref(), Some("Ё/ё 在前斜杠键"));
     }
 }

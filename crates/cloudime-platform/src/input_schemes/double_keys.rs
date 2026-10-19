@@ -108,6 +108,7 @@ impl DoubleKeysScheme {
                                         .join("\n")
                                 })
                                 .unwrap_or_default(),
+                            shifted: String::new(),
                         }
                     })
                     .collect()
@@ -124,12 +125,14 @@ impl DoubleKeysScheme {
                 ),
                 initial: String::new(),
                 mapping: display_final(final_),
+                shifted: String::new(),
             })
             .collect();
         KeyMapLayout {
             rows,
             zero_initials,
             footer: None,
+            symbol: false,
         }
     }
 

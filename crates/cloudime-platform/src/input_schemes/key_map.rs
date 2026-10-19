@@ -20,6 +20,9 @@ pub struct KeyCap {
     ///
     /// 里面的 ü 一律写作 `ü`（方案文件写 `v`：`van` 显示成 `üan`）。
     pub mapping: String,
+
+    /// u 模式符号窗口的 Shift 符号；普通键位映射参考为空。
+    pub shifted: String,
 }
 
 /// 键位映射参考的版面：三排键盘格子 + 一张零声母表。
@@ -33,6 +36,9 @@ pub struct KeyMapLayout {
 
     /// 面板底部的一行提示（u 模式日文假名用）；普通键位映射参考没有。
     pub footer: Option<String>,
+
+    /// u 模式符号窗口：普通符号画在格子下方、Shift 符号画在上方；普通键位映射参考为 `false`。
+    pub symbol: bool,
 }
 
 /// 什么时候显示「键位映射参考」（`use_input_scheme.cfg` 的 `key_map_reference`）。
