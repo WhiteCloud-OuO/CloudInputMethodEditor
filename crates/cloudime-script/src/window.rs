@@ -309,6 +309,9 @@ pub enum Request {
     /// 把逻辑焦点指定给这件辅助窗口 / 交还给宿主；独立窗口则是拿 / 放键盘焦点。
     Focus(WindowId, bool),
 
+    /// 把键盘焦点交给某个 `text_edit` / `text_box` 宿主。
+    FocusText { id: WindowId, name: String },
+
     /// 动态改一个**已有区域**的命中范围：`combine` = 合并进来（并集），否则剪除（差集）。
     /// 只影响鼠标命中，不重画（区域不参与绘制）。
     EditRegion {
@@ -578,6 +581,17 @@ pub(crate) fn handle(
         "hide",
         lua.create_function(move |_, _this: mlua::Table| {
             hide_requests.borrow_mut().push(Request::Hide(id));
+            Ok(())
+        })?,
+    )?;
+
+    let focus_text_requests = requests.clone();
+    handle.set(
+        "focus_text",
+        lua.create_function(move |_, (_this, name): (mlua::Table, String)| {
+            focus_text_requests
+                .borrow_mut()
+                .push(Request::FocusText { id, name });
             Ok(())
         })?,
     )?;

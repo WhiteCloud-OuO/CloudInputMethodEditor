@@ -133,6 +133,13 @@ impl ScriptWindows {
             }
             WindowRequest::Close(id) => self.close(id),
             WindowRequest::Focus(id, focus) => self.focus(id, focus),
+            WindowRequest::FocusText { id, name } => {
+                if let Some(window) = self.windows.get(&id) {
+                    window.focus_text(&name);
+                } else {
+                    tracing::warn!(id, control = name, "脚本窗口：focus_text 时找不到这块窗口");
+                }
+            }
             WindowRequest::EditRegion {
                 id,
                 name,
@@ -808,6 +815,19 @@ impl ScriptWindow {
         });
         if let Some(edit) = target {
             edit.host.focus();
+        }
+    }
+
+    /// 按控件名把键盘焦点交给 `text_edit` / `text_box` 的宿主。
+    fn focus_text(&self, name: &str) {
+        if let Some(host) = self.text_edit_host(name) {
+            host.focus();
+        } else {
+            tracing::warn!(
+                id = self.id,
+                control = name,
+                "text_edit：focus_text 找不到控件"
+            );
         }
     }
 

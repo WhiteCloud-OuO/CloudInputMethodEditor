@@ -11,7 +11,7 @@
 | [`docs/design/online-translate.md`](docs/design/online-translate.md) | 「在线翻译由脚本自己实现」这一条的来龙去脉 |
 | [`docs/notes/crate-notes.md`](docs/notes/crate-notes.md) | 实现要点（`crates/cloudime-script`、Server 的「用户脚本」两节） |
 | [`Scripts/template.lua`](Scripts/template.lua) | 「新建脚本」用的模板（只有清单骨架） |
-| [`Scripts/lib/zdic-panel.lua`](Scripts/lib/zdic-panel.lua) | 汉典查询面板：Ctrl+Alt+Q 查询高亮候选 / 输入中文，独立窗口显示释义；布局在同目录 `zdic-panel.json` |
+| [`Scripts/lib/fast-searching-online.lua`](Scripts/lib/fast-searching-online.lua) | 在线查询面板：Ctrl+Alt+Q 查询高亮候选 / 输入词语，中文走汉典、英文走有道，独立窗口显示释义；布局在同目录 `fast-searching-online.json` |
 | [`Scripts/lib/example-niutrans.lua`](Scripts/lib/example-niutrans.lua) | 完整示例：小牛英汉互译（签名、表单编码、折行、多行显示） |
 | [`Scripts/lib/niutrans-window.lua`](Scripts/lib/niutrans-window.lua) | 小牛英汉互译窗口：Ctrl+Alt+Y 复制选中文本、光标旁多行编辑窗口、自动翻译；静态布局在同目录 `niutrans-window.json` |
 | [`Scripts/lib/example-theme-by-app.lua`](Scripts/lib/example-theme-by-app.lua) | 示例：按前台程序换主题（组合键触发 + `cloudime.foreground_app()` / `cloudime.apply_theme()`） |
@@ -492,6 +492,7 @@ aux:show()
 | `win:hide()` | 收起（不销毁） |
 | `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
 | `win:focus(true / false)` | 独立窗口：拿 / 放**键盘焦点**（之后 `key` 载荷里带 `window` / `window_id`）；辅助窗口：把逻辑焦点指定给它 / 交还给宿主 |
+| `win:focus_text(name)` | 把键盘焦点交给某个 `text_edit` / `text_box` 宿主（面板打开后自动聚焦输入框用） |
 | `win:combine_region(name, 形状)` | 把形状并进已有区域（只改命中、不重画） |
 | `win:prune_region(name, 形状)` | 从已有区域里挖掉形状（只改命中、不重画） |
 | `win:region_contains(name, x, y)` | 点是否在区域里（含边界）；没有这个区域给 `nil` |

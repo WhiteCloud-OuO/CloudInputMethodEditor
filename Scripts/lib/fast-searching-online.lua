@@ -1,17 +1,18 @@
--- 汉典查询面板：Ctrl + Alt + Q。
+-- 在线查询面板：Ctrl + Alt + Q。
 --
 -- 有候选窗口时：
 --   * 查询词 = 当前高亮候选；
 --   * 面板摆在候选窗口旁边（右边放不下就放左边，再不行放候选窗下方 / 上方）；
---   * 候选是中文词语 / 汉字时自动查询。
--- 没有候选窗口时：直接在光标附近打开空面板，输入中文后按回车或点搜索。
+--   * 候选是中文词语 / 汉字或英文单词时自动查询。
+-- 没有候选窗口时：直接在光标附近打开空面板，输入中文或英文后按回车或点搜索。
+-- 窗口显示后焦点会自动落到单行输入框。
 --
--- 布局在 Scripts/lib/zdic-panel.json；本文件放到 Scripts\ 下后重启输入法服务即可。
--- 英文单词查询暂未实现：只做中文词语 / 汉字的识别与查询。
+-- 布局在 Scripts/lib/fast-searching-online.json；本文件放到 Scripts\ 下后重启输入法服务即可。
+-- 查询中文词语 / 汉字走汉典，英文单词走有道。
 
 cloudime.script{
-    name                  = "汉典查询",
-    description           = "Ctrl+Alt+Q：查询高亮候选词或输入中文词语，在独立面板里显示汉典释义",
+    name                  = "在线查询",
+    description           = "Ctrl+Alt+Q：查询高亮候选词或输入词语，中文走汉典、英文走有道，在独立面板里显示释义",
     api                   = 2,
     trigger_condition     = "combination_key",
     combination_modifiers = "ctrl+alt",
@@ -20,7 +21,7 @@ cloudime.script{
     sync                  = false,
     handover              = "callback",
     on_error              = function(event, message)
-        cloudime.log("汉典查询出错：" .. event .. " - " .. message)
+        cloudime.log("在线查询出错：" .. event .. " - " .. message)
     end,
 }
 
@@ -38,6 +39,7 @@ local last_query_text = nil
 local last_query_at = 0
 -- 同词查询结果缓存：热键 / Enter 自动重复时不再把已经显示的结果打回“正在查询”。
 local last_result_word = nil
+local last_result_source = nil
 local last_result_text = nil
 
 local function trim(text)
@@ -129,6 +131,22 @@ local function is_chinese_word(text)
             return false
         end
         index = next_index
+    end
+    return true
+end
+
+local function is_english_word(text)
+    if text == "" then
+        return false
+    end
+    for index = 1, #text do
+        local byte = text:byte(index)
+        if byte >= 0x80 then
+            return false
+        end
+        if not string.char(byte):match("[%w%-' ]") then
+            return false
+        end
     end
     return true
 end
@@ -232,6 +250,277 @@ local function parse_zdic(html, word)
     return table.concat(lines, "\n")
 end
 
+-- 最小的 JSON 解码器：有道返回的是 JSON，但脚本运行时不带 JSON 库。
+-- 支持对象 / 数组 / 字符串 / 数字 / true / false / null，够解析 jsonapi 的响应。
+local function json_decode(text)
+    local pos, length = 1, #text
+
+    local function fail(message)
+        error(message, 0)
+    end
+
+    local function skip()
+        while pos <= length do
+            local byte = text:byte(pos)
+            if byte == 0x20 or byte == 0x09 or byte == 0x0A or byte == 0x0D then
+                pos = pos + 1
+            else
+                break
+            end
+        end
+    end
+
+    local parse_value
+
+    local function parse_string()
+        if text:sub(pos, pos) ~= '"' then
+            fail("JSON 字符串缺少引号")
+        end
+        pos = pos + 1
+        local out = {}
+        local escapes = {
+            ['"'] = '"',
+            ['\\'] = '\\',
+            ['/'] = '/',
+            b = '\b',
+            f = '\f',
+            n = '\n',
+            r = '\r',
+            t = '\t',
+        }
+        while pos <= length do
+            local byte = text:byte(pos)
+            if byte == 0x22 then
+                pos = pos + 1
+                return table.concat(out)
+            elseif byte == 0x5C then
+                pos = pos + 1
+                local escape = text:sub(pos, pos)
+                pos = pos + 1
+                if escapes[escape] then
+                    out[#out + 1] = escapes[escape]
+                elseif escape == "u" then
+                    local code = tonumber(text:sub(pos, pos + 3), 16)
+                    pos = pos + 4
+                    if not code then
+                        fail("JSON Unicode 转义不完整")
+                    end
+                    if code >= 0xD800 and code <= 0xDBFF
+                        and text:sub(pos, pos + 1) == "\\u" then
+                        local low = tonumber(text:sub(pos + 2, pos + 5), 16)
+                        if low and low >= 0xDC00 and low <= 0xDFFF then
+                            pos = pos + 6
+                            code = 0x10000
+                                + (code - 0xD800) * 0x400
+                                + (low - 0xDC00)
+                        end
+                    end
+                    out[#out + 1] = utf8_char(code)
+                else
+                    fail("JSON 转义不认识：" .. escape)
+                end
+            else
+                out[#out + 1] = string.char(byte)
+                pos = pos + 1
+            end
+        end
+        fail("JSON 字符串没有结束")
+    end
+
+    parse_value = function()
+        skip()
+        local first = text:sub(pos, pos)
+        if first == "{" then
+            pos = pos + 1
+            local value = {}
+            skip()
+            if text:sub(pos, pos) == "}" then
+                pos = pos + 1
+                return value
+            end
+            while true do
+                skip()
+                local key = parse_string()
+                skip()
+                if text:sub(pos, pos) ~= ":" then
+                    fail("JSON 对象缺冒号")
+                end
+                pos = pos + 1
+                value[key] = parse_value()
+                skip()
+                local separator = text:sub(pos, pos)
+                if separator == "}" then
+                    pos = pos + 1
+                    return value
+                elseif separator ~= "," then
+                    fail("JSON 对象缺逗号")
+                end
+                pos = pos + 1
+            end
+        elseif first == "[" then
+            pos = pos + 1
+            local value = {}
+            skip()
+            if text:sub(pos, pos) == "]" then
+                pos = pos + 1
+                return value
+            end
+            while true do
+                value[#value + 1] = parse_value()
+                skip()
+                local separator = text:sub(pos, pos)
+                if separator == "]" then
+                    pos = pos + 1
+                    return value
+                elseif separator ~= "," then
+                    fail("JSON 数组缺逗号")
+                end
+                pos = pos + 1
+            end
+        elseif first == '"' then
+            return parse_string()
+        elseif text:sub(pos, pos + 3) == "true" then
+            pos = pos + 4
+            return true
+        elseif text:sub(pos, pos + 4) == "false" then
+            pos = pos + 5
+            return false
+        elseif text:sub(pos, pos + 3) == "null" then
+            pos = pos + 4
+            return nil
+        elseif first == "-" or first:match("%d") then
+            local start = pos
+            while pos <= length and text:sub(pos, pos):match("[-+0-9%.eE]") do
+                pos = pos + 1
+            end
+            local number = tonumber(text:sub(start, pos - 1))
+            if not number then
+                fail("JSON 数字不合法")
+            end
+            return number
+        end
+        fail("JSON 值不认识")
+    end
+
+    local value = parse_value()
+    skip()
+    if pos <= length then
+        fail("JSON 末尾还有内容")
+    end
+    return value
+end
+
+local function text_value(value)
+    if type(value) == "string" then
+        return value
+    end
+    if type(value) == "table" then
+        local parts = {}
+        for _, item in ipairs(value) do
+            local text = text_value(item)
+            if text and text ~= "" then
+                parts[#parts + 1] = text
+            end
+        end
+        return table.concat(parts, " ")
+    end
+    return nil
+end
+
+local function parse_youdao(body, word)
+    local ok, data = pcall(json_decode, body)
+    if not ok or type(data) ~= "table" then
+        return nil
+    end
+
+    local lines = { "单词：" .. word }
+    local simple = data.simple
+    local simple_word = simple and simple.word and simple.word[1]
+    if type(simple_word) == "table" then
+        if simple_word.usphone and simple_word.usphone ~= "" then
+            lines[#lines + 1] = "美音：" .. simple_word.usphone
+        end
+        if simple_word.ukphone and simple_word.ukphone ~= "" then
+            lines[#lines + 1] = "英音：" .. simple_word.ukphone
+        end
+    end
+
+    local definitions, seen = {}, {}
+    local function add(value)
+        value = trim(text_value(value) or "")
+        if value ~= "" and not seen[value] then
+            seen[value] = true
+            definitions[#definitions + 1] = value
+        end
+    end
+    local function add_with_pos(pos, value)
+        value = trim(text_value(value) or "")
+        if value == "" then
+            return
+        end
+        pos = trim(pos or "")
+        if pos ~= "" and not value:match("^%a+%.") then
+            value = pos .. " " .. value
+        end
+        add(value)
+    end
+
+    local ec_words = data.ec and data.ec.word
+    if type(ec_words) == "table" then
+        for _, entry in ipairs(ec_words) do
+            for _, group in ipairs(entry.trs or {}) do
+                for _, translation in ipairs(group.tr or {}) do
+                    local line = translation.l
+                    add_with_pos(translation.pos, line and line.i)
+                end
+            end
+        end
+    end
+
+    if data.individual and type(data.individual.trs) == "table" then
+        for _, item in ipairs(data.individual.trs) do
+            add_with_pos(item.pos, item.tran)
+        end
+    end
+
+    if #definitions == 0 then
+        local english = data.ee and data.ee.word
+        if type(english) == "table" then
+            for _, group in ipairs(english.trs or {}) do
+                add_with_pos(group.pos, group.tr and group.tr[1] and group.tr[1].l and group.tr[1].l.i)
+            end
+        end
+    end
+
+    local web_definitions = {}
+    local web = data.web_trans and data.web_trans["web-translation"]
+    if type(web) == "table" then
+        for _, entry in ipairs(web) do
+            for _, translation in ipairs(entry.trans or {}) do
+                local value = trim(text_value(translation.value) or "")
+                if value ~= "" then
+                    web_definitions[#web_definitions + 1] = value
+                end
+            end
+        end
+    end
+
+    if #definitions > 0 then
+        lines[#lines + 1] = "【释义】"
+        for index, value in ipairs(definitions) do
+            lines[#lines + 1] = tostring(index) .. ". " .. value
+        end
+    elseif #web_definitions > 0 then
+        lines[#lines + 1] = "【网络释义】"
+        for index, value in ipairs(web_definitions) do
+            lines[#lines + 1] = tostring(index) .. ". " .. value
+        end
+    else
+        return nil
+    end
+    return table.concat(lines, "\n")
+end
+
 local function set_status(text, color)
     if not win then
         return
@@ -252,7 +541,7 @@ local function apply_theme()
     end
     local ok, error = pcall(win.set_button_background, win, "search", extra)
     if not ok then
-        cloudime.log("汉典查询：设置搜索按钮主题色失败：" .. tostring(error))
+        cloudime.log("在线查询：设置搜索按钮主题色失败：" .. tostring(error))
     end
 end
 
@@ -260,13 +549,13 @@ local function ensure_window()
     if win then
         return win
     end
-    local layout = cloudime.install_path("Scripts/lib/zdic-panel.json")
+    local layout = cloudime.install_path("Scripts/lib/fast-searching-online.json")
     if not layout then
-        cloudime.log("汉典查询：找不到 Scripts/lib/zdic-panel.json")
+        cloudime.log("在线查询：找不到 Scripts/lib/fast-searching-online.json")
         return nil
     end
     win = cloudime.window.create{
-        name        = "汉典查询",
+        name        = "在线查询",
         width       = WIDTH,
         height      = HEIGHT,
         layout      = layout,
@@ -361,20 +650,28 @@ local function request_query(text)
     text = trim(text or "")
     if text == "" then
         pending_query_text = nil
-        win:set_text("result", "输入中文词语后按回车，或点搜索按钮。")
-        set_status("请输入中文词语 / 汉字", "#FFCC3333")
-        return
-    end
-    if not is_chinese_word(text) then
-        pending_query_text = nil
-        win:set_text("result", "英文单词查询暂未支持。\n请先输入中文词语或汉字。")
-        set_status("目前只支持中文词语 / 汉字", "#FFCC3333")
+        win:set_text("result", "输入中文词语、汉字或英文单词后按回车，或点搜索按钮。")
+        set_status("请输入查询内容", "#FFCC3333")
         return
     end
 
-    if last_result_word == text and last_result_text then
+    local source, url
+    if is_chinese_word(text) then
+        source = "汉典"
+        url = "https://zdic.net/hans/" .. url_encode(text)
+    elseif is_english_word(text) then
+        source = "有道"
+        url = "https://dict.youdao.com/jsonapi?q=" .. url_encode(text)
+    else
+        pending_query_text = nil
+        win:set_text("result", "目前支持中文词语 / 汉字和英文单词。")
+        set_status("暂不支持这种文本", "#FFCC3333")
+        return
+    end
+
+    if last_result_word == text and last_result_source == source and last_result_text then
         win:set_text("result", last_result_text)
-        set_status("来自汉典 zdic.net", "#FF888888")
+        set_status("来自" .. source .. "词典", "#FF888888")
         return
     end
 
@@ -391,9 +688,8 @@ local function request_query(text)
     request_seq = request_seq + 1
     local sequence = request_seq
     win:set_text("result", "正在查询「" .. text .. "」…")
-    set_status("正在连接汉典…", "#FF888888")
+    set_status("正在连接" .. source .. "…", "#FF888888")
 
-    local url = "https://zdic.net/hans/" .. url_encode(text)
     cloudime.http_get(url, HTTP_TIMEOUT_MS, function(result)
         if sequence == request_seq then
             pending_query_text = nil
@@ -407,12 +703,17 @@ local function request_query(text)
             return
         end
         if result.status ~= 200 then
-            win:set_text("result", "汉典返回 HTTP " .. tostring(result.status))
+            win:set_text("result", source .. "返回 HTTP " .. tostring(result.status))
             set_status("没有找到词条", "#FFCC3333")
             return
         end
 
-        local parsed = parse_zdic(result.body, text)
+        local parsed
+        if source == "汉典" then
+            parsed = parse_zdic(result.body, text)
+        else
+            parsed = parse_youdao(result.body, text)
+        end
         if not parsed then
             win:set_text("result", "页面里没有找到可显示的释义。\n" .. url)
             set_status("未找到释义", "#FFCC3333")
@@ -420,8 +721,9 @@ local function request_query(text)
         end
         win:set_text("result", parsed)
         last_result_word = text
+        last_result_source = source
         last_result_text = parsed
-        set_status("来自汉典 zdic.net", "#FF888888")
+        set_status("来自" .. source .. "词典", "#FF888888")
     end)
 end
 
@@ -449,15 +751,16 @@ local function open_panel(pos)
     local x, y = place_beside_candidate(pos, pending_has_candidate)
     win:show{ x = x, y = y }
     win:focus(true)
+    win:focus_text("query")
 
-    if word ~= "" and is_chinese_word(word) then
+    if word ~= "" and (is_chinese_word(word) or is_english_word(word)) then
         request_query(word)
     elseif word ~= "" then
-        win:set_text("result", "当前候选不是中文词语 / 汉字。\n英文单词查询暂未支持。")
-        set_status("目前只支持中文词语 / 汉字", "#FFCC3333")
+        win:set_text("result", "目前支持中文词语 / 汉字和英文单词。")
+        set_status("暂不支持这种文本", "#FFCC3333")
     elseif not was_open then
-        win:set_text("result", "输入中文词语后按回车，或点搜索按钮。")
-        set_status("请输入中文词语 / 汉字", "#FF888888")
+        win:set_text("result", "输入中文词语、汉字或英文单词后按回车，或点搜索按钮。")
+        set_status("请输入查询内容", "#FF888888")
     end
 end
 
@@ -493,6 +796,7 @@ cloudime.on("window", function(event)
         last_query_text = nil
         last_query_at = 0
         last_result_word = nil
+        last_result_source = nil
         last_result_text = nil
         win:close()
         win = nil

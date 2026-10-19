@@ -19,7 +19,7 @@
       "y": 16,
       "size": 16,
       "runs": [
-        { "text": "汉典查询", "color": "#FF222222" }
+        { "text": "在线查询", "color": "#FF222222" }
       ]
     },
     {
@@ -90,14 +90,13 @@
       "read_only": true,
       "auto_line_wrap": true,
       "line_spacing": 6,
-      "font": "candidate",
-      "font_size": 14,
+      "font": "translate",
       "back_color": "#FFF7F7F7",
       "edge_color": "#FFC8C8C8",
       "text_color": "#FF222222",
       "sel_back_color": "#384A90E2",
       "sel_text_color": "#FF222222",
-      "text": "输入中文词语后按回车，或点搜索按钮。"
+      "text": "输入中文词语、汉字或英文单词后按回车，或点搜索按钮。"
     }
   ]
 }

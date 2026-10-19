@@ -294,6 +294,7 @@ local aux = cloudime.window.create_auxiliary{
 | `win:hide()` | 收起（不销毁；内容留着，再 `show` 原样回来） |
 | `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
 | `win:focus(true/false)` | 独立窗口：拿 / 放**键盘焦点**（`key` 载荷里会带 `window`）；辅助窗口：把逻辑焦点指定给它 / 交还给宿主 |
+| `win:focus_text(name)` | 把键盘焦点交给某个 `text_edit` / `text_box` 宿主（面板打开后自动聚焦输入框用） |
 | `win:combine_region(name, 形状)` | 把形状并进已有区域（只改命中、不重画） |
 | `win:prune_region(name, 形状)` | 从已有区域里挖掉形状（只改命中、不重画） |
 | `win:region_contains(name, x, y)` | 点是否在区域里（含边界）；没有这个区域给 `nil` |
