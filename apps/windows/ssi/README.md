@@ -1,10 +1,11 @@
 # 特殊字符输入器（SpecialSymbolsInserter）
 
-一个用 **勇芳 VisualFreeBasic（VFB）** 编写的特殊字符输入小工具，用于向任意程序快速输入键盘上难以打出的特殊符号（序号、角标、希腊字母、西里尔字母、日文假名、制表符等）。
+一个用 **勇芳 VisualFreeBasic（VFB）** 编写的特殊字符输入小工具，用于向任意程序快速输入键盘上难以打出的特殊符号（序号、角标、希腊字母、西里尔字母、日文假名、制表符、箭头等），并附带一个英文花体转换页。
 
 - 点 **左键**：把按钮上的字符以「模拟键盘输入」的方式直接打到你当前正在打字的程序里；
 - 点 **右键**：把按钮上的字符复制到系统剪贴板，方便手动粘贴；
-- 窗口 **置顶 + 不抢焦点**：点击本工具时，键盘焦点仍停留在目标程序里，因此可以连续点击、连续输入，无需来回切换窗口。
+- 窗口 **置顶 + 默认不抢焦点**：点击本工具时，键盘焦点仍停留在目标程序里，因此可以连续点击、连续输入，无需来回切换窗口；
+- 第 7 页「英文花体」是例外：切到该页时窗口会正常激活，方便在输入框里输入英文并转换。
 
 ---
 
@@ -16,19 +17,20 @@
 ├─ forms/
 │  ├─ Form1.frm                   主窗口（标题栏 + 选项卡容器）
 │  ├─ Form2.frm                   常用符号（第 1 个标签，56 个字符）
-│  ├─ Form3.frm                   序号和角标（第 2 个标签，111 个字符）
+│  ├─ Form3.frm                   序号 / 角标（第 2 个标签，111 个字符）
 │  ├─ Form4.frm                   希腊字母（第 3 个标签，76 个字符）
 │  ├─ Form5.frm                   西里尔字母（第 4 个标签，100 个字符）
 │  ├─ Form6.frm                   日文假名（第 5 个标签，110 个字符，五十音图）
-│  └─ Form7.frm                   制表符（第 6 个标签，33 个字符，框线）
+│  ├─ Form7.frm                   制表符 / 箭头（第 6 个标签，93 个字符）
+│  └─ Form8.frm                   英文花体（第 7 个标签，14 种字母样式）
 ├─ modules/
-│  └─ SpecialCharInput.inc        核心模块：模拟键盘输入 / 复制剪贴板
+│  └─ SpecialCharInput.inc        核心模块：模拟键盘输入 / 复制剪贴板 / 切换激活模式
 ├─ images/icon.ico                程序图标
 ├─ release/                       32 位编译输出
 └─ release64/                     64 位编译输出
 ```
 
-总计约 **486 个** 特殊字符按钮，全部按分类分布在 6 个标签页。
+前 6 个标签共 **546 个** 特殊字符按钮；第 7 个标签是英文花体转换器（14 种样式）。
 
 ---
 
@@ -36,17 +38,23 @@
 
 | 位置 | 说明 |
 | --- | --- |
-| 顶部选项卡 | 共 6 页：常用符号 / 序号和角标 / 希腊字母 / 西里尔字母 / 日文假名 / 制表符 |
-| 页面按钮 | 每个按钮显示一个特殊字符 |
-| 左键单击 | 模拟键盘输入该字符（送入当前焦点窗口） |
-| 右键单击 | 复制该字符到剪贴板 |
-| 窗口标题栏 | 可拖动窗口；右上角可最小化 / 关闭 |
+| 顶部选项卡 | 共 7 页：常用符号 / 序号·角标 / 希腊字母 / 西里尔字母 / 日文假名 / 制表符·箭头 / 英文花体 |
+| 页面按钮（第 1–6 页） | 每个按钮显示一个特殊字符 |
+| 左键单击（第 1–6 页） | 模拟键盘输入该字符（送入当前焦点窗口） |
+| 右键单击（第 1–6 页） | 复制该字符到剪贴板 |
+| 英文花体页（第 7 页） | 在输入框输入英文，选择 14 种样式之一，结果实时显示；点「复制结果到剪贴板」复制结果 |
+| 窗口标题栏 | 可拖动窗口；右上角可关闭（已去掉最小化按钮） |
 
 > 排版说明：
-> - 第 2 页「序号和角标」按**类别分排**——带圈数字、括号数字、中文括号数字、中文带圈数字、大写罗马数字、小写罗马数字、上标、下标，每类各占新的一行（每行最多 14 个）；
+> - 第 2 页「序号 / 角标」按**类别分排**——带圈数字、括号数字、中文括号数字、中文带圈数字、大写罗马数字、小写罗马数字、上标、下标，每类各占新的一行（每行最多 14 个）；
 > - 第 3 页「希腊字母」把**大写、小写、变体、带重音**分成四块，块间空出 32 像素；
 > - 第 4 页「西里尔字母」同样分组（大写、小写、乌克兰语、塞尔维亚语、哈萨克语），块间 32 像素；
-> - 第 5 页「日文假名」是**五十音图**：左 5 列平假名、右 5 列片假名，中间空出 32 像素；第 1–10 行为各行，第 11 行只有「ん / ン」。
+> - 第 5 页「日文假名」是**五十音图**：左 5 列平假名、右 5 列片假名，中间空出 32 像素；第 1–10 行为各行，第 11 行只有「ん / ン」；
+> - 第 6 页「制表符 / 箭头」包含 33 个框线符号和 60 个箭头 / 方向符号；
+> - 第 7 页「英文花体」提供 14 种字母样式（带圈、方框、小型大写、粗体、斜体、花体、双线体等），只转换 A–Z / a–z，其它字符原样保留。
+
+> 第 7 页需要输入文字，因此切到该页时窗口会正常激活并聚焦输入框；切回其它页后恢复「不抢焦点」模式。
+
 
 > 典型用法：在记事本、Word、聊天窗口等程序里把光标放到要输入的位置 → 点击本工具对应字符 → 字符立即出现在目标程序中。
 
@@ -58,25 +66,28 @@
 核心模块 `modules/SpecialCharInput.inc` 中的 `InsertUnicodeText` 使用 Win32 的
 `SendInput` + `KEYEVENTF_UNICODE`，把字符逐个以 Unicode 按键事件注入系统。
 
-- 与键盘布局无关，可输入任意 Unicode 字符（中文、假名、序号、制表符等）；
+- 与键盘布局无关，可输入任意 Unicode 字符（中文、假名、序号、制表符、箭头等）；
 - 自动处理 UTF-16 代理对（如少量非 BMP 字符）。
 
 剪贴板部分 `CopyUnicodeToClipboard` 使用 `OpenClipboard` / `SetClipboardData(CF_UNICODETEXT)`，
 以 UTF-16 文本形式写入剪贴板。
 
-### 2. 为什么不抢焦点也能输入
-主窗口 `Form1` 通过 `TopMost = True`，并在 `Form1_WM_Create`（窗口显示前）中再调用一次 `SetWindowPos(..., HWND_TOPMOST, ...)` 确保始终置顶；
-同时用**两手准备**保证“点击不抢焦点、字符能送进目标程序”：
+### 2. 为什么默认不抢焦点也能输入
+主窗口 `Form1` 在 `Form1_WM_Create`（窗口显示前）调用
+`SetWindowPos(..., HWND_TOPMOST, ...)` 确保始终置顶（设计器里的 `TopMost` 属性本身是 `False`）；
+同时用**两手准备**保证默认页面“点击不抢焦点、字符能送进目标程序”：
 
-1. **点击不激活本窗口**：在 `Form1_WM_Create` 里（窗口显示前）给窗口加上 `WS_EX_NOACTIVATE`，
-   并在 `WM_MOUSEACTIVATE` 里对客户区返回 `MA_NOACTIVATE`：
+1. **默认页面点击不激活本窗口**：在 `Form1_WM_Create` 里给窗口加上 `WS_EX_NOACTIVATE`，
+   并在 `WM_MOUSEACTIVATE` 里对客户区返回 `MA_NOACTIVATE`；第 7 页「英文花体」例外，见下：
 ```vb
 SetWindowLongPtr hWndForm, GWL_EXSTYLE, GetWindowLongPtr(hWndForm, GWL_EXSTYLE) Or WS_EX_NOACTIVATE
 ...
 Function Form1_Custom(...) As LResult
    If wMsg = WM_ACTIVATE Then SetInputTarget Cast(HWND, lParam)   '记录“上一次的目标窗口”
    If wMsg = WM_MOUSEACTIVATE Then
-      If HiWord(lParam) = HTCLIENT Then Return MA_NOACTIVATE      '点击客户区：不激活本窗口
+      If TabControl1.Selected <> 6 And HiWord(lParam) = HTCLIENT Then
+         Return MA_NOACTIVATE                                     '非英文花体页：点击不激活
+      End If
    End If
    Function = False
 End Function
@@ -85,6 +96,10 @@ End Function
 2. **万一还是被激活了，就切回目标程序**：`modules/SpecialCharInput.inc` 里记录“目标窗口”
    （`SetInputTarget`，由上面的 `WM_ACTIVATE` 调用），发送前 `EnsureInputTarget` 若发现焦点在自己身上，
    就用 `AttachThreadInput + SetForegroundWindow` 把前台切回目标程序，再 `SendInput`。
+
+3. **英文花体页需要键盘输入**：切到第 7 页时，`Form1_TabControl1_NM_Click` 调用
+   `SetForm1ActivateMode(True)` 临时去掉 `WS_EX_NOACTIVATE`，再 `SetForegroundWindow` 并把焦点交给
+   `Form8.Text1`；切回其它页时调用 `SetForm1ActivateMode(False)` 恢复不抢焦点。
 
 > 为什么不用工程属性 `NoActivate=True`：它会触发 VFB 的“无焦点窗体多线程显示”机制，对**启动窗体**并不稳妥；
 > 所以改为运行时加 `WS_EX_NOACTIVATE`。`MA_NOACTIVATE` 只对顶层窗口生效，点击子窗体时可能收不到，
@@ -95,16 +110,18 @@ End Function
 主窗口只有一个 `TabControl1`，它的 `Custom` 属性记录了「标签数、当前选中项，以及每个标签绑定的子窗口」：
 
 ```
-Custom=6|0|常用符号||Form2|0|序号和角标||Form3|0|希腊字母||Form4|0|西里尔字母||Form5|0|日文假名||Form6|0|制表符||Form7|0|
+Custom=7|0|常用符号||Form2|0|序号\|角标||Form3|0|希腊字母||Form4|0|西里尔字母||Form5|0|日文假名||Form6|0|制表符\|箭头||Form7|0|英文花体||Form8|0|
 ```
 
 格式为：`标签数|当前选中|` + 对每个标签重复 `标题|图标|绑定子窗口|附加数据|`。
+标题里的 `\|` 是 TabControl 对竖线的转义，显示为「序号 / 角标」「制表符 / 箭头」。
 
-运行时 TabControl 会在切换标签时自动 `Show` / `Hide` 对应的子窗口（`Form2`~`Form7`），
-无需手写切换代码。每个子窗口都是 `Child=True` 的子窗口，内部放了一排 `YFbutton` 虚拟按钮。
+`Form1_TabControl1_NM_Click` 在切换标签时手动 `Show` / `Hide` 对应的子窗口
+（`Form2`~`Form8`），并根据是否进入第 7 页切换激活策略。每个符号子窗口都是 `Child=True`，
+内部放一排 `YFbutton` 虚拟按钮；`Form8` 则放输入框、样式选项和复制按钮。
 
 ### 4. 按钮事件
-每个符号页的 `[AllCode]` 中只有两个事件处理（以 Form3 为例）：
+前 6 个符号页的 `[AllCode]` 中只有两个事件处理（以 Form3 为例）：
 
 ```vb
 '左键：模拟键盘输入
@@ -121,7 +138,19 @@ End Sub
 `YFbutton1` 是控件数组，事件回调会传入被点按钮的索引 `ControlIndex`；
 处理函数直接读取该按钮的 `Caption`（即字符本身）并送入模块，因此新增字符无需改动代码。
 
-### 5. 字符的显示与编码（重点）
+### 5. 英文花体转换（Form8）
+第 7 页把输入的英文字母替换成 Unicode 数学字母 / 花体字母：
+
+- 14 个 `Option1` 样式按钮，每个按钮的 `Tag` 里放 3 个样例子字符（`&H码点|&H码点|&H码点`）；
+  `Form8_WM_Create` 用 `TagArr2CWSTR` 把 `Tag` 还原成 `Caption`，避免源码代码页写坏非 BMP 字符。
+- `ABCode(0)`~`ABCode(13)` 每个保存 52 个码点（A–Z + a–z）；`ChangeText` 读取当前选中的
+  `Option1`，把 `Text1` 里的 A–Z / a–z 逐字替换，其它字符原样拼回，结果写进只读的 `Text2`。
+- `Text1` 的 `EN_Change` 和样式按钮点击都会调用 `ChangeText`，所以输入 / 切换样式时结果实时更新。
+- 结果框下方「复制结果到剪贴板」按钮（`YFbutton1`）调用 `CopySymbol` 复制 `Text2`；
+  第 7 页不直接 `SendInput` 注入，避免把整段转换结果误打进目标程序。
+- 结果依赖目标程序字体是否支持对应的 Unicode 字母；显示异常时剪贴板内容仍是正确的码点。
+
+### 6. 字符的显示与编码（重点）
 VFB 生成的源码是按工程代码页（本项目为 **GBK / 936**）保存的，因此**不在 GBK 字符集内**的字符
 （例如 `۞ ♥ ♣ ♠ ♦ ✓ ☑ ⑫ ⑬ ₀ ⅓ °±` 等）在自动生成时会被写成“？”，运行时便显示成“？”。
 
@@ -162,16 +191,19 @@ End Sub
 2. **直接改 `.frm` 文本**：每个按钮对应一个 `[YFbutton]` 段，修改其 `Caption=` 即可。
    按钮网格参数（所有符号页统一）：
    - 按钮 **28×28**、每行 **14 个**、步长 31、从 (4,4) 开始；
-   - `Form3`（序号和角标）每个类别另起一行，`Form4`（希腊字母）大写/小写分块。
+   - `Form3`（序号 / 角标）每个类别另起一行，`Form4`（希腊字母）大写/小写分块。
 
    选项卡显示区约 **446 × 540** 像素（100% DPI，当前窗口尺寸下）。
 
 ### 增加新的一页
-1. 复制一个现有 `FormN.frm` 为新的表单（例如 `Form8.frm`），改 `Name=` / `Caption=` 与按钮；
-2. 在 `.ffp` 的 `[Objects]` 增加 `Form=.\forms\Form8.frm|0|0||Yes|`，并同步 `NumObjects`（=对象数+3）；
+1. 复制一个现有 `FormN.frm` 为新的表单（例如 `Form9.frm`），改 `Name=` / `Caption=` 与按钮；
+2. 在 `.ffp` 的 `[Objects]` 增加 `Form=.\forms\Form9.frm|0|0||Yes|`，并同步 `NumObjects`（=对象数+3）；
 3. 在 `TopTab=` 增加一行；
-4. 修改 `Form1.frm` 中 `TabControl1` 的 `Custom`：把标签数 +1，并追加 `新标题||Form8|0|`，
-   同时保证整串以 `|` 结尾（这样解析器才能取到最后一组）。
+4. 修改 `Form1.frm` 中 `TabControl1` 的 `Custom`：把标签数 +1，并追加 `新标题||Form9|0|`，
+   同时保证整串以 `|` 结尾（这样解析器才能取到最后一组）；
+5. 在 `Form1_TabControl1_NM_Click` 的 `Show` / `Hide` 列表和选中索引判断里加上新页；
+   如果新页需要键盘输入，还要像第 7 页那样调用 `SetForm1ActivateMode(True)` / `SetFocus`，
+   切走时恢复 `SetForm1ActivateMode(False)`。
 
 ### 修改“左键 / 右键”的行为
 只需改 `modules/SpecialCharInput.inc` 里的 `InsertSymbol` / `CopySymbol`（或底层两个函数）。
@@ -181,9 +213,11 @@ End Sub
 
 ## 六、已知限制与可扩展点
 
-- **首次使用**：程序刚启动时本窗口是前台窗口，请先点击一下目标程序把光标定位好，再点击符号（之后本工具不再抢焦点）。
+- **首次使用**：程序刚启动时停在第 1 页，本窗口不抢焦点，请先把光标放到目标程序再点击符号；
+  切到第 7 页「英文花体」时窗口会正常激活并聚焦输入框，切回其它页后恢复不抢焦点。
 - **管理员权限程序**：由于 Windows 的 UIPI 机制，普通权限的本工具无法向「以管理员身份运行」的程序注入按键；如需支持，请给本工具勾选 `UseAdminPriv`（工程属性）后以管理员运行。
 - **个别特殊宿主**：少数使用底层键盘钩子 / 独占输入的程序可能收不到 `SendInput` 的 Unicode 字符，此时可用「右键复制」再手动粘贴。
+- **英文花体显示**：转换结果是标准 Unicode 数学字母，目标程序字体不支持时可能显示成方框 / 异体；复制出来的码点不会受影响。
 - **常用符号页（Form2）布局**：该页由原有工程保留，其最右列按钮在设计宽度上略宽于选项卡显示区，可能存在轻微裁切；如需调整，可在设计器里整体左移或缩小间距。
 - **剪贴板反馈**：目前右键复制后没有弹窗提示（避免打扰）；如需提示，可在 `CopySymbol` 后调用 `Form1.Caption` 短暂变化或用托盘气泡提示。
 - **可扩展**：`SpecialCharInput.inc` 是通用模块，可复用到其它需要「模拟输入 / 复制文本」的工程中。
@@ -194,7 +228,8 @@ End Sub
 
 | 文件 | 作用 |
 | --- | --- |
-| `modules/SpecialCharInput.inc` | 输入/复制的核心逻辑（`InsertUnicodeText`、`CopyUnicodeToClipboard`、`InsertSymbol`、`CopySymbol`） |
-| `forms/Form1.frm` | 主窗口、选项卡、置顶与不抢焦点设置 |
+| `modules/SpecialCharInput.inc` | 输入/复制的核心逻辑（`InsertUnicodeText`、`CopyUnicodeToClipboard`、`InsertSymbol`、`CopySymbol`、`SetForm1ActivateMode`） |
+| `forms/Form1.frm` | 主窗口、选项卡、置顶、默认不抢焦点与英文花体页激活切换 |
 | `forms/Form2.frm` ~ `Form7.frm` | 6 个符号页，每页含按钮数组及其左键/右键事件 |
+| `forms/Form8.frm` | 英文花体转换页：14 种样式、输入实时转换、复制结果 |
 | `SpecialSymbolsInserter.ffp` | 工程文件，登记所有表单与模块 |
