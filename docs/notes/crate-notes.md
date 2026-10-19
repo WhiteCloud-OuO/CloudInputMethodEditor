@@ -1107,6 +1107,10 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `PARAFORMAT2` 的 `PFM_LINESPACING`（精确行距，u16 点，缺省 8）。
   `ScriptWindow` 在 `rebuild_text_edits` 里同时收集 `text_edits()` 和 `text_boxes()`；滚动范围写回
   `Element::TextBox.h_scroll` / `v_scroll`，渲染器按可见性扣文本区并画 8 点厚、4 点间隙的滚动条。
+  注意 `TxGetHScroll` / `TxGetVScroll` 的 `max` 是内容总高度 / 总宽度，不是可滚到的最大位置；
+  `scroll_state` 统一减去 `page` 后才存进 `TextBoxScroll.max`，滑块比值和滑轨长度才按真正的
+  可滚范围计算，拖到底时最后一行正好贴住文本区底边。`page < max - min` 的旧可见性判断也改成
+  换算后的 `max > min`。
   内部滚动条不进 `regions`：`begin_text_box_press` 按控件内坐标判滑块 / 轨道，拖动用
   `EM_SETSCROLLPOS`，点轨道翻页，滚轮在宿主里按页高 1/4 滚动；`WM_TEXT_SCROLL` 通知脚本窗刷新滑块。
   非拖拽改值（点轨道 / 滚轮，包括文本区内的滚轮）和独立滚动条一样用 140 ms ease-out 动画：

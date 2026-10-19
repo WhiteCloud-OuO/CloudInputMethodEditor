@@ -88,7 +88,9 @@ win:clear("editor")
   `PFM_LINESPACING` / `dyLineSpacing` 设置（点 → twips）。
 - 不创建 RichEdit 自己的滚动条：`TxGetScrollBars` 返回 0；滚动条由 `text_box` 绘制和命中。
 - `TxGetHScroll` / `TxGetVScroll` 用于读取 `min/max/pos/page/enabled`，这是内部滚动条的
-  唯一数据源；滚动位置通过 `EM_SETSCROLLPOS`（或 `EM_LINESCROLL`）回写 RichEdit。
+  唯一数据源；RichEdit 返回的 `max` 是内容总高度 / 总宽度，可滚到的最大位置是
+  `max - page`，写回前要先减掉一页，否则滑块到不了底、最后一行也不会贴住文本区底边。
+  滚动位置通过 `EM_SETSCROLLPOS`（或 `EM_LINESCROLL`）回写 RichEdit。
 
 ## 鼠标交互
 
@@ -100,7 +102,7 @@ win:clear("editor")
 - 非拖拽改值（点轨道、滚轮）与独立滚动条一样用约 140 ms ease-out 动画，文本和滑块一起过渡；
   拖动滑块则立即跟手，并取消该轴正在进行的动画。
 - `auto_line_wrap = true` 时没有水平滚动条，文本区宽度固定；`false` 时长行产生水平滚动。
-- 滚动条只在 `enabled` 或 `page < max - min` 时显示，显示后重新计算文本区尺寸。
+- 滚动条只在 `max > min`（可滚距离大于 0）时显示，显示后重新计算文本区尺寸。
 
 ## 宿主与数据流
 

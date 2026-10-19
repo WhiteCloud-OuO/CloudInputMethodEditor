@@ -534,7 +534,8 @@ pub enum SvgAlign {
     Right,
 }
 
-/// `text_box` 内部滚动条的可见范围（值单位由 RichEdit 的像素位置换算）。
+/// `text_box` 内部滚动条的可见范围（值单位为 RichEdit 的像素）。
+/// `max` 是**可滚到的最大位置**（内容总高度 / 宽度减一页），`page` 是视口大小。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct TextBoxScroll {
     pub min: u64,

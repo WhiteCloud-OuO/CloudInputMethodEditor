@@ -2422,10 +2422,14 @@ fn points(value: f32, dpi: u32) -> i32 {
 /// 渲染器的 `Color` → Win32 `COLORREF`（0x00BBGGRR）。
 fn scroll_state(info: ScrollInfo) -> TextBoxScroll {
     let min = info.min.max(0) as u64;
-    let max = info.max.max(info.min) as u64;
     let page = info.page.max(0) as u64;
+    // RichEdit 的 `TxGetVScroll` / `TxGetHScroll` 返回的 `max` 是内容总高度 / 宽度，
+    // 不是可滚到的最大位置；真正能滚到的最后位置要再减掉一页。
+    // 不减这一页会让滑块只走到约 95%，并且拖动到底时位置被 RichEdit 夹回。
+    let extent = info.max.max(info.min) as u64;
+    let max = extent.saturating_sub(page).max(min);
     let value = (info.pos.max(info.min) as u64).clamp(min, max);
-    let visible = max.saturating_sub(min) > page;
+    let visible = max > min;
     TextBoxScroll {
         min,
         max,
@@ -2703,5 +2707,44 @@ mod tests {
             (15.0, 15.0),
             "高 DPI 再除倍数"
         );
+    }
+
+    /// RichEdit 的 max 是内容总高，不是可滚到的最大位置；要减一页，否则滑块到不了底。
+    #[test]
+    fn scroll_state_subtracts_the_page_from_the_content_extent() {
+        let info = ScrollInfo {
+            min: 0,
+            max: 2310,
+            pos: 2194,
+            page: 116,
+        };
+        let state = scroll_state(info);
+        assert_eq!(state.max, 2194, "110 行 × 21 像素，减掉 116 像素视口");
+        assert_eq!(state.value, 2194);
+        assert_eq!(state.page, 116);
+        assert!(state.visible);
+    }
+
+    /// 位置超出可滚范围时夹到最大位置；内容不足一页时不显示滚动条。
+    #[test]
+    fn scroll_state_clamps_and_hides_when_content_fits() {
+        let state = scroll_state(ScrollInfo {
+            min: 0,
+            max: 2310,
+            pos: 2300,
+            page: 116,
+        });
+        assert_eq!(state.max, 2194);
+        assert_eq!(state.value, 2194);
+
+        let state = scroll_state(ScrollInfo {
+            min: 0,
+            max: 100,
+            pos: 0,
+            page: 150,
+        });
+        assert_eq!(state.max, 0);
+        assert_eq!(state.value, 0);
+        assert!(!state.visible);
     }
 }
