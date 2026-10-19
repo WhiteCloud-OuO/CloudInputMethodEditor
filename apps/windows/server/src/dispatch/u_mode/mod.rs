@@ -276,18 +276,6 @@ impl Router {
             self.update_u_aux();
             return Effect::Navigated;
         }
-        if let Some(c) = event.character.filter(char::is_ascii_alphabetic)
-            && self.mixture_enabled()
-            && !u.greek.accent
-            && !u.greek.diaeresis
-        {
-            // 第二个键是字母：离开符号窗口，接回普通拼音 / 英文词匹配。
-            u.symbol_ui = false;
-            self.u_mode = Some(u);
-            self.update_u_aux();
-            self.engine.push(c);
-            return Effect::Changed(None);
-        }
         if let Some(symbol) = u.symbol(event) {
             // 上屏一个符号，但保留 u 模式与符号窗口。
             self.u_mode = Some(u);

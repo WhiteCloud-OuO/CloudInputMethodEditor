@@ -1553,6 +1553,8 @@ fn full_pinyin_u_starts_in_letter_mode_and_space_toggles_symbols() {
     assert_eq!(frame.candidates.items.len(), 6);
     assert_eq!(frame.candidates.items[0].text, "常用符号");
     assert!(r.u_mode.expect("还在 u 模式").symbol_ui);
+    let (_, commit, _) = key(&mut r, 0x51, Some('q'), normal);
+    assert_eq!(commit.as_deref(), Some("◰"), "符号输入里字母按符号表上屏");
 
     // 再按 Space：回字母输入。
     let (_, _, _) = key(&mut r, 0x20, Some(' '), normal);
@@ -1563,15 +1565,14 @@ fn full_pinyin_u_starts_in_letter_mode_and_space_toggles_symbols() {
     assert!(r.u_mode.is_some(), "字母输入仍留在 u 模式");
 }
 
-/// u 模式退出符号窗口后，普通候选窗仍按同一光标位置继续显示。
+/// Space 在字母 / 符号之间切换时，候选窗仍按同一光标位置继续显示。
 #[test]
-fn u_mode_transition_keeps_the_candidate_window_shown() {
+fn u_mode_space_switch_keeps_the_candidate_window_shown() {
     let normal = KeyModifiers::default();
     let mut r = router(9);
     let recorded = Arc::new(Recorded::default());
     r.set_candidate_sink(Box::new(RecordingSink(recorded.clone())));
     key(&mut r, 0x55, Some('u'), normal);
-    key(&mut r, 0x20, Some(' '), normal); // 切到符号输入
     r.handle(ClientMessage::PositionCandidates {
         session: SessionId(1),
         rect: ScreenRect {
@@ -1581,10 +1582,12 @@ fn u_mode_transition_keeps_the_candidate_window_shown() {
             bottom: 40,
         },
     });
-    key(&mut r, 0x4E, Some('n'), normal);
+    key(&mut r, 0x20, Some(' '), normal); // 切到符号输入
+    key(&mut r, 0x20, Some(' '), normal); // 切回字母输入
     let shows = recorded.shows.lock().unwrap();
-    assert!(shows.len() >= 2, "u 模式与第二个字母都要显示候选窗");
-    assert_eq!(shows.last().unwrap().0.preedit[0].text, "un");
+    assert!(shows.len() >= 2, "切模式也要显示候选窗");
+    assert_eq!(shows.last().unwrap().0.preedit[0].text, "u");
+    assert!(!r.u_mode.expect("还在 u 模式").symbol_ui);
 }
 
 /// 不支持中英混输时直接进符号输入，字母键按符号表上屏。
