@@ -52,34 +52,35 @@ pub(super) enum StatusKind {
 }
 
 impl Painter {
-    /// 按配置里的三个字族建字体库（同名字族只加载一次，第一个非空的当界面字体）；
-    /// 字体库加载失败返回 `None`，两个窗口不绘制。
+    /// 按配置里的字族建字体库（同名字族只加载一次，第一个非空的当界面字体）；
+    /// 符号 / 日文补充字体只加载、不参与界面字体选择。字体库加载失败返回 `None`，两个窗口不绘制。
     fn new(settings: &RenderSettings) -> Option<Self> {
         let started = std::time::Instant::now();
         let mut fonts: Vec<UiFont> = Vec::new();
-        for (family, _) in [
-            &settings.candidate_font,
-            &settings.pinyin_font,
-            &settings.item_number_font,
-            &settings.translate_font,
+        for family in [
+            &settings.candidate_font.0,
+            &settings.pinyin_font.0,
+            &settings.item_number_font.0,
+            &settings.translate_font.0,
         ] {
+            push_font(&mut fonts, family);
+        }
+        let mut extras: Vec<UiFont> = Vec::new();
+        for family in [&settings.symbol_font, &settings.japanese_font] {
             let family = family.trim();
-            if family.is_empty()
-                || fonts
-                    .iter()
-                    .any(|font| font.family.eq_ignore_ascii_case(family))
+            if fonts
+                .iter()
+                .chain(extras.iter())
+                .any(|font| font.family.eq_ignore_ascii_case(family))
             {
                 continue;
             }
-            fonts.push(UiFont {
-                family: family.to_owned(),
-                files: system_fonts::family_files(family),
-            });
+            push_font(&mut extras, family);
         }
-        let library = if fonts.is_empty() {
+        let library = if fonts.is_empty() && extras.is_empty() {
             FontLibrary::system(LOCALE)
         } else {
-            FontLibrary::with_fonts(LOCALE, &fonts)
+            FontLibrary::with_fonts_and_extras(LOCALE, &fonts, &extras)
         };
         let library = match library {
             Ok(library) => library,
@@ -349,6 +350,22 @@ fn apply_theme_colors(theme: &mut Theme, file: &cloudime_platform::ThemeFile) {
     theme.colors.tip_background = color(file.tip.background);
     theme.colors.tip_icon = color(file.tip.icon);
     theme.colors.tip_shadow = color(file.tip.shadow);
+}
+
+/// 往字体清单里加一个字族（空名跳过，同名不重复）。
+fn push_font(fonts: &mut Vec<UiFont>, family: &str) {
+    let family = family.trim();
+    if family.is_empty()
+        || fonts
+            .iter()
+            .any(|font| font.family.eq_ignore_ascii_case(family))
+    {
+        return;
+    }
+    fonts.push(UiFont {
+        family: family.to_owned(),
+        files: system_fonts::family_files(family),
+    });
 }
 
 /// 配置里的字族名 → 渲染器要的「有就用、空就没有」。

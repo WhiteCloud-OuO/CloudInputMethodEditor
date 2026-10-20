@@ -232,6 +232,12 @@ impl Component for Settings {
                     self.save_font(role, &choice);
                 }
             }
+            Message::PickSupplementFont(kind) => {
+                let current = kind.current(&self.config.candidate).to_owned();
+                if let Some(family) = font_dialog::pick_family(&current) {
+                    self.save("candidate", kind.key(), family);
+                }
+            }
             Message::ItemNumberStyle(Some(i)) if i < ItemNumberStyle::ALL.len() => {
                 self.save(
                     "candidate",

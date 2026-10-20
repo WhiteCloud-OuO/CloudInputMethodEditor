@@ -23,6 +23,11 @@ pub trait TextElement {
 
     /// 只量不画（排版要先知道宽度）；宽度与 [`Self::text`] 返回的那个一致。
     fn measure(&self, text: &str, style: &TextStyle) -> TextSize;
+
+    /// 这个样式（字族）能不能显示 `ch`。默认当作能，只有真正走字形管线的实现才需要覆盖。
+    fn supports_char(&mut self, _ch: char, _style: &TextStyle) -> bool {
+        true
+    }
 }
 
 /// **SVG 图形**：按 SVG 自己的宽高比等比缩放，塞进 `(x, y)` 起 `size` 见方的框里（居中、不裁剪）。

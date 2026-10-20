@@ -39,6 +39,12 @@ pub struct KeyMapLayout {
 
     /// u 模式符号窗口：普通符号画在格子下方、Shift 符号画在上方；普通键位映射参考为 `false`。
     pub symbol: bool,
+
+    /// 符号窗口的补充字体（主字体缺字时用）；普通键位映射参考为空。
+    pub fallback_family: Option<String>,
+
+    /// 优先用补充字体：日文假名固定用日文字体，不再先试主字体。
+    pub fallback_first: bool,
 }
 
 /// 什么时候显示「键位映射参考」（`use_input_scheme.cfg` 的 `key_map_reference`）。

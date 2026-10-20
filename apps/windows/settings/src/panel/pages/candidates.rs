@@ -100,6 +100,34 @@ impl FontRole {
     }
 }
 
+/// u 模式符号窗口用的两个补充字体（只存字族名，字号跟格子走）。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(crate) enum SupplementFont {
+    /// 符号补充字体（缺省 Segoe UI Symbol）。
+    Symbol,
+
+    /// 日文补充字体（缺省 Yu Gothic UI）。
+    Japanese,
+}
+
+impl SupplementFont {
+    /// 配置里对应的键。
+    pub(crate) fn key(self) -> &'static str {
+        match self {
+            Self::Symbol => "symbol_font",
+            Self::Japanese => "japanese_font",
+        }
+    }
+
+    /// 当前字族名。
+    pub(crate) fn current(self, config: &CandidateConfig) -> &str {
+        match self {
+            Self::Symbol => &config.symbol_font,
+            Self::Japanese => &config.japanese_font,
+        }
+    }
+}
+
 /// 一个「滑轨 + 右侧数字」的整数值项：拖动即时更新，数字定宽、垂直居中，不把滑轨顶来顶去。
 /// 「字体…」按钮：上面显示当前的字族与字号。
 fn font_button(
@@ -110,6 +138,17 @@ fn font_button(
     Button::new()
         .on_click(context.callback(move |_| Message::PickFont(role)))
         .content(role.current(config).label())
+}
+
+/// 补充字体按钮：只选字族，不选字号。
+fn supplement_button(
+    kind: SupplementFont,
+    config: &CandidateConfig,
+    context: &mut ViewContext<Settings>,
+) -> View {
+    Button::new()
+        .on_click(context.callback(move |_| Message::PickSupplementFont(kind)))
+        .content(kind.current(config))
 }
 
 /// 枚举下拉：按 `label()` 列项，选中 `current`（找不到取 0）。
@@ -231,6 +270,16 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             font_button(FontRole::ItemNumber, c, context),
         ),
         field("翻译字体", "", font_button(FontRole::Translate, c, context)),
+        field(
+            "符号补充字体",
+            "U 模式符号窗口里，主字体缺字时用这个字体显示符号；只选字族，字号跟格子走。",
+            supplement_button(SupplementFont::Symbol, c, context),
+        ),
+        field(
+            "日文补充字体",
+            "U 模式日文假名在主字体缺字时用这个字体显示；只选字族，字号跟格子走。",
+            supplement_button(SupplementFont::Japanese, c, context),
+        ),
         field(
             "候选项序号样式",
             "",

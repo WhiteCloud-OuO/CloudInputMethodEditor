@@ -19,6 +19,12 @@ pub struct RenderSettings {
     /// 翻译 Tip 的字体（候选窗底部那一行左侧）。
     pub translate_font: (String, f32),
 
+    /// u 模式符号窗口的补充字体（主字体缺字时用）。
+    pub symbol_font: String,
+
+    /// u 模式日文假名的补充字体（主字体缺字时用）。
+    pub japanese_font: String,
+
     /// 候选窗口的最小宽度（物理像素）：竖排、横排都生效。
     pub min_width_pixels: f32,
 

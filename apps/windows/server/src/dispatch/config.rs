@@ -27,6 +27,13 @@ pub struct RouterConfig {
 
     /// 翻译 Tip 的字体（`[candidate] translate_font`）。
     pub translate_font: (String, f32),
+
+    /// u 模式符号窗口缺字时补用的字体（`[candidate] symbol_font`）。
+    pub symbol_font: String,
+
+    /// u 模式日文假名缺字时补用的字体（`[candidate] japanese_font`）。
+    pub japanese_font: String,
+
     /// 序号的写法（`[candidate] item_number_style`）。
     pub item_number_style: ItemNumberStyle,
 
@@ -190,6 +197,8 @@ impl RouterConfig {
             candidate_font: self.candidate_font.clone(),
             item_number_font: self.item_number_font.clone(),
             translate_font: self.translate_font.clone(),
+            symbol_font: self.symbol_font.clone(),
+            japanese_font: self.japanese_font.clone(),
             min_width_pixels: self.script_min_width.unwrap_or(self.min_width_pixels),
             item_number_style: self.item_number_style,
             scale: self.script_scale,
@@ -275,6 +284,8 @@ impl From<&Config> for RouterConfig {
                 candidate.translate_font.family.clone(),
                 candidate.translate_font.size,
             ),
+            symbol_font: candidate.symbol_font.clone(),
+            japanese_font: candidate.japanese_font.clone(),
             item_number_style: candidate.item_number_style,
             min_width_pixels: candidate.candidate_box_minimum_width as f32,
             max_cell_width: candidate.candidate_item_maximum_width as f32,

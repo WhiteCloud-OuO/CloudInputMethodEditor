@@ -263,6 +263,8 @@ fn key_map_layout() -> KeyMapLayout {
         zero_initials: ZERO.iter().copied().map(zero).collect(),
         footer: None,
         symbol: false,
+        fallback_family: None,
+        fallback_first: false,
     }
 }
 

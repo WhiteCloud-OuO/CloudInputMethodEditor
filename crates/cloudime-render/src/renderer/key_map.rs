@@ -110,6 +110,12 @@ pub struct KeyMapLayout {
 
     /// u 模式符号窗口：普通符号画在格子下方、Shift 符号画在上方。
     pub symbol: bool,
+
+    /// 符号窗口的补充字体（主字体缺字时用）。
+    pub fallback_family: Option<String>,
+
+    /// 优先用补充字体（日文假名固定用日文字体）。
+    pub fallback_first: bool,
 }
 
 impl KeyMapLayout {
@@ -228,7 +234,12 @@ pub fn draw_key_map<T: RectElement + TextElement>(
     origin: (f32, f32),
 ) {
     let metrics = Metrics { theme, scale };
-    let styles = KeyMapStyles::new(&metrics, cell);
+    let styles = KeyMapStyles::new(
+        &metrics,
+        cell,
+        layout.fallback_family.as_deref(),
+        layout.fallback_first,
+    );
     let cell = metrics.px(cell).round().max(1.0);
     // 相邻两格共用一条线：步距 = 边长 − 线宽
     let pitch = KeyMapLayout::pitch(cell);
@@ -360,8 +371,9 @@ fn draw_key_cap<T: RectElement + TextElement>(
     if symbol {
         let line_height = styles.mapping.line_height;
         let draw_centered = |target: &mut T, text: &str, top: f32| {
-            let text_width = target.measure(text, &styles.mapping).width;
-            target.text(text, &styles.mapping, x + (width - text_width) / 2.0, top);
+            let style = styles.symbol_style(target, text);
+            let text_width = target.measure(text, style).width;
+            target.text(text, style, x + (width - text_width) / 2.0, top);
         };
         if !cap.mapping.is_empty() {
             draw_centered(target, &cap.mapping, y + height - inset - line_height);
@@ -426,6 +438,11 @@ struct KeyMapStyles {
     key: TextStyle,
     initial: TextStyle,
     mapping: TextStyle,
+    /// 符号窗口的补充字体：主字体缺字时改用它；普通键位映射参考为空。
+    fallback: Option<TextStyle>,
+
+    /// 优先用补充字体（日文假名）。
+    fallback_first: bool,
     /// 底部提示（u 模式日文假名用）。
     footer: TextStyle,
     /// 有 `Some` 表示韵母首字母要单独上色（颜色按字母现取）。
@@ -434,9 +451,21 @@ struct KeyMapStyles {
 
 impl KeyMapStyles {
     /// `cell` 是格子边长（**点**）：格子里的字号与内边距都按它等比算 —— 格子大了字也大。
-    fn new(metrics: &Metrics, cell: f32) -> Self {
+    fn new(
+        metrics: &Metrics,
+        cell: f32,
+        fallback_family: Option<&str>,
+        fallback_first: bool,
+    ) -> Self {
         let colors = metrics.theme.colors;
         let family = metrics.theme.text_family.as_ref();
+        let mapping = metrics
+            .style(FontSpec::with_size(cell * MAPPING_FONT_RATIO), colors.text)
+            .with_family(metrics.theme.pinyin_family.as_ref());
+        let fallback = fallback_family
+            .map(str::trim)
+            .filter(|family| !family.is_empty())
+            .map(|family| mapping.clone().with_family(Some(&family.to_owned())));
         Self {
             background: colors.background,
             // 格线借序号 / 页脚那档浅灰，跟候选窗的次要文字一致
@@ -450,13 +479,34 @@ impl KeyMapStyles {
                     INITIAL_COLOR,
                 )
                 .with_family(family),
-            mapping: metrics
-                .style(FontSpec::with_size(cell * MAPPING_FONT_RATIO), colors.text)
-                .with_family(metrics.theme.pinyin_family.as_ref()),
+            mapping,
+            fallback,
+            fallback_first,
             footer: metrics
                 .style(FontSpec::with_size(cell * FOOTER_FONT_RATIO), colors.badge)
                 .with_family(family),
             head: Some(()),
+        }
+    }
+
+    /// 一格符号用的样式：主字体缺字、补充字体能显示时换补充字体，否则仍用主字体。
+    fn symbol_style<'a, T: TextElement>(&'a self, target: &mut T, text: &str) -> &'a TextStyle {
+        let Some(fallback) = self.fallback.as_ref() else {
+            return &self.mapping;
+        };
+        let fallback_supports = text
+            .chars()
+            .all(|ch| ch.is_whitespace() || target.supports_char(ch, fallback));
+        if fallback_supports && self.fallback_first {
+            return fallback;
+        }
+        let base_supports = text
+            .chars()
+            .all(|ch| ch.is_whitespace() || target.supports_char(ch, &self.mapping));
+        if base_supports || !fallback_supports {
+            &self.mapping
+        } else {
+            fallback
         }
     }
 
@@ -500,6 +550,8 @@ mod tests {
             zero_initials: (0..zero).map(|_| cap("AA")).collect(),
             footer: None,
             symbol: false,
+            fallback_family: None,
+            fallback_first: false,
         }
     }
 
@@ -520,8 +572,8 @@ mod tests {
             theme: &theme,
             scale: 1.0,
         };
-        let small = KeyMapStyles::new(&metrics, CELL);
-        let large = KeyMapStyles::new(&metrics, CELL * 2.0);
+        let small = KeyMapStyles::new(&metrics, CELL, None, false);
+        let large = KeyMapStyles::new(&metrics, CELL * 2.0, None, false);
         let close = |value: f32, wanted: f32| (value - wanted).abs() < 0.01;
         assert!(close(small.key.size, 7.0), "46 点的格子里是 7 点");
         assert!(close(small.mapping.size, 11.0), "46 点的格子里是 11 点");
@@ -597,6 +649,8 @@ mod tests {
             zero_initials: (0..5).map(|_| cap("AA")).collect(),
             footer: None,
             symbol: false,
+            fallback_family: None,
+            fallback_first: false,
         };
         assert_eq!(
             layout.table_rows(),

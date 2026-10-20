@@ -141,6 +141,10 @@ candidate_item_maximum_width = 420
 program_list_of_hiding_candidate = []
 # 组句中的拼音显示在哪：both 行内和候选窗口 / inline 只在行内 / window 只在候选窗口（应用里不放 marked text）
 preedit = "both"
+# u 模式符号窗口的补充字体：主字体缺字时用它显示符号（只写字体名）
+symbol_font = "Segoe UI Symbol"
+# u 模式日文假名的补充字体：日文假名优先用它（只写字体名）
+japanese_font = "Yu Gothic UI"
 
 # 三个字体：字族名 + 字号（点）。字族空表示用系统界面字体；没装这个字族时自动回到系统字体
 [candidate.pinyin_font]
@@ -554,7 +558,7 @@ mod tests {
     #[test]
     fn candidate_and_general_sections_parse() {
         let config: Config = toml::from_str(
-            "[candidate]\ncandidate_count = 5\ncandidate_arrangement_direction = \"horizontal\"\npreedit = \"window\"\n[candidate.pinyin_font]\nfamily = \"LXGW WenKai\"\nsize = 12\n",
+            "[candidate]\ncandidate_count = 5\ncandidate_arrangement_direction = \"horizontal\"\npreedit = \"window\"\nsymbol_font = \"Symbola\"\njapanese_font = \"Yu Mincho\"\n[candidate.pinyin_font]\nfamily = \"LXGW WenKai\"\nsize = 12\n",
         )
         .unwrap();
         assert_eq!(config.candidate.candidate_count(), 5);
@@ -563,6 +567,8 @@ mod tests {
             LayoutMode::Horizontal
         );
         assert_eq!(config.candidate.preedit, PreeditMode::Window);
+        assert_eq!(config.candidate.symbol_font, "Symbola");
+        assert_eq!(config.candidate.japanese_font, "Yu Mincho");
         assert_eq!(config.candidate.pinyin_font.size, 12.0);
         assert_eq!(config.candidate.pinyin_font.family, "LXGW WenKai");
         // 没写的字体项按缺省

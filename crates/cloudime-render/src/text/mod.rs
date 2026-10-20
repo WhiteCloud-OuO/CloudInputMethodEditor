@@ -5,7 +5,7 @@ mod style;
 
 use std::collections::HashMap;
 
-use cosmic_text::fontdb::{Family, ID, Style};
+use cosmic_text::fontdb::{Family, ID, Query, Stretch, Style, Weight};
 use cosmic_text::{Attrs, Buffer, FontSystem, Metrics, Shaping, SwashCache, SwashContent};
 
 use crate::canvas::Canvas;
@@ -31,6 +31,9 @@ pub struct TextPainter {
 
     /// 覆盖率 gamma 查找表，按 gamma 值缓存。
     gamma_tables: HashMap<u32, Box<[u8; 256]>>,
+
+    /// 某个字族本身能不能显示某个字符（按字族 + 字符缓存）。
+    supports: HashMap<(Option<String>, char), bool>,
 }
 
 impl TextPainter {
@@ -44,6 +47,7 @@ impl TextPainter {
             tracking: HashMap::new(),
             gamma_tables: HashMap::new(),
             widths: HashMap::new(),
+            supports: HashMap::new(),
         }
     }
 
@@ -139,6 +143,41 @@ impl TextPainter {
             canvas.fill_rect(x, line_y, line_w, thickness, style.color);
         }
         width
+    }
+
+    /// 这个字族本身能不能显示 `ch`：查字体的 cmap，`0` 是缺字（不把系统回退算进来 —— 调用方要据此
+    /// 决定什么时候换补充字体）。空白字符直接算作能显示。
+    pub(crate) fn supports_char(&mut self, ch: char, style: &TextStyle) -> bool {
+        if ch.is_whitespace() {
+            return true;
+        }
+        let key = (style.family.clone(), ch);
+        if let Some(supported) = self.supports.get(&key) {
+            return *supported;
+        }
+        let family = style
+            .family
+            .as_deref()
+            .map(Family::Name)
+            .unwrap_or(Family::SansSerif);
+        let query = Query {
+            families: std::slice::from_ref(&family),
+            weight: Weight::NORMAL,
+            stretch: Stretch::Normal,
+            style: if style.italic {
+                Style::Italic
+            } else {
+                Style::Normal
+            },
+        };
+        let supported = self
+            .font_system
+            .db()
+            .query(&query)
+            .and_then(|id| self.font_system.get_font(id, Weight::NORMAL))
+            .is_some_and(|font| font.as_swash().charmap().map(ch) != 0);
+        self.supports.insert(key, supported);
+        supported
     }
 
     /// 每个字形用的字族名（相邻相同的合并），拿来核对中日字形与 emoji 回退到了哪家字体。

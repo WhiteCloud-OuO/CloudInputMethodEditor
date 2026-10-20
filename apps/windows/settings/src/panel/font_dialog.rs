@@ -48,3 +48,10 @@ pub(super) fn pick_font(current: &FontChoice) -> Option<FontChoice> {
     };
     Some(FontChoice { family, size })
 }
+
+/// 只选字族（符号 / 日文补充字体用）：字号只是给对话框一个初值，返回时丢掉。
+pub(super) fn pick_family(current: &str) -> Option<String> {
+    pick_font(&FontChoice::new(current, 11.0))
+        .map(|choice| choice.family.trim().to_owned())
+        .filter(|family| !family.is_empty())
+}

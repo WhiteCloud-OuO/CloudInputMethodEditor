@@ -37,43 +37,41 @@ pub struct FontLibrary {
 impl FontLibrary {
     /// 按清单加载系统字体。`locale` 决定 Han 字形选哪家（`zh-CN` / `zh-TW` / `ja`）。
     pub fn system(locale: &str) -> Result<Self, RenderError> {
-        Self::build(locale, &[])
+        Self::build(locale, &[], &[])
     }
 
     /// 界面字体换成用户指定的字族，系统字体仍加载在后面当回退；指定的字体一个文件都没加载到或名字对不上就退回系统字体。
     pub fn with_ui_font(locale: &str, ui_font: &UiFont) -> Result<Self, RenderError> {
-        Self::build(locale, std::slice::from_ref(ui_font))
+        Self::build(locale, std::slice::from_ref(ui_font), &[])
     }
 
     /// 按配置里的几个字族建库：`fonts[0]` 当界面字体（`SansSerif` 映射到它），其余也加载好、文本样式按名字用；
     /// 每个字族都解析不到时退回系统字体。`fonts` 为空等同于 [`Self::system`]。
     pub fn with_fonts(locale: &str, fonts: &[UiFont]) -> Result<Self, RenderError> {
-        Self::build(locale, fonts)
+        Self::build(locale, fonts, &[])
     }
 
-    fn build(locale: &str, fonts: &[UiFont]) -> Result<Self, RenderError> {
+    /// 与 [`Self::with_fonts`] 一样，但 `extras` 只加载进字库、不参与界面字体的选择
+    /// （符号 / 日文补充字体用，免得 `fonts` 全空时把它们当成界面字体）。
+    pub fn with_fonts_and_extras(
+        locale: &str,
+        fonts: &[UiFont],
+        extras: &[UiFont],
+    ) -> Result<Self, RenderError> {
+        Self::build(locale, fonts, extras)
+    }
+
+    fn build(locale: &str, fonts: &[UiFont], extras: &[UiFont]) -> Result<Self, RenderError> {
         let mut db = Database::new();
         // 逐个字族加载它的文件，记下谁真的可用（文件名对不上 / 一个都没加载到就是不可用）
         let mut custom_family = None;
         for font in fonts {
-            let loaded = font.files.iter().filter(|path| load(&mut db, path)).count();
-            let found = db.faces().any(|face| {
-                face.families
-                    .iter()
-                    .any(|(name, _)| name.eq_ignore_ascii_case(&font.family))
-            });
-            if loaded > 0 && found {
-                if custom_family.is_none() {
-                    custom_family = Some(font.family.clone());
-                }
-            } else {
-                tracing::warn!(
-                    family = font.family,
-                    files = font.files.len(),
-                    loaded,
-                    "指定的候选窗字体没找到，用系统字体"
-                );
+            if load_family(&mut db, font) && custom_family.is_none() {
+                custom_family = Some(font.family.clone());
             }
+        }
+        for font in extras {
+            load_family(&mut db, font);
         }
         let ui =
             load_first(&mut db, &platform::ui_fonts()).ok_or_else(|| RenderError::NoUiFont {
@@ -128,6 +126,27 @@ impl FontLibrary {
 
 /// 界面字体用的字族。
 pub(crate) const UI_FAMILY: Family<'static> = Family::SansSerif;
+
+/// 加载一个配置字族的全部文件；文件一个都没加载到、或者字族名对不上时返回 `false` 并记日志。
+fn load_family(db: &mut Database, font: &UiFont) -> bool {
+    let loaded = font.files.iter().filter(|path| load(db, path)).count();
+    let found = db.faces().any(|face| {
+        face.families
+            .iter()
+            .any(|(name, _)| name.eq_ignore_ascii_case(&font.family))
+    });
+    if loaded > 0 && found {
+        true
+    } else {
+        tracing::warn!(
+            family = font.family,
+            files = font.files.len(),
+            loaded,
+            "指定的字体没找到，文本走系统回退"
+        );
+        false
+    }
+}
 
 /// 依次尝试，加载成功的第一个文件的第一张面。
 fn load_first(db: &mut Database, paths: &[PathBuf]) -> Option<cosmic_text::fontdb::ID> {

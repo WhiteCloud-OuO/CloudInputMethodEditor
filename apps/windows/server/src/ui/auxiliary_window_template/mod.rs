@@ -676,6 +676,8 @@ fn to_render_layout(layout: &input_schemes::KeyMapLayout) -> cloudime_render::Ke
         zero_initials: layout.zero_initials.iter().map(cap).collect(),
         footer: layout.footer.clone(),
         symbol: layout.symbol,
+        fallback_family: layout.fallback_family.clone(),
+        fallback_first: layout.fallback_first,
     }
 }
 

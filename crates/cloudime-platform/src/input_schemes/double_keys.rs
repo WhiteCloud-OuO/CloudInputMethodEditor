@@ -133,6 +133,8 @@ impl DoubleKeysScheme {
             zero_initials,
             footer: None,
             symbol: false,
+            fallback_family: None,
+            fallback_first: false,
         }
     }
 

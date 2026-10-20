@@ -58,6 +58,20 @@ impl Default for FontChoice {
 /// 三个字体的缺省字族（CSV 给的默认值）。
 pub const DEFAULT_FAMILY: &str = "微软雅黑";
 
+/// u 模式符号窗口缺字时补用的字体。
+pub const DEFAULT_SYMBOL_FONT: &str = "Segoe UI Symbol";
+
+/// u 模式日文假名缺字时补用的字体。
+pub const DEFAULT_JAPANESE_FONT: &str = "Yu Gothic UI";
+
+fn default_symbol_font() -> String {
+    DEFAULT_SYMBOL_FONT.to_owned()
+}
+
+fn default_japanese_font() -> String {
+    DEFAULT_JAPANESE_FONT.to_owned()
+}
+
 /// 候选词序号的样式。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -195,6 +209,14 @@ pub struct CandidateConfig {
     /// 翻译字体：候选窗底部那一行左侧的翻译 Tip。
     pub translate_font: FontChoice,
 
+    /// 符号补充字体：u 模式符号窗口里主字体缺字时使用。
+    #[serde(default = "default_symbol_font")]
+    pub symbol_font: String,
+
+    /// 日文补充字体：u 模式日文假名缺字时使用。
+    #[serde(default = "default_japanese_font")]
+    pub japanese_font: String,
+
     /// 候选项序号样式。
     pub item_number_style: ItemNumberStyle,
 
@@ -231,6 +253,8 @@ impl Default for CandidateConfig {
             candidate_font: FontChoice::new(DEFAULT_FAMILY, 13.0),
             item_number_font: FontChoice::new(DEFAULT_FAMILY, 11.0),
             translate_font: FontChoice::new(DEFAULT_FAMILY, 11.0),
+            symbol_font: DEFAULT_SYMBOL_FONT.to_owned(),
+            japanese_font: DEFAULT_JAPANESE_FONT.to_owned(),
             item_number_style: ItemNumberStyle::default(),
             preedit: crate::config::PreeditMode::default(),
             candidate_box_minimum_width: DEFAULT_CANDIDATE_BOX_MINIMUM_WIDTH,

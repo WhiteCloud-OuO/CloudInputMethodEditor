@@ -90,6 +90,8 @@ impl UMode {
             zero_initials: Vec::new(),
             footer: Some(footer),
             symbol: true,
+            fallback_family: None,
+            fallback_first: self.category() == SymbolCategory::Kana,
         }
     }
 
@@ -315,7 +317,17 @@ impl Router {
     }
 
     pub(super) fn update_u_aux(&mut self) {
-        let layout = self.u_mode.filter(|u| u.symbol_ui).map(|u| u.layout());
+        let layout = self.u_mode.filter(|u| u.symbol_ui).map(|u| {
+            let mut layout = u.layout();
+            // 假名用日文补充字体，其余符号用符号补充字体；主字体能显示时不会用到它。
+            let family = if u.category() == SymbolCategory::Kana {
+                &self.config.japanese_font
+            } else {
+                &self.config.symbol_font
+            };
+            layout.fallback_family = Some(family.trim().to_owned()).filter(|f| !f.is_empty());
+            layout
+        });
         self.candidates.set_symbol_aux(layout);
     }
 }

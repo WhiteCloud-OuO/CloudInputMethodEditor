@@ -253,7 +253,8 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 `[candidate]` 收拢候选窗口那一套：`use_local_sentence_organization_model`（原 `[model] enabled`）、`candidate_arrangement_direction`、
 `candidate_count`（夹 5–9）、`candidate_association_counts`（联想候选项目上限，夹 0–4；候选列表里「比读法更长的词」最多留几条，
 见 `ranking::rank` 的 `association_limit`；缺省 2）、`pinyin_font` / `candidate_font` / `item_number_font`（各 `family` + `size` 的子表；
-缺省微软雅黑 11 / 13 / 11 pt）、
+缺省微软雅黑 11 / 13 / 11 pt）、`symbol_font` / `japanese_font`（u 模式符号窗口的补充字族，只存字族名；缺省
+`Segoe UI Symbol` / `Yu Gothic UI`）、
 `item_number_style`（decimal / circled / roman / dingbat / parenthesized）、`candidate_box_minimum_width`（物理像素，竖排与横排都生效；缺省 180）、
 `show_more_candidate_items`（缺省关；开着时组句里 Tab 把候选窗展开成一整屏，见候选窗那一节）、`mouse_word_selection`
 （off 关闭（缺省）/ more_candidates 仅展开成网格时 / always 全部开启；控制候选窗的鼠标悬停 / 点选，见候选窗那一节）、
@@ -840,8 +841,8 @@ Chromium 把「物理键还按着时注入的同名键」当自动重复，宿�
 `service/mode.rs::switch_mode` 一处拦住（内置英文模式下发为关时才拦英文，协议值现在恒开）；状态条点击在 Server 侧（`dispatch/status/mod.rs`）走同一条路，
 「输入」页在 `settings/src/panel/pages/input.rs`，
 对应 `[input]` 那九项（最前面是「输入方案」下拉 `ComboBox`（**全键拼音**（缺省；界面名，配置值仍是 `full_pinyin`）/ 双键拼音 / 形码输入，落 `input_schemes`；形码输入还没实现）；选中的方案会在下拉**紧跟后面**生成它自己的那块面板（`scheme_body`：粗体标题 + 若干行，套 `scheme_card` 的卡片外观 —— `Border` 的卡片底色 / 圆角 / 1 DIP 边框 / 内边距；没实现的方案用 `scheme_placeholder` 占位）—— 使用简拼、模糊音、中英文混合输入就放在「全键拼音」那一块里，双键拼音那块是方案下拉 + 「显示原始输入按键」开关（`show_raw_input`，配置项）+ 「中英文混合输入」开关（`set_scheme_mixture_input` 写 `use_input_scheme.cfg` 的 `mixture_input`，`[input] mixture_input` 那份只管全键拼音）+ 「使用辅助码」开关（`set_auxiliary_codes` 改写方案文件的 `[Auxiliary] UsingAuxiliaryCodes`）+「辅助码方案」下拉 + 「在候选项显示辅助码」开关（`set_candidate_auxiliary` 写 `candidate_auxiliary`，开了辅助码且表读得出来时才可点）（`pick_auxiliary_scheme` 写 `use_input_scheme.cfg` 的 `auxiliary` 行；第 0 项是「（不使用）」，选了就写文件名）**紧挨着右边再加一个下拉**选「辅助码怎么对」（`AuxiliaryMode` 四种，`panel::pick_auxiliary_mode` 写 `auxiliary_mode` 行；两个下拉都在「使用辅助码」开着、且表读得出来时可点）+「启用键位映射参考」下拉（`set_key_map_reference` 写 `key_map_reference`：关闭 / 按下组合键时 / 始终跟随候选窗口）+「键位映射参考组合键」两个下拉夹一个 `+` 的 `TextBlock`（`set_key_map_hotkey` 写 `key_map_hotkey`，`ctrl+f1` 这样；下面那行注说明组合键可能被系统 / 应用占用）+ `[刷新方案] [应用方案] [打开方案目录]`（`apply_dual_key_scheme` 写 `input_schemes` 并 `crate::server::restart`，让方案 `WordBank` 的词库重新装配；无效方案红字列原因），别的方案下**压根不生成**，所以不用 `is_enabled` 置灰（早先那版置灰的写法已删）；框架**没导出 `Visibility`**（整个 crate 搜 `visibility` 一处都没有，也没有 `Popup` / `Flyout` 元素、没有「拿到底层 XAML 对象」的公开口子；`LayoutControl` 只给 `opacity` / 对齐 / `margin` / `exit_transition`，`CanvasChildExt` 给 `canvas_left` / `canvas_top`），所以「隐藏」就是不把它放进 children（`controls::feedback` 同一条路）。面板会改变子项个数，而 `children` 是**按位置认身份**的，插进来会让后面每一项换身份被重建（丢焦点 / 选中态）—— 所以这一页改用 `keyed_children` 并给每项一个 key。模糊音、符号映射、符号成对补全三组勾选都用 `ListView`，每项是一份 `ListViewItem`、内容就是一个自带文本的 `CheckBox`（`CheckBox` 是 `ContentControl`，文本直接 `.content(label)`，不用再套 `TextBlock`）；列表共用 `controls::scroll_list`——`selection_mode(None)` 不要选中高亮，`max_height` 卡在 5 行（`LIST_ROW_HEIGHT × LIST_VISIBLE_ROWS`），超出的组（符号成对补全 10 项）由列表自己出滚动条；简繁单选与候选页的排布单选走 `controls::radio_row`——**独立 `RadioButton`** 横排（同一个 `group_name` 互斥），**不用框架的 `RadioButtons` 容器**：容器一行内容的「期望高度」比实际渲染矮（渲染 32、期望 25），渲染出来的选项比自己盒子低 3.5px，左边的标签按盒子居中后看着总差一点，从外面（`min_height` / 套一层面板）也调不动；独立控件和开关 / 下拉一样是单控件，居中对得上；标点全半角下拉等）；标签与控件默认**垂直居中**（`controls::labeled`，标签不设对齐会被拉伸到整行高、文字却画在自己顶部，40 高的开关行里就偏上约 10px）；一行很高的控件（`ListView`、单选）改用 `controls::labeled_top` / `field_top`，标签顶对齐、与第一行内容对齐；「候选」页在 `pages/candidates.rs`，
-对应 `[candidate]`（本地整句模型开关、排布单选、个数滑轨（右侧跟一个当前值数字）、联想候选项目上限滑轨 0–4、三个「字体…」按钮弹系统字体对话框 `font_dialog.rs`、
-序号样式下拉、最小宽度、展示更多候选项（`ToggleSwitch`：**非全键拼音方案下置灰**，`is_enabled(false)` —— 它下面的「使用鼠标选词」下拉（`mode_combo` 返回的是 `ComboBox`，能直接接 `.is_enabled()`）与「展开后每个候选项的最大宽度」（`NumberBox`）跟着一起置灰；它的 U / I / V 三种模式也只在「全键拼音」下有效，写在说明里）、按程序隐藏的名单（下面每行一个 2 列 `Grid`——`Star` 列放程序名、「删除」按钮放第二列，外壳用 `controls::scroll_list` 卡 5 行，多了自己滚动））；「短语」页在 `pages/phrase.rs`（顶部「启用软件自带短语」开关；列表每行是一个 5 列 `Grid`——短语内容（`Star` 列，`Wrap` + `max_lines(3)` + 省略号）/ 候选内容 / 触发字母串 / 位置 / 编辑·删除两个按钮，列宽全部钉死（含操作列，否则表头那行没有按钮、`Star` 列会多占一截导致表头与数据行错位）；表单 + 列表读写安装目录 `Phrases\Phrase.db` 的 `user` 表）；
+对应 `[candidate]`（本地整句模型开关、排布单选、个数滑轨（右侧跟一个当前值数字）、联想候选项目上限滑轨 0–4、四个「字体…」按钮弹系统字体对话框 `font_dialog.rs`、
+符号补充字体 / 日文补充字体两个按钮只取 `pick_family` 的字族名（落 `symbol_font` / `japanese_font`）、序号样式下拉、最小宽度、展示更多候选项（`ToggleSwitch`：**非全键拼音方案下置灰**，`is_enabled(false)` —— 它下面的「使用鼠标选词」下拉（`mode_combo` 返回的是 `ComboBox`，能直接接 `.is_enabled()`）与「展开后每个候选项的最大宽度」（`NumberBox`）跟着一起置灰；它的 U / I / V 三种模式也只在「全键拼音」下有效，写在说明里）、按程序隐藏的名单（下面每行一个 2 列 `Grid`——`Star` 列放程序名、「删除」按钮放第二列，外壳用 `controls::scroll_list` 卡 5 行，多了自己滚动））；「短语」页在 `pages/phrase.rs`（顶部「启用软件自带短语」开关；列表每行是一个 5 列 `Grid`——短语内容（`Star` 列，`Wrap` + `max_lines(3)` + 省略号）/ 候选内容 / 触发字母串 / 位置 / 编辑·删除两个按钮，列宽全部钉死（含操作列，否则表头那行没有按钮、`Star` 列会多占一截导致表头与数据行错位）；表单 + 列表读写安装目录 `Phrases\Phrase.db` 的 `user` 表）；
 「主题」页在 `pages/theme/`：`mod.rs` 是页面（`Slot` 是那 21 个颜色槽，`ALL` / `label()` / `get()` / `set()`，顺序与页面一致；高亮 / 普通候选序号各一项；「新建主题」按钮 + 名字 `TextBox` + 「确认保存」按钮、「选择主题」`ComboBox` + 「刷新主题」/「应用主题」两个按钮、21 行「名称 + 可点的 `#aarrggbb`」，末尾挂 `color_dialog::ColorDialog`）；
 `preview.rs` 是页顶那块预览，**走真渲染器**：按草稿 + 配置里的四项字体拼一份 `cloudime_render::Theme`（`min_width_pixels` 固定 200），拼一帧样例（拼音行、两条候选、角标「句」/「造」、页码、译文 Tip、在线那一行），用 `Renderer::render` 画候选窗、`render_status` 画悬浮工具栏（7 个图标）与状态切换提示（前 4 个），三份各自带主题阴影色的 `Shadow`；
 图标用 `include_str!` 把 `server/src/ui/status/icons/*.svg` 编进来（那几个文件是 cargo 的编译依赖，改了会重编）；位图 `encode_png()` 后交给 `Image::source_data(EncodedImage)`、`Stretch::None` 1:1 贴出来——所以预览与真实窗口像素一致（真阴影 / 真尺寸 / 真图标并按主题色染色）。
@@ -1242,7 +1243,12 @@ u 模式复用同一件资产，但走 `CandidateSink::set_symbol_aux(Option<Key
 `Space` 在符号输入里切回字母输入；字母输入里只有拼音串还停在单个 `u` 时 Space 才切符号，出现别的字母后 Space
 恢复普通选词 / 上屏。支持混输时 Tip 显示「按空格进入/退出符号输入」，没有混输不显示。符号格子左下角始终留一行
 `KeyMapLayout::footer`（假名 / 西里尔提示或空行），正常符号画在格子下方、Shift 符号画在上方；键帽与符号表在
-`server/src/dispatch/u_mode/mapping.rs`。`Ctrl+Alt+U` / `V` 在两种方案下都可用；非全拼 v 模式由
+`server/src/dispatch/u_mode/mapping.rs`。`KeyMapLayout::fallback_family` 由 `Router::update_u_aux` 按分类填：假名用
+`[candidate] japanese_font`，其余用 `symbol_font`；假名同时置 `fallback_first`（固定优先日文字体）。
+`TextPainter::supports_char` 用 fontdb 的 `Query` 定位字族，再查该字体的 cmap
+（`font.as_swash().charmap().map(ch) != 0`，按字族 + 字符缓存；不把系统回退算进来），
+`draw_key_cap` 根据它与 `fallback_first` 决定用主字体还是补充字体。`Painter` 把这两个字族也加进字体库；
+符号窗口显式换样式，别的文本仍走 cosmic-text 的普通回退链。`Ctrl+Alt+U` / `V` 在两种方案下都可用；非全拼 v 模式由
 `Engine::start_expression` 强制表达式前缀，`query_inner` 在强制状态跳过双拼查询。
 ⚠️ `auxiliary_toggle` / `set_auxiliary` / `set_symbol_aux` 必须写在 `impl CandidateSink for UiHandle` 里：Router 拿的是
 `Box<dyn CandidateSink>`，写成固有方法会落到 trait 的**空默认体**上（真机踩过，有回归测试盯着）。

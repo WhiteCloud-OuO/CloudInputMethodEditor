@@ -81,6 +81,10 @@ impl TextElement for Render {
     fn measure(&self, text: &str, style: &TextStyle) -> TextSize {
         Render::measure(self, text, style)
     }
+
+    fn supports_char(&mut self, ch: char, style: &TextStyle) -> bool {
+        self.text.borrow_mut().supports_char(ch, style)
+    }
 }
 
 impl SvgElement for Render {

@@ -60,6 +60,8 @@ pub(crate) enum Message {
     AssociationCounts(f64),
     /// 点了某个字体的「字体…」按钮：弹系统字体对话框。
     PickFont(super::pages::candidates::FontRole),
+    /// 选 u 模式符号窗口的补充字体（只取字族名）。
+    PickSupplementFont(super::pages::candidates::SupplementFont),
     /// 候选项序号样式（`ItemNumberStyle::ALL` 的下标）。
     ItemNumberStyle(Option<usize>),
     /// 候选框最小宽度（物理像素）。
