@@ -114,11 +114,9 @@ Source: "{#Repo}\data\generated\lm.qj";          DestDir: "{app}\data\generated"
 Source: "{#Repo}\WordBank\*.db";   DestDir: "{app}\WordBank"; Flags: ignoreversion; Excludes: "UserWordBank.db"
 ; —— 短语库：安装目录 Phrases\Phrase.db（user 与 cloudime_default 两张表）——
 ; 用户脚本目录：只装「新建脚本」用的模板（用户在设置页里建的脚本不随包走；升级会覆盖模板）。
-; lib\ 里只放脚本用的工具（纯 Lua 的 md5.lua）与示例（example-theme-by-app.lua、example-auto-number.lua、
-; test-caret-window.lua + .json）—— 它们在子目录里，加载器只认 Scripts\ 根部的 *.lua，所以不会被当成脚本执行。
-; 小牛翻译、在线查询等实际脚本在脚本仓库 CloudIME_ScriptWarehouse，不随安装包。
+; 示例、共享模块和实际脚本都不随安装包；需要时从源码仓库或 CloudIME_ScriptWarehouse 取，
+; 放到用户自己的 Scripts\（共享模块可自建 Scripts\lib\，加载器只认根部的 *.lua）。
 Source: "{#Repo}\Scripts\template.lua"; DestDir: "{app}\Scripts"; Flags: ignoreversion
-Source: "{#Repo}\Scripts\lib\*"; DestDir: "{app}\Scripts\lib"; Flags: ignoreversion
 
 ; —— 主题：安装目录 Themes\ 只放**随包默认**主题（只读）；用户自己编辑 / 新建的主题在
 ; `%APPDATA%\CloudIME\Themes\`（可写，设置页「主题」页写那里）——

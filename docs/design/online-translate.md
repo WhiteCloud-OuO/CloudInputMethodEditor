@@ -24,7 +24,8 @@
 复制选中文本、在光标旁开多行翻译窗口，静态布局是同目录的 `niutrans-window.json`。
 下载后拷到安装目录 `Scripts\` 根部、填自己的 appId / apikey、重启输入法服务就生效。
 
-安装包只在 `Scripts\lib\` 里带示例与共享工具，不再带这两份小牛翻译脚本；它们也不会自动加载。
+安装包只装 `Scripts\template.lua`，不再带 `Scripts\lib` 里的示例、共享工具或这两份小牛翻译脚本；
+它们也都不会自动加载，需要时从源码仓库 / 脚本仓库下载到 `Scripts\`。
 
 示例拿到译文后还会**按候选窗现在的宽度折行**：`cloudime.candidate.width()` 拿到窗口内容区宽度（点），
 扣掉左右内边距（各 8 点）与「在线 」前缀，用 `cloudime.ui.truncate(译文, 行宽, { mode = "wrap",
@@ -49,7 +50,7 @@ max_lines = 5, font = "translate" })` 折成最多 5 行（超出的在末行补
 - **厂商 / 端点 / 参数 / 语向 / 组合键 / 结果怎么用**，全是脚本里几行；换服务商只改脚本，输入法不动。
 - 输入法侧不留厂商相关代码：没有 HTTP 之外的接口面，也没有随之而来的配置与设置页。
 - 要签名的接口（比如小牛）需要 MD5：Lua 标准库没有，所以随包给一份**纯 Lua MD5**
-  （`Scripts\lib\md5.lua`，只依赖 LuaJIT 的 `bit` 库）。它拿 RFC 1321 的标准向量与小牛文档里的例子
+  （源码仓库的 `Scripts\lib\md5.lua`，只依赖 LuaJIT 的 `bit` 库）。它拿 RFC 1321 的标准向量与小牛文档里的例子
   当回归用例（`crates/cloudime-script` 的 `the_shipped_lua_md5_matches_the_known_vectors`）——
   这份文件写错，所有签名就都错了。
 

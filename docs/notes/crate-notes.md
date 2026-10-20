@@ -1340,8 +1340,9 @@ TSF 那边 `key_sink::would_eat` / `eats_key` 在**组句里**（候选窗显示
 （见「用户脚本」一节的触发条件）。`Alt` / `Win` 不碰
 （AltGr = Ctrl+Alt、Win 是系统键，都在外壳那一层）。
 小牛翻译的两份实际脚本（候选版 / 独立窗口版）与其 `md5.lua` 已迁到脚本仓库
-`https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse` 的 `src\` 下；安装包的 `Scripts\lib\`
-只保留示例与共享工具。脚本拿到译文后会按 `cloudime.candidate.width()`（候选窗内容区宽度，点）折行（最多 5 行、超出的补「…」），
+`https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse` 的 `src\` 下；安装包只装
+`Scripts\template.lua`，源码仓库 `Scripts\lib` 里的示例与共享工具都不随包。脚本拿到译文后会按
+`cloudime.candidate.width()`（候选窗内容区宽度，点）折行（最多 5 行、超出的补「…」），
 不再改窗口宽度 —— 窗口宽度只由候选决定。
 
 TSF 原有数字 / OEM 标点 / 空格键码按当前布局用 `ToUnicodeEx` 解析（bit 2 避免改变键盘状态），

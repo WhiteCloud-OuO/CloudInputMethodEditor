@@ -26,10 +26,9 @@ C:\Program Files\CloudIME\
     data\phrase-default.db    内置短语的同步源（与上面同一份文件换个名字，每次升级都覆盖；Server 启动时把它的
                               cloudime_default 同步进 Phrases\Phrase.db，用户短语不受影响）
     Scripts\                  用户 Lua 脚本（一个 .lua 一个脚本；本目录对普通用户可写，「设置 → 脚本」页走它）+
-                              template.lua（「新建脚本」的模板，加载器按文件名跳过、不执行；升级会覆盖它，用户脚本不动）
-    Scripts\lib\              脚本工具与示例（不会被加载；md5.lua、example-auto-number.lua、
-                              example-theme-by-app.lua、test-caret-window.*；实际脚本在
-                              https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse）
+                              template.lua（「新建脚本」的模板，加载器按文件名跳过、不执行；升级会覆盖它，用户脚本不动）。
+                              安装包只装这一个模板；示例、共享模块和实际脚本都不随包，实际脚本在
+                              https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse
     data\icons-arrangement.cfg 悬浮状态条的按钮排布（哪个按钮、位置、图标）
     data\icons\*.svg          那些按钮的图标（20×20）
     InputSchemes\             双键拼音方案文件（DoubleKeysPinyin\*.toml / .ini 与 AuxiliaryCodes\ 辅助码表；

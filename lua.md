@@ -16,7 +16,8 @@
 
 实际使用的脚本（小牛候选翻译、小牛整句翻译窗口、在线查询）在
 [CloudIME_ScriptWarehouse](https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse) 的 `src\` 下；
-本仓库的 `Scripts\lib` 只保留示例与共享工具。
+本仓库源码的 `Scripts\lib` 只保留示例与共享工具。**安装包只装 `Scripts\template.lua`**，
+示例、共享模块和实际脚本都不随包，需要时自己下载到 `Scripts\`。
 
 ## 目录
 
@@ -63,7 +64,8 @@
 ## 2. 五分钟上手
 
 1. **放哪儿**：安装目录下的 `Scripts\`（与 `Phrases\`、`WordBank\` 同级）。
-   相对路径按 Server 的工作目录（就是安装目录）算，所以 `dofile("Scripts/lib/md5.lua")` 能找到东西。
+   相对路径按 Server 的工作目录（就是安装目录）算。安装包只带 `template.lua`；示例与 `md5.lua`
+   在源码仓库的 `Scripts\lib` 和脚本仓库里，要引共享模块就自己建 `Scripts\lib\` 再放进去。
 2. **怎么建**：设置 → 脚本 → 「新建脚本」会用模板建一个文件并用记事本打开。
    也可以自己往 `Scripts\` 里丢一个 UTF-8 的 `.lua`。
 3. **什么时候生效**：**改完要重启输入法服务** —— 任务栏「中 / 英」图标右键 → 「重启输入法服务」，
@@ -854,7 +856,7 @@ end)
 ## 7. 标准库与运行环境
 
 - 语言是 **Lua 5.1**（LuaJIT）。`string` / `table` / `math` / `os` / `io` / `package` 都在；
-  **没有 `debug` 库**；LuaJIT 的 `bit` 库可用（随包的 `Scripts\lib\md5.lua` 就靠它）。
+  **没有 `debug` 库**；LuaJIT 的 `bit` 库可用（源码仓库 `Scripts\lib\md5.lua` 就靠它）。
 - 脚本的 **JIT 关掉**了（LuaJIT 编成 trace 之后不再检查调试钩子，预算就失效了），`jit.on` 也收掉了。
 - 刻意改过的几处（都是「会退进程 / 会卡住」的入口）：
 
