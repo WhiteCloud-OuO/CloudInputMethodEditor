@@ -1578,6 +1578,27 @@ fn space_after_more_letters_commits_instead_of_toggling_symbols() {
     assert!(!r.u_mode.is_some_and(|u| u.symbol_ui));
 }
 
+/// 真实英文词 `undo`：空格走普通上屏，不切符号。
+#[test]
+fn space_commits_undo_as_a_word() {
+    let normal = KeyModifiers::default();
+    let mut r = Router::new(
+        Engine::new(Dictionary::parse("你\tni\t100\n").unwrap())
+            .with_english(WordList::parse("undo\tundo\t100\n").unwrap()),
+        RouterConfig::default(),
+    );
+    r.handle(ClientMessage::OpenSession {
+        session: SessionId(1),
+        app: None,
+        protocol: PROTOCOL_VERSION,
+    });
+    compose(&mut r, "undo", normal);
+    let (outcome, commit, frame) = key(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit.as_deref(), Some("undo"));
+    assert_ne!(frame.candidates.items.len(), 6, "不能切进六类符号");
+}
+
 /// Space 在字母 / 符号之间切换时，候选窗仍按同一光标位置继续显示。
 #[test]
 fn u_mode_space_switch_keeps_the_candidate_window_shown() {
