@@ -591,7 +591,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-windows-server"
-version = "0.1.2-dev"
+version = "0.1.2"
 dependencies = [
  "cloudime-core",
  "cloudime-dictionary",
@@ -617,7 +617,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-windows-settings"
-version = "0.1.2-dev"
+version = "0.1.2"
 dependencies = [
  "cloudime-core",
  "cloudime-dictionary",
@@ -636,7 +636,7 @@ dependencies = [
 
 [[package]]
 name = "cloudime-windows-tsf"
-version = "0.1.2-dev"
+version = "0.1.2"
 dependencies = [
  "cloudime-core",
  "cloudime-platform",
