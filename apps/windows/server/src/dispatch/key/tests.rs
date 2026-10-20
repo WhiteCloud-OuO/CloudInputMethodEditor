@@ -1565,6 +1565,19 @@ fn full_pinyin_u_starts_in_letter_mode_and_space_toggles_symbols() {
     assert!(r.u_mode.is_some(), "字母输入仍留在 u 模式");
 }
 
+/// 拼音串一旦不只是 `u`，Space 就是普通选词 / 上屏，切不到符号输入。
+#[test]
+fn space_after_more_letters_commits_instead_of_toggling_symbols() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    key(&mut r, 0x55, Some('u'), normal);
+    key(&mut r, 0x4E, Some('n'), normal);
+    let (outcome, _, frame) = key(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_ne!(frame.candidates.items.len(), 6, "不能切进六类符号");
+    assert!(!r.u_mode.is_some_and(|u| u.symbol_ui));
+}
+
 /// Space 在字母 / 符号之间切换时，候选窗仍按同一光标位置继续显示。
 #[test]
 fn u_mode_space_switch_keeps_the_candidate_window_shown() {

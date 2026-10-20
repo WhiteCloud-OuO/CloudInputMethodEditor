@@ -211,7 +211,12 @@ impl Router {
             self.engine.clear();
             return Some(Effect::Changed(None));
         }
-        if event.virtual_key == 0x20 && self.mixture_enabled() {
+        // 只有拼音串还停在模式前缀 `u` 时，Space 才是「切符号输入」；
+        // 一旦打出别的字母（undo / un…），Space 回到普通选词 / 整段上屏。
+        if event.virtual_key == 0x20
+            && self.mixture_enabled()
+            && self.engine.composition().text() == "u"
+        {
             let mut next = u;
             next.symbol_ui = true;
             self.u_mode = Some(next);
