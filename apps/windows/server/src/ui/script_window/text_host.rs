@@ -65,6 +65,10 @@ type CreateTextServicesFn =
 
 const CLASS_NAME: PCWSTR = w!("CloudIMETextHost");
 
+/// 单行编辑框插入符闪烁计时器的 ID。不能用 0：窗口计时器传 0 时，`SetTimer` 的返回值和
+/// `WM_TIMER.wParam` 可能不一致，插入符会永远停在显示态。
+const CARET_TIMER_ID: usize = 0x4341_5245;
+
 /// 宿主窗 → 脚本窗口：编辑框文本变了，请重读并派发 `text_changed`。
 pub(super) const WM_TEXT_CHANGED: u32 = WM_APP + 0x4A;
 
@@ -462,7 +466,9 @@ impl TextHostWindow {
             } else {
                 blink
             };
-            let timer = unsafe { SetTimer(Some(self.hwnd), 0, blink, None) };
+            // 必须给非零 ID：窗口计时器传 0 时，`SetTimer` 可能返回一个值，但系统投递的
+            // `WM_TIMER.wParam` 是 0，跟返回值对不上，插入符就永远不会切到隐藏态。
+            let timer = unsafe { SetTimer(Some(self.hwnd), CARET_TIMER_ID, blink, None) };
             self.caret_timer.set(timer);
         }
         unsafe {

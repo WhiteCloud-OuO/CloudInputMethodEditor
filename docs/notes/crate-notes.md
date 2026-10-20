@@ -1098,7 +1098,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   **嵌套 / 滚动 / 读写**（2026-10-18）：`Document::text_edits()` 递归累加面板偏移，因此
   `panel.children` 里的 `text_edit` 也建宿主；嵌套控件补同名区域，`focus_text_edit` 先按区域名找宿主。
   单行文本超过编辑区时 `scroll_x` 跟随光标，绘制 / 选区 / 插入符共用它；鼠标坐标在转发给 RichEdit
-  前补上 `scroll_x`，所以点击位置和显示一致。
+  前补上 `scroll_x`，所以点击位置和显示一致。单行插入符由宿主自绘并靠窗口计时器闪烁：`SetTimer`
+  必须传非零的 `CARET_TIMER_ID`；传 0 时返回值与 `WM_TIMER.wParam` 可能对不上，插入符会一直显示。
   文本缓存 `TextCache` 存在运行时：`set_content` / `load_layout` 的初始 `text`、`set_text` 和
   `EN_CHANGE` 都会更新。`win:get_text(name)` 直接读缓存；`win:set_text(name, text)` 排 `SetText` 请求。
   宿主 `TxNotify(EN_CHANGE)` / 输入消息 `PostMessage` 自定义 `WM_TEXT_CHANGED` 给脚本窗，脚本窗读宿主文本后派
