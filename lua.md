@@ -11,11 +11,12 @@
 | [`docs/design/online-translate.md`](docs/design/online-translate.md) | 「在线翻译由脚本自己实现」这一条的来龙去脉 |
 | [`docs/notes/crate-notes.md`](docs/notes/crate-notes.md) | 实现要点（`crates/cloudime-script`、Server 的「用户脚本」两节） |
 | [`Scripts/template.lua`](Scripts/template.lua) | 「新建脚本」用的模板（只有清单骨架） |
-| [`Scripts/lib/fast-searching-online.lua`](Scripts/lib/fast-searching-online.lua) | 在线查询面板：Ctrl+Alt+Q 查询高亮候选 / 输入词语，中文走汉典、英文走有道，独立窗口显示释义；布局在同目录 `fast-searching-online.json` |
-| [`Scripts/lib/example-niutrans.lua`](Scripts/lib/example-niutrans.lua) | 完整示例：小牛英汉互译（签名、表单编码、折行、多行显示） |
-| [`Scripts/lib/niutrans-window.lua`](Scripts/lib/niutrans-window.lua) | 小牛英汉互译窗口：Ctrl+Alt+Y 复制选中文本、光标旁多行编辑窗口、自动翻译；静态布局在同目录 `niutrans-window.json` |
 | [`Scripts/lib/example-theme-by-app.lua`](Scripts/lib/example-theme-by-app.lua) | 示例：按前台程序换主题（组合键触发 + `cloudime.foreground_app()` / `cloudime.apply_theme()`） |
 | [`Scripts/lib/example-auto-number.lua`](Scripts/lib/example-auto-number.lua) | 示例：自动序号（`combination_key` + `none` 单键 + `cloudime.context` + `commit`「换行 + 下一条序号」） |
+
+实际使用的脚本（小牛候选翻译、小牛整句翻译窗口、在线查询）在
+[CloudIME_ScriptWarehouse](https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse) 的 `src\` 下；
+本仓库的 `Scripts\lib` 只保留示例与共享工具。
 
 ## 目录
 
@@ -389,7 +390,8 @@ cloudime.http_post(url, body, {
 - 请求在自己的线程上跑，工人线程只收结果；**超过时限才回来的结果一律丢掉**。
 - `http_post` 的表头名字 / 值会当场校验，不合法当场报错（不给后台线程 panic 的机会）。
 - 输入法**不解析 JSON**：`result.body` 是原始响应文本，要抠字段就自己用 `string.match` 或带个小解析
-  （`Scripts\lib\example-niutrans.lua` 用最朴素的 `:match('"tgtText"%s*:%s*"(.-)"')`）。
+  （脚本仓库「小牛候选翻译」里的 `example-niutrans.lua` 用最朴素的
+  `:match('"tgtText"%s*:%s*"(.-)"')`）。
 - 想让回调生效，清单按 `sync = false, handover = "callback"` 写（两者必须自洽：`true` 配 `"return"`）。
 
 ### 候选窗
@@ -1047,8 +1049,9 @@ cloudime.on("key", function(event)
 end)
 ```
 
-完整的厂商实现（签名、表单编码、按窗口宽度折行、最多 5 行）见
-[`Scripts/lib/example-niutrans.lua`](Scripts/lib/example-niutrans.lua)。
+完整的厂商实现（签名、表单编码、按窗口宽度折行、最多 5 行）见脚本仓库
+[「小牛候选翻译」](https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse/tree/main/src/小牛候选翻译)
+里的 `example-niutrans.lua`。
 
 ### 12.7 按候选窗当前宽度折行（长译文多行显示）
 

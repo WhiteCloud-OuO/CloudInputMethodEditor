@@ -1339,9 +1339,9 @@ TSF 那边 `key_sink::would_eat` / `eats_key` 在**组句里**（候选窗显示
 （`combination_key` 的 `keys`；DLL 的 `wants_declared_key` 只认**不带修饰键时**按下的那些）才先问一趟
 （见「用户脚本」一节的触发条件）。`Alt` / `Win` 不碰
 （AltGr = Ctrl+Alt、Win 是系统键，都在外壳那一层）。
-随包在安装目录 `Scripts\lib\` 下给两样东西做这件事：`md5.lua`（纯 Lua MD5，只依赖 LuaJIT 的 `bit`，
-拿 RFC 1321 向量回归）与 `example-niutrans.lua`（完整示例）；`lib\` 是子目录，加载器不认，所以不会被执行。
-示例拿到译文后会按 `cloudime.candidate.width()`（候选窗内容区宽度，点）折行（最多 5 行、超出的补「…」），
+小牛翻译的两份实际脚本（候选版 / 独立窗口版）与其 `md5.lua` 已迁到脚本仓库
+`https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse` 的 `src\` 下；安装包的 `Scripts\lib\`
+只保留示例与共享工具。脚本拿到译文后会按 `cloudime.candidate.width()`（候选窗内容区宽度，点）折行（最多 5 行、超出的补「…」），
 不再改窗口宽度 —— 窗口宽度只由候选决定。
 
 TSF 原有数字 / OEM 标点 / 空格键码按当前布局用 `ToUnicodeEx` 解析（bit 2 避免改变键盘状态），

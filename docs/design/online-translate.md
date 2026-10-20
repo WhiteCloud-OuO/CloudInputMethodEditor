@@ -16,16 +16,15 @@
 事件里重写。顶部的 `notice` 是另一处，两条互不影响。**它支持多行**：脚本体里写了换行（`\n`）就按几行画，
 窗口高度跟着长（渲染器按 `\n` 分行；最高几行由脚本自己限）。
 
-**随包的示例**：`Scripts\lib\example-niutrans.lua`（小牛翻译「通用文本-Flash」的完整实现：签名、表单编码、
-抠 `tgtText`、写 `online` 都写好了；按文本里有没有中文字符自动中译英 / 英译中）。它在 `lib\` 子目录里，
-**不会被加载** —— 拷到 `Scripts\` 根部、填上自己的 appId / apikey、重启输入法服务就生效。
-另有 `Scripts\lib\md5.lua`（纯 Lua MD5）供签名用。
-窗口版示例是 `Scripts\lib\niutrans-window.lua`：`Ctrl+Alt+Y` 复制选中文本、在光标旁开多行翻译窗口，
-同样做英汉互译；静态布局在同目录 `niutrans-window.json`，未配置凭据时脚本用 `update_content`
-更新提示标签；同样拷到 `Scripts\` 根部并填凭据。
+**脚本仓库**：小牛翻译的候选版和窗口版已迁到
+`https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse` 的 `src\小牛候选翻译` 与
+`src\小牛整句翻译（独立窗口）`。候选版 `example-niutrans.lua` 是小牛翻译「通用文本-Flash」的完整实现：
+签名、表单编码、抠 `tgtText`、写 `online` 都写好了，按文本里有没有中文字符自动中译英 / 英译中；
+两个文件夹各自带一份 `md5.lua`（纯 Lua MD5）供签名用。窗口版 `niutrans-window.lua` 用 `Ctrl+Alt+Y`
+复制选中文本、在光标旁开多行翻译窗口，静态布局是同目录的 `niutrans-window.json`。
+下载后拷到安装目录 `Scripts\` 根部、填自己的 appId / apikey、重启输入法服务就生效。
 
-安装包的 `Scripts\lib\` 会默认带上这两份示例和 `niutrans-window.json`，但不会自动加载；
-要启用就复制到 `Scripts\` 根部并填自己的 appId / apikey。
+安装包只在 `Scripts\lib\` 里带示例与共享工具，不再带这两份小牛翻译脚本；它们也不会自动加载。
 
 示例拿到译文后还会**按候选窗现在的宽度折行**：`cloudime.candidate.width()` 拿到窗口内容区宽度（点），
 扣掉左右内边距（各 8 点）与「在线 」前缀，用 `cloudime.ui.truncate(译文, 行宽, { mode = "wrap",
