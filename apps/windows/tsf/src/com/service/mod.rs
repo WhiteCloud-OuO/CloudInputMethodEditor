@@ -91,6 +91,10 @@ pub struct TextService {
     /// 当前登记成 TSF 保留键的脚本组合热键（GUID + 虚拟键码）。
     script_preserved: RefCell<Vec<ScriptPreservedKey>>,
 
+    /// 脚本组合热键是否已经按当前设置登记过。`apply_input_settings` 的设置去重不能连这次登记一起跳过：
+    /// 实例刚建、`thread_mgr` 还没就绪时可能先应用过一次设置，之后再收到相同设置就只该补登记。
+    script_hotkeys_synced: Cell<bool>,
+
     /// 上一次应用过的按键行为设置；与 Server 下发的一致时就不重复应用
     /// （每一拍 `SyncMode` 都带着它，见 [`TextService_Impl::apply_input_settings`]）。
     input_settings: Cell<Option<InputSettings>>,
@@ -227,6 +231,7 @@ impl TextService {
             switch_preserved: Cell::new(false),
             hotkeys_preserved: Cell::new(false),
             script_preserved: RefCell::new(Vec::new()),
+            script_hotkeys_synced: Cell::new(false),
             input_settings: Cell::new(None),
             auto_disabled: Cell::new(false),
             conversion_guard_until: Cell::new(None),

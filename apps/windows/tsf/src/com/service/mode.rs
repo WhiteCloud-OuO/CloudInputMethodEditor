@@ -84,6 +84,7 @@ impl TextService_Impl {
         };
         self.unregister_script_hotkeys(&keystroke);
         if !input.script_global_hotkeys {
+            self.script_hotkeys_synced.set(true);
             return;
         }
 
@@ -107,6 +108,9 @@ impl TextService_Impl {
                     let old_key = preserved::script_hotkey_key(old);
                     let _ = unsafe { keystroke.UnpreserveKey(&entry.guid, &old_key) };
                 }
+                // 失败也算试过了：设置没变时别每一拍 `SyncMode` 都重试、刷一屏失败日志。
+                // 下一次设置变化或重新激活（`drop_switch_preserved_key` 会把标记清掉）还会再试。
+                self.script_hotkeys_synced.set(true);
                 return;
             }
             registered.push(ScriptPreservedKey {
@@ -116,6 +120,7 @@ impl TextService_Impl {
             });
         }
         *self.script_preserved.borrow_mut() = registered;
+        self.script_hotkeys_synced.set(true);
         log(&format!(
             "脚本全局热键已登记 {} 个（仅中文输入状态抢占）",
             self.script_preserved.borrow().len()
@@ -141,21 +146,28 @@ impl TextService_Impl {
     /// 应用 Server 下发的按键行为设置：`OpenSession` 的回包给一次，之后每一拍 `SyncMode` 也都带着。
     /// 值没变就什么都不做，所以设置窗口改完在下一拍（约 320 ms）生效，不用切走再切回输入法。
     pub(super) fn apply_input_settings(&self, input: InputSettings) {
-        if self.input_settings.get() == Some(input) {
+        let changed = self.input_settings.get() != Some(input);
+        // 设置没变、脚本热键也已经登记过才真正跳过。`sync_script_hotkeys` 可能在 `thread_mgr`
+        // 还没就绪时被调过一次，那次什么都没登记；不能因为设置相同就把补登记也跳掉。
+        if !changed && self.script_hotkeys_synced.get() {
             return;
         }
         self.input_settings.set(Some(input));
-        log(&format!(
-            "按键行为设置：中英切换键 {}，内置英文模式 {}，Shift 字母进组句 {}",
-            input.switch_mode.describe(),
-            input.english_mode,
-            input.shift_letter_compose
-        ));
-        self.apply_mode_settings(input.english_mode, input.switch_mode);
+        if changed {
+            log(&format!(
+                "按键行为设置：中英切换键 {}，内置英文模式 {}，Shift 字母进组句 {}",
+                input.switch_mode.describe(),
+                input.english_mode,
+                input.shift_letter_compose
+            ));
+            self.apply_mode_settings(input.english_mode, input.switch_mode);
+        }
         self.sync_script_hotkeys(&input);
-        // 「不处于输入状态时自动禁用输入法」：刚打开开关（且当前就不在输入状态）时立刻生效，
-        // 关掉开关时把自己之前关的放回去。
-        self.sync_auto_disable();
+        if changed {
+            // 「不处于输入状态时自动禁用输入法」：刚打开开关（且当前就不在输入状态）时立刻生效，
+            // 关掉开关时把自己之前关的放回去。
+            self.sync_auto_disable();
+        }
     }
 
     /// 「不处于输入状态时自动禁用输入法」（`[debugging] auto_disable_without_text_input`）：
@@ -216,6 +228,7 @@ impl TextService_Impl {
     /// 停用时撤掉保留键登记（切换键与两个内置热键）。
     pub(super) fn drop_switch_preserved_key(&self, keystroke: &ITfKeystrokeMgr) {
         self.unregister_script_hotkeys(keystroke);
+        self.script_hotkeys_synced.set(false);
         if self.switch_preserved.replace(false) {
             preserved::unregister_switch_mode(keystroke);
         }

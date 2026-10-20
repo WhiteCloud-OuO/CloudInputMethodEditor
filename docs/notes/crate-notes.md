@@ -833,6 +833,9 @@ Chromium 把「物理键还按着时注入的同名键」当自动重复，宿�
 `ITfKeystrokeMgr::PreserveKey` 逐个登记（每个槽位一个 GUID）。`OnPreservedKey` 命中脚本 GUID 时，
 只在中文状态调用 `handle_key` 把键送 Server；英文 / 禁用 / 键盘禁用时返回 `FALSE` 放行。
 `combination_modifiers = "none"` 的单键不注册，仍走原来的 `script_keys` 按键 sink。
+`apply_input_settings` 对下发值的去重**不能连脚本热键登记一起跳过**：实例刚建、`thread_mgr` 还没就绪时
+可能先应用过一次相同设置，`sync_script_hotkeys` 那次什么都没登记；`script_hotkeys_synced` 单独记登记状态，
+设置没变时也会补登记。停用时清掉这个标记，重新激活后再登记。
 `Ctrl+Alt+U` / `V` 另登记为固定保留键 `GUID_MODE_U` / `GUID_MODE_V`，全拼与非全拼都可用。
 `OnPreservedKey` 命中时直接 `forward_key` 送 Server，不走 `OnTestKeyDown` 的 `would_eat`，免得同一个键
 被 test / preserved 两条路各送一次；英文 / 禁用 / 键盘禁用时返回 `FALSE`，Server 再从空组句进入对应模式。
