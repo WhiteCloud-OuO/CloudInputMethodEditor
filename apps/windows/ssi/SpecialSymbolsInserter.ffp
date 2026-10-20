@@ -1,5 +1,5 @@
 ﻿#VisualFreeBasic_Project#  Version=5.8.4
-NumObjects=11
+NumObjects=12
 ProjectName=SpecialSymbolsInserter
 CompilationMode=0
 CompilationDebug=0
@@ -27,7 +27,7 @@ Build=0
 FileMajor=1
 FileMinor=0
 FileRevision=0
-FileBuild=43
+FileBuild=148
 AutoIncrement=-1
 DefaultCompiler=64
 Comments=
@@ -38,22 +38,18 @@ LegalTrademarks=
 ProductName=
 
 [Objects]
-Form=.\forms\Form1.frm|0|0|Startup|Yes|
-Form=.\forms\Form2.frm|0|0||Yes|
+Form=.\forms\Form1.frm|29|1732|Startup|Yes|
+Form=.\forms\Form2.frm|0|762||Yes|
 Form=.\forms\Form3.frm|0|0||Yes|
 Form=.\forms\Form4.frm|0|0||Yes|
 Form=.\forms\Form5.frm|0|0||Yes|
-Form=.\forms\Form6.frm|0|231||Yes|
-Form=.\forms\Form7.frm|0|0||Yes|
-Module=.\modules\SpecialCharInput.inc|0|0||Yes|
+Form=.\forms\Form6.frm|2|231||Yes|
+Form=.\forms\Form7.frm|0|513||Yes|
+Module=.\modules\SpecialCharInput.inc|100|6468||Yes|
+Form=.\forms\Form8.frm|150|11227||Yes|
 
-TopTab=.\forms\Form1.frm|False|1|0|0
-TopTab=.\forms\Form2.frm|False|1|0|0
-TopTab=.\forms\Form3.frm|False|1|0|0
-TopTab=.\forms\Form4.frm|False|1|0|0
-TopTab=.\forms\Form5.frm|True|1|0|0
-TopTab=.\forms\Form6.frm|False|0|0|231
-TopTab=.\forms\Form7.frm|False|1|0|0
+TopTab=.\forms\Form1.frm|False|0|29|1732
+TopTab=.\forms\Form2.frm|True|1|0|762
 #END_MAIN_PROPERTIES#
 
 

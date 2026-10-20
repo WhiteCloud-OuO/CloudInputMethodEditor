@@ -122,3 +122,23 @@ End Sub
 Sub CopySymbol(ByVal s As CWSTR)           '右键：复制到剪贴板
    CopyUnicodeToClipboard(s)
 End Sub
+
+'============================================================
+' 切换 Form1 外壳的激活策略
+' allowActivate = True  → 允许抢焦点（切到 Form8 时）
+' allowActivate = False → 不抢焦点（其它页面 / 默认状态）
+'============================================================
+Sub SetForm1ActivateMode(allowActivate As Boolean)
+   Dim hWndForm As HWND = Form1.hWndForm
+   Dim exStyle  As Long = GetWindowLongPtr(hWndForm, GWL_EXSTYLE)
+   
+   If allowActivate Then
+      ' ★ 去掉 WS_EX_NOACTIVATE，让窗口可以正常被激活
+      exStyle = exStyle And (Not WS_EX_NOACTIVATE)
+   Else
+      ' ★ 重新挂上 WS_EX_NOACTIVATE，恢复“不抢焦点”模式
+      exStyle = exStyle Or WS_EX_NOACTIVATE
+   End If
+   
+   SetWindowLongPtr hWndForm, GWL_EXSTYLE, exStyle
+End Sub
