@@ -161,6 +161,10 @@ impl Router {
 
     /// 每个候选右侧的来源角标。
     fn candidate_badges(&self, frame: &Frame) -> Vec<Option<char>> {
+        // u 模式的候选（符号分类或字母输入）都不显示来源角标。
+        if self.u_mode.is_some() {
+            return vec![None; frame.candidates.items.len()];
+        }
         badges_of(frame, self.engine.learner())
     }
 

@@ -67,7 +67,7 @@ impl TextService_Impl {
         match preserved::register_hotkeys(&keystroke, self.client_id.get()) {
             Ok(()) => {
                 self.hotkeys_preserved.set(true);
-                log("内置热键 Ctrl + Alt + . / Ctrl + Alt + , 已登记为保留键");
+                log("内置热键 Ctrl + Alt + . / , / U / V 已登记为保留键");
             }
             Err(error) => log(&format!("登记内置热键失败: {error}")),
         }

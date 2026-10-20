@@ -393,6 +393,8 @@ mod tests {
         let mut mode = UMode::default();
         mode.set_category(2);
         assert_eq!(mode.symbol(&key(0x45, 'e', false)), Some("ε"));
+        assert_eq!(mode.symbol(&key(0xBA, ';', false)), Some("【重音】"));
+        assert_eq!(mode.symbol(&key(0xDE, '\'', false)), Some("【隔音】"));
 
         assert!(mode.greek_toggle(&key(0xBA, ';', false)));
         assert_eq!(mode.symbol(&key(0x45, 'e', false)), Some("έ"));
@@ -405,6 +407,21 @@ mod tests {
         assert!(mode.greek_toggle(&key(0xDE, '\'', false)));
         assert_eq!(mode.symbol(&key(0x49, 'i', false)), Some("ΐ"));
         assert_eq!(mode.symbol(&key(0x59, 'y', false)), Some("ΰ"));
+    }
+
+    #[test]
+    fn kana_uses_the_new_layout_and_katakana_matches_it() {
+        let mut mode = UMode::default();
+        mode.set_category(4);
+        assert_eq!(mode.symbol(&key(0x51, 'q', false)), Some("あ"));
+        assert_eq!(mode.symbol(&key(0x51, 'Q', true)), Some("ぁ"));
+        assert_eq!(mode.symbol(&key(0x59, 'y', false)), Some("た"));
+        assert_eq!(mode.symbol(&key(0x59, 'Y', true)), Some("ま"));
+        assert_eq!(mode.symbol(&key(0xBA, ';', false)), Some("の"));
+        assert_eq!(mode.symbol(&key(0xBA, ':', true)), Some("を"));
+        mode.tab();
+        assert_eq!(mode.symbol(&key(0x51, 'q', false)), Some("ア"));
+        assert_eq!(mode.symbol(&key(0x51, 'Q', true)), Some("ァ"));
     }
 
     #[test]
