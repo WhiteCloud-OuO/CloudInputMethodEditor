@@ -832,9 +832,9 @@ Chromium 把「物理键还按着时注入的同名键」当自动重复，宿�
 `ITfKeystrokeMgr::PreserveKey` 逐个登记（每个槽位一个 GUID）。`OnPreservedKey` 命中脚本 GUID 时，
 只在中文状态调用 `handle_key` 把键送 Server；英文 / 禁用 / 键盘禁用时返回 `FALSE` 放行。
 `combination_modifiers = "none"` 的单键不注册，仍走原来的 `script_keys` 按键 sink。
-非全拼的 `Ctrl+Alt+U` 另登记为固定保留键 `GUID_MODE_U`；`InputSettings::full_pinyin` 告诉 DLL 当前是不是全拼
-（全拼裸 `u`，不抢这个组合）。`OnPreservedKey` 命中它时直接 `forward_key` 送 Server，不走 `OnTestKeyDown` 的
-`would_eat`，免得同一个键被 test / preserved 两条路各送一次；英文 / 禁用 / 键盘禁用 / 全拼时返回 `FALSE`。
+`Ctrl+Alt+U` / `V` 另登记为固定保留键 `GUID_MODE_U` / `GUID_MODE_V`，全拼与非全拼都可用。
+`OnPreservedKey` 命中时直接 `forward_key` 送 Server，不走 `OnTestKeyDown` 的 `would_eat`，免得同一个键
+被 test / preserved 两条路各送一次；英文 / 禁用 / 键盘禁用时返回 `FALSE`，Server 再从空组句进入对应模式。
 状态全局一份、存在 Server（`Router.mode: InputMode`），DLL 激活 / 得到焦点 / 轮询时 `SyncMode` 取回，用户切了 `ModeChanged` 报上去。会话号用线程 id（`com::session_id`）——TSF 的 client id
 各进程都是同样那几个值，拿它当会话号会在 Server 那边撞号。四条切换入口都汇到
 `service/mode.rs::switch_mode` 一处拦住（内置英文模式下发为关时才拦英文，协议值现在恒开）；状态条点击在 Server 侧（`dispatch/status/mod.rs`）走同一条路，
@@ -1239,8 +1239,11 @@ u 模式复用同一件资产，但走 `CandidateSink::set_symbol_aux(Option<Key
 （从 52 逻辑点起算，再按 `MIN_KEY_MAP_HEIGHT` 316 物理像素补足最小高度、不跟候选窗同高），`None` 时收起并恢复
 用户配置的键位映射参考；`symbol_assets_on` 与 `assets_on` 取或，两套开关互不影响。支持中英混输时进入 u 模式
 先是字母输入（`UMode::symbol_ui = false`，不显示资产），`Space` 切符号输入；没有混输时直接符号输入。
-`Space` 在符号输入里切回字母输入。符号格子左下角始终留一行 `KeyMapLayout::footer`（假名 / 西里尔提示或空行），
-正常符号画在格子下方、Shift 符号画在上方；键帽与符号表在 `server/src/dispatch/u_mode/mapping.rs`。
+`Space` 在符号输入里切回字母输入；字母输入里只有拼音串还停在单个 `u` 时 Space 才切符号，出现别的字母后 Space
+恢复普通选词 / 上屏。支持混输时 Tip 显示「按空格进入/退出符号输入」，没有混输不显示。符号格子左下角始终留一行
+`KeyMapLayout::footer`（假名 / 西里尔提示或空行），正常符号画在格子下方、Shift 符号画在上方；键帽与符号表在
+`server/src/dispatch/u_mode/mapping.rs`。`Ctrl+Alt+U` / `V` 在两种方案下都可用；非全拼 v 模式由
+`Engine::start_expression` 强制表达式前缀，`query_inner` 在强制状态跳过双拼查询。
 ⚠️ `auxiliary_toggle` / `set_auxiliary` / `set_symbol_aux` 必须写在 `impl CandidateSink for UiHandle` 里：Router 拿的是
 `Box<dyn CandidateSink>`，写成固有方法会落到 trait 的**空默认体**上（真机踩过，有回归测试盯着）。
 显示方式与组合键在 `use_input_scheme.cfg` 的 `key_map_reference`（`off` / `hotkey` / `always`）与 `key_map_hotkey`

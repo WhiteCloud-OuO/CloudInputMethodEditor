@@ -19,10 +19,6 @@ pub struct ScriptHotkey {
 /// 一次下发给 DLL 的脚本全局热键上限；超过的脚本键仍走普通按键 sink，不注册保留键。
 pub const MAX_SCRIPT_HOTKEYS: usize = 32;
 
-fn default_true() -> bool {
-    true
-}
-
 /// Server 下发给 DLL 的「按键行为」设置。
 ///
 /// DLL 跑在每个应用的进程里，拿不到 Server 那份 [`Config`](crate::Config)，但有几项在**按键到达之前**
@@ -63,11 +59,6 @@ pub struct InputSettings {
     /// `0` = 一个组合键脚本都没有，按键路径与以前逐字节一致。
     #[serde(default)]
     pub script_key_modifiers: u16,
-
-    /// 当前输入方案是不是全拼：全拼直接按 `u` 进 u 模式，别的方案用 `Ctrl+Alt+U`。
-    /// 旧 DLL 缺这个字段时按 `true`，也就是不额外抢 `Ctrl+Alt+U`。
-    #[serde(default = "default_true")]
-    pub full_pinyin: bool,
 
     /// 「为脚本提供全局热键」：把下面的脚本组合键注册成 TSF 保留键。
     #[serde(default)]
@@ -112,7 +103,6 @@ impl Default for InputSettings {
             raw_input: false,
             auto_disable_without_text_input: false,
             script_key_modifiers: 0,
-            full_pinyin: true,
             script_global_hotkeys: false,
             script_hotkeys: [ScriptHotkey::default(); MAX_SCRIPT_HOTKEYS],
             script_keys: [0; 4],

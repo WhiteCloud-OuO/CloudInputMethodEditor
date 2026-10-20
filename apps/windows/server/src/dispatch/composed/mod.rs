@@ -315,8 +315,14 @@ impl Router {
             frame.tip = Some(hint);
         }
         // u 模式：支持中英混输时在翻译 Tip 那一行告诉用户可以直接打英文单词。
-        if self.u_mode.is_some() {
-            frame.tip = self.mixture_enabled().then(|| hint_tip("可输入英文单词"));
+        if let Some(u_mode) = self.u_mode {
+            frame.tip = self.mixture_enabled().then(|| {
+                hint_tip(if u_mode.symbol_ui {
+                    "按空格退出符号输入"
+                } else {
+                    "按空格进入符号输入"
+                })
+            });
         }
         // 表达式计算面板：只有一条「结果」候选，不画序号
         frame.hide_index = self.engine.calculator();

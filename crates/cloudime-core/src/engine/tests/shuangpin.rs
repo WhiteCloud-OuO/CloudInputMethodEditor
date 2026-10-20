@@ -703,6 +703,18 @@ fn expression_mode_is_off_under_shuangpin() {
     vhgo.set_input("vhgo");
     assert!(!vhgo.expression_mode(), "双拼下 `v` 不是表达式前缀");
     assert!(full.expression_mode(), "全键拼音下 `v` 开头就是表达式模式");
+
+    // 非全拼从 Ctrl+Alt+V 进来时，由 `start_expression` 显式强制 v 模式。
+    let mut forced = engine();
+    forced.set_shuangpin(Some(table()));
+    forced.start_expression();
+    forced.push('1');
+    forced.push('+');
+    forced.push('2');
+    assert!(forced.expression_mode(), "Ctrl+Alt+V 后双拼也进 v 模式");
+    assert!(shortcut_kind(forced.query().ok()), "v 模式出表达式候选");
+    forced.clear();
+    assert!(!forced.expression_mode(), "退出后不再强制表达式");
 }
 
 /// 双拼下按**原始按键**匹配英文词，由 `use_input_scheme.cfg` 的「中英混合输入」说了算

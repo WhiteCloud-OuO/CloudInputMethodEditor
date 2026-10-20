@@ -100,6 +100,10 @@ pub struct Engine {
     /// [`crate::shuangpin::Table`] 交进来 —— Core 不读文件。
     shuangpin: Option<crate::shuangpin::Table>,
 
+    /// 非全拼用 `Ctrl+Alt+V` 显式进入 v 模式时置位：这时 `v` 按表达式前缀解释，
+    /// 不受双键拼音的「v 是按键」规则影响；退出组句时清零。
+    forced_expression: bool,
+
     /// 辅助码表（方案里 `UsingAuxiliaryCodes` 开着时挂上）：只用来**筛选**候选，不参与排序。
     /// 同样由 `cloudime-platform` 读文件后注入（Core 只认 trait）。
     auxiliary_codes: Option<Box<dyn crate::shuangpin::AuxiliaryTable>>,
@@ -322,6 +326,7 @@ impl Engine {
             full_width_punctuation: true,
             use_jian_pin: true,
             shuangpin: None,
+            forced_expression: false,
             auxiliary_codes: None,
             auxiliary_mode: crate::auxiliary::AuxiliaryMode::PerChar,
             show_raw_input: true,

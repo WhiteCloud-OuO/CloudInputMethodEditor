@@ -107,17 +107,16 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             return Ok(self.handle_key(pic, self.key_event(hotkey.key)).into());
         }
         // 非全拼的 Ctrl+Alt+U：只在中文状态接管；全拼直接按 u，不走这个保留键。
-        if guid == preserved::GUID_MODE_U {
-            let full_pinyin = self
-                .input_settings
-                .get()
-                .is_none_or(|input| input.full_pinyin);
-            if full_pinyin || self.mode_state.english() || self.raw_input() {
+        if matches!(guid, preserved::GUID_MODE_U | preserved::GUID_MODE_V) {
+            if self.mode_state.english() || self.raw_input() {
                 return Ok(FALSE);
             }
-            return Ok(self
-                .forward_key(pic, self.key_event(u32::from(b'U')))
-                .into());
+            let vk = if guid == preserved::GUID_MODE_U {
+                u32::from(b'U')
+            } else {
+                u32::from(b'V')
+            };
+            return Ok(self.forward_key(pic, self.key_event(vk)).into());
         }
         if guid == preserved::GUID_SWITCH_MODE {
             self.switch_source.set("保留键 Ctrl + Alt + Space");

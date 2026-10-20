@@ -195,6 +195,7 @@ impl Engine {
             // 整段转换完：已选文本（这次选择的文本已并进去）+ 本次一起交给应用，组句清空。
             let selected = self.composition.selected_text();
             self.composition.clear();
+            self.forced_expression = false;
             Some(selected)
         }
     }

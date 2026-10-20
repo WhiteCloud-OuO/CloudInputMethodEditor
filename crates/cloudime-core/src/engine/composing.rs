@@ -165,9 +165,18 @@ impl Engine {
         &self.composition
     }
 
+    /// 从空组句显式进入 v 模式。全拼本来就认 `v` 前缀；双键拼音靠这个强制标志也能进表达式，
+    /// 供非全拼的 `Ctrl+Alt+V` 用。
+    pub fn start_expression(&mut self) {
+        self.clear();
+        self.push('v');
+        self.forced_expression = true;
+    }
+
     pub fn push(&mut self, c: char) {
         if self.composition.is_empty() {
             // 新一段组句：从这一键起算耗时、翻页与重打；英文候选大小写回到原样
+            self.forced_expression = false;
             self.composition_started = Some(Instant::now());
             self.page_turns = 0;
             self.retype_snapshot = None;
@@ -217,6 +226,7 @@ impl Engine {
         self.retype_snapshot = None;
         self.composition_started = None;
         self.page_turns = 0;
+        self.forced_expression = false;
         self.traditional_map.borrow_mut().clear();
     }
 
@@ -283,7 +293,7 @@ impl Engine {
     /// **`v` / `u` / `i` 三种模式仅全键拼音可用**：挂着双键拼音表时 `v` 只是一个普通方案键，
     /// 不当表达式（否则 `vhgo` 会被当成表达式、左下角还会冒出「输入数字或表达式」）。
     pub fn expression_mode(&self) -> bool {
-        self.shuangpin.is_none()
+        (self.shuangpin.is_none() || self.forced_expression)
             && !self.has_custom_phrase()
             && self.composition.text().starts_with(EXPRESSION_PREFIX)
     }
@@ -351,6 +361,7 @@ impl Engine {
         }
         self.meter_commit(&raw, InputSource::Raw, english_word);
         self.composition.clear();
+        self.forced_expression = false;
         self.traditional_map.borrow_mut().clear();
         self.remember_commit(LastCommit::plain(&keys));
         self.punctuation.note_committed(&raw);

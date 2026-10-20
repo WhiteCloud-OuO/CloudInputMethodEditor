@@ -187,10 +187,10 @@ impl Router {
         self.update_u_aux();
     }
 
-    /// 非全拼的 `Ctrl+Alt+U`；全拼走 `apply_chinese` 的裸 u。
+    /// `Ctrl+Alt+U`：全拼、非全拼都进 u 模式。
     pub(super) fn u_mode_hotkey(&mut self, event: &KeyEvent) -> Option<Effect> {
-        if self.config.full_pinyin
-            || self.composing()
+        if self.composing()
+            || event.modifiers.english_mode
             || !event.modifiers.ctrl
             || !event.modifiers.alt
             || event.modifiers.win
@@ -199,6 +199,21 @@ impl Router {
             return None;
         }
         self.enter_u_mode();
+        Some(Effect::Changed(None))
+    }
+
+    /// `Ctrl+Alt+V`：全拼 / 非全拼都从空组句进 v 模式。
+    pub(super) fn v_mode_hotkey(&mut self, event: &KeyEvent) -> Option<Effect> {
+        if self.composing()
+            || event.modifiers.english_mode
+            || !event.modifiers.ctrl
+            || !event.modifiers.alt
+            || event.modifiers.win
+            || event.virtual_key != u32::from(b'V')
+        {
+            return None;
+        }
+        self.engine.start_expression();
         Some(Effect::Changed(None))
     }
 

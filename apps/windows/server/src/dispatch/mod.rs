@@ -371,7 +371,6 @@ impl Router {
             // 组合键脚本在清单里声明的那几套修饰键（`combination_modifiers`）的并集：DLL 据此把命中的
             // 组合键（组句与否都算）送来问一趟；一个这类脚本都没有时是 0，按键路径与以前逐字节一致。
             script_key_modifiers: self.scripts.combination_key_masks(),
-            full_pinyin: self.config.full_pinyin,
             script_global_hotkeys: self.config.script_global_hotkeys,
             script_hotkeys: config::script_hotkeys(&self.scripts.combination_hotkeys()),
             // `key` 触发脚本声明的具体按键（`keys`）：位图，DLL 据此在没组句时也送这些键。

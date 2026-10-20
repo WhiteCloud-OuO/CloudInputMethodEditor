@@ -156,7 +156,9 @@ impl Engine {
         // 也放在表达式 **之前**：`v` / `u` / `i` 那三种面板（表达式、区位、符号）仅全键拼音可用。
         // 喂给解码器的是**大小写原样**的那一份（`typed_scope`）：大写字母进缓冲区时被压成小写
         // 只记了 shifted 标记，辅助码全靠大小写区分。
-        if let Some(table) = &self.shuangpin {
+        if !self.forced_expression
+            && let Some(table) = &self.shuangpin
+        {
             return self.query_shuangpin(table, &self.composition.typed_scope(), &rest, start);
         }
         if keys.starts_with(EXPRESSION_PREFIX) {

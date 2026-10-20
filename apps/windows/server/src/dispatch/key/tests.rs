@@ -1546,13 +1546,15 @@ fn full_pinyin_u_starts_in_letter_mode_and_space_toggles_symbols() {
     assert_eq!(commit, None);
     assert!(!r.u_mode.expect("进了 u 模式").symbol_ui, "默认字母输入");
     let tip = r.self_drawn_frame().tip.expect("混输提示");
-    assert_eq!(tip.joined(), "可输入英文单词");
+    assert_eq!(tip.joined(), "按空格进入符号输入");
 
     // Space：切到符号输入，六类候选且不带序号。
     let (_, _, frame) = key(&mut r, 0x20, Some(' '), normal);
     assert_eq!(frame.candidates.items.len(), 6);
     assert_eq!(frame.candidates.items[0].text, "常用符号");
     assert!(r.u_mode.expect("还在 u 模式").symbol_ui);
+    let tip = r.self_drawn_frame().tip.expect("符号输入提示");
+    assert_eq!(tip.joined(), "按空格退出符号输入");
     let (_, commit, _) = key(&mut r, 0x51, Some('q'), normal);
     assert_eq!(commit.as_deref(), Some("◰"), "符号输入里字母按符号表上屏");
 
@@ -1631,6 +1633,7 @@ fn u_mode_without_mixture_input_goes_straight_to_symbols() {
     let mut r = router(9);
     r.engine.set_mixture_input(false);
     key(&mut r, 0x55, Some('u'), normal);
+    assert!(r.self_drawn_frame().tip.is_none(), "没有混输不显示切换提示");
     let (_, commit, frame) = key(&mut r, 0x4E, Some('n'), normal);
     assert_eq!(commit.as_deref(), Some("≠"));
     assert!(r.u_mode.expect("还在 u 模式").symbol_ui);
@@ -1665,15 +1668,19 @@ fn u_inside_a_pinyin_syllable_is_not_a_mode_key() {
 
 /// 非全拼用 Ctrl+Alt+U；全拼不抢这个组合。
 #[test]
-fn only_non_full_pinyin_uses_the_ctrl_alt_u_hotkey() {
+fn ctrl_alt_u_and_v_enter_modes_in_both_schemes() {
     let hotkey = KeyModifiers {
         ctrl: true,
         alt: true,
         ..KeyModifiers::default()
     };
+    let normal = KeyModifiers::default();
     let mut full = router(9);
     key(&mut full, 0x55, Some('\u{15}'), hotkey);
-    assert!(full.u_mode.is_none(), "全拼的 u 已经在裸键上");
+    assert!(full.u_mode.is_some(), "全拼也能用 Ctrl+Alt+U");
+    key(&mut full, 0x1B, None, normal);
+    key(&mut full, 0x56, Some('\u{16}'), hotkey);
+    assert!(full.engine.expression_mode(), "全拼 Ctrl+Alt+V 进 v 模式");
 
     let mut dual = Router::new(
         Engine::new(Dictionary::parse("你\tni\t100\n").unwrap()),
@@ -1688,5 +1695,8 @@ fn only_non_full_pinyin_uses_the_ctrl_alt_u_hotkey() {
         protocol: PROTOCOL_VERSION,
     });
     key(&mut dual, 0x55, Some('\u{15}'), hotkey);
-    assert!(dual.u_mode.is_some());
+    assert!(dual.u_mode.is_some(), "非全拼 Ctrl+Alt+U");
+    key(&mut dual, 0x1B, None, normal);
+    key(&mut dual, 0x56, Some('\u{16}'), hotkey);
+    assert!(dual.engine.expression_mode(), "非全拼 Ctrl+Alt+V");
 }

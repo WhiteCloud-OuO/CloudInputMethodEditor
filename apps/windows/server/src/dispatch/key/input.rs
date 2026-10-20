@@ -80,6 +80,9 @@ impl Router {
             self.caret_shift = 1;
             return Effect::Changed(None);
         }
+        if let Some(effect) = self.v_mode_hotkey(event) {
+            return effect;
+        }
         if let Some(effect) = self.u_mode_hotkey(event) {
             return effect;
         }

@@ -22,8 +22,11 @@ pub(crate) const GUID_TOGGLE_SIMP_TRAD: GUID =
 pub(crate) const GUID_TOGGLE_PUNCTUATION: GUID =
     GUID::from_u128(0x5c3e9f27_1d6a_4b82_8f47_2a6c9d0e5b18);
 
-/// Ctrl + Alt + U（非全拼进 u 模式）的保留键标识。
+/// Ctrl + Alt + U（进 u 模式）的保留键标识。
 pub(crate) const GUID_MODE_U: GUID = GUID::from_u128(0x2f7b8c41_5d9e_4a36_b0c8_7e1d4f6a9b20);
+
+/// Ctrl + Alt + V（进 v 模式）的保留键标识。
+pub(crate) const GUID_MODE_V: GUID = GUID::from_u128(0x8a4c1e72_6b3d_4f59_9c20_5d7e1a8b3f64);
 
 /// 脚本全局热键的 GUID 基值；每个槽位用基值 + 下标，避免注册时互相覆盖。
 const GUID_SCRIPT_HOTKEY_BASE: u128 = 0x9d3a7e51_4c82_4f06_b7a1_6e2f8c1d5a40;
@@ -91,6 +94,13 @@ fn mode_u_key() -> TF_PRESERVEDKEY {
     }
 }
 
+fn mode_v_key() -> TF_PRESERVEDKEY {
+    TF_PRESERVEDKEY {
+        uVKey: u32::from(b'V'),
+        uModifiers: TF_MOD_CONTROL | TF_MOD_ALT,
+    }
+}
+
 /// 登记 Ctrl + Alt + Space 为中英切换保留键（`switch_mode` 勾了它时）。
 pub(crate) fn register_switch_mode(keystroke: &ITfKeystrokeMgr, tid: u32) -> Result<()> {
     let description: Vec<u16> = "切换中英文（云朵输入法）".encode_utf16().collect();
@@ -120,6 +130,10 @@ pub(crate) fn register_hotkeys(keystroke: &ITfKeystrokeMgr, tid: u32) -> Result<
     unsafe {
         keystroke.PreserveKey(tid, &GUID_MODE_U, &mode_u_key(), &mode_u)?;
     }
+    let mode_v: Vec<u16> = "v 模式 / 表达式（云朵输入法）".encode_utf16().collect();
+    unsafe {
+        keystroke.PreserveKey(tid, &GUID_MODE_V, &mode_v_key(), &mode_v)?;
+    }
     Ok(())
 }
 
@@ -127,4 +141,5 @@ pub(crate) fn unregister_hotkeys(keystroke: &ITfKeystrokeMgr) {
     let _ = unsafe { keystroke.UnpreserveKey(&GUID_TOGGLE_SIMP_TRAD, &simp_trad_key()) };
     let _ = unsafe { keystroke.UnpreserveKey(&GUID_TOGGLE_PUNCTUATION, &punctuation_key()) };
     let _ = unsafe { keystroke.UnpreserveKey(&GUID_MODE_U, &mode_u_key()) };
+    let _ = unsafe { keystroke.UnpreserveKey(&GUID_MODE_V, &mode_v_key()) };
 }
