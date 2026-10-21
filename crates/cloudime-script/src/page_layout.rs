@@ -287,6 +287,33 @@ fn parse_subpage(
             items.len()
         )));
     }
+    let required = object
+        .get("required")
+        .map(|value| {
+            value
+                .as_array()
+                .ok_or_else(|| runtime("subpage.required 必须是字符串数组"))?
+                .iter()
+                .map(|value| {
+                    value
+                        .as_str()
+                        .map(str::to_owned)
+                        .ok_or_else(|| runtime("subpage.required 的字段必须是字符串"))
+                })
+                .collect::<mlua::Result<Vec<_>>>()
+        })
+        .transpose()?
+        .unwrap_or_default();
+    for (index, item) in items.iter().enumerate() {
+        for field in &required {
+            if lookup_path(item, field).is_none() {
+                return Err(runtime(format!(
+                    "子页面 {} 第 {index} 项缺少 required 字段：{field}",
+                    path.display()
+                )));
+            }
+        }
+    }
 
     let template_base = path
         .parent()
@@ -962,6 +989,30 @@ mod tests {
         }))
         .unwrap_err();
         assert!(error.to_string().contains("未知 layout.type"), "{error}");
+    }
+
+    #[test]
+    fn a_missing_required_item_field_fails_the_whole_layout() {
+        let dir =
+            std::env::temp_dir().join(format!("cloudime-subpage-required-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let template = dir.join("row.json");
+        std::fs::write(&template, r#"{"version":2,"page":{"children":[]}}"#).unwrap();
+        let value = json!({
+            "version": 2,
+            "page": {
+                "children": [{
+                    "type": "subpage", "name": "rows", "src": "row.json",
+                    "repeat": "items", "required": ["title"]
+                }]
+            }
+        });
+        let data = json!({ "items": [{ "id": 1 }] });
+        let lua = Lua::new();
+        let error = load(&lua, &value, &dir, (None, None), &data).unwrap_err();
+        assert!(error.to_string().contains("required"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]

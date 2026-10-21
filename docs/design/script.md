@@ -497,7 +497,7 @@ cloudime.on("window", function(event)
     -- event.x, event.y   内容区坐标（点）
     -- event.element  命中的元素（内容是 1 起的数组，这里也是 1 起；没命中是 nil）
     -- event.region   命中的区域名（内容里的 regions；没命中是 nil）
-    -- event.control  命中的控件名（布局文件里的 name；没命中 / 没写 name 是 nil）
+    -- event.control  命中的控件名（布局文件里的 name；子页面实例给局部名；没命中是 nil）
     -- event.subpage / event.instance / event.item_index / event.item_key / event.control_path
     --                 v2 子页面实例信息；普通窗口事件是 nil
     -- event.handler  区域 / 布局声明的事件处理器名（events 表；没声明是 nil）

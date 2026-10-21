@@ -3057,7 +3057,7 @@ mod tests {
             y: 8.0,
             element: Some(2),
             region: Some("plus".to_owned()),
-            control: Some("rows_1_title".to_owned()),
+            control: Some("title".to_owned()),
             instance: Some(InstanceInfo {
                 subpage: "rows".to_owned(),
                 instance: "rows[1]".to_owned(),
@@ -3082,7 +3082,7 @@ mod tests {
         assert!(payload.get::<bool>("shift").unwrap());
         assert_eq!(payload.get::<String>("window").unwrap(), "面板");
         assert_eq!(payload.get::<String>("region").unwrap(), "plus");
-        assert_eq!(payload.get::<String>("control").unwrap(), "rows_1_title");
+        assert_eq!(payload.get::<String>("control").unwrap(), "title");
         assert_eq!(payload.get::<String>("subpage").unwrap(), "rows");
         assert_eq!(payload.get::<String>("instance").unwrap(), "rows[1]");
         assert_eq!(payload.get::<usize>("item_index").unwrap(), 1);

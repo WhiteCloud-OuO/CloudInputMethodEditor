@@ -568,9 +568,10 @@ local win = cloudime.window.create{
 win:set_data{ items = { { title = "C" } } }
 ```
 
-子页面用 `subpage` 节点 + `repeat` / `key`，模板里写 `{{item.title}}`，实例内控件名会自动加前缀
-（例如 `rows_0_title`）；窗口事件里会带 `event.subpage` / `event.instance` / `event.item_index` /
-`event.item_key` / `event.control_path`。v2 目前是实验接口，细节和限制以设计文档为准。
+子页面用 `subpage` 节点 + `repeat` / `key`，模板里写 `{{item.title}}`，实例子页面内控件用局部名事件
+（例如 `event.control = "title"`），完整路径在 `event.control_path`（例如 `rows[1].title`）；
+`subpage.required = { "title", "meta" }` 可声明每个 item 必填的数据字段，缺一项整份布局失败。
+v2 目前是实验接口，细节和限制以设计文档为准。
 
 **元素表**（坐标 / 尺寸都是点，超出内容区的部分被裁掉）：
 
@@ -831,7 +832,7 @@ cloudime.on("window", function(event)
     -- event.x / event.y            内容区坐标（点）
     -- event.element               命中的元素（内容数组里 1 起的下标；没命中是 nil）
     -- event.region                命中的区域名（内容里的 regions；没命中是 nil）
-    -- event.control               命中的控件名（布局文件里的 name；没命中 / 没写 name 是 nil）
+    -- event.control               命中的控件名（布局文件里的 name；子页面实例给局部名，没命中是 nil）
     -- event.subpage / event.instance / event.item_index / event.item_key / event.control_path
     --                              v2 子页面实例信息；普通窗口事件是 nil
     -- event.handler               区域 / 布局声明的事件处理器名（events 表；没声明是 nil）

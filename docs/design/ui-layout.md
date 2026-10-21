@@ -231,6 +231,7 @@ Page（主页面，一窗口一棵）
 - **必填字段缺失**：整份布局失效；记 `error` 日志，窗口保持原样。
 - **可空字段缺失**：按缺省值 / 空串处理；记 `warn` 日志（同一字段每次加载只记一次，避免刷屏）。
 - 必填示例：节点 `type`、控件 `name`、子页面 `src`、`layout.type`（写了 `layout` 时）。
+- `subpage.required` 是数据项必填字段数组（相对 `item`）；任一项缺失整份布局失败。
 - 可空示例：`padding`、`gap`、`visible`、`repeat`、`key`、`w` / `h`。
 - 子页面缺字段同样遵守：必填失败整份布局失效，可空按缺省并记日志。
 
@@ -278,7 +279,8 @@ Page（主页面，一窗口一棵）
   - `control`：局部控件名；
   - `control_path`：完整路径。
 - 窗口事件载荷已带上 `subpage` / `instance` / `item_index` / `item_key` / `control_path`；
-  控件名本身仍是实例内加前缀后的唯一名（例如 `rows_0_title`），`control` 保留这个实际控件名。
+  控件内部仍用实例前缀名（例如 `rows_0_title`）保证布局内唯一，但 `event.control` 给**局部名**
+  （例如 `title`），完整路径用 `event.control_path`。
 - 一个窗口仍然只有一份 Lua 脚本；子页面不单独运行脚本，事件冒泡到窗口脚本。
 - `win:update_content` 等按控件名寻址的 API 需要支持完整路径或“实例 + 局部名”。
 
