@@ -10,7 +10,7 @@
 //! - **有内容**（眼下只有「键位映射参考」）：格子边长按**目标高度**反推 —— 竖排用宿主（候选窗口）
 //!   **现在的高度**（两个窗口一样高；候选窗底下多一行译文 / 多一页页码时它也跟着高），
 //!   横排宿主又扁又宽、按不了，直接按「候选窗口装 9 个候选项」那档；两种排布都再夹一道
-//!   [`MIN_KEY_MAP_HEIGHT`]（**316 物理像素**）—— 谁都不比它矮，格子里的字才撑得住；
+//!   `MIN_KEY_MAP_HEIGHT`（**316 物理像素**）—— 谁都不比它矮，格子里的字才撑得住；
 //! - **没内容**（版面还没生成）：竖排高度对齐「候选窗口装 9 个候选项」的高度，宽度取它的 **√2 倍**（向下取整）；
 //!   横排宽度对齐「候选窗口装 6 个候选项（每个两个字）」的宽度，高度取它的 **√5 倍**（向下取整）；
 //! - 间隙固定 16 逻辑像素（按 DPI 折成物理像素）。
@@ -23,8 +23,8 @@
 //!
 //! **焦点**：这块面板**默认不具备焦点** —— 鼠标一律穿透到下面的窗口，键也轮不到它（窗口建出来就带
 //! `WS_EX_TRANSPARENT`，命中测试也回 `HTTRANSPARENT`）。创建时声明了允许获取焦点
-//! （[`Self::new`] 的 `able_to_get_focus`）也只是「能」：真拿到要所有者**指定**（`ui::auxiliary`
-//! 那套 [`super::auxiliary::Focus`]）；拿到之后才接鼠标（[`Self::set_focused`]），
+//! （[`AuxiliaryWindowTemplate::new`] 的 `able_to_get_focus`）也只是「能」：真拿到要所有者**指定**（`ui::auxiliary`
+//! 那套 [`super::auxiliary::Focus`]）；拿到之后才接鼠标（[`AuxiliaryWindowTemplate::set_focused`]），
 //! 同时所有者那侧让位（见 [`super::independent_window_template`]）。
 
 use std::cell::{Cell, RefCell};
@@ -48,10 +48,11 @@ use cloudime_platform::LayoutMode;
 use cloudime_platform::input_schemes;
 use cloudime_render::{Color, ControlName, Layout, StaticTextContent, key_map_cell, key_map_size};
 
-use super::layered;
-use super::monitor;
-use super::painter::{Painter, SharedPainter};
-use super::window_class::WindowClass;
+use crate::layered;
+use crate::monitor;
+use crate::painter::{Painter, SharedPainter};
+use crate::window::{module_handle, mouse_transparent, set_mouse_transparent};
+use crate::window_class::WindowClass;
 
 const CLASS_NAME: PCWSTR = w!("CloudIMEAuxiliaryWindow");
 static CLASS: WindowClass = WindowClass::new();
@@ -64,7 +65,7 @@ thread_local! {
 }
 
 /// 与候选窗口之间的默认间隙（**逻辑像素**，按 DPI 折成物理像素）。
-pub(super) const DEFAULT_GAP: i32 = 16;
+pub const DEFAULT_GAP: i32 = 16;
 
 /// 竖排的默认高度按「候选窗口装 9 个候选项」量。
 const VERTICAL_ROWS: usize = 9;
@@ -77,7 +78,7 @@ const SYMBOL_CELL: f32 = 52.0;
 
 /// 窗口模板的三个属性（**物理像素**）；`None` = 用按候选窗口形状算出来的默认值。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
-pub(super) struct AuxiliaryWindowSpec {
+pub struct AuxiliaryWindowSpec {
     /// 宽。
     pub width: Option<i32>,
 
@@ -102,7 +103,7 @@ enum Content {
 
 /// 面板上的鼠标动作（键位映射参考不接鼠标；脚本辅助窗口接）。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum PanelAction {
+pub enum PanelAction {
     Click,
     RightClick,
     Hover,
@@ -126,7 +127,7 @@ impl PanelAction {
 /// 一次面板鼠标事件：坐标是**内容区点**；`element` 是命中的元素（1 起，`None` = 没命中），
 /// `region` 是命中的区域名（`Document.regions` 里的 `name`）。
 #[derive(Debug, Clone)]
-pub(super) struct PanelEvent {
+pub struct PanelEvent {
     pub action: PanelAction,
     pub x: f32,
     pub y: f32,
@@ -138,10 +139,10 @@ pub(super) struct PanelEvent {
 }
 
 /// 面板鼠标事件的出口：脚本辅助窗口用它把点击 / 悬停送回工人线程。
-pub(super) type PanelEvents = Box<dyn Fn(PanelEvent) + Send>;
+pub type PanelEvents = Box<dyn Fn(PanelEvent) + Send>;
 
 /// 窗口模板创建的那个窗口；不显示时只是藏在层里。
-pub(super) struct AuxiliaryWindowTemplate {
+pub struct AuxiliaryWindowTemplate {
     hwnd: HWND,
 
     /// 创建时声明的「允许获取焦点」（`able_to_get_focus`）：`false`（缺省）时**永远**不接输入。
@@ -208,10 +209,10 @@ impl AuxiliaryWindowTemplate {
     /// （见 [`super::auxiliary::Asset::able_to_get_focus`]）；`false`（缺省）时永远不接输入。
     /// 声明了也只是「能」—— 创建之后的焦点仍在所有者手上，直到所有者**指定**给它。失败返回 `Err`，
     /// 调用方降级为不显示。
-    pub(super) fn new(painter: SharedPainter, able_to_get_focus: bool) -> Result<Self> {
+    pub fn new(painter: SharedPainter, able_to_get_focus: bool) -> Result<Self> {
         CLASS.ensure(|| WNDCLASSEXW {
             lpfnWndProc: Some(wndproc),
-            hInstance: super::module_handle(),
+            hInstance: module_handle(),
             lpszClassName: CLASS_NAME,
             ..Default::default()
         })?;
@@ -232,7 +233,7 @@ impl AuxiliaryWindowTemplate {
                 0,
                 None,
                 None,
-                Some(super::module_handle()),
+                Some(module_handle()),
                 None,
             )?
         };
@@ -260,7 +261,7 @@ impl AuxiliaryWindowTemplate {
     }
 
     /// 把自己登记进本线程的表，窗口过程按 HWND 找回它（`Weak`：不续命，`Drop` 之后自然没了）。
-    pub(super) fn attach(self: &Rc<Self>) {
+    pub fn attach(self: &Rc<Self>) {
         REGISTRY.with(|map| {
             map.borrow_mut()
                 .insert(self.hwnd.0 as isize, Rc::downgrade(self));
@@ -268,32 +269,32 @@ impl AuxiliaryWindowTemplate {
     }
 
     /// 设三个属性（物理像素）；`None` 的项回到默认算法。
-    pub(super) fn set_spec(&self, spec: AuxiliaryWindowSpec) {
+    pub fn set_spec(&self, spec: AuxiliaryWindowSpec) {
         self.spec.set(spec);
     }
 
     /// 换面板里要画的键位映射参考版面（当前方案变了一整份重送）；空版面就是一块空面板。
-    pub(super) fn set_key_map(&self, layout: input_schemes::KeyMapLayout) {
+    pub fn set_key_map(&self, layout: input_schemes::KeyMapLayout) {
         *self.content.borrow_mut() = Content::KeyMap(layout, None);
         // 版面变了：下次 `show` 一定重画
         self.revision.set(self.revision.get() + 1);
     }
 
     /// u 模式符号窗口：四排方形格子，边长固定（逻辑点），不与候选窗同高。
-    pub(super) fn set_symbol_key_map(&self, layout: input_schemes::KeyMapLayout) {
+    pub fn set_symbol_key_map(&self, layout: input_schemes::KeyMapLayout) {
         *self.content.borrow_mut() = Content::KeyMap(layout, Some(SYMBOL_CELL));
         self.revision.set(self.revision.get() + 1);
     }
 
     /// 换面板里要画的脚本内容（`cloudime.window.create_auxiliary` + `set_content`）。
-    pub(super) fn set_document(&self, document: cloudime_render::Document) {
+    pub fn set_document(&self, document: cloudime_render::Document) {
         *self.control_names.borrow_mut() = document.control_names.clone();
         *self.content.borrow_mut() = Content::Document(document);
         self.revision.set(self.revision.get() + 1);
     }
 
     /// 更新静态 `label` / `text_block` 的文字；只影响内容，不重建窗口。
-    pub(super) fn update_static_content(&self, name: &str, content: StaticTextContent) -> bool {
+    pub fn update_static_content(&self, name: &str, content: StaticTextContent) -> bool {
         let mut document = self.content.borrow_mut();
         let Content::Document(document) = &mut *document else {
             tracing::warn!("辅助窗口：只有脚本内容才能更新静态文本");
@@ -308,7 +309,7 @@ impl AuxiliaryWindowTemplate {
     }
 
     /// 改一个扁平 SVG 按钮的背景色；只影响内容，不重建窗口。
-    pub(super) fn set_button_background(&self, name: &str, color: Color) -> bool {
+    pub fn set_button_background(&self, name: &str, color: Color) -> bool {
         let mut document = self.content.borrow_mut();
         let Content::Document(document) = &mut *document else {
             tracing::warn!("辅助窗口：只有脚本内容才能改按钮颜色");
@@ -323,7 +324,7 @@ impl AuxiliaryWindowTemplate {
     }
 
     /// 动态改一个区域的命中范围（合并 / 剪除）：只影响鼠标命中，不重画。
-    pub(super) fn edit_region(&self, name: &str, shape: cloudime_render::HitShape, combine: bool) {
+    pub fn edit_region(&self, name: &str, shape: cloudime_render::HitShape, combine: bool) {
         let mut content = self.content.borrow_mut();
         let Content::Document(document) = &mut *content else {
             tracing::warn!("窗口模板：只有脚本内容才有区域");
@@ -347,13 +348,13 @@ impl AuxiliaryWindowTemplate {
     }
 
     /// 要不要阴影（脚本 `shadow = false` 时关掉）。
-    pub(super) fn set_shadow(&self, shadow: bool) {
+    pub fn set_shadow(&self, shadow: bool) {
         self.shadow.set(shadow);
         self.revision.set(self.revision.get() + 1);
     }
 
     /// 装鼠标事件出口（脚本辅助窗口用；键位映射参考不装，鼠标一律穿透）。
-    pub(super) fn set_events(&self, events: PanelEvents) {
+    pub fn set_events(&self, events: PanelEvents) {
         *self.events.borrow_mut() = Some(events);
     }
 
@@ -375,7 +376,7 @@ impl AuxiliaryWindowTemplate {
                     .filter(|hit| hit.contains(x, y))
                     .map(|_| index + 1)
             });
-        let region = super::region::hit(&self.regions.borrow(), x, y);
+        let region = crate::region::hit(&self.regions.borrow(), x, y);
         (x, y, element, region)
     }
 
@@ -435,7 +436,7 @@ impl AuxiliaryWindowTemplate {
     }
 
     /// 创建时声明的 `able_to_get_focus`。
-    pub(super) fn focusable(&self) -> bool {
+    pub fn focusable(&self) -> bool {
         self.focusable
     }
 
@@ -444,7 +445,7 @@ impl AuxiliaryWindowTemplate {
     ///
     /// 没声明 `able_to_get_focus` 的面板不会被打开输入（只记一条日志 —— 那说明调用方写错了，
     /// 或者所有者没照 [`super::auxiliary::Assets::designate_focus`] 的规矩来）。
-    pub(super) fn set_focused(&self, focused: bool) {
+    pub fn set_focused(&self, focused: bool) {
         if focused && !self.focusable {
             tracing::warn!("窗口模板：这件资产创建时没声明 able_to_get_focus，不接输入");
             return;
@@ -453,12 +454,12 @@ impl AuxiliaryWindowTemplate {
             return;
         }
         // 鼠标穿透就靠那一个位：窗口过程那边的命中测试也读它（两边同一个来源）
-        super::set_mouse_transparent(self.hwnd, !focused);
+        set_mouse_transparent(self.hwnd, !focused);
         tracing::debug!(focused, "窗口模板：鼠标输入开关");
     }
 
     /// 贴在候选窗口的内容矩形旁边显示：`layout` 决定贴右侧（竖排）还是下方（横排）。
-    pub(super) fn show(&self, candidate: RECT, layout: LayoutMode) {
+    pub fn show(&self, candidate: RECT, layout: LayoutMode) {
         let point = POINT {
             x: candidate.left,
             y: candidate.top,
@@ -587,7 +588,7 @@ impl AuxiliaryWindowTemplate {
     }
 
     /// 收起（没显示过也无妨）。
-    pub(super) fn hide(&self) {
+    pub fn hide(&self) {
         // 收起来之后窗口内容就不作数了：下次显示重画
         self.painted.set(None);
         self.hits.borrow_mut().clear();
@@ -733,7 +734,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         // 没焦点（缺省）时窗口带着 `WS_EX_TRANSPARENT`：鼠标一律穿透到下面的窗口。
         // 命中测试照那个位回答 —— 与 `set_focused` 同一个来源，两边不会打架。
         WM_NCHITTEST => {
-            let transparent = super::mouse_transparent(hwnd);
+            let transparent = mouse_transparent(hwnd);
             LRESULT(if transparent {
                 HTTRANSPARENT as isize
             } else {

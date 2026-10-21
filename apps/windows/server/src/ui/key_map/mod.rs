@@ -1,4 +1,4 @@
-//! 键位映射参考：**候选窗口的一件资产**（见 [`super`] 那份说明）。
+//! 键位映射参考：**候选窗口的一件资产**（资产模型见 [`cloud_ui::auxiliary`]）。
 //!
 //! 把当前双键拼音方案的小写键（声母 / 韵母 / 零声母）逐行列出来，给新手对着敲。
 //! 窗口本身（主题背景 + 圆角、贴宿主摆位）走辅助窗口模板 [`AuxiliaryWindowTemplate`] —— 那块是**绘制**
@@ -12,9 +12,9 @@ use std::rc::Rc;
 
 use windows::core::Result;
 
-use super::{Asset, Bridge};
-use crate::ui::auxiliary_window_template::AuxiliaryWindowTemplate;
-use crate::ui::painter::SharedPainter;
+use cloud_ui::auxiliary::{Asset, Bridge};
+use cloud_ui::auxiliary_window_template::AuxiliaryWindowTemplate;
+use cloud_ui::painter::SharedPainter;
 use cloudime_platform::input_schemes::KeyMapLayout;
 
 /// 键位映射参考窗口。
@@ -28,7 +28,7 @@ impl KeyMapWindow {
     ///
     /// 它是块**纯参考面板**：`able_to_get_focus` 按缺省（`false`）—— 不具备焦点，鼠标一律穿透、点不着。
     /// 将来要它接输入时，把这里的 `false` 改成 `true`，再在宿主那边**指定**焦点给它
-    /// （[`super::DesignatedAssetToGetFocus`]）。
+    /// （[`cloud_ui::auxiliary::DesignatedAssetToGetFocus`]）。
     pub(crate) fn new(painter: SharedPainter) -> Result<Self> {
         let template = Rc::new(AuxiliaryWindowTemplate::new(painter, false)?);
         template.attach();

@@ -56,8 +56,9 @@ use windows::core::{
     BOOL, Error, GUID, HSTRING, IUnknown_Vtbl, Interface, PCWSTR, Result, implement, w,
 };
 
-use super::super::window_class::WindowClass;
 use super::tsf;
+use crate::window::module_handle;
+use crate::window_class::WindowClass;
 
 /// `Msftedit.dll!CreateTextServices` 的原始签名。
 type CreateTextServicesFn =
@@ -1358,7 +1359,7 @@ fn ensure_class() -> Result<()> {
     CLASS.ensure(|| WNDCLASSEXW {
         style: CS_DBLCLKS,
         lpfnWndProc: Some(wndproc),
-        hInstance: super::super::module_handle(),
+        hInstance: module_handle(),
         hCursor: unsafe { LoadCursorW(None, IDC_IBEAM).unwrap_or_default() },
         lpszClassName: CLASS_NAME,
         ..Default::default()

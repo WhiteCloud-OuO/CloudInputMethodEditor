@@ -12,8 +12,8 @@
 use cloudime_render::{FontLibrary, Renderer, Theme, UiFont, system_fonts};
 use cloudime_script::MeasureFont;
 
-use super::painter::LOCALE;
 use crate::dispatch::RenderSettings;
+use cloud_ui::painter::LOCALE;
 
 /// 量尺：一个自己的渲染器 + 建它时用的字体设置。
 pub(crate) struct Measurer {

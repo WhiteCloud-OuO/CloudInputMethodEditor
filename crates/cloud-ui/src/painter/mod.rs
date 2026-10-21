@@ -11,22 +11,22 @@ use cloudime_render::{
     Shadow, StatusCell, Theme, UiFont, system_fonts,
 };
 
-use crate::dispatch::RenderSettings;
+use crate::RenderSettings;
 
 /// 按字族名加载字体时的 locale（中日同形字选哪家的字形）。
-pub(super) const LOCALE: &str = "zh-CN";
+pub const LOCALE: &str = "zh-CN";
 
 /// 每建一次 [`Painter`] 就 +1：窗口模板靠它判断「渲染器（主题 / 字体）换了，得重画」。
 static NEXT_GENERATION: AtomicU64 = AtomicU64::new(1);
 
 /// UI 线程上共享的渲染器；`None` = 字体库加载失败，渲染不出来。
-pub(super) type SharedPainter = Rc<RefCell<Option<Painter>>>;
+pub type SharedPainter = Rc<RefCell<Option<Painter>>>;
 
-pub(super) struct Painter {
+pub struct Painter {
     /// 渲染器（字体库随它）。
     renderer: Renderer,
 
-    /// 这一份是第几次建的（见 [`NEXT_GENERATION`]）。
+    /// 这一份是第几次建的（见 `NEXT_GENERATION`）。
     generation: u64,
 
     /// 主题：三项字体与竖排最小宽度按配置改过，颜色按当前主题文件改过，其余用缺省。
@@ -43,7 +43,7 @@ pub(super) struct Painter {
 
 /// 状态条 / 状态切换提示用哪一套主题色。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub(super) enum StatusKind {
+pub enum StatusKind {
     /// 悬浮工具栏。
     Bar,
 
@@ -135,7 +135,7 @@ impl Painter {
     }
 
     /// 渲染设置变了就重建渲染器。
-    pub(super) fn configure(shared: &SharedPainter, settings: &RenderSettings) {
+    pub fn configure(shared: &SharedPainter, settings: &RenderSettings) {
         let mut painter = shared.borrow_mut();
         if painter
             .as_ref()
@@ -147,7 +147,7 @@ impl Painter {
     }
 
     /// 画一帧候选窗口；`dpi` 96 为 100%。失败记日志返回 `None`，调用方不显示候选窗口。
-    pub(super) fn render_frame(
+    pub fn render_frame(
         &mut self,
         frame: &Frame,
         layout: LayoutMode,
@@ -178,18 +178,18 @@ impl Painter {
         Some(rendered)
     }
 
-    /// 这一份渲染器是第几次建的（见 [`NEXT_GENERATION`]）。
-    pub(super) fn generation(&self) -> u64 {
+    /// 这一份渲染器是第几次建的（见 `NEXT_GENERATION`）。
+    pub fn generation(&self) -> u64 {
         self.generation
     }
 
     /// `text_edit` 宿主的底色 / 文字色：跟随候选窗主题，免得白底黑字压在深色面板上。
-    pub(super) fn text_edit_colors(&self) -> (Color, Color) {
+    pub fn text_edit_colors(&self) -> (Color, Color) {
         (self.theme.colors.background, self.theme.colors.text)
     }
 
     /// `text_edit` 选中文字的背景 / 文字色：跟随候选窗高亮色。
-    pub(super) fn text_edit_selection_colors(&self) -> (Color, Color) {
+    pub fn text_edit_selection_colors(&self) -> (Color, Color) {
         (
             self.theme.colors.highlight,
             self.theme.colors.highlight_text,
@@ -197,7 +197,7 @@ impl Painter {
     }
 
     /// 某个字体槽位的字族与字号（点）：`text_edit` 的字体用。
-    pub(super) fn text_font(&self, slot: FontSlot) -> (Option<String>, f32) {
+    pub fn text_font(&self, slot: FontSlot) -> (Option<String>, f32) {
         match slot {
             FontSlot::Candidate => (self.theme.text_family.clone(), self.theme.text_font.size),
             FontSlot::Pinyin => (
@@ -213,7 +213,7 @@ impl Painter {
     }
 
     /// 画一块空面板（内容区尺寸给死）：给「窗口模板」用（版面还没生成时）。
-    pub(super) fn render_panel(&mut self, content: (i32, i32), dpi: u32) -> Option<Rendered> {
+    pub fn render_panel(&mut self, content: (i32, i32), dpi: u32) -> Option<Rendered> {
         self.renderer
             .render_panel(
                 content.0 as f32,
@@ -227,7 +227,7 @@ impl Painter {
     }
 
     /// 画一块「键位映射参考」面板（版面给进来，内容区尺寸由版面自己定）：给「窗口模板」用。
-    pub(super) fn render_key_map(
+    pub fn render_key_map(
         &mut self,
         layout: &cloudime_render::KeyMapLayout,
         cell: f32,
@@ -247,7 +247,7 @@ impl Painter {
 
     /// 画一份**脚本内容**（面板 + 元素表）；`shadow` = 要不要与候选窗同源的那层阴影。
     /// 给「辅助窗口模板」与脚本独立窗口用。
-    pub(super) fn render_document(
+    pub fn render_document(
         &mut self,
         document: &cloudime_render::Document,
         dpi: u32,
@@ -268,7 +268,7 @@ impl Painter {
 
     /// 「候选窗口装 9 个候选项」那个内容高度（**点**）：键位映射参考的缺省目标高度
     /// （竖排 / 横排都用它当底，见窗口模板的 `key_map_height`）。
-    pub(super) fn key_map_height_nine(&mut self, dpi: u32) -> f32 {
+    pub fn key_map_height_nine(&mut self, dpi: u32) -> f32 {
         const ROWS: usize = 9;
         let (_, height) = self.candidate_size(Layout::Vertical, ROWS, dpi);
         height as f32 / scale(dpi)
@@ -277,7 +277,7 @@ impl Painter {
     /// 按「候选窗口装 `rows` 个候选、每个两个字」的形状量内容区尺寸（像素，不含阴影边）。
     ///
     /// 给「窗口模板」算默认大小用：竖排量 9 个候选的高度、横排量 6 个两字候选的宽度。
-    pub(super) fn candidate_size(&mut self, layout: Layout, rows: usize, dpi: u32) -> (i32, i32) {
+    pub fn candidate_size(&mut self, layout: Layout, rows: usize, dpi: u32) -> (i32, i32) {
         let frame = Frame {
             preedit: Some(Preedit::plain("shu'ru'fa", 0)),
             rows: (0..rows).map(|index| Row::plain(index, "国国")).collect(),
@@ -291,7 +291,7 @@ impl Painter {
     }
 
     /// 画状态条或状态切换提示：`kind` 决定用哪一套背景 / 图标 / 阴影色。
-    pub(super) fn render_status(
+    pub fn render_status(
         &mut self,
         cells: &[StatusCell],
         dpi: u32,

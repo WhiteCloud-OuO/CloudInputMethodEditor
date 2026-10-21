@@ -2,54 +2,47 @@
 //! 这些高 z-band 宿主盖住，只有本进程配合 uiAccess 签名才能盖过）。
 //!
 //! 两类窗口**一律用渲染**（`docs/design/windows.md` §6）：云朵渲染器把一整帧出成预乘 RGBA 位图（那块
-//! 「内存区域」），[`layered`] 换通道后 `UpdateLayeredWindow` 整块一次贴上。窗口过程**不做直接绘制** ——
+//! 「内存区域」），`cloud_ui::layered` 换通道后 `UpdateLayeredWindow` 整块一次贴上。窗口过程**不做直接绘制** ——
 //! 不处理 `WM_PAINT`、窗口类没有背景刷、也没有 `InvalidateRect`：贴上去的那一帧会一直留在窗口上，
 //! 只有再贴一帧新的才会变。
 //!
 //! HWND 线程亲和：Router 在工人线程上产出内容，经通道 + `PostThreadMessageW` 唤醒交给 UI 线程应用。
-//! 线程句柄是 [`UiHandle`]，命令在 [`command`]，分层窗口合成在 [`layered`]，两块窗口共用的渲染器在 [`painter`]。
-//! 两类窗口各有一个**模板**：独立窗口用 [`independent_window_template`]（自己那块窗 + 名下资产），
-//! 辅助窗口（资产）用 [`auxiliary_window_template`]（分层面板 + 贴宿主摆位）。
+//! 线程句柄是 `UiHandle`，命令在 `command`，分层窗口合成在 `cloud_ui::layered`，两块窗口共用的渲染器在
+//! `cloud_ui::painter`。
+//! 两类窗口各有一个**模板**：独立窗口用 `cloud_ui::independent_window_template`（自己那块窗 + 名下资产），
+//! 辅助窗口（资产）用 `cloud_ui::auxiliary_window_template`（分层面板 + 贴宿主摆位）。
 //!
 //! **窗口分两类**（规则见 `docs/design/windows.md`）：
 //!
 //! - **独立窗口（independent window）**：各有一块自己的分层窗与**自己的生命周期**（UI 线程建、按需显示 / 隐藏、
-//!   随进程销毁）—— 候选窗口在 [`candidates`]、悬浮工具栏在 [`status`]、状态切换提示在 [`status_tip`]；
+//!   随进程销毁）—— 候选窗口在 `candidates`、悬浮工具栏在 `status`、状态切换提示在 `status_tip`；
 //! - **辅助窗口（auxiliary window）**：挂在某块独立窗口上的辅助信息 / 提示窗口，是那块独立窗口的**资产**（asset），
-//!   在 [`auxiliary`]。**所有者唯一且不转移**（每个辅助窗口有且只有一个所有者，就是它的宿主；所有权不移交、
+//!   在 `cloud_ui::auxiliary`。**所有者唯一且不转移**（每个辅助窗口有且只有一个所有者，就是它的宿主；所有权不移交、
 //!   也不被直接借用），而且**只能经桥接**（bridging）跟所有者通讯 —— 它不能直接找别的辅助窗口或别的独立窗口，
-//!   要什么都得委托所有者（[`auxiliary::Bridge`]，宿主实现）。生命周期**始终绑定**到宿主：宿主先建好自己那块窗
+//!   要什么都得委托所有者（[`cloud_ui::auxiliary::Bridge`]，宿主实现）。生命周期**始终绑定**到宿主：宿主先建好自己那块窗
 //!   再建资产（`Assets::add`），销毁时 `Drop` 的第一件事就是把资产放掉（`Assets::retire`）；显示 / 隐藏也由宿主
 //!   驱动（`Asset::sync` 里经 `owner.host()` / `owner.asset_on()` 要）。眼下只有候选窗口的
-//!   「键位映射参考」（[`auxiliary::key_map`]）一件。
-//! - **焦点（focus）**（[`auxiliary::Focus`]）：一组窗口（独立窗口 + 它名下的资产）里**任何时刻恰好一个**持有者。
+//!   「键位映射参考」（`key_map`）一件。
+//! - **焦点（focus）**（[`cloud_ui::auxiliary::Focus`]）：一组窗口（独立窗口 + 它名下的资产）里**任何时刻恰好一个**持有者。
 //!   缺省在独立窗口身上（创建并显示后总是具备焦点），每块独立窗口**都**能**指定**资产获取焦点
-//!   （[`auxiliary::DesignatedAssetToGetFocus`]，由独立窗口模板统一实现）—— 接手的资产响应鼠标 / 键盘，
+//!   （[`cloud_ui::auxiliary::DesignatedAssetToGetFocus`]，由独立窗口模板统一实现）—— 接手的资产响应鼠标 / 键盘，
 //!   原所有者不再接受。**所有辅助窗口默认不具备焦点**（鼠标穿透、点不着），除非创建时声明
-//!   [`auxiliary::Asset::able_to_get_focus`]；归还三条路（所有者收回 / 资产收起 / 资产生命周期末），
-//!   后两条**自动**走。**同一所有者**的两件辅助窗口之间转手也**经桥接**（[`auxiliary::Bridge::designate_focus`]，
+//!   [`cloud_ui::auxiliary::Asset::able_to_get_focus`]；归还三条路（所有者收回 / 资产收起 / 资产生命周期末），
+//!   后两条**自动**走。**同一所有者**的两件辅助窗口之间转手也**经桥接**（[`cloud_ui::auxiliary::Bridge::designate_focus`]，
 //!   资产之间不直接通讯）；把自己的焦点转出去叫**失焦**（unfocusing）、获得焦点叫**聚焦**（focusing）。
 //!   通过**资产克隆 / 窃取**进来的资产特性照旧（能不能获得焦点跟原件一样），但**不抢焦点** —— 收进来时焦点仍
 //!   留在所有者或姊妹资产身上。
 //!   这是**逻辑焦点**：谁都不去抢系统的 `SetFocus`（窗口全是 `WS_EX_NOACTIVATE`，抢了会把用户正在打字的
 //!   应用弄丢）。
 
-mod auxiliary;
-mod auxiliary_window_template;
 mod candidates;
 mod command;
-mod independent_window_template;
-mod layered;
+mod key_map;
 mod measure;
-mod monitor;
-pub(crate) use monitor::{dpi_near, work_area_near};
-mod painter;
-mod region;
-mod script_window;
+pub(crate) use cloud_ui::monitor::{dpi_near, work_area_near};
 mod status;
 mod status_tip;
 mod viewport;
-mod window_class;
 
 pub(crate) use measure::SharedMeasurer;
 pub(crate) use viewport::Viewport;
@@ -60,16 +53,14 @@ use std::sync::Arc;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use windows::Win32::Foundation::{E_FAIL, HINSTANCE, HWND, LPARAM, RECT, WPARAM};
-use windows::Win32::System::LibraryLoader::GetModuleHandleW;
+use windows::Win32::Foundation::{E_FAIL, LPARAM, RECT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    ASFW_ANY, AllowSetForegroundWindow, DispatchMessageW, GWL_EXSTYLE, GetMessageW,
-    GetWindowLongPtrW, MSG, PostThreadMessageW, SetWindowLongPtrW, TranslateMessage, WM_APP,
-    WS_EX_TRANSPARENT,
+    ASFW_ANY, AllowSetForegroundWindow, DispatchMessageW, GetMessageW, MSG, PostThreadMessageW,
+    TranslateMessage, WM_APP,
 };
 use windows::core::{Error, Result};
 
@@ -79,14 +70,14 @@ use cloudime_platform::protocol::{Frame, ScreenRect};
 
 use self::candidates::CandidateWindow;
 use self::command::UiCommand;
-use self::painter::{Painter, SharedPainter};
-use self::script_window::{ScriptWindowEvents, ScriptWindows};
 use self::status::StatusBar;
 use self::status_tip::StatusTip;
 use crate::dispatch::{
     CandidateEvent, CandidateSink, RenderSettings, ScriptWindowSink, StatusEvent, StatusSink,
     StatusView,
 };
+use cloud_ui::painter::{Painter, SharedPainter};
+use cloud_ui::script_window::{ScriptWindowEvents, ScriptWindows};
 
 /// 状态条上的操作（点格子 / 拖动结束）回给 Router 的回调，UI 线程上调。
 pub type StatusEvents = Box<dyn Fn(StatusEvent) + Send>;
@@ -250,33 +241,6 @@ pub(crate) fn open_spec_chars() {
     }
 }
 
-/// 本进程 exe 的模块句柄（注册窗口类 / 建窗口用）。
-pub(super) fn module_handle() -> HINSTANCE {
-    let module = unsafe { GetModuleHandleW(None) }.unwrap_or_default();
-    HINSTANCE(module.0)
-}
-
-/// 给窗口开 / 关**鼠标穿透**（`WS_EX_TRANSPARENT` 那一个位）：开着鼠标落到下面的窗口（点不着）。
-///
-/// 窗口之间「谁接受鼠标」都动这一个位（见 `ui::auxiliary` 的焦点）：焦点不在自己身上的一方开着它。
-/// 光靠窗口过程回 `HTTRANSPARENT` 不够 —— 那玩意儿只把消息转给**同线程**的下层窗口，而咱底下
-/// 通常是别的进程的应用。
-pub(super) fn set_mouse_transparent(hwnd: HWND, transparent: bool) {
-    let current = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
-    let style = if transparent {
-        current | WS_EX_TRANSPARENT.0
-    } else {
-        current & !WS_EX_TRANSPARENT.0
-    };
-    unsafe { SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style as isize) };
-}
-
-/// 这个窗口这会儿是不是鼠标穿透（窗口过程的 `WM_NCHITTEST` 照它回答，与 [`set_mouse_transparent`] 同一个位）。
-pub(super) fn mouse_transparent(hwnd: HWND) -> bool {
-    let style = unsafe { GetWindowLongPtrW(hwnd, GWL_EXSTYLE) } as u32;
-    style & WS_EX_TRANSPARENT.0 != 0
-}
-
 /// UI 线程主体：建窗口、报回线程 id、跑消息循环。
 fn run(
     commands: Receiver<UiCommand>,
@@ -367,7 +331,7 @@ fn apply(
         UiCommand::Show(payload) => {
             let (frame, badges, rect) = *payload;
             window.set_content(&frame, &badges);
-            // 宿主换了一帧：名下资产由它自己在 `show` 里摆好（见 `super::auxiliary`）
+            // 宿主换了一帧：名下资产由它自己在 `show` 里摆好（见 `cloud_ui::auxiliary`）
             window.show(to_win_rect(rect));
         }
         UiCommand::Hide => window.hide(),

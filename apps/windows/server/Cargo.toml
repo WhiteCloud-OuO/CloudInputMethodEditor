@@ -23,6 +23,7 @@ cloudime-lm.workspace = true
 cloudime-neural.workspace = true
 cloudime-platform.workspace = true
 cloudime-render.workspace = true
+cloud-ui.workspace = true
 cloudime-script.workspace = true
 cloudime-translate.workspace = true
 cloudime-update.workspace = true

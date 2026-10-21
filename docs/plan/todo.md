@@ -76,7 +76,7 @@
   功能收尾（按价值排；工时=开发+真机验证合计，单人；真机来回是大头）：
   - [x] **② 候选词「看到轮次」计数 `note_displayed`**（★☆☆ / 低）：`dispatch/mod.rs::reconcile_candidates` 里真正 show 那次按当前页调 `Engine::note_displayed`、收窗传空，词汇记录据此统计「见过 / 上屏过」的词数。
   - [~] **③ 悬浮状态条**（★★☆ / 中 / 1.5–2 天）：**代码完成，待真机测**（2026-09-10）。
-    Server 侧单例，跟候选窗同一条 UI 线程；分层窗贴图从候选窗抽出成 `ui/layered/` 两边共用，云朵渲染器（字体 / 配色 / DPI / 深浅）复用；
+    Server 侧单例，跟候选窗同一条 UI 线程；分层窗贴图从候选窗抽出成 `crates/cloud-ui/src/layered/` 两边共用，云朵渲染器（字体 / 配色 / DPI / 深浅）复用；
     状态条自己一个窗口类 + 窗口过程（`ui/status/`）：`WM_NCHITTEST`→`HTCAPTION` 整块可拖、`WM_MOUSEACTIVATE`→`MA_NOACTIVATE` 不抢焦点、
     `WM_EXITSIZEMOVE` 把位置写回 `[status_bar] x/y`（`GWLP_USERDATA` 存自身指针）。新增协议 `ClientMessage::ModeChanged{english}`（fire-and-forget），
     DLL 在 `update_mode_indicator` 推模式；Server 据此刷、会话关就收起。配置加 `[status_bar]` 分节（`enabled`/`x`/`y`），

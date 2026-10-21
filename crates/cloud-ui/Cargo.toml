@@ -1,0 +1,40 @@
+[package]
+name = "cloud-ui"
+description = "Windows 自绘窗口壳：分层窗口、资产窗口、脚本窗口与 RichEdit 宿主"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[features]
+default = ["script"]
+# 脚本窗口（`ScriptWindows` / RichEdit / TSF）；独立程序只要通用窗口时可以关掉，免得拖进 LuaJIT。
+script = ["dep:cloudime-script"]
+
+[dependencies]
+cloudime-platform.workspace = true
+cloudime-render.workspace = true
+cloudime-script = { workspace = true, optional = true }
+tracing.workspace = true
+
+[target."cfg(windows)".dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_Graphics_Gdi",
+    "Win32_System_Com",
+    "Win32_System_LibraryLoader",
+    "Win32_System_Ole",
+    "Win32_System_Variant",
+    "Win32_UI_Controls",
+    "Win32_UI_Controls_RichEdit",
+    "Win32_UI_HiDpi",
+    "Win32_UI_Input_Ime",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_TextServices",
+    "Win32_UI_WindowsAndMessaging",
+] }
+# `#[implement]` 展开会引用 `::windows_core`，需要直接依赖
+windows-core.workspace = true
+
+[lints]
+workspace = true

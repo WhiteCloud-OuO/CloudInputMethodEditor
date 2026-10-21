@@ -5,7 +5,7 @@
 //! - **独立窗口**：自己一块分层窗、自己的生命周期（脚本 `close` 或进程退出时销毁）；
 //! - **辅助窗口**：挂在某块**脚本独立窗口**名下的一件**资产**，走 [`AuxiliaryWindowTemplate`]，
 //!   贴宿主摆位、默认不接鼠标；
-//! - 内容都是脚本给的声明式 [`Document`]（点坐标），这里经 [`Painter::render_document`] 出图、
+//! - 内容都是脚本给的声明式 [`Document`]（点坐标），这里经 [`crate::painter::Painter::render_document`] 出图、
 //!   [`layered::present`] 整块贴上 —— 与候选窗同一个渲染器、同一层阴影。
 //!
 //! **线程**：本模块全部跑在 UI 线程上；脚本在工人线程产出 [`WindowRequest`]，经命令通道过来。
@@ -34,13 +34,14 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, Result, w};
 
-use super::auxiliary::{Asset, Bridge, DesignatedAssetToGetFocus, Focus, Host};
-use super::auxiliary_window_template::{AuxiliaryWindowSpec, AuxiliaryWindowTemplate, PanelAction};
-use super::independent_window_template::IndependentWindowTemplate;
-use super::layered;
-use super::monitor;
-use super::painter::SharedPainter;
-use super::window_class::WindowClass;
+use crate::auxiliary::{Asset, Bridge, DesignatedAssetToGetFocus, Focus, Host};
+use crate::auxiliary_window_template::{AuxiliaryWindowSpec, AuxiliaryWindowTemplate, PanelAction};
+use crate::independent_window_template::IndependentWindowTemplate;
+use crate::layered;
+use crate::monitor;
+use crate::painter::SharedPainter;
+use crate::window::mouse_transparent;
+use crate::window_class::WindowClass;
 use cloudime_platform::LayoutMode;
 use cloudime_render::{
     ButtonState, Color, Document, Element, FontSlot, HitShape, Region, ScrollAxis,
@@ -66,7 +67,7 @@ static CLASS: WindowClass = WindowClass::new();
 /// 脚本窗口鼠标事件的出口：UI 线程调它，把事件送进工人线程的 `Work` 通道。
 ///
 /// `Arc`（而不是 `Rc`）：它要随 UI 线程的启动闭包跨线程移动；窗口之间共享同一份。
-pub(super) type ScriptWindowEvents = Arc<dyn Fn(ScriptWindowEvent) + Send + Sync>;
+pub type ScriptWindowEvents = Arc<dyn Fn(ScriptWindowEvent) + Send + Sync>;
 
 thread_local! {
     /// 本线程建出来的脚本独立窗口（HWND → 窗口）：窗口过程收鼠标 / 命中测试时按它找回状态。
@@ -74,7 +75,7 @@ thread_local! {
 }
 
 /// 脚本建出来的全部窗口（独立窗口 + 名下的辅助窗口），按编号索引。
-pub(super) struct ScriptWindows {
+pub struct ScriptWindows {
     windows: HashMap<WindowId, Rc<ScriptWindow>>,
     auxiliaries: HashMap<WindowId, Rc<ScriptAuxiliary>>,
     painter: SharedPainter,
@@ -83,7 +84,7 @@ pub(super) struct ScriptWindows {
 
 impl ScriptWindows {
     /// 一块窗口都还没有：`painter` 与别的窗口共用（同一份字形缓存）。
-    pub(super) fn new(painter: SharedPainter, events: ScriptWindowEvents) -> Self {
+    pub fn new(painter: SharedPainter, events: ScriptWindowEvents) -> Self {
         Self {
             windows: HashMap::new(),
             auxiliaries: HashMap::new(),
@@ -93,7 +94,7 @@ impl ScriptWindows {
     }
 
     /// 脚本的一次窗口操作（命令通道里来的，按顺序执行）。
-    pub(super) fn apply(&mut self, request: WindowRequest) {
+    pub fn apply(&mut self, request: WindowRequest) {
         match request {
             WindowRequest::Create(id, spec) => self.create(id, spec),
             WindowRequest::CreateAuxiliary(id, spec) => self.create_auxiliary(id, spec),
@@ -1994,7 +1995,7 @@ impl ScriptWindow {
     fn hit_at(&self, client_x: i32, client_y: i32) -> (f32, f32, Option<usize>, Option<usize>) {
         let (x, y) = content_point(client_x, client_y, self.margin.get(), self.scale.get());
         let element = element_at(&self.hits.borrow(), x, y);
-        let region = super::region::hit(&self.regions.borrow(), x, y);
+        let region = crate::region::hit(&self.regions.borrow(), x, y);
         (x, y, element, region)
     }
 
@@ -2612,7 +2613,7 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     match msg {
         // 不接鼠标的脚本窗口带 `WS_EX_TRANSPARENT`：命中测试照那个位回答（与模板同一个来源）。
         WM_NCHITTEST => {
-            let transparent = super::mouse_transparent(hwnd);
+            let transparent = mouse_transparent(hwnd);
             LRESULT(if transparent {
                 HTTRANSPARENT as isize
             } else {

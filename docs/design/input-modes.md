@@ -92,7 +92,7 @@ ZXCVBNM,./
 
 - 进入 / 按键 / 分类状态：`apps/windows/server/src/dispatch/u_mode/`、`dispatch/key/input.rs`
 - 候选列表与 Tip：`dispatch/composed/mod.rs`
-- 符号窗口：复用 `ui/auxiliary` 的键位映射资产，新增临时符号模式（不影响用户配置的键位映射参考）
+- 符号窗口：复用 `cloud_ui::auxiliary` 的键位映射资产，新增临时符号模式（不影响用户配置的键位映射参考）
 - 非全拼入口：`InputSettings::full_pinyin` + TSF 的 `GUID_MODE_U`
 
 ## 与脚本的关系

@@ -75,7 +75,7 @@ computer
 
 | 方案 | 说明 |
 |---|---|
-| Server 进程里自绘渲染器出位图、贴到 layered window（`server/src/ui/layered/`） | 候选窗与悬浮状态条共用一条 UI 线程与一个字体库，阴影、圆角都由渲染器画 |
+| Server 进程里自绘渲染器出位图、贴到 layered window（`crates/cloud-ui/src/layered/`） | 候选窗与悬浮状态条共用一条 UI 线程与一个字体库，阴影、圆角都由渲染器画 |
 
 不选的方案及原因：
 

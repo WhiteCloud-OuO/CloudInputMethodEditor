@@ -137,8 +137,8 @@ win:clear("editor")
 | `crates/cloudime-render/src/document.rs` | `Element::TextBox` 与运行时滚动条状态 |
 | `crates/cloudime-render/src/renderer/mod.rs` | 多行背景和滚动条绘制 |
 | `crates/cloudime-script/src/window.rs` | `parse_text_box`、`Element::TextBox`、文本 API 缓存 |
-| `apps/windows/server/src/ui/script_window/text_host.rs` | 多行 RichEdit 模式、`TxDraw`、滚动查询 / 回写、行距 |
-| `apps/windows/server/src/ui/script_window/mod.rs` | 文本宿主统一收集、内部滚动条状态 / 拖动 / 滚轮 / 事件 |
+| `crates/cloud-ui/src/script_window/text_host.rs` | 多行 RichEdit 模式、`TxDraw`、滚动查询 / 回写、行距 |
+| `crates/cloud-ui/src/script_window/mod.rs` | 文本宿主统一收集、内部滚动条状态 / 拖动 / 滚轮 / 事件 |
 | `lua.md` / `docs/design/script.md` / `docs/notes/crate-notes.md` | 对外属性、方法、事件和实现说明 |
 
 实现状态：已完成。多行文本由 RichEdit 的 `TxDraw` 绘制；建宿主后先 `OnTxInPlaceActivate`

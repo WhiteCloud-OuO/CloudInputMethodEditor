@@ -214,7 +214,7 @@ fn family(name: &str) -> Option<String> {
 
 /// 主题文件的 21 个颜色 → 渲染配色。
 ///
-/// 与 `apps/windows/server/src/ui/painter/mod.rs::apply_theme_colors` 是同一份映射：两个壳依赖的东西
+/// 与 `crates/cloud-ui/src/painter/mod.rs::apply_theme_colors` 是同一份映射：两个壳依赖的东西
 /// 不同（Server 拿 `RenderSettings`、这里只有 `ThemeFile`），谁也不能反过来依赖谁，所以各留一份；
 /// **改键名或加颜色时两处一起改**。
 fn apply_colors(theme: &mut Theme, file: &ThemeFile) {

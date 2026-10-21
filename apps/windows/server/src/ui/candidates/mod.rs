@@ -1,5 +1,5 @@
 //! 候选窗口：不抢焦点、置顶的分层窗口，跟随光标，画拼音行与候选列表，四周柔和阴影。
-//! 由云朵渲染器出位图再贴（[`super::painter`]）；绘制内容在 [`RenderData`]，一行的展示形态在 [`row`]。
+//! 由云朵渲染器出位图再贴（[`cloud_ui::painter`]）；绘制内容在 [`RenderData`]，一行的展示形态在 [`row`]。
 //!
 //! 方向键只移动高亮时，高亮条从一个格子滑到另一个（见 [`HIGHLIGHT_SLIDE_MS`]）：
 //! 窗口过程收 `WM_TIMER` 按经过时间算进度、原地重贴；纯展示，不改窗口位置大小。
@@ -34,15 +34,15 @@ use cloudime_platform::protocol::Frame;
 use cloudime_render::{HighlightAnimation, HighlightRect, Pixmap, clip_pixmap};
 
 pub(crate) use self::render_data::RenderData;
-use super::auxiliary::key_map::KeyMapWindow;
-use super::auxiliary::{Bridge, DesignatedAssetToGetFocus, Host};
-use super::independent_window_template::IndependentWindowTemplate;
-use super::layered;
-use super::monitor;
-use super::painter::SharedPainter;
-use super::window_class::WindowClass;
+use super::key_map::KeyMapWindow;
 use super::{CandidateEvents, Viewport};
 use crate::dispatch::{CandidateEvent, RenderSettings};
+use cloud_ui::auxiliary::{Bridge, DesignatedAssetToGetFocus, Host};
+use cloud_ui::independent_window_template::IndependentWindowTemplate;
+use cloud_ui::layered;
+use cloud_ui::monitor;
+use cloud_ui::painter::SharedPainter;
+use cloud_ui::window_class::WindowClass;
 
 const CLASS_NAME: PCWSTR = w!("CloudIMECandidateWindow");
 static CLASS: WindowClass = WindowClass::new();
@@ -165,7 +165,7 @@ struct Transition {
 /// 候选窗口。内容经 `UpdateLayeredWindow` 一次贴上（**渲染**，不做直接绘制 —— 见
 /// `docs/design/windows.md` §6），窗口过程只额外处理滑动定时器。
 ///
-/// 它是一块**独立窗口**（见 [`super::independent_window_template`]）：自己那块窗与**名下的资产**
+/// 它是一块**独立窗口**（见 [`cloud_ui::independent_window_template`]）：自己那块窗与**名下的资产**
 /// （辅助窗口，眼下是键位映射参考）都交给 [`IndependentWindowTemplate`] 管。
 pub(crate) struct CandidateWindow {
     /// 独立窗口模板：自己那块分层窗 + 名下资产（销毁时先放资产、再销毁窗）。
@@ -268,7 +268,7 @@ impl CandidateWindow {
         )?;
         let dpi = unsafe { GetDpiForSystem() }.max(96);
         let data = RefCell::new(RenderData::empty());
-        // 资产的寿命在宿主这块窗建好**之后**开始：先有自己，再建名下资产（见 `super::auxiliary`）
+        // 资产的寿命在宿主这块窗建好**之后**开始：先有自己，再建名下资产（见 `cloud_ui::auxiliary`）
         match KeyMapWindow::new(painter.clone()) {
             Ok(asset) => template.assets_mut().add(Box::new(asset)),
             Err(error) => tracing::error!(%error, "建键位映射参考窗口失败，将不显示它"),
@@ -398,12 +398,12 @@ impl CandidateWindow {
         self.data.borrow().layout
     }
 
-    /// 是不是展开着（Tab 的「更多候选项」）：展开时名下的资产要让位（见 [`super::auxiliary::Asset`]）。
+    /// 是不是展开着（Tab 的「更多候选项」）：展开时名下的资产要让位（见 [`cloud_ui::auxiliary::Asset`]）。
     pub(crate) fn expanded(&self) -> bool {
         self.data.borrow().columns > 0
     }
 
-    /// 这一组的焦点在不在**自己**身上（缺省在；被指定给名下资产时不在，见 [`super::auxiliary::Focus`]）。
+    /// 这一组的焦点在不在**自己**身上（缺省在；被指定给名下资产时不在，见 [`cloud_ui::auxiliary::Focus`]）。
     /// 不在时窗口过程让位：整块窗鼠标穿透，点不着、滚轮也不是它的。
     pub(crate) fn focused(&self) -> bool {
         self.template.focused()
@@ -805,7 +805,7 @@ impl CandidateWindow {
 }
 
 /// 候选窗口是名下资产（辅助窗口）的**所有者**：资产要什么只能经这条**桥接**路跟它要
-/// （见 [`super::auxiliary`]）—— 它们够不着别的辅助窗口，也够不着别的独立窗口。
+/// （见 [`cloud_ui::auxiliary`]）—— 它们够不着别的辅助窗口，也够不着别的独立窗口。
 impl Bridge for CandidateWindow {
     fn host(&self) -> Host {
         Host {

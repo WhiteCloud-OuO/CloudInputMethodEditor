@@ -126,9 +126,9 @@ cloudime-render
 
 ## 参考
 
-- `apps/windows/server/src/ui/script_window/text_host.rs`
-- `apps/windows/server/src/ui/script_window/text_store.rs`
-- `apps/windows/server/src/ui/script_window/tsf.rs`
+- `crates/cloud-ui/src/script_window/text_host.rs`
+- `crates/cloud-ui/src/script_window/text_store.rs`
+- `crates/cloud-ui/src/script_window/tsf.rs`
 - `crates/cloudime-render/src/text/mod.rs`
 - `docs/design/text-box.md`
 - `docs/design/script.md`

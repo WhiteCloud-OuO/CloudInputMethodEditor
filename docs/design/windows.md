@@ -149,7 +149,7 @@ pub(super) trait Clonable: Asset {
 
 两类窗口画内容只有这一种方法：**先画进一块内存区域，画完整块贴到窗口上**。云朵渲染器把一整帧（阴影、圆角、
 文字、图标）出成一块**预乘 RGBA 位图**（tiny-skia 画形状 / 路径，cosmic-text + swash 画字，resvg 画 SVG，
-阴影是手写盒式模糊），`ui/layered` 换通道后 `UpdateLayeredWindow` **整块一次**贴上（`ULW_ALPHA`，逐像素 alpha）。
+阴影是手写盒式模糊），`cloud_ui::layered` 换通道后 `UpdateLayeredWindow` **整块一次**贴上（`ULW_ALPHA`，逐像素 alpha）。
 落地上：
 
 - 窗口过程**不处理 `WM_PAINT`**（分层窗口本来就不走这条路）；窗口类**不设 `hbrBackground`**、也不调
@@ -218,19 +218,20 @@ pub(super) trait Clonable: Asset {
   `Region::contains_region` / `intersects` 用 `i_overlay` 把形状转成多边形做并 / 差 / 交，
   给出内含 / 相交 / 重合 / 相离（只贴一条边不算相交）；脚本侧另有 `region_contains` 查点。
 
-实现：`cloudime_render::Region`（数据：名字 / 形状 / `draggable`）、`ui/region.rs::hit`（命中）、
+实现：`cloudime_render::Region`（数据：名字 / 形状 / `draggable`）、`cloud_ui::region::hit`（命中）、
 脚本窗口的 `begin_drag` 按命中区域的 `draggable` 决定要不要开始拖窗口。
 
 ## 7. 实现落点
 
-- **独立窗口模板**（`ui/independent_window_template/`）：注册窗口类 + 建一块**分层、置顶、不抢焦点**的弹出窗
+- **独立窗口模板**（`crates/cloud-ui/src/independent_window_template/`）：注册窗口类 + 建一块**分层、置顶、不抢焦点**的弹出窗
   （纯展示的再加 `TRANSPARENT` 让鼠标穿透），并**管名下的资产** —— `Assets` 的 `add` / `sync` / `hide` /
   `set_lines` / `retire`，`Drop` 里**先 `retire` 再 `DestroyWindow` 自己**（§1 的寿命规矩由模板保证）。
+  候选窗口、悬浮工具栏、状态切换提示与脚本独立窗口都用它建窗（候选 / 脚本窗口再往里挂资产）。
   **焦点**也由它兜着（§4）：焦点状态在资产表里，模板实现 `DesignatedAssetToGetFocus` —— 指定 / 收回时自己
   **失焦 / 聚焦**（`unfocusing` / `focusing`，两边都落到 `sync_input()` 上），并给窗口过程一个 `focused()`：
-  焦点不在自己身上时整块让开，自己那块窗鼠标穿透（`WS_EX_TRANSPARENT`，`ui::set_mouse_transparent`），
+  焦点不在自己身上时整块让开，自己那块窗鼠标穿透（`WS_EX_TRANSPARENT`，`cloud_ui::window::set_mouse_transparent`），
   窗口过程的 `WM_NCHITTEST` 也按 `focused()` 回 `HTTRANSPARENT`。
-  - **辅助窗口模板**（`ui/auxiliary_window_template/`）：资产用的那块**分层面板**（主题背景 + 圆角 + 阴影
+  - **辅助窗口模板**（`crates/cloud-ui/src/auxiliary_window_template/`）：资产用的那块**分层面板**（主题背景 + 圆角 + 阴影
     都出一张预乘 RGBA 位图里；宽 / 高 / 间隙三个属性，没设过按宿主形状算默认；`show(宿主内容区矩形, 排布方向)`
     摆位 —— 宿主右边 / 下边放不下就换左边 / 上边）。画什么三选一：**空面板** / **键位映射参考** / **脚本文档**
     （`Document`，`set_document`）；出图 `Painter::render_panel` / `render_key_map` / `render_document`，
@@ -238,12 +239,12 @@ pub(super) trait Clonable: Asset {
     代号」判重，没变就不重贴。**焦点**：`new` 收一个 `able_to_get_focus`，`set_focused` 开关鼠标穿透
     （`WS_EX_TRANSPARENT` 与命中测试读同一个位，两边不会打架）。**鼠标**：`set_events` 装一个出口，
     点击 / 悬停 / 离开变成内容区坐标 + 命中元素（脚本辅助窗口用；键位映射参考不装，一律穿透）。
-- **资产这层**（`ui/auxiliary/`）：`Asset`（资产：`name`、声明 `able_to_get_focus`、收 `focusing` / `unfocusing`）、  `Assets`（宿主名下的资产表 + 这一组的**焦点**；`add` 收资产时**不动焦点**，§4 规则 8；`retire_named`
+- **资产这层**（`crates/cloud-ui/src/auxiliary/`）：`Asset`（资产：`name`、声明 `able_to_get_focus`、收 `focusing` / `unfocusing`）、  `Assets`（宿主名下的资产表 + 这一组的**焦点**；`add` 收资产时**不动焦点**，§4 规则 8；`retire_named`
   放掉指定的一件——脚本 `close` 用）、`Bridge`（桥：
   `designate_focus(name)` 是同一所有者的两件资产之间转手的路，`return_focus_to_owner()` 是把焦点交回去）、
   `Host`（宿主喂给资产的形状：内容区矩形 / 排布方向 / 是不是展开着）、`Focus`（焦点在谁身上，§4）、
   `DesignatedAssetToGetFocus`（指定资产获取焦点）。
-- **脚本窗口**（`ui/script_window/`，2026-10-17）：Lua（`cloudime.window.*`）建出来的两类窗口。管理器
+- **脚本窗口**（`crates/cloud-ui/src/script_window/`，2026-10-17）：Lua（`cloudime.window.*`）建出来的两类窗口。管理器
   `ScriptWindows` 拿脚本请求（`WindowRequest`，经 `UiCommand::ScriptWindow` 从工人线程过来）建 / 改 / 收；
   `ScriptWindow` 用**独立窗口模板**、`ScriptAuxiliary` 用**辅助窗口模板**并作为宿主资产（`Assets::add`）。
   内容是一份声明式 `Document`，经 `Painter::render_document` 一次出图；命中按形状（`HitShape`：圆角 / 圆 /
@@ -253,6 +254,6 @@ pub(super) trait Clonable: Asset {
 - **画元素**（`cloudime-render`）：`elements`（六条元素 trait）、`render`（`Render`：一块离屏位图 + 共享的
   字形管线；候选窗 / 状态条 / 状态提示 / 辅助窗口面板 / 脚本窗口全走它）、`document`（脚本内容的元素表 +
   `Renderer::render_document`：面板 + 元素 + 每个元素的命中框）。
-- 现在有两类资产：候选窗口的**键位映射参考**（`ui/auxiliary/key_map/`，名字 `key_map`；它**没**声明
+- 现在有两类资产：候选窗口的**键位映射参考**（`apps/windows/server/src/ui/key_map/`，名字 `key_map`；它**没**声明
   `able_to_get_focus`，所以候选窗那一组一直由候选窗口持有焦点）与**脚本辅助窗口**（名字 `script-<id>`，
   `interactive = true` 时声明可获取焦点、由脚本 `aux:focus(true)` 走所有者指定）。

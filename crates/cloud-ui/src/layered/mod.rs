@@ -1,5 +1,5 @@
 //! 分层窗口贴图：把云朵渲染器出的预乘 RGBA 位图换成 BGRA，`UpdateLayeredWindow` 一次贴上。
-//! 候选窗口与状态条共用；位图带阴影边，在 [`Canvas`] 里换通道后贴。
+//! 候选窗口与状态条共用；位图带阴影边，在 `Canvas` 里换通道后贴。
 //!
 //! 这是**渲染**那条路的最后一步（`docs/design/windows.md` §6）：位图就是那块「内存区域」，画好一整帧之后
 //! **整块**贴上；贴完窗口自己不会把它擦掉，要变只能再贴一帧。
@@ -18,13 +18,13 @@ use self::canvas::Canvas;
 const SHADOW_MARGIN: i32 = 16;
 
 /// 阴影留白的物理像素宽度（`dpi` 96 为 100%）。
-pub(super) fn shadow_margin(dpi: u32) -> i32 {
+pub fn shadow_margin(dpi: u32) -> i32 {
     ((SHADOW_MARGIN * dpi as i32) / 96).max(1)
 }
 
 /// 把渲染器出的预乘 RGBA 位图（已含阴影边）贴到分层窗口上，`win_pos` 是位图左上角的屏幕坐标。
 /// `alpha` 是整张位图的额外不透明度（255 = 原样），候选窗展开 / 收起过渡淡入时用。
-pub(super) fn present(hwnd: HWND, pixmap: &Pixmap, win_pos: (i32, i32), alpha: u8) -> Result<()> {
+pub fn present(hwnd: HWND, pixmap: &Pixmap, win_pos: (i32, i32), alpha: u8) -> Result<()> {
     let (w, h) = (pixmap.width() as i32, pixmap.height() as i32);
     if w <= 0 || h <= 0 {
         return Err(Error::from(E_INVALIDARG));

@@ -6,7 +6,7 @@
 //! - 注册窗口类（窗口过程由调用方给）并建一块**分层、置顶、不抢焦点**的弹出窗
 //!   （`WS_EX_LAYERED | TOOLWINDOW | TOPMOST | NOACTIVATE`；纯展示的再加 `TRANSPARENT` 让鼠标穿透）；
 //! - 管**名下的资产**（辅助窗口，见 [`super::auxiliary`]）：独立窗口把自己那块窗建好之后再
-//!   [`Self::assets_mut`] 往里加，`Drop` 里**先**放掉资产、**再**销毁自己这块窗 ——
+//!   [`IndependentWindowTemplate::assets_mut`] 往里加，`Drop` 里**先**放掉资产、**再**销毁自己这块窗 ——
 //!   资产的寿命就落在这段区间里。
 //!
 //! 画什么、怎么摆、什么时候显示，仍由各独立窗口自己定（候选窗口见 `ui/candidates`，
@@ -15,8 +15,8 @@
 //! **焦点**：每一块独立窗口创建并显示后**总是具备焦点**（这一组的焦点缺省就在它身上），而且它**都**
 //! 实现了「指定资产获取焦点」（[`DesignatedAssetToGetFocus`]）—— 可以把焦点指定给名下某件声明了
 //! `able_to_get_focus` 的资产，或者收回来。焦点不在自己身上时整块让开：自己那块窗鼠标穿透
-//! （`WS_EX_TRANSPARENT`，[`super::set_mouse_transparent`]），窗口过程的 `WM_NCHITTEST` 也按
-//! [`Self::focused`] 回 `HTTRANSPARENT`（点不着、滚轮也不是它的）。
+//! （`WS_EX_TRANSPARENT`，[`crate::window::set_mouse_transparent`]），窗口过程的 `WM_NCHITTEST` 也按
+//! [`IndependentWindowTemplate::focused`] 回 `HTTRANSPARENT`（点不着、滚轮也不是它的）。
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
@@ -25,15 +25,15 @@ use windows::Win32::UI::WindowsAndMessaging::{
 };
 use windows::core::{PCWSTR, Result};
 
-use super::auxiliary::{Assets, DesignatedAssetToGetFocus, Focus};
-use super::module_handle;
-use super::window_class::WindowClass;
+use crate::auxiliary::{Assets, DesignatedAssetToGetFocus, Focus};
+use crate::window::{module_handle, set_mouse_transparent};
+use crate::window_class::WindowClass;
 
 /// 独立窗口的窗口过程：每块独立窗口自己实现一个（要按 HWND 找回自己的状态）。
-pub(super) type WndProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
+pub type WndProc = unsafe extern "system" fn(HWND, u32, WPARAM, LPARAM) -> LRESULT;
 
 /// 独立窗口模板建出来的那块空壳窗。
-pub(super) struct IndependentWindowTemplate {
+pub struct IndependentWindowTemplate {
     /// 自己那块分层窗。
     hwnd: HWND,
 
@@ -45,7 +45,7 @@ impl IndependentWindowTemplate {
     /// 建一块独立窗口：注册 `class`（窗口过程 = `wndproc`），再建一个隐藏的弹出窗。
     ///
     /// `transparent` = 纯展示、鼠标穿透；`cursor` 给要接鼠标的窗口（候选窗口）一个箭头。
-    pub(super) fn new(
+    pub fn new(
         class: &'static WindowClass,
         class_name: PCWSTR,
         title: PCWSTR,
@@ -87,29 +87,29 @@ impl IndependentWindowTemplate {
     }
 
     /// 自己那块窗。
-    pub(super) fn hwnd(&self) -> HWND {
+    pub fn hwnd(&self) -> HWND {
         self.hwnd
     }
 
     /// 名下的资产（辅助窗口）：**建好自己这块窗之后**往里加。
-    pub(super) fn assets_mut(&mut self) -> &mut Assets {
+    pub fn assets_mut(&mut self) -> &mut Assets {
         &mut self.assets
     }
 
     /// 见 [`Self::assets_mut`]。
-    pub(super) fn assets(&self) -> &Assets {
+    pub fn assets(&self) -> &Assets {
         &self.assets
     }
 
     /// 这一组的焦点在不在**自己**（独立窗口）身上。窗口过程里接鼠标的那几处（`WM_NCHITTEST`）
     /// 按它让位：焦点被指定给名下的资产时，所有者整块窗鼠标穿透、不再接受鼠标。
-    pub(super) fn focused(&self) -> bool {
+    pub fn focused(&self) -> bool {
         self.assets.focus() == Focus::Owner
     }
 
     /// 收起名下的资产（宿主收起时调）：资产表会先**自动归还焦点**（§4），之后自己这块窗的鼠标开关
     /// 也跟着回位 —— 否则会留下一块「看不见的窗还占着鼠标穿透」的状态。
-    pub(super) fn hide_assets(&self) {
+    pub fn hide_assets(&self) {
         self.assets.hide();
         self.focusing();
     }
@@ -117,7 +117,7 @@ impl IndependentWindowTemplate {
     /// 自己那块窗的**鼠标开关**跟当前焦点对齐：焦点不在自己身上时整块让开（鼠标穿透到下面的窗口）。
     /// 焦点换人（[`DesignatedAssetToGetFocus`]）与资产收起之后都要调一遍。
     fn sync_input(&self) {
-        super::set_mouse_transparent(self.hwnd, !self.focused());
+        set_mouse_transparent(self.hwnd, !self.focused());
     }
 }
 

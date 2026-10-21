@@ -22,6 +22,7 @@ Windows 输入法（只做 Windows，上游的 macOS / Linux 壳已删除）。C
 - `crates/cloudime-translate`：本地词典（安装目录 `LocalDictionary\` 下的 `.qj` / `.db`）的释义查询与「学没学会」，翻译 Tip 用它。
 - `crates/cloudime-script`：用户脚本的运行时（mlua + LuaJIT，LuaJIT 源码随包编）。改哪些输入法行为、脚本在哪几处跑，见 `docs/design/script.md`。
 - `crates/cloudime-render`：自绘渲染器（spike 中，分支 renderer-spike）：候选窗一帧 + 主题 → 位图，壳只贴图。见 `docs/design/rendering.md`。
+- `crates/cloud-ui`：Windows 壳共用的分层窗口 / 资产窗口 / 脚本窗口 / RichEdit 宿主，以及共享 `Painter` 与 `RenderSettings`；`cloudime-render` 只负责出图。见 `docs/notes/crate-notes.md`「crates/cloud-ui」。
 - `crates/cloudime-update`：检查更新：读官网的 `releases.json`、验 ed25519 签名、按平台与渠道挑新版本，只提示不安装；发版侧的签名工具是 `tools/release-sign`。见 `docs/design/update.md`。
 - `apps/cli`：Core 的验证工具：查询、逐键计时、输入日志回放、整句评测、常数扫描。排序 / 整句 / 纠错的改动先跑它再合。
 - `apps/windows`：`server`（Server 进程：Engine + IPC + 自绘候选窗与状态条）+ `tsf`（TSF DLL）+ `settings`（WinUI 3）+ `installer`（Inno）。DLL 不能带 Engine 的依赖树，所以是两个 package。

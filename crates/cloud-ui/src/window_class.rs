@@ -6,7 +6,7 @@ use windows::Win32::UI::WindowsAndMessaging::{RegisterClassExW, WNDCLASSEXW};
 use windows::core::{Error, Result};
 
 /// 进程内只注册一次的窗口类，放 `static` 里，建窗口前 [`Self::ensure`]。
-pub(crate) struct WindowClass {
+pub struct WindowClass {
     /// 首次注册。
     once: Once,
 
@@ -14,8 +14,14 @@ pub(crate) struct WindowClass {
     failed: AtomicBool,
 }
 
+impl Default for WindowClass {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl WindowClass {
-    pub(crate) const fn new() -> Self {
+    pub const fn new() -> Self {
         Self {
             once: Once::new(),
             failed: AtomicBool::new(false),
@@ -23,7 +29,7 @@ impl WindowClass {
     }
 
     /// 首次按 `build` 注册（`cbSize` 由这里填）；类已存在不算失败。
-    pub(crate) fn ensure(&self, build: impl FnOnce() -> WNDCLASSEXW) -> Result<()> {
+    pub fn ensure(&self, build: impl FnOnce() -> WNDCLASSEXW) -> Result<()> {
         self.once.call_once(|| {
             let mut class = build();
             class.cbSize = core::mem::size_of::<WNDCLASSEXW>() as u32;

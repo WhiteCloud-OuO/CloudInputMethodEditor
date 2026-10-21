@@ -21,14 +21,12 @@
 //!   **聚焦**（focusing）—— 资产收 [`Asset::focusing`] / [`Asset::unfocusing`]，所有者收
 //!   [`DesignatedAssetToGetFocus::focusing`] / [`DesignatedAssetToGetFocus::unfocusing`]。
 //!
-//! 现在名下只有一份资产：候选窗口的「键位映射参考」（[`key_map`]）—— 它**没**声明
+//! 眼下使用这套机制的是候选窗口的「键位映射参考」与脚本辅助窗口 —— 前者**没**声明
 //! `able_to_get_focus`，所以眼下整组一直由候选窗口持有焦点。
 //!
 //! ⚠️ 「**资产克隆**」与「**资产窃取**」（别的独立窗口来克隆本窗口的资产、克隆完把原件销毁）也写在
 //! `docs/design/windows.md` §5 —— **本输入法暂时用不上**，先把规则定下来（将来要加的是一个
 //! 「可克隆」trait，比如 `Clonable: Asset`）。
-
-pub(super) mod key_map;
 
 use std::cell::Cell;
 
@@ -39,7 +37,7 @@ use cloudime_platform::input_schemes::KeyMapLayout;
 
 /// 宿主独立窗口喂给资产的那点信息：宿主的**内容区**屏幕矩形、排布方向、是不是展开着（Tab）。
 #[derive(Debug, Clone, Copy, Default)]
-pub(super) struct Host {
+pub struct Host {
     /// 宿主内容区的屏幕矩形；宿主没显示时为 `None`（资产这时该收起）。
     pub rect: Option<RECT>,
 
@@ -67,7 +65,7 @@ pub(super) struct Host {
 // 第一轮只落机制：还没有谁来**指定**焦点，所以 `Focus::Asset` 这个变体眼下没被生产代码构造（测试里有）。
 #[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
-pub(super) enum Focus {
+pub enum Focus {
     /// 在所有者（独立窗口）身上。
     #[default]
     Owner,
@@ -83,7 +81,7 @@ pub(super) enum Focus {
 /// 资产自己说了不算 —— 声明了 [`Asset::able_to_get_focus`] 也只是「能」接，真拿到要所有者指定。
 // 第一轮只落机制：还没有谁来调它（后续部分接入「谁在什么时候指定焦点」时会用上）。
 #[allow(dead_code)]
-pub(super) trait DesignatedAssetToGetFocus {
+pub trait DesignatedAssetToGetFocus {
     /// 把焦点**指定**给名下叫 `name` 的那件资产（`designated_asset_to_get_focus`）。
     /// `false` = 没动 —— 没这个名字、那件没声明 [`Asset::able_to_get_focus`]、或者焦点本来就在它手上。
     fn designate_focus(&self, name: &str) -> bool;
@@ -106,7 +104,7 @@ pub(super) trait DesignatedAssetToGetFocus {
 /// 规矩：辅助窗口**不能**直接跟别的辅助窗口、也不能跟不是它所有者的独立窗口通讯 ——
 /// 要几何、要开关、要内容，都得委托所有者。这个 trait 由**所有者**（宿主独立窗口）实现，
 /// 每次驱动资产时把 `&dyn Bridge` **借**给它用一下（所有权仍在宿主手里，不转移）。
-pub(super) trait Bridge {
+pub trait Bridge {
     /// 宿主（所有者）自己的形状：内容区屏幕矩形 / 排布方向 / 是不是展开着。
     fn host(&self) -> Host;
 
@@ -130,7 +128,7 @@ pub(super) trait Bridge {
 ///
 /// **所有者唯一且不转移**：谁建的谁就是它唯一的所有者，之后一直待在宿主的 [`Assets`] 里；
 /// 它够得着的只有宿主每次经桥接交过来的 [`Bridge`]。
-pub(super) trait Asset {
+pub trait Asset {
     /// 这件资产的**名字**：同一所有者的名下**不许重名**（[`Assets::add`] 里 `debug_assert` 盯着）。
     /// 跨资产指认（[`Bridge::designate_focus`]）与日志用它 —— 名字要**稳定**，加 / 删别的资产不影响它。
     /// 脚本建的资产名字是运行期起的（`format!("script-{id}")`），所以返回借来的 `&str`。
@@ -180,7 +178,7 @@ pub(super) trait Asset {
 /// **生命周期末**（[`Self::retire`]）—— 后两条**自动**走一遍归还，焦点不会落在一件看不见、或者马上就
 /// 没了的东西上。
 #[derive(Default)]
-pub(super) struct Assets {
+pub struct Assets {
     /// 名下的资产（[`Focus::Asset`] 里的下标就是这儿的顺序）。
     items: Vec<Box<dyn Asset>>,
 
@@ -197,7 +195,7 @@ impl Assets {
     /// 特性照旧、焦点不动。
     ///
     /// 名字重了在 debug 下直接叫出来 —— [`Self::designate_focus`] 按名字指认，重名就指不准了。
-    pub(super) fn add(&mut self, asset: Box<dyn Asset>) {
+    pub fn add(&mut self, asset: Box<dyn Asset>) {
         debug_assert!(
             self.index_of(asset.name()).is_none(),
             "同一所有者名下的资产重名：{}",
@@ -207,12 +205,12 @@ impl Assets {
     }
 
     /// 这一组的焦点在谁身上。
-    pub(super) fn focus(&self) -> Focus {
+    pub fn focus(&self) -> Focus {
         self.focus.get()
     }
 
     /// 焦点这会儿是不是在叫 `name` 的那件资产身上（脚本收起它时用：先归还再收起）。
-    pub(super) fn focused_name_is(&self, name: &str) -> bool {
+    pub fn focused_name_is(&self, name: &str) -> bool {
         match self.focus.get() {
             Focus::Asset(index) => self
                 .items
@@ -226,7 +224,7 @@ impl Assets {
     /// `false` = 没动 —— 没这个名字、那件没声明 [`Asset::able_to_get_focus`]、或者焦点本来就在它手上。
     // 机制已就位：还没有谁来主动指定（后续部分接入触发时会用上；归还那条已经在走）。
     #[allow(dead_code)]
-    pub(super) fn designate_focus(&self, name: &str) -> bool {
+    pub fn designate_focus(&self, name: &str) -> bool {
         let Some(index) = self.index_of(name) else {
             return false;
         };
@@ -235,13 +233,13 @@ impl Assets {
     }
 
     /// 让焦点**归还给所有者**（`return_focus_to_owner`）。`false` = 没动（本来就在所有者手上）。
-    pub(super) fn return_focus_to_owner(&self) -> bool {
+    pub fn return_focus_to_owner(&self) -> bool {
         self.move_focus(Focus::Owner)
     }
 
     /// 宿主贴出一帧 / 开关变了：把全部资产驱动一遍 —— 手上把自己（作为 [`Bridge`]）借给它们，
     /// 它们要什么经桥接回来要。
-    pub(super) fn sync(&self, owner: &dyn Bridge) {
+    pub fn sync(&self, owner: &dyn Bridge) {
         // 焦点只可能落在**所有者**、或一件**声明过** `able_to_get_focus` 的资产上（指定时查过一遍）。
         // 在驱动这一拍上复核：将来谁改了指定的路，这里第一时间叫出来。
         debug_assert!(
@@ -256,7 +254,7 @@ impl Assets {
 
     /// 全部收起（宿主收起时）。**带着焦点的那件一收起就先自动归还焦点** —— 否则它看不见了、
     /// 所有者又不接输入，这一组没人响应鼠标 / 键盘。
-    pub(super) fn hide(&self) {
+    pub fn hide(&self) {
         self.return_focus_to_owner();
         for asset in &self.items {
             asset.hide();
@@ -264,14 +262,14 @@ impl Assets {
     }
 
     /// 换全部资产的版面内容。
-    pub(super) fn set_key_map(&self, layout: KeyMapLayout) {
+    pub fn set_key_map(&self, layout: KeyMapLayout) {
         for asset in &self.items {
             asset.set_key_map(layout.clone());
         }
     }
 
     /// u 模式符号窗口：四排固定大小的符号格子。
-    pub(super) fn set_symbol_key_map(&self, layout: KeyMapLayout) {
+    pub fn set_symbol_key_map(&self, layout: KeyMapLayout) {
         for asset in &self.items {
             asset.set_symbol_key_map(layout.clone());
         }
@@ -279,14 +277,14 @@ impl Assets {
 
     /// 放掉全部资产（宿主销毁**之前**的第一件事）：**销毁前一刻先自动归还焦点** ——
     /// 焦点不能落在一件马上就要没了的资产上。
-    pub(super) fn retire(&mut self) {
+    pub fn retire(&mut self) {
         self.return_focus_to_owner();
         self.items.clear();
     }
 
     /// 放掉名下叫 `name` 的那一件（脚本 `close`）：焦点落在它身上就先归还；落在后面的姊妹资产身上
     /// 就把下标跟着前移（焦点不换人）。不重名的前提下其它资产一概不动。
-    pub(super) fn retire_named(&mut self, name: &str) {
+    pub fn retire_named(&mut self, name: &str) {
         let Some(index) = self.index_of(name) else {
             return;
         };

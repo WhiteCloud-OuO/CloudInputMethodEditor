@@ -426,7 +426,7 @@ win:set_content{
   RichEdit 字体缺省用候选词字体（`font` 可换槽位），字号缺省取主题里该槽位的字号（`size` 可覆盖）；
   宿主窗底色 / 文字色跟随候选窗主题；`selection_background` / `selection_color` / `caret_color` /
   `svg_color` 不写时分别跟主题高亮背景 / 高亮文字 / 正文颜色 / SVG 原色。自动区域与按钮同一套（`drag = false`）。
-  TSF 输入由 `script_window/tsf.rs` + `text_store.rs` 接管：每个宿主窗建一个 `ITfContext`，
+  TSF 输入由 `crates/cloud-ui/src/script_window/tsf.rs` + `text_store.rs` 接管：每个宿主窗建一个 `ITfContext`，
   `ITextStoreACP` 把文本、选区、光标矩形桥到 RichEdit；键盘先给 `ITfKeystrokeMgr`，被输入法吃掉
   就不再交给 RichEdit。CloudIME 的中文组合、候选窗和提交都走这条路。焦点进入时按 windowless
   RichEdit 的约定依次 `OnTxInPlaceActivate` / `OnTxUIActivate`，再以 `wParam = NULL` 发

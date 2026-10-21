@@ -424,7 +424,7 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 不扫系统字体、不要 svgz 与光栅图解码）解析光栅化，按 SVG 宽高比缩进 `BUTTON_SIZE` = 20 pt 的方按钮居中叠上去，解析失败返回 `RenderError::InvalidSvg`；
 `draw_svg` 收一个 `Option<Color>`，给了就按每个像素的 alpha 把整张图标染成这个颜色（工具栏 / 提示窗的图标色靠它，SVG 里写的是什么色都只取轮廓）；
 `render_status` 只画图标、不留文字格与分隔线，按钮之间与四周各留 `BUTTON_GAP` = 6 pt，返回各按钮右边界供点击命中；背景与阴影由壳按窗口传入（工具栏 / 状态切换提示各一套主题色）。
-`examples/preview.rs` 出 PNG 与真机截图并排比、`--measure` 量宽度。Windows 壳候选窗口与悬浮状态条都走这条渲染路径（`ui/painter/`，`ui/layered/` 贴位图），
+`examples/preview.rs` 出 PNG 与真机截图并排比、`--measure` 量宽度。Windows 壳候选窗口与悬浮状态条都走这条渲染路径（`cloud_ui::painter`，`cloud_ui::layered` 贴位图），
 字体库加载失败时都不绘制、不显示并记日志；`[general] font` 是候选窗字族名（空为系统字体，`fonts/directwrite.rs` 按字族名找字体文件只加载那几个，没装就回系统字体；
 设置页 `candidates.rs` 的字体框是边输入边提示的自动补全）。设计与验收见 `docs/design/rendering.md`。
 候选行右侧的**来源角标**：`Row.badge`（Server `dispatch/candidates/mod.rs::badges_of` 按 `kind == Custom` 判「短」、
@@ -439,7 +439,7 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 
 **展开（Tab）的过渡**由壳做（`ui/candidates/mod.rs`）：渲染器提供一个纯位图工具 `clip_pixmap`（按左上角裁 / 补透明）。
 壳在 300 ms 里把「内容尺寸」从切换前插值到切换后（`transition_frame`），每帧把渲染结果裁到这一块再贴出去，整张的额外不透明度走
-`UpdateLayeredWindow` 的 `SourceConstantAlpha`（`ui/layered::present` 因此多一个 `alpha` 参数，从 170 淡入到 255）。
+`UpdateLayeredWindow` 的 `SourceConstantAlpha`（`cloud_ui::layered::present` 因此多一个 `alpha` 参数，从 170 淡入到 255）。
 **位图不缩放**——内容是逐步露出来，字始终按最终字号栅格化，不会糊。触发条件是 `RenderData.columns` 由 0 变成非 0
 （Tab 展开；释义列表临时收起也走这条），起点取上一帧真正贴出去的尺寸（`last_content`）；定时器与高亮滑动共用
 （`SLIDE_TIMER_ID` / 16 ms），两个动画都走完才 `stop_animation`；起止各留一行 `info` 日志（含帧数），排查这类问题很有用。
@@ -466,9 +466,28 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 **缩放只有一个倍数**：渲染器只认「点 → 像素」一个 `scale`，主题里所有长度（字号、留白、间距、圆角、阴影）都乘它。
 所以壳的滚轮缩放不用改渲染器：候选窗把缩放的倍数折进传给 painter 的 DPI（`ui/candidates/mod.rs::effective_dpi` =
 显示器 DPI × `1.2^级数`），框、字、留白、阴影就一起变。级数存的是整数，上去再下来精确回 100%；`hide()` 里归零
-（窗口一关就回 100%，与「收起态宽度」一样属于这次弹窗的临时状态）。两处随之放宽：`ui/painter::scale` 不再拿 96 当下限
+（窗口一关就回 100%，与「收起态宽度」一样属于这次弹窗的临时状态）。两处随之放宽：`cloud_ui::painter::scale` 不再拿 96 当下限
 （缩小时倍数小于 1），`preferred_size` 里的最小宽度改成按点算（`m.px(theme.min_width_pixels)`，原来是
 `min_width_pixels / scale`，缩放时会朝反方向跑）。
+
+## crates/cloud-ui
+
+Windows 壳的公共层（2026-10-20 从 `apps/windows/server/src/ui/` 抽出）：`cloudime-render` 只负责把内容画成位图，
+这里管分层窗口、窗口模板、资产 / 焦点、脚本窗口与 RichEdit 宿主。依赖方向是
+`cloudime-render` / `cloudime-script` / `cloudime-platform` → `cloud-ui` → Server；`cloud-ui` 不反向依赖 Server。
+
+- **共享渲染器**：`painter` 的 `Painter` / `SharedPainter` / `StatusKind` 与 `RenderSettings`（原先在
+  `dispatch/candidates/sink.rs`，现在 Server 的 `dispatch` 只做再导出）。候选窗、状态条、脚本窗口共用同一份字体缓存。
+- **窗口模板**：`independent_window_template`（独立窗口壳 + 名下资产）、`auxiliary_window_template`（辅助窗口面板）、
+  `layered`（预乘 RGBA → BGRA → `UpdateLayeredWindow`）、`monitor` / `window_class` / `window`（工作区、窗口类、模块句柄与鼠标穿透）。
+- **资产模型**：`auxiliary` 的 `Asset` / `Assets` / `Bridge` / `Host` / `Focus` / `DesignatedAssetToGetFocus`。
+  候选窗口的键位映射参考 `KeyMapWindow` 仍是候选专属，留在 `apps/windows/server/src/ui/key_map/`；脚本辅助窗口在 `script_window`。
+- **脚本窗口**：`script_window`（`ScriptWindows` / `ScriptWindow` / `ScriptAuxiliary`）以及 `text_host` / `text_store` / `tsf`
+  （windowless RichEdit + TSF）。`ScriptWindows`、`ScriptWindowEvents` 是给 Server 的入口；请求 / 事件类型仍来自 `cloudime-script`。
+  这条依赖由 `script` 特性控制（缺省开）；只要通用窗口的独立程序可以 `default-features = false`，不拖进 LuaJIT。
+- **平台约束**：除 `RenderSettings` 外，模块都只在 Windows 编译（`lib.rs` 按 `cfg(windows)` 导出）；窗口创建、窗口过程、
+  `ScriptWindows::apply` 必须在同一个 UI 线程上，类型是 `Rc` / `RefCell` / `thread_local!`，不是 `Send`。
+  字体枚举走 DirectWrite，i686 也能编；`SetProcessDpiAwarenessContext` 仍由 Server 在创建任何窗口之前调用。
 
 ## crates/cloudime-update
 
@@ -933,7 +952,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 **状态切换提示**（`server/src/ui/status_tip/`，`[input] show_status_change_tip` 缺省开）：中 / 英、Caps Lock、
 全 / 半角、简 / 繁、中文 / 西文标点任一变了，就在输入光标附近弹一个停留 1 秒的小条 —— 样式与悬浮状态条同一套图标，
 只取排布表的前四个（`ui/status/mod.rs::StatusIcons`，`TIP_BUTTONS = 4`，`Arrangement` 只在本模块可见，提示窗经它拿图标）；
-`WS_EX_TRANSPARENT` 点不着（鼠标穿透到下面的应用）、`WS_EX_NOACTIVATE` 不抢焦点，位置贴光标下方、放不下放上方（`place`，
+窗口由独立窗口模板建（`transparent = true`：`WS_EX_TRANSPARENT` 点不着、`WS_EX_NOACTIVATE` 不抢焦点），
+位置贴光标下方、放不下放上方（`place`，
 比候选窗那套简单：不用避让高亮行）。触发在 Router（`dispatch/status/mod.rs::check_status_tip`）：与 `reconcile_status` 分开，
 只在**用户切状态**的几条路（`handle_mode_changed`、`handle_status_event`（状态条三格与两个内置热键都汇到这里）、每拍 `SyncMode`）上调，
 配置热加载**不**走它（改设置不该弹提示）；比较 `TipState`（中英 + Caps + 全半角 + 简繁 + 当前模式的标点），第一次观察只记不弹。
@@ -950,17 +970,17 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 
 **两个模板**（都是从 `general_window` 那一个拆出来的；模板只给「某一类窗口」共用，本身不是窗口）：
 
-- **独立窗口模板**（`server/src/ui/independent_window_template/`，`IndependentWindowTemplate`）：注册窗口类 + 建一块
+- **独立窗口模板**（`crates/cloud-ui/src/independent_window_template/`，`IndependentWindowTemplate`）：注册窗口类 + 建一块
   **分层、置顶、不抢焦点**的弹出窗（`WS_EX_LAYERED | TOOLWINDOW | TOPMOST | NOACTIVATE`，纯展示的再加 `TRANSPARENT`），
   并且**管名下的资产**（`Assets`）：宿主建好自己那块窗之后 `assets_mut().add(...)`，`Drop` 里**先** `assets.retire()`
-  **再** `DestroyWindow` 自己 —— 资产的寿命就落在这段区间里。候选窗口先用了它（悬浮工具栏 / 状态切换提示可以照抄；
-  候选窗口自己那份 `Drop` 也就不用写了）。**焦点**（`focused()`）也在这层：焦点缺省在自己身上，被指定给名下的资产后
+  **再** `DestroyWindow` 自己 —— 资产的寿命就落在这段区间里。候选窗口、悬浮工具栏、状态切换提示都用它建窗，
+  各自只留窗口过程与业务状态。**焦点**（`focused()`）也在这层：焦点缺省在自己身上，被指定给名下的资产后
   窗口过程里接鼠标的地方要按它让位；模板实现 `DesignatedAssetToGetFocus`（`designate_focus(name)` /
   `return_focus_to_owner` / `focus`，指定时自己**失焦** `unfocusing`、收回时**聚焦** `focusing`，两边都落到
-  `sync_input()` 上：`ui::set_mouse_transparent` + 命中测试），所以**每块独立窗口都有**这个特性
+  `sync_input()` 上：`cloud_ui::window::set_mouse_transparent` + 命中测试），所以**每块独立窗口都有**这个特性
   （见下「辅助窗口」那条）。
-- **辅助窗口模板**（`server/src/ui/auxiliary_window_template/`，`AuxiliaryWindowTemplate`）：给资产用的那块**分层面板** ——
-  主题背景 + 圆角 + 阴影都出在一张预乘 RGBA 位图里，`ui::layered::present` 换成 BGRA 后
+- **辅助窗口模板**（`crates/cloud-ui/src/auxiliary_window_template/`，`AuxiliaryWindowTemplate`）：给资产用的那块**分层面板** ——
+  主题背景 + 圆角 + 阴影都出在一张预乘 RGBA 位图里，`cloud_ui::layered::present` 换成 BGRA 后
   `UpdateLayeredWindow` 一次贴上，窗口过程**不处理 `WM_PAINT`**。
   画什么由 `Content` 三选一：`Empty`（空面板）/ `KeyMap`（键位映射参考，`set_key_map`）/ `Document`
   （脚本内容，`set_document`，出图走 `Painter::render_document`，同时把每个元素的命中框（点）与
@@ -977,21 +997,22 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 所有者唯一且不转移、桥接 bridging、**焦点 focus**、资产克隆与资产窃取、**渲染 rendering**）。
 这里只记实现落点：
 
-- **独立窗口**（`independent window`）：候选窗口（`candidates/`）、悬浮工具栏（`status/`）、状态切换提示
-  （`status_tip/`）、脚本窗口（`script_window/`）—— 各有一块自己的分层窗与**自己的生命周期**；创建并显示后
-  **总是具备焦点**。焦点不在自己身上时整块让开：自己那块窗鼠标穿透（`ui::set_mouse_transparent` 动
+- **独立窗口**（`independent window`）：候选窗口（`apps/windows/server/src/ui/candidates/`）、悬浮工具栏
+  （`apps/windows/server/src/ui/status/`）、状态切换提示（`apps/windows/server/src/ui/status_tip/`）、
+  脚本窗口（`crates/cloud-ui/src/script_window/`）—— 各有一块自己的分层窗与**自己的生命周期**；创建并显示后
+  **总是具备焦点**。焦点不在自己身上时整块让开：自己那块窗鼠标穿透（`cloud_ui::window::set_mouse_transparent` 动
   `WS_EX_TRANSPARENT` 一个位），候选窗口的窗口过程在 `WM_NCHITTEST` 里另按 `CandidateWindow::focused()`
   （= 模板的 `focused()`）回 `HTTRANSPARENT`（点不着、滚轮也不是它的），缺省照常 `HTCLIENT`。宿主收起资产走
   `template.hide_assets()`（先让资产表自动归还焦点，再把自己那块窗的鼠标开关回位）。
 - **辅助窗口**（`auxiliary window`）：挂在某块独立窗口上的辅助信息 / 提示窗口，是宿主的**资产**；
-  这一层在 `auxiliary/`（`Asset` 资产 trait、`Assets` 宿主名下的资产表、`Bridge` 桥、`Host` 宿主形状、
+  这一层在 `crates/cloud-ui/src/auxiliary/`（`Asset` 资产 trait、`Assets` 宿主名下的资产表、`Bridge` 桥、`Host` 宿主形状、
   `Focus` 焦点在谁身上、`DesignatedAssetToGetFocus` 指定资产获取焦点的 trait）。
   宿主先建好自己那块窗再 `Assets::add`；`Drop` 里先 `Assets::retire` 再 `DestroyWindow` 自己
   （这段顺序由独立窗口模板保证）；显示 / 隐藏由宿主驱动（`Asset::sync` 里经 `Bridge` 向宿主要几何与开关）。
   `Assets::retire_named(name)` 是脚本 `close` 一件资产用的「放掉这一件」：不在焦点上就只删掉，
   焦点在它身上就归还给所有者、在后面的姊妹资产身上就把下标前移（`ScriptWindow::retire_asset` 之后补一次
   `focusing()` 让宿主的鼠标开关跟上）。
-- **脚本窗口**（`script_window/`）：Lua `cloudime.window.*` 建出来的两类窗口。`ScriptWindows` 是 UI 线程上的
+- **脚本窗口**（`crates/cloud-ui/src/script_window/`）：Lua `cloudime.window.*` 建出来的两类窗口。`ScriptWindows` 是 UI 线程上的
   管理器（`windows` / `auxiliaries` 两张表 + 共用 `SharedPainter` + 一个 `Arc<dyn Fn(ScriptWindowEvent)>` 出口）；
   `ScriptWindow` 用独立窗口模板 + `Document`（`Painter::render_document` 出图）、`ScriptAuxiliary` 用辅助窗口
   模板并作为宿主资产（`AssetHandle` 包一层 `Rc`，管理器和资产表各持一份）。脚本的请求由 Server 在每次派发后
@@ -1019,7 +1040,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   对应的行为测试在 `crates/cloudime-script/tests/caret_window_script.rs`，`runtime.rs` 只留宿主 API。
 - **区域**（`region`，2026-10-17）：窗口内容里可以被鼠标**点击 / 拖拽**的范围，数据在
   `cloudime_render::document::Region`（名字 / `HitShape` / `draggable` + 合并 / 剪除形状），命中在
-  `ui::region::hit`（后写的盖住先写的）。形状不限于矩形：`HitShape` 支持矩形 / 圆角 / 圆 / 线段 / 路径，
+  `cloud_ui::region::hit`（后写的盖住先写的）。形状不限于矩形：`HitShape` 支持矩形 / 圆角 / 圆 / 线段 / 路径，
   脚本 `regions` 里用 `shape = "rect" | "round_rect" | "circle" | "path"`（不写就按 `cx` / `commands` 猜）。
   `contains` 先看 `pruned`（差集）、再看原始形状与 `combined`（并集）—— 命中只做成员判断。
   **关系判断**（`contains_region` / `intersects`）另走 `i_overlay`：把形状转成多边形，依次
@@ -1083,7 +1104,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 - **单行编辑框**（`text_edit`，2026-10-18）：`control::TextEdit` 负责背景胶囊 / 边框（缺省颜色
   `#FFC8C8C8`、1 物理像素且不随缩放；显式 `edge_width` 仍按点缩放）、可选 SVG（按背景高度缩放、`SvgAlign` 左右）和文本区几何
   （无 SVG：`w-h` 居中；有 SVG：`w-h-svg宽度-4`；高度向内缩 1 点边框）。实际的编辑控件是
-  **windowless RichEdit**（`script_window/text_host.rs`）：每块 `text_edit` 建一个普通顶层宿主窗
+  **windowless RichEdit**（`crates/cloud-ui/src/script_window/text_host.rs`）：每块 `text_edit` 建一个普通顶层宿主窗
   （owner = 脚本窗，`WS_EX_TOOLWINDOW | WS_EX_TOPMOST`），从 `Msftedit.dll` 取 `CreateTextServices`，
   用 `IID_ITextServices` 做 `QueryInterface` 拿 `ITextServices`，再把自己的 `ITextHost` 实现接上去；
   绘制由宿主窗 `WM_PAINT` 不调 `TxDraw`；键盘 / 鼠标 / IME 消息原样转给 `TxSendMessage`，文字和选区由宿主用 GDI 自绘。
@@ -1141,7 +1162,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   **闪烁修复**（2026-10-18）：`TxDraw` 改为先画到内存 DC 再 `BitBlt`；多行 `WM_MOUSEMOVE`
   不再额外 `InvalidateRect`（RichEdit 自己会失效选区）；`TextHostWindow::set_bounds` / `show`
   缓存上次边界和显隐，脚本窗口每帧重画时不再对所有宿主重复 `SetWindowPos` / `ShowWindow`。
-- **TSF 桥**（`script_window/text_store.rs` / `tsf.rs`，2026-10-18）：windowless RichEdit 自己只提供
+- **TSF 桥**（`crates/cloud-ui/src/script_window/text_store.rs` / `tsf.rs`，2026-10-18）：windowless RichEdit 自己只提供
   IMM32 的 `ITextHost::TxImmGetContext`，不直接参与 TSF；要让 CloudIME 的中文输入作用到它，必须补
   客户端文本存储。`text_store.rs` 实现 `ITextStoreACP`，把 `GetText` / `SetText` / 选区 / 插入 /
   `GetTextExt` 桥到 RichEdit 的 `TxSendMessage(WM_GETTEXT / EM_GETSEL / EM_SETSEL / EM_REPLACESEL /
@@ -1219,19 +1240,20 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   一次 10.4ms、占整帧九成，缓存后 11.3ms → 0.74ms。② **量宽缓存** —— `TextPainter::measure` 把
   (文字, 字族, 字号, 行高, 斜体) → 宽度存进 `HashMap`（512 条封顶），布局阶段同一段字一次出帧会被量两三遍，
   命中后 `measure_frame` 35µs → 1.2µs，整帧内容再省 ~20%。
-  **两处热路径**：③ **贴图前换通道**（`ui::layered::swap_rb`）—— RGBA → BGRA 只是每组 4 字节换 R / B，
+  **两处热路径**：③ **贴图前换通道**（`cloud_ui::layered::swap_rb`）—— RGBA → BGRA 只是每组 4 字节换 R / B，
   改成字节切片 + **SSSE3**（16 字节一组 shuffle，没有就标量），640×600@200% 那块 1.46MB 从 0.46ms 降到 0.06ms；
   ④ **字形合成**（`Canvas::blend_mask`）—— 按覆盖率把颜色预乘成 256 项表（每像素少 4 次乘法）、矩形先裁到画布内、
   再按行切片（不再每像素判边界）；9 行候选整帧 551µs → 501µs。
   窗口里只准经这些 trait 画。自绘的几个窗口**一律用渲染** —— 渲染器把一整帧出成预乘 RGBA 位图
-  （就是那块**内存区域**）→ `ui/layered::present` 换通道 → `UpdateLayeredWindow(ULW_ALPHA)` **整块一次**贴上。
+  （就是那块**内存区域**）→ `cloud_ui::layered::present` 换通道 → `UpdateLayeredWindow(ULW_ALPHA)` **整块一次**贴上。
   窗口过程**不处理 `WM_PAINT`**、窗口类**不设 `hbrBackground`**、不调 `InvalidateRect`，所以没有「刷新把画布
   擦掉」的时机：贴上去的那一帧一直在，要变只能**再贴一帧**（重新出图）或**销毁窗口**。**能画的元素**：`text`（字形管线）/ `svg`（`svg.rs`：usvg + resvg 光栅化）/ `img`
   （`image.rs`：PNG 从文件或文件句柄读 + 解码 + 按目标矩形双线性缩放）/ `line`（细矩形或细长填充路径）/
   `rect`（含圆角矩形与圆：`fill_round_rect`，圆 = 半径取半边长）/ `path`（`fill_path`，tiny-skia 的路径）。
 
-**辅助窗口**（`server/src/ui/auxiliary/`）：眼下只一件资产 —— 候选窗口的**键位映射参考**
-（`key_map/`，`KeyMapWindow`）：用**辅助窗口模板**搭的实窗（分层面板：阴影 / 圆角 / 内容一张位图），
+**辅助窗口**（资产模型在 `crates/cloud-ui/src/auxiliary/`，候选窗口的键位映射参考在
+`apps/windows/server/src/ui/key_map/`）：眼下只一件资产 —— **键位映射参考**（`key_map/`，`KeyMapWindow`）：
+用**辅助窗口模板**搭的实窗（分层面板：阴影 / 圆角 / 内容一张位图），
 把当前方案的键位映射画成一张**键盘**给新手对着敲
 （版面由 `input_schemes::key_map_layout()` 按当前方案生成 —— 三排格子 + 零声母表，经 `CandidateSink::set_auxiliary`
 送到候选窗口、再落到资产上）。宿主是**候选窗口**（它实现 `Bridge`）：`CandidateWindow` 里 `assets_on` + `template.assets()`，

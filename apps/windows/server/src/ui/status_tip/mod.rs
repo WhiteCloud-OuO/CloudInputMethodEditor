@@ -9,19 +9,18 @@ use std::cell::{Cell, RefCell};
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, HTTRANSPARENT, KillTimer, MA_NOACTIVATE,
-    SW_HIDE, SW_SHOWNA, SetTimer, ShowWindow, WM_MOUSEACTIVATE, WM_NCHITTEST, WM_TIMER,
-    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST,
-    WS_EX_TRANSPARENT, WS_POPUP,
+    DefWindowProcW, HTTRANSPARENT, KillTimer, MA_NOACTIVATE, SW_HIDE, SW_SHOWNA, SetTimer,
+    ShowWindow, WM_MOUSEACTIVATE, WM_NCHITTEST, WM_TIMER,
 };
 use windows::core::{PCWSTR, Result, w};
 
-use super::layered;
-use super::monitor;
-use super::painter::SharedPainter;
 use super::status::StatusIcons;
-use super::window_class::WindowClass;
 use crate::dispatch::StatusView;
+use cloud_ui::independent_window_template::IndependentWindowTemplate;
+use cloud_ui::layered;
+use cloud_ui::monitor;
+use cloud_ui::painter::SharedPainter;
+use cloud_ui::window_class::WindowClass;
 
 const CLASS_NAME: PCWSTR = w!("CloudIMEStatusTip");
 static CLASS: WindowClass = WindowClass::new();
@@ -47,43 +46,30 @@ pub(super) struct StatusTip {
 
     /// 前四个状态按钮的图标；内部自己管排布（与悬浮状态条各一份）。
     icons: RefCell<StatusIcons>,
+
+    /// 独立窗口模板：纯展示、鼠标穿透，Drop 时销毁。
+    _template: IndependentWindowTemplate,
 }
 
 impl StatusTip {
     /// 建一个隐藏的提示窗。失败返回 `Err`，调用方降级为不显示提示。
     pub(super) fn new(painter: SharedPainter) -> Result<Self> {
-        CLASS.ensure(|| WNDCLASSEXW {
-            lpfnWndProc: Some(wndproc),
-            hInstance: super::module_handle(),
-            lpszClassName: CLASS_NAME,
-            ..Default::default()
-        })?;
-        // TRANSPARENT：纯展示，鼠标点它等于点在底下的应用上。NOACTIVATE：显示时不抢应用焦点。
-        let hwnd = unsafe {
-            CreateWindowExW(
-                WS_EX_LAYERED
-                    | WS_EX_TOOLWINDOW
-                    | WS_EX_TOPMOST
-                    | WS_EX_NOACTIVATE
-                    | WS_EX_TRANSPARENT,
-                CLASS_NAME,
-                w!("状态切换提示"),
-                WS_POPUP,
-                0,
-                0,
-                0,
-                0,
-                None,
-                None,
-                Some(super::module_handle()),
-                None,
-            )?
-        };
+        // TRANSPARENT：纯展示，鼠标点它等于点在底下的应用上。
+        let template = IndependentWindowTemplate::new(
+            &CLASS,
+            CLASS_NAME,
+            w!("状态切换提示"),
+            wndproc,
+            true,
+            None,
+        )?;
+        let hwnd = template.hwnd();
         Ok(Self {
             hwnd,
             painter,
             dpi: Cell::new(unsafe { GetDpiForSystem() }.max(96)),
             icons: RefCell::new(StatusIcons::load()),
+            _template: template,
         })
     }
 
@@ -105,7 +91,7 @@ impl StatusTip {
         let cells = self.icons.borrow_mut().cells(view, caps);
         let rendered = match (cells.is_empty(), self.painter.borrow_mut().as_mut()) {
             (false, Some(painter)) => {
-                painter.render_status(&cells, dpi, crate::ui::painter::StatusKind::Tip)
+                painter.render_status(&cells, dpi, cloud_ui::painter::StatusKind::Tip)
             }
             _ => None,
         };
@@ -136,12 +122,6 @@ impl StatusTip {
     pub(super) fn hide(&self) {
         let _ = unsafe { KillTimer(Some(self.hwnd), TIMER_ID) };
         let _ = unsafe { ShowWindow(self.hwnd, SW_HIDE) };
-    }
-}
-
-impl Drop for StatusTip {
-    fn drop(&mut self) {
-        let _ = unsafe { DestroyWindow(self.hwnd) };
     }
 }
 

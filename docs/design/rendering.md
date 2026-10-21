@@ -42,7 +42,7 @@
 
 | 壳 | 贴位图的方式 | 改动 |
 |---|---|---|
-| Windows | 分层窗口 `UpdateLayeredWindow` 本来就吃位图，`server/src/ui/layered/` 的合成器换成贴渲染器输出 | 比 D2D 改动更小 |
+| Windows | 分层窗口 `UpdateLayeredWindow` 本来就吃位图，`crates/cloud-ui/src/layered/` 的合成器换成贴渲染器输出 | 比 D2D 改动更小 |
 
 技术选型：
 
@@ -97,7 +97,7 @@
 
 ## Windows 落地（2026-09-15，真机已验）
 
-- **壳**：`apps/windows/server/src/ui/painter/`，候选窗口与悬浮状态条共用一份渲染器（字体库与字形缓存一份）；`layered::present` 把渲染器出的预乘 RGBA 位图换成 BGRA 后 `UpdateLayeredWindow` 贴上，阴影由渲染器画（`Shadow::mac_panel()`，分层窗口没有系统阴影）。倍数取 DPI / 96。
+- **壳**：`crates/cloud-ui/src/painter/`，候选窗口与悬浮状态条共用一份渲染器（字体库与字形缓存一份）；`cloud_ui::layered::present` 把渲染器出的预乘 RGBA 位图换成 BGRA 后 `UpdateLayeredWindow` 贴上，阴影由渲染器画（`Shadow::mac_panel()`，分层窗口没有系统阴影）。倍数取 DPI / 96。
   两个窗口只有这一条绘制路径；字体库加载失败（渲染器建不起来）时都不绘制、不显示，并记日志。
 - **状态条**：`render_status` 画一排 `StatusCell::Icon`：整份 `<svg>` 源码交给 `svg.rs`（resvg 解析 + 光栅化成 `BUTTON_SIZE` = 20 pt 方按钮，按 SVG 宽高比等比缩放居中），按钮之间与四周各留 `BUTTON_GAP` = 6 pt，没有文字格也没有分隔线；返回位图与各按钮右边界供点击命中。按钮的顺序、显隐与图标来自 exe 旁 `data\icons-arrangement.cfg`（Server 侧 `ui/status/arrangement.rs` 解析，`pos=-1` 不显示）。resvg 关掉默认特性：图标里没有文字，不引入系统字体扫描、svgz 解压与光栅图解码（usvg 因此一个可选特性都没开）；源码解析不了就让整帧渲染报 `RenderError::InvalidSvg`。
 - **配置**：`[general] font` 经 `CandidateSink::configure` 送到 UI 线程，装上时与热加载变了时各送一次；字族名按 DirectWrite 的系统字体集合找文件（`cloudime_render::system_fonts`），设置程序的「字体」框也从它列字族。

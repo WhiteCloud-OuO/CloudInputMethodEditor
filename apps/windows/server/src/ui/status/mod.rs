@@ -1,5 +1,5 @@
 //! 悬浮状态条：桌面上常驻、可拖动的浮条，画一排图标按钮。
-//! 按钮来自 exe 旁 `data\icons-arrangement.cfg`（排布见 [`arrangement`]），由云朵渲染器画（[`super::painter`]）。
+//! 按钮来自 exe 旁 `data\icons-arrangement.cfg`（排布见 [`arrangement`]），由云朵渲染器画（[`cloud_ui::painter`]）。
 //!
 //! 按下鼠标先 `DragDetect`：挪出拖动阈值就交给系统的移动循环（`WM_NCLBUTTONDOWN` + `HTCAPTION`），
 //! 结束时 `WM_EXITSIZEMOVE` 报新位置；没挪就是点击，按 x 落进哪个按钮（[`placement`]）。
@@ -23,10 +23,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     DragDetect, GetKeyState, ReleaseCapture, VK_CAPITAL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, HTCAPTION, HTCLIENT, IDC_ARROW,
-    KillTimer, LoadCursorW, MA_NOACTIVATE, PostThreadMessageW, SendMessageW, SetTimer,
-    WM_EXITSIZEMOVE, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_TIMER,
-    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_POPUP,
+    DefWindowProcW, GetCursorPos, HTCAPTION, HTCLIENT, IDC_ARROW, KillTimer, LoadCursorW,
+    MA_NOACTIVATE, PostThreadMessageW, SendMessageW, SetTimer, WM_EXITSIZEMOVE, WM_LBUTTONDOWN,
+    WM_MOUSEACTIVATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_TIMER,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -36,10 +35,13 @@ use self::arrangement::{Arrangement, ButtonState};
 use self::placement::{Placement, StatusAction};
 use self::tooltip::Tooltip;
 use super::StatusEvents;
-use super::painter::SharedPainter;
-use super::window_class::WindowClass;
-use super::{WM_STATUS_CAPS, layered, monitor};
+use super::WM_STATUS_CAPS;
 use crate::dispatch::StatusView;
+use cloud_ui::independent_window_template::IndependentWindowTemplate;
+use cloud_ui::layered;
+use cloud_ui::monitor;
+use cloud_ui::painter::SharedPainter;
+use cloud_ui::window_class::WindowClass;
 
 const CLASS_NAME: PCWSTR = w!("CloudIMEStatusBar");
 static CLASS: WindowClass = WindowClass::new();
@@ -99,36 +101,24 @@ pub(super) struct StatusBar {
 
     /// 图标按钮的悬停提示；建不出来就没有提示。
     tooltip: Option<Tooltip>,
+
+    /// 独立窗口模板：注册窗口类、建分层窗，Drop 时销毁（放最后：提示窗先拆，再销毁宿主窗）。
+    _template: IndependentWindowTemplate,
 }
 
 impl StatusBar {
     /// 建一个隐藏的状态条窗口。
     pub(super) fn new(events: StatusEvents, painter: SharedPainter) -> Result<Self> {
-        CLASS.ensure(|| WNDCLASSEXW {
-            lpfnWndProc: Some(wndproc),
-            hInstance: super::module_handle(),
-            hCursor: unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default(),
-            lpszClassName: CLASS_NAME,
-            ..Default::default()
-        })?;
+        let template = IndependentWindowTemplate::new(
+            &CLASS,
+            CLASS_NAME,
+            w!("悬浮工具栏"),
+            wndproc,
+            false,
+            Some(unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default()),
+        )?;
+        let hwnd = template.hwnd();
         let dpi = unsafe { GetDpiForSystem() }.max(96);
-        // NOACTIVATE：显示时不抢应用焦点。
-        let hwnd = unsafe {
-            CreateWindowExW(
-                WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE,
-                CLASS_NAME,
-                w!("悬浮工具栏"),
-                WS_POPUP,
-                0,
-                0,
-                0,
-                0,
-                None,
-                None,
-                Some(super::module_handle()),
-                None,
-            )?
-        };
         let placement = Rc::new(Placement::new(hwnd, layered::shadow_margin(dpi), events));
         PLACEMENTS.with(|map| map.borrow_mut().insert(hwnd.0 as isize, placement.clone()));
         Ok(Self {
@@ -139,6 +129,7 @@ impl StatusBar {
             painter,
             arrangement: RefCell::new(Arrangement::load()),
             tooltip: Tooltip::new(hwnd),
+            _template: template,
         })
     }
 
@@ -216,7 +207,7 @@ impl StatusBar {
         let cells = Self::status_cells(&view, &arrangement, self.placement.caps.get(), usize::MAX);
         let rendered = match (cells.is_empty(), self.painter.borrow_mut().as_mut()) {
             (false, Some(painter)) => {
-                painter.render_status(&cells, self.dpi.get(), crate::ui::painter::StatusKind::Bar)
+                painter.render_status(&cells, self.dpi.get(), cloud_ui::painter::StatusKind::Bar)
             }
             _ => None,
         };
@@ -306,7 +297,6 @@ impl StatusBar {
 impl Drop for StatusBar {
     fn drop(&mut self) {
         PLACEMENTS.with(|map| map.borrow_mut().remove(&(self.hwnd.0 as isize)));
-        let _ = unsafe { DestroyWindow(self.hwnd) };
     }
 }
 

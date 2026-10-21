@@ -11,6 +11,7 @@ members = [
     "crates/cloudime-script",
     "crates/cloudime-neural",
     "crates/cloudime-render",
+    "crates/cloud-ui",
     "crates/cloudime-update",
     "apps/cli", "apps/windows/server", "apps/windows/tsf", "apps/windows/settings", "tools/dict-convert", "tools/release-sign", "apps/windows/tools/cloudime-wordbank-transformer",
 ]
@@ -36,6 +37,7 @@ cloudime-translate = { path = "crates/cloudime-translate" }
 cloudime-script = { path = "crates/cloudime-script" }
 cloudime-neural = { path = "crates/cloudime-neural" }
 cloudime-render = { path = "crates/cloudime-render" }
+cloud-ui = { path = "crates/cloud-ui" }
 cloudime-update = { path = "crates/cloudime-update" }
 
 # 外部依赖统一在这里定版本，子 crate 一律 `xxx.workspace = true`
@@ -89,6 +91,8 @@ png = "0.18.1"
 # Windows 平台层
 embed-manifest = "1.4.0"
 windows-registry = "0.6.1"
+windows = "0.62.2"
+windows-core = "0.62.2"
 
 # cosmic-text 加了 opsz 光学字号支持（FontSystem::set_optical_size），补丁在 qingjian-team 的 fork，分支 qingjian-opsz 基于 0.19.0；
 # 上游收了就删掉这段回 crates.io。见 docs/design/rendering.md
