@@ -277,8 +277,8 @@ Page（主页面，一窗口一棵）
   - `item_key`；
   - `control`：局部控件名；
   - `control_path`：完整路径。
-- `control_path` / 实例路径目前尚未接入窗口事件层；当前先给实例内控件加前缀名（例如 `rows_0_title`）保证布局内唯一，
-  事件仍按控件名 / 区域名分发。完整路径在后续运行时 API 步骤补齐。
+- 窗口事件载荷已带上 `subpage` / `instance` / `item_index` / `item_key` / `control_path`；
+  控件名本身仍是实例内加前缀后的唯一名（例如 `rows_0_title`），`control` 保留这个实际控件名。
 - 一个窗口仍然只有一份 Lua 脚本；子页面不单独运行脚本，事件冒泡到窗口脚本。
 - `win:update_content` 等按控件名寻址的 API 需要支持完整路径或“实例 + 局部名”。
 

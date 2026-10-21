@@ -16,5 +16,5 @@ pub enum Work {
     Candidate(CandidateEvent),
 
     /// UI 线程发来的脚本窗口鼠标操作（点击 / 悬停）：派给脚本的 `window` 事件。
-    ScriptWindow(cloudime_script::ScriptWindowEvent),
+    ScriptWindow(Box<cloudime_script::ScriptWindowEvent>),
 }

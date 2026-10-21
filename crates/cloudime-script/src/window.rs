@@ -16,9 +16,10 @@ use std::time::SystemTime;
 
 use cloudime_render::{
     ButtonColors, ButtonShape, ButtonState, Color, Document, Element, FlatSvgButton, FontSlot,
-    HitRect, HitShape, Label, LabelRun, Panel, PathCommand, Pixmap, Region, ScrollAxis, ScrollBar,
-    StaticImage, StaticShape, StaticTextContent, SvgAlign, TextBlock, TextBox, TextBoxScroll,
-    TextEdit, flip_image, gray_image, load_image, mask_image, rotate_image, scale_image, svg_size,
+    HitRect, HitShape, InstanceInfo, Label, LabelRun, Panel, PathCommand, Pixmap, Region,
+    ScrollAxis, ScrollBar, StaticImage, StaticShape, StaticTextContent, SvgAlign, TextBlock,
+    TextBox, TextBoxScroll, TextEdit, flip_image, gray_image, load_image, mask_image, rotate_image,
+    scale_image, svg_size,
 };
 
 use crate::mlua;
@@ -877,6 +878,7 @@ pub(crate) fn load_layout_document(
         mlua::Error::RuntimeError(format!("布局文件 {}：{error}", path.display()))
     })?;
     document.control_names = layout.control_names;
+    document.instances = layout.instances;
     Ok(document)
 }
 
@@ -1052,6 +1054,7 @@ fn parse_document(
         elements,
         regions,
         control_names: Vec::new(),
+        instances: HashMap::new(),
     })
 }
 
@@ -2303,6 +2306,9 @@ pub struct ScriptWindowEvent {
     /// 命中的控件名（布局文件里每个控件的 `name`）；没有名字或没命中根元素时是 `None`。
     pub control: Option<String>,
 
+    /// 命中的控件属于哪个子页面实例；普通窗口控件是 `None`。
+    pub instance: Option<InstanceInfo>,
+
     /// 区域 / 布局为这个事件声明的处理器名（`events` 表）；没声明是 `None`。
     pub handler: Option<String>,
 
@@ -2338,6 +2344,19 @@ pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result
     payload.set("element", event.element)?;
     payload.set("region", event.region.clone())?;
     payload.set("control", event.control.clone())?;
+    if let Some(instance) = &event.instance {
+        payload.set("subpage", instance.subpage.clone())?;
+        payload.set("instance", instance.instance.clone())?;
+        payload.set("item_index", instance.item_index)?;
+        payload.set("item_key", instance.item_key.clone())?;
+        payload.set("control_path", instance.control_path())?;
+    } else {
+        payload.set("subpage", mlua::Value::Nil)?;
+        payload.set("instance", mlua::Value::Nil)?;
+        payload.set("item_index", mlua::Value::Nil)?;
+        payload.set("item_key", mlua::Value::Nil)?;
+        payload.set("control_path", mlua::Value::Nil)?;
+    }
     payload.set("handler", event.handler.clone())?;
     payload.set("text", event.text.clone())?;
     payload.set("key", event.key)?;
@@ -3038,7 +3057,14 @@ mod tests {
             y: 8.0,
             element: Some(2),
             region: Some("plus".to_owned()),
-            control: Some("Counter".to_owned()),
+            control: Some("rows_1_title".to_owned()),
+            instance: Some(InstanceInfo {
+                subpage: "rows".to_owned(),
+                instance: "rows[1]".to_owned(),
+                item_index: 1,
+                item_key: Some("2".to_owned()),
+                local_name: "title".to_owned(),
+            }),
             handler: Some("plus_clicked".to_owned()),
             text: Some("12".to_owned()),
             key: Some(0x41),
@@ -3056,7 +3082,15 @@ mod tests {
         assert!(payload.get::<bool>("shift").unwrap());
         assert_eq!(payload.get::<String>("window").unwrap(), "面板");
         assert_eq!(payload.get::<String>("region").unwrap(), "plus");
-        assert_eq!(payload.get::<String>("control").unwrap(), "Counter");
+        assert_eq!(payload.get::<String>("control").unwrap(), "rows_1_title");
+        assert_eq!(payload.get::<String>("subpage").unwrap(), "rows");
+        assert_eq!(payload.get::<String>("instance").unwrap(), "rows[1]");
+        assert_eq!(payload.get::<usize>("item_index").unwrap(), 1);
+        assert_eq!(payload.get::<String>("item_key").unwrap(), "2");
+        assert_eq!(
+            payload.get::<String>("control_path").unwrap(),
+            "rows[1].title"
+        );
         assert_eq!(payload.get::<String>("handler").unwrap(), "plus_clicked");
         assert_eq!(payload.get::<String>("text").unwrap(), "12");
         assert_eq!(payload.get::<u32>("key").unwrap(), 0x41);

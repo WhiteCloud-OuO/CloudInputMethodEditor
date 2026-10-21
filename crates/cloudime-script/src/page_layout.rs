@@ -10,7 +10,7 @@ use cloud_ui_core::{
     Align, Axis, Constraints, Edges, GridTrack, Insets, Justify, LayoutSpec, Measure, Node, NodeId,
     NodeKind, PageTree, Position, Size, SizeSpec, layout,
 };
-use cloudime_render::ControlName;
+use cloudime_render::{ControlName, InstanceInfo};
 use mlua::{Lua, Table, Value as LuaValue};
 use serde_json::{Map, Number, Value};
 
@@ -51,6 +51,7 @@ pub(crate) fn load(
     apply_common(&mut tree.nodes[0], page, fallback)?;
     let mut payloads = vec![None];
     let mut names = HashSet::new();
+    let mut instances = std::collections::HashMap::new();
     let mut templates = std::collections::HashMap::new();
     let mut visiting = Vec::new();
     let children = parse_children(
@@ -59,8 +60,10 @@ pub(crate) fn load(
         base,
         &mut payloads,
         &mut names,
+        &mut instances,
         &data,
         "",
+        None,
         &mut templates,
         &mut visiting,
         0,
@@ -99,6 +102,7 @@ pub(crate) fn load(
     Ok(Layout {
         table,
         control_names,
+        instances,
     })
 }
 
@@ -109,8 +113,10 @@ fn parse_children(
     base: &Path,
     payloads: &mut Vec<Option<Value>>,
     names: &mut HashSet<String>,
+    instances: &mut std::collections::HashMap<String, InstanceInfo>,
     data: &Value,
     prefix: &str,
+    instance: Option<&InstanceInfo>,
     templates: &mut std::collections::HashMap<PathBuf, Value>,
     visiting: &mut Vec<PathBuf>,
     depth: usize,
@@ -124,7 +130,8 @@ fn parse_children(
     let mut ids = Vec::with_capacity(children.len());
     for child in children {
         ids.push(parse_node(
-            tree, child, base, payloads, names, data, prefix, templates, visiting, depth,
+            tree, child, base, payloads, names, instances, data, prefix, instance, templates,
+            visiting, depth,
         )?);
     }
     Ok(ids)
@@ -137,8 +144,10 @@ fn parse_node(
     base: &Path,
     payloads: &mut Vec<Option<Value>>,
     names: &mut HashSet<String>,
+    instances: &mut std::collections::HashMap<String, InstanceInfo>,
     data: &Value,
     prefix: &str,
+    instance: Option<&InstanceInfo>,
     templates: &mut std::collections::HashMap<PathBuf, Value>,
     visiting: &mut Vec<PathBuf>,
     depth: usize,
@@ -152,7 +161,8 @@ fn parse_node(
         .ok_or_else(|| runtime("页面树节点缺 type"))?;
     if kind_name == "subpage" {
         return parse_subpage(
-            tree, object, base, payloads, names, data, prefix, templates, visiting, depth,
+            tree, object, base, payloads, names, instances, data, prefix, templates, visiting,
+            depth,
         );
     }
     let kind = match kind_name {
@@ -183,9 +193,17 @@ fn parse_node(
             payload.insert("name".to_owned(), Value::String(name.clone()));
         }
         payloads[id] = Some(bind_value(payload, data));
+        if let (Some(name), Some(instance), Some(local_name)) =
+            (&tree.nodes[id].name, instance, local_name)
+        {
+            let mut info = instance.clone();
+            info.local_name = local_name.to_owned();
+            instances.insert(name.clone(), info);
+        }
     }
     let children = parse_children(
-        tree, object, base, payloads, names, data, prefix, templates, visiting, depth,
+        tree, object, base, payloads, names, instances, data, prefix, instance, templates,
+        visiting, depth,
     )?;
     tree.nodes[id].children = children;
     Ok(id)
@@ -198,6 +216,7 @@ fn parse_subpage(
     base: &Path,
     payloads: &mut Vec<Option<Value>>,
     names: &mut HashSet<String>,
+    instance_map: &mut std::collections::HashMap<String, InstanceInfo>,
     data: &Value,
     prefix: &str,
     templates: &mut std::collections::HashMap<PathBuf, Value>,
@@ -281,8 +300,20 @@ fn parse_subpage(
             .and_then(|key| item.get(key))
             .cloned()
             .unwrap_or_else(|| Value::from(index as u64));
+        let item_key = if key.is_null() {
+            None
+        } else {
+            Some(stringify(&key))
+        };
         let context = make_context(data, item, index, key);
         let instance_prefix = format!("{instance_prefix}{index}_");
+        let info = InstanceInfo {
+            subpage: local_name.to_owned(),
+            instance: format!("{prefix}{local_name}[{index}]"),
+            item_index: index,
+            item_key,
+            local_name: String::new(),
+        };
         let mut instance = Node::new(NodeKind::Stem);
         apply_common(&mut instance, page, (None, None))?;
         instance.name = Some(format!("{instance_prefix}page"));
@@ -298,8 +329,10 @@ fn parse_subpage(
             &template_base,
             payloads,
             names,
+            instance_map,
             &context,
             &instance_prefix,
+            Some(&info),
             templates,
             visiting,
             depth + 1,
@@ -978,6 +1011,11 @@ mod tests {
         let third: mlua::Table = layout.table.get(3).unwrap();
         assert_eq!(third.get::<String>("name").unwrap(), "rows_1_title");
         assert_eq!(third.get::<String>("text").unwrap(), "B");
+        let info = layout.instances.get("rows_1_title").expect("实例元数据");
+        assert_eq!(info.instance, "rows[1]");
+        assert_eq!(info.item_index, 1);
+        assert_eq!(info.item_key.as_deref(), Some("2"));
+        assert_eq!(info.control_path(), "rows[1].title");
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

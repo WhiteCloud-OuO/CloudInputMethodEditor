@@ -38,7 +38,7 @@ pub use control::{
 };
 /// 脚本窗口 / 面板的内容：**声明式**元素表（display list），由 [`Renderer::render_document`] 一次出图。
 pub use document::{
-    ControlName, Document, Element, FontSlot, HitRect, HitShape, PathCommand, Region,
+    ControlName, Document, Element, FontSlot, HitRect, HitShape, InstanceInfo, PathCommand, Region,
     StaticTextContent, TextEditPlacement,
 };
 /// **能画的元素**的 traits：`text` / `svg` / `img` / `line` / `rect`（含圆角与圆）/ `path`；

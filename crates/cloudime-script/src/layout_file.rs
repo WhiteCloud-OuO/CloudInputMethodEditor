@@ -8,10 +8,10 @@
 //!
 //! **每个控件必须写 `name`**：它既是脚本认控件的标识符，也参与布局内唯一性校验。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::Path;
 
-use cloudime_render::ControlName;
+use cloudime_render::{ControlName, InstanceInfo};
 use mlua::{Lua, Table, Value as LuaValue};
 use serde_json::Value;
 
@@ -35,6 +35,7 @@ const RUST_KEYWORDS: &[&str] = &[
 pub(crate) struct Layout {
     pub table: Table,
     pub control_names: Vec<ControlName>,
+    pub instances: HashMap<String, InstanceInfo>,
 }
 
 /// 读一个布局文件，转成 `set_content` 能直接消费的 Lua 表。
@@ -145,6 +146,7 @@ fn content(lua: &Lua, value: &Value, base: &Path) -> mlua::Result<Layout> {
     Ok(Layout {
         table,
         control_names,
+        instances: HashMap::new(),
     })
 }
 

@@ -336,7 +336,7 @@ fn serve(mut router: Router) {
         let sender = std::sync::Mutex::new(work_tx.clone());
         std::sync::Arc::new(move |event| {
             if let Ok(sender) = sender.lock() {
-                let _ = sender.send(Work::ScriptWindow(event));
+                let _ = sender.send(Work::ScriptWindow(Box::new(event)));
             }
         })
     };

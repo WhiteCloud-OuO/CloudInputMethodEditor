@@ -277,12 +277,13 @@ local aux = cloudime.window.create_auxiliary{
 }
 ```
 
-句柄上的方法（两类窗口一套）：
+句柄上的方法（两类窗口一套；`version: 2` 页面树是实验路径，契约见 `docs/design/ui-layout.md`）：
 
 | 方法 | 意思 |
 |---|---|
 | `win:set_content{…}` | 换一整份内容（整份替换；见下），尺寸可以跟着变 |
-| `win:load_layout(path)` | 读 JSON 布局文件并整份替换；控件 / 尺寸 / 区域 / 事件都从文件来，见下 |
+| `win:load_layout(path, data?)` | 读 JSON 布局文件并整份替换；`data` 是 v2 页面树的数据上下文 |
+| `win:set_data(data)` | 用当前数据重跑最近一次 v2 布局（不重新读文件） |
 | `win:get_text(name)` | 读某个 `text_edit` / `text_box` 的最近文本；没有 / 还没收到时给 `nil` |
 | `win:set_text(name, text)` | 设置某个 `text_edit` / `text_box` 的文本（按控件名找） |
 | `win:update_content(name, content)` | 更新静态 `label` / `text_block`：`text_block` 传字符串，`label` 传带颜色的 runs；不改尺寸、不参与交互 |
@@ -497,6 +498,8 @@ cloudime.on("window", function(event)
     -- event.element  命中的元素（内容是 1 起的数组，这里也是 1 起；没命中是 nil）
     -- event.region   命中的区域名（内容里的 regions；没命中是 nil）
     -- event.control  命中的控件名（布局文件里的 name；没命中 / 没写 name 是 nil）
+    -- event.subpage / event.instance / event.item_index / event.item_key / event.control_path
+    --                 v2 子页面实例信息；普通窗口事件是 nil
     -- event.handler  区域 / 布局声明的事件处理器名（events 表；没声明是 nil）
     -- event.text     text_changed 时的完整文本；其它事件是 nil
     -- event.key      key_pressed 的虚拟键码；其它事件是 nil

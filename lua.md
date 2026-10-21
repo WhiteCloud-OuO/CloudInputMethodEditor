@@ -485,7 +485,8 @@ aux:show()
 | 方法 | 说明 |
 |---|---|
 | `win:set_content{ … }` | 换一整份内容（整份替换；`width` / `height` 可省，缺省用建窗口时那份） |
-| `win:load_layout(path)` | 读一份 JSON 布局文件并换成整份内容；`width` / `height` / 控件 / 区域都从文件来 |
+| `win:load_layout(path, data?)` | 读一份 JSON 布局文件并换成整份内容；`data` 是 v2 页面树的数据上下文 |
+| `win:set_data(data)` | 用当前数据重跑最近一次 v2 布局（不重新读文件）；普通控件按控件名更新 |
 | `win:get_text(name)` | 读某个 `text_edit` / `text_box` 最近一次文本；控件不存在 / 还没有文本时给 `nil` |
 | `win:set_text(name, text)` | 设置某个 `text_edit` / `text_box` 的文本（按控件名找，整份替换、光标放到末尾） |
 | `win:update_content(name, content)` | 更新静态控件显示内容：`text_block` 传字符串；`label` 传 `{ { text = …, color = … }, … }`，每段都必须带颜色。控件仍是静态的，不参与鼠标 / 键盘交互 |
@@ -554,6 +555,22 @@ aux:show()
 - 布局文件里的 `svg_path` / `img.path` 先按布局文件所在目录找，再逐级向上找；因此放在
   `Scripts/lib/` 的布局可以直接写 `Images/...`（落到安装根目录），也可以把素材放在布局旁边。
   改布局文件后要重新 `load_layout` 或重启输入法服务；不会自动监听文件变化。
+
+**页面树 v2（实验）**：布局文件顶层写 `"version": 2` 时，使用页面树 / 布局算法，而不是上面的绝对坐标。
+完整契约见 [`docs/design/ui-layout.md`](docs/design/ui-layout.md)；脚本侧只需要记住：
+
+```lua
+local win = cloudime.window.create{
+    layout = "Scripts/lib/list.json",
+    data = { items = { { title = "A" }, { title = "B" } } },
+}
+-- 或：win:load_layout("Scripts/lib/list.json", { items = ... })
+win:set_data{ items = { { title = "C" } } }
+```
+
+子页面用 `subpage` 节点 + `repeat` / `key`，模板里写 `{{item.title}}`，实例内控件名会自动加前缀
+（例如 `rows_0_title`）；窗口事件里会带 `event.subpage` / `event.instance` / `event.item_index` /
+`event.item_key` / `event.control_path`。v2 目前是实验接口，细节和限制以设计文档为准。
 
 **元素表**（坐标 / 尺寸都是点，超出内容区的部分被裁掉）：
 
@@ -815,6 +832,8 @@ cloudime.on("window", function(event)
     -- event.element               命中的元素（内容数组里 1 起的下标；没命中是 nil）
     -- event.region                命中的区域名（内容里的 regions；没命中是 nil）
     -- event.control               命中的控件名（布局文件里的 name；没命中 / 没写 name 是 nil）
+    -- event.subpage / event.instance / event.item_index / event.item_key / event.control_path
+    --                              v2 子页面实例信息；普通窗口事件是 nil
     -- event.handler               区域 / 布局声明的事件处理器名（events 表；没声明是 nil）
     -- event.text                  text_changed 时的完整文本；其它事件是 nil
     -- event.key                   key_pressed 的虚拟键码；其它事件是 nil

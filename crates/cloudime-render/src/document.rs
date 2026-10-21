@@ -6,6 +6,7 @@
 //!
 //! 内容变了就整份替换（没有「只改某一个元素」的口子）—— 与窗口的渲染模型一致：一块内存区域 = 一帧。
 
+use std::collections::HashMap;
 use std::sync::Arc;
 
 use i_overlay::core::fill_rule::FillRule;
@@ -43,6 +44,35 @@ pub struct Document {
 
     /// JSON 布局里的控件名：名字 → 元素路径；脚本 / 事件按它认控件。
     pub control_names: Vec<ControlName>,
+
+    /// 子页面实例元数据：控件名 → 它属于哪个实例；普通控件没有条目。
+    pub instances: HashMap<String, InstanceInfo>,
+}
+
+/// 一个子页面实例的上下文。
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct InstanceInfo {
+    /// 子页面节点名。
+    pub subpage: String,
+
+    /// 实例路径，例如 `rows[1]`。
+    pub instance: String,
+
+    /// 数组下标。
+    pub item_index: usize,
+
+    /// `repeat.key` 的值（字符串化）；没有为 `None`。
+    pub item_key: Option<String>,
+
+    /// 实例内控件原名，例如 `title`。
+    pub local_name: String,
+}
+
+impl InstanceInfo {
+    /// 事件里的完整控件路径，例如 `rows[1].title`。
+    pub fn control_path(&self) -> String {
+        format!("{}.{}", self.instance, self.local_name)
+    }
 }
 
 /// 一个控件的名字与它在内容树里的位置（根元素从 0 开始，`children` 继续往下）。
@@ -221,6 +251,7 @@ impl Document {
             elements: Vec::new(),
             regions: Vec::new(),
             control_names: Vec::new(),
+            instances: HashMap::new(),
         }
     }
 
@@ -1129,6 +1160,7 @@ impl std::fmt::Debug for Document {
             .field("elements", &self.elements.len())
             .field("regions", &self.regions.len())
             .field("control_names", &self.control_names.len())
+            .field("instances", &self.instances.len())
             .finish()
     }
 }
@@ -1327,6 +1359,7 @@ mod tests {
                     path: vec![1],
                 },
             ],
+            instances: Default::default(),
         };
         assert!(document.update_static_content(
             "hint",

@@ -987,6 +987,7 @@ impl ScriptWindow {
             .unwrap_or_else(|| region_name.clone());
         let region = Some(region_name.clone());
         let element = (edit.path.len() == 1).then_some(edit.path[0] + 1);
+        let instance = document.instances.get(&control_name).cloned();
         let (x, y) = self.last.get();
         let (ctrl, alt, shift) = modifiers();
         (self.events)(ScriptWindowEvent {
@@ -998,6 +999,7 @@ impl ScriptWindow {
             element,
             region,
             control: Some(control_name),
+            instance,
             handler,
             text: Some(text),
             key: None,
@@ -1038,6 +1040,7 @@ impl ScriptWindow {
             .unwrap_or_else(|| region_name.clone());
         let region = Some(region_name.clone());
         let element = (edit.path.len() == 1).then_some(edit.path[0] + 1);
+        let instance = document.instances.get(&control_name).cloned();
         let (x, y) = self.last.get();
         let (ctrl, alt, shift) = modifiers();
         (self.events)(ScriptWindowEvent {
@@ -1049,6 +1052,7 @@ impl ScriptWindow {
             element,
             region,
             control: Some(control_name),
+            instance,
             handler,
             text: None,
             key,
@@ -1534,6 +1538,7 @@ impl ScriptWindow {
             .control_name(index + 1)
             .map(str::to_owned)
             .unwrap_or_else(|| bar.region_name.clone());
+        let instance = document.instances.get(&control).cloned();
         let region = Some(bar.region_name.clone());
         let (ctrl, alt, shift) = modifiers();
         (self.events)(ScriptWindowEvent {
@@ -1545,6 +1550,7 @@ impl ScriptWindow {
             element: Some(index + 1),
             region,
             control: Some(control),
+            instance,
             handler,
             text: None,
             key: None,
@@ -2076,6 +2082,9 @@ impl ScriptWindow {
                 .as_deref()
                 .and_then(|name| self.control_name_for_region(name))
         });
+        let instance = control
+            .as_deref()
+            .and_then(|name| self.document.borrow().instances.get(name).cloned());
         let (ctrl, alt, shift) = modifiers();
         (self.events)(ScriptWindowEvent {
             window: self.id,
@@ -2086,6 +2095,7 @@ impl ScriptWindow {
             element,
             region,
             control,
+            instance,
             handler,
             text: None,
             key: None,
@@ -2133,6 +2143,9 @@ impl ScriptWindow {
         };
         let handler = self.region_handler(&region, action);
         let control = self.control_name(Some(index + 1));
+        let instance = control
+            .as_deref()
+            .and_then(|name| self.document.borrow().instances.get(name).cloned());
         let (x, y, _, _) = self.hit_at(client_x, client_y);
         let (ctrl, alt, shift) = modifiers();
         (self.events)(ScriptWindowEvent {
@@ -2144,6 +2157,7 @@ impl ScriptWindow {
             element: Some(index + 1),
             region: Some(region),
             control,
+            instance,
             handler,
             text: None,
             key: None,
@@ -2361,6 +2375,7 @@ impl ScriptAuxiliary {
                 element: panel.element,
                 region: panel.region.clone(),
                 control: panel.control.clone(),
+                instance: None,
                 handler: panel.handler.clone(),
                 text: None,
                 key: None,

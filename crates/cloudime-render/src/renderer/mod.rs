@@ -1304,6 +1304,7 @@ mod tests {
             height: 48.0,
             regions: Vec::new(),
             control_names: Vec::new(),
+            instances: Default::default(),
             elements: vec![
                 Element::Rect {
                     x: 0.0,
@@ -1378,6 +1379,7 @@ mod tests {
             height: 80.0,
             regions: Vec::new(),
             control_names: Vec::new(),
+            instances: Default::default(),
             elements: vec![
                 Element::Panel(Panel {
                     x: 0.0,
@@ -1491,6 +1493,7 @@ mod tests {
                 height: 40.0,
                 regions: Vec::new(),
                 control_names: Vec::new(),
+                instances: Default::default(),
                 elements: vec![Element::FlatSvgButton(button(state))],
             };
             renderer
