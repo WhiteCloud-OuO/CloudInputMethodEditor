@@ -2336,6 +2336,7 @@ mod tests {
             &mut ImageCache::default(),
         )
         .unwrap_or_else(|error| panic!("{}：{error}", path.display()));
+        assert_eq!((document.width, document.height), (760.0, 640.0));
         assert!(
             document
                 .control_names

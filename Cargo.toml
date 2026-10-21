@@ -11,6 +11,7 @@ members = [
     "crates/cloudime-script",
     "crates/cloudime-neural",
     "crates/cloudime-render",
+    "crates/cloud-ui-core",
     "crates/cloud-ui",
     "crates/cloudime-update",
     "apps/cli", "apps/windows/server", "apps/windows/tsf", "apps/windows/settings", "tools/dict-convert", "tools/release-sign", "apps/windows/tools/cloudime-wordbank-transformer",
@@ -37,6 +38,7 @@ cloudime-translate = { path = "crates/cloudime-translate" }
 cloudime-script = { path = "crates/cloudime-script" }
 cloudime-neural = { path = "crates/cloudime-neural" }
 cloudime-render = { path = "crates/cloudime-render" }
+cloud-ui-core = { path = "crates/cloud-ui-core" }
 cloud-ui = { path = "crates/cloud-ui" }
 cloudime-update = { path = "crates/cloudime-update" }
 

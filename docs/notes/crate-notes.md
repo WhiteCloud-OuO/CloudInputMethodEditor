@@ -470,6 +470,12 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 （缩小时倍数小于 1），`preferred_size` 里的最小宽度改成按点算（`m.px(theme.min_width_pixels)`，原来是
 `min_width_pixels / scale`，缩放时会朝反方向跑）。
 
+## crates/cloud-ui-core
+
+页面树与布局核心（2026-10-21 建立）：只放几何 / 约束 / 布局算法，不依赖 Windows、脚本运行时或渲染器。
+`cloud-ui` 的窗口壳和 `cloudime-script` 的 JSON / Lua 绑定共用这里的页面树，避免 `cloud-ui` 与
+`cloudime-script` 互相依赖。
+
 ## crates/cloud-ui
 
 Windows 壳的公共层（2026-10-20 从 `apps/windows/server/src/ui/` 抽出）：`cloudime-render` 只负责把内容画成位图，

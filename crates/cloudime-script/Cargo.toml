@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+cloud-ui-core.workspace = true
 cloudime-render.workspace = true
 jiff.workspace = true
 mlua.workspace = true

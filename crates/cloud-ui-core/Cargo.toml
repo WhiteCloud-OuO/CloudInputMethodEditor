@@ -1,0 +1,10 @@
+[package]
+name = "cloud-ui-core"
+description = "页面树、布局约束与尺寸核心；不依赖 Windows 与脚本运行时"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true

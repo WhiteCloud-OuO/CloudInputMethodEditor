@@ -393,6 +393,7 @@ checksum = "1c133bc6a41be0d194c306b5506d15e6feeea7b1d6604bd3f8310dfb2ca96486"
 name = "cloud-ui"
 version = "0.0.3"
 dependencies = [
+ "cloud-ui-core",
  "cloudime-platform",
  "cloudime-render",
  "cloudime-script",
@@ -400,6 +401,10 @@ dependencies = [
  "windows",
  "windows-core 0.62.2",
 ]
+
+[[package]]
+name = "cloud-ui-core"
+version = "0.0.3"
 
 [[package]]
 name = "cloudime-cli"
@@ -565,6 +570,7 @@ dependencies = [
 name = "cloudime-script"
 version = "0.0.3"
 dependencies = [
+ "cloud-ui-core",
  "cloudime-render",
  "jiff",
  "mlua",

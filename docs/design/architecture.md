@@ -40,7 +40,8 @@ cloudime/
 │   ├── cloudime-platform/      # 平台层的公共部分：配置文件、协议类型
 │   ├── cloudime-render/        # 自绘渲染器：一帧 + 主题 → 预乘 RGBA 位图
 │   ├── cloudime-script/        # 用户脚本运行时（LuaJIT）
-│   └── cloud-ui/            # Windows 壳：分层窗口、资产窗口、脚本窗口、RichEdit 宿主
+│   ├── cloud-ui-core/          # 页面树、布局约束与尺寸核心（无 Windows / 脚本依赖）
+│   └── cloud-ui/               # Windows 壳：分层窗口、资产窗口、脚本窗口、RichEdit 宿主
 │
 ├── apps/
 │   ├── cli/                    # 测试工具：查询、逐键计时、输入日志回放评测、整句评测

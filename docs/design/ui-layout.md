@@ -4,8 +4,8 @@
 当前发布版本仍按 v1 解析；v2 落地前，`lua.md` 与实现以 v1 为准。
 
 本页定义窗口内容的页面树、布局算法与 JSON 契约。元素的画法、事件、窗口模板见
-`script.md` / `windows.md`；布局引擎放在 `cloud-ui`，`cloudime-render` 仍只负责把
-最终几何画成位图。
+`script.md` / `windows.md`；页面树与布局引擎放在 `cloud-ui-core`，`cloud-ui` 负责 Windows
+窗口壳，`cloudime-render` 仍只负责把最终几何画成位图。
 
 ## 1. 目标与边界
 
@@ -298,7 +298,8 @@ Page（主页面，一窗口一棵）
 
 ## 8. 引擎边界
 
-- 页面树、布局算法、子页面实例化放在 `cloud-ui`。
+- 页面树、布局算法、子页面实例化放在 `cloud-ui-core`。
+- `cloud-ui` 只负责 Windows 窗口壳、分层贴图、命中测试和文本宿主。
 - `cloudime-script` 负责读取 JSON、校验字段、把 Lua 数据变成页面树的数据上下文。
 - `cloudime-render` 只接收布局后的几何和 `Document`，不实现 flex / grid。
 - 布局在工人线程完成后生成新的 `Document`，UI 线程只负责贴图、命中测试和文本宿主。

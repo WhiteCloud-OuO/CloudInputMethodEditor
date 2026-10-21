@@ -15,6 +15,7 @@ mod layout_file;
 mod runtime;
 mod window;
 
+pub use cloud_ui_core as layout_core;
 pub use mlua;
 pub use runtime::{
     AppHook, ClipboardGetHook, ClipboardSetHook, ConfigHook, DIRECTORY, KeyboardHook, MeasureFont,

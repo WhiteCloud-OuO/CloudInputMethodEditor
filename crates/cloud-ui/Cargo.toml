@@ -12,6 +12,7 @@ default = ["script"]
 script = ["dep:cloudime-script"]
 
 [dependencies]
+cloud-ui-core.workspace = true
 cloudime-platform.workspace = true
 cloudime-render.workspace = true
 cloudime-script = { workspace = true, optional = true }
