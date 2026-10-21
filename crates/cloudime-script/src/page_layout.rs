@@ -4,20 +4,24 @@
 //! [`crate::window`] 的同一套解析器。子页面（可重复实例 / 数据绑定）留到后续步骤。
 
 use std::collections::HashSet;
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use cloud_ui_core::{
     Align, Axis, Constraints, Edges, GridTrack, Insets, Justify, LayoutSpec, Measure, Node, NodeId,
     NodeKind, PageTree, Position, Size, SizeSpec, layout,
 };
 use cloudime_render::ControlName;
-use mlua::{Lua, Table};
-use serde_json::{Map, Value};
+use mlua::{Lua, Table, Value as LuaValue};
+use serde_json::{Map, Number, Value};
 
-use crate::layout_file::{Layout, to_lua, validate_name};
+use crate::layout_file::{Layout, read_value, resolve_path, to_lua, validate_name};
 
 /// v2 顶层版本号。
 const VERSION: u64 = 2;
+
+/// 子页面最大深度与实例数，防止递归 / 列表把布局撑爆。
+const MAX_SUBPAGE_DEPTH: usize = 8;
+const MAX_SUBPAGE_INSTANCES: usize = 100;
 
 /// 解析 v2 布局并展开成 `set_content` 能消费的表。
 pub(crate) fn load(
@@ -25,6 +29,7 @@ pub(crate) fn load(
     value: &Value,
     base: &Path,
     fallback: (Option<f32>, Option<f32>),
+    data: &Value,
 ) -> mlua::Result<Layout> {
     let root = value
         .as_object()
@@ -37,11 +42,29 @@ pub(crate) fn load(
         .and_then(Value::as_object)
         .ok_or_else(|| runtime("v2 布局缺 page 对象"))?;
 
+    let data = if data.is_null() {
+        page.get("data").cloned().unwrap_or(Value::Null)
+    } else {
+        data.clone()
+    };
     let mut tree = PageTree::new(Node::new(NodeKind::Page));
     apply_common(&mut tree.nodes[0], page, fallback)?;
     let mut payloads = vec![None];
     let mut names = HashSet::new();
-    let children = parse_children(&mut tree, page, base, &mut payloads, &mut names)?;
+    let mut templates = std::collections::HashMap::new();
+    let mut visiting = Vec::new();
+    let children = parse_children(
+        &mut tree,
+        page,
+        base,
+        &mut payloads,
+        &mut names,
+        &data,
+        "",
+        &mut templates,
+        &mut visiting,
+        0,
+    )?;
     tree.nodes[0].children = children;
 
     let constraints = root_constraints(&tree.nodes[0]);
@@ -79,12 +102,18 @@ pub(crate) fn load(
     })
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_children(
     tree: &mut PageTree,
     object: &Map<String, Value>,
     base: &Path,
     payloads: &mut Vec<Option<Value>>,
     names: &mut HashSet<String>,
+    data: &Value,
+    prefix: &str,
+    templates: &mut std::collections::HashMap<PathBuf, Value>,
+    visiting: &mut Vec<PathBuf>,
+    depth: usize,
 ) -> mlua::Result<Vec<NodeId>> {
     let Some(children) = object.get("children") else {
         return Ok(Vec::new());
@@ -94,17 +123,25 @@ fn parse_children(
     };
     let mut ids = Vec::with_capacity(children.len());
     for child in children {
-        ids.push(parse_node(tree, child, base, payloads, names)?);
+        ids.push(parse_node(
+            tree, child, base, payloads, names, data, prefix, templates, visiting, depth,
+        )?);
     }
     Ok(ids)
 }
 
+#[allow(clippy::too_many_arguments)]
 fn parse_node(
     tree: &mut PageTree,
     value: &Value,
     base: &Path,
     payloads: &mut Vec<Option<Value>>,
     names: &mut HashSet<String>,
+    data: &Value,
+    prefix: &str,
+    templates: &mut std::collections::HashMap<PathBuf, Value>,
+    visiting: &mut Vec<PathBuf>,
+    depth: usize,
 ) -> mlua::Result<NodeId> {
     let object = value
         .as_object()
@@ -113,16 +150,22 @@ fn parse_node(
         .get("type")
         .and_then(Value::as_str)
         .ok_or_else(|| runtime("页面树节点缺 type"))?;
+    if kind_name == "subpage" {
+        return parse_subpage(
+            tree, object, base, payloads, names, data, prefix, templates, visiting, depth,
+        );
+    }
     let kind = match kind_name {
         "stem" => NodeKind::Stem,
-        "subpage" => NodeKind::Subpage,
         "panel" => NodeKind::Container,
         _ => NodeKind::Control,
     };
 
-    if let Some(name) = object.get("name").and_then(Value::as_str) {
+    let local_name = object.get("name").and_then(Value::as_str);
+    let name = local_name.map(|name| format!("{prefix}{name}"));
+    if let Some(name) = &name {
         validate_name(name).map_err(runtime)?;
-        if !names.insert(name.to_owned()) {
+        if !names.insert(name.clone()) {
             return Err(runtime(format!("控件名重复：{name}")));
         }
     } else if matches!(kind, NodeKind::Control | NodeKind::Container) {
@@ -131,18 +174,255 @@ fn parse_node(
 
     let mut node = Node::new(kind);
     apply_common(&mut node, object, (None, None))?;
+    node.name = name;
     let id = tree.push(node);
     payloads.push(None);
     if matches!(kind, NodeKind::Control | NodeKind::Container) {
-        payloads[id] = Some(control_payload(object)?);
+        let mut payload = control_payload(object)?;
+        if let (Some(name), Some(payload)) = (&tree.nodes[id].name, payload.as_object_mut()) {
+            payload.insert("name".to_owned(), Value::String(name.clone()));
+        }
+        payloads[id] = Some(bind_value(payload, data));
     }
-    if matches!(kind, NodeKind::Subpage) {
-        // 子页面在下一步实现；先保留节点，让解析阶段能给出明确错误。
-        payloads[id] = None;
-    }
-    let children = parse_children(tree, object, base, payloads, names)?;
+    let children = parse_children(
+        tree, object, base, payloads, names, data, prefix, templates, visiting, depth,
+    )?;
     tree.nodes[id].children = children;
     Ok(id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_subpage(
+    tree: &mut PageTree,
+    object: &Map<String, Value>,
+    base: &Path,
+    payloads: &mut Vec<Option<Value>>,
+    names: &mut HashSet<String>,
+    data: &Value,
+    prefix: &str,
+    templates: &mut std::collections::HashMap<PathBuf, Value>,
+    visiting: &mut Vec<PathBuf>,
+    depth: usize,
+) -> mlua::Result<NodeId> {
+    if depth >= MAX_SUBPAGE_DEPTH {
+        return Err(runtime(format!("子页面嵌套超过 {MAX_SUBPAGE_DEPTH} 层")));
+    }
+    let src = object
+        .get("src")
+        .and_then(Value::as_str)
+        .ok_or_else(|| runtime("subpage 缺 src"))?;
+    let path = PathBuf::from(resolve_path(base, src));
+    if visiting.iter().any(|visiting| visiting == &path) {
+        return Err(runtime(format!("子页面循环引用：{}", path.display())));
+    }
+    let template = if let Some(template) = templates.get(&path) {
+        template.clone()
+    } else {
+        let template = read_value(&path)?;
+        templates.insert(path.clone(), template.clone());
+        template
+    };
+    if template
+        .as_object()
+        .and_then(|root| root.get("version"))
+        .and_then(Value::as_u64)
+        != Some(VERSION)
+    {
+        return Err(runtime(format!(
+            "子页面不是 version: 2 页面树：{}",
+            path.display()
+        )));
+    }
+    let page = template
+        .as_object()
+        .and_then(|root| root.get("page"))
+        .and_then(Value::as_object)
+        .ok_or_else(|| runtime(format!("子页面缺 page：{}", path.display())))?;
+
+    let local_name = object
+        .get("name")
+        .and_then(Value::as_str)
+        .unwrap_or("subpage");
+    let instance_prefix = format!("{}{}_", prefix, sanitize_prefix(local_name));
+    let repeat = object.get("repeat").and_then(Value::as_str);
+    let items = match repeat {
+        Some(path) => {
+            let value = lookup_path(data, path)
+                .ok_or_else(|| runtime(format!("subpage.repeat 找不到数据：{path}")))?;
+            let Value::Array(items) = value else {
+                return Err(runtime(format!("subpage.repeat 必须是数组：{path}")));
+            };
+            items.clone()
+        }
+        None => vec![data.clone()],
+    };
+    let max_instances = object
+        .get("max_instances")
+        .and_then(Value::as_u64)
+        .map(|value| value as usize)
+        .unwrap_or(MAX_SUBPAGE_INSTANCES)
+        .min(MAX_SUBPAGE_INSTANCES);
+    if items.len() > max_instances {
+        return Err(runtime(format!(
+            "子页面实例数 {} 超过上限 {max_instances}",
+            items.len()
+        )));
+    }
+
+    let template_base = path
+        .parent()
+        .map(Path::to_path_buf)
+        .unwrap_or_else(|| PathBuf::from("."));
+    let key_name = object.get("key").and_then(Value::as_str);
+    visiting.push(path);
+    let mut instances = Vec::with_capacity(items.len());
+    for (index, item) in items.iter().enumerate() {
+        let key = key_name
+            .and_then(|key| item.get(key))
+            .cloned()
+            .unwrap_or_else(|| Value::from(index as u64));
+        let context = make_context(data, item, index, key);
+        let instance_prefix = format!("{instance_prefix}{index}_");
+        let mut instance = Node::new(NodeKind::Stem);
+        apply_common(&mut instance, page, (None, None))?;
+        instance.name = Some(format!("{instance_prefix}page"));
+        instance.visible = object
+            .get("visible")
+            .and_then(Value::as_bool)
+            .unwrap_or(true);
+        let id = tree.push(instance);
+        payloads.push(None);
+        let children = parse_children(
+            tree,
+            page,
+            &template_base,
+            payloads,
+            names,
+            &context,
+            &instance_prefix,
+            templates,
+            visiting,
+            depth + 1,
+        )?;
+        tree.nodes[id].children = children;
+        instances.push(id);
+    }
+    visiting.pop();
+
+    let mut wrapper = Node::new(NodeKind::Stem);
+    wrapper.name = Some(format!(
+        "{prefix}{}__instances",
+        sanitize_prefix(local_name)
+    ));
+    wrapper.layout = LayoutSpec::Flex {
+        direction: Axis::Row,
+        wrap: true,
+        justify: Justify::Start,
+        align: Align::Start,
+        gap: 0.0,
+    };
+    wrapper.visible = object
+        .get("visible")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    wrapper.children = instances;
+    let id = tree.push(wrapper);
+    payloads.push(None);
+    Ok(id)
+}
+
+fn make_context(data: &Value, item: &Value, index: usize, key: Value) -> Value {
+    let mut context = Map::new();
+    context.insert("item".to_owned(), item.clone());
+    context.insert("index".to_owned(), Value::from(index as u64));
+    context.insert("key".to_owned(), key);
+    context.insert("data".to_owned(), data.clone());
+    if let Value::Object(fields) = data {
+        for (name, value) in fields {
+            context.entry(name.clone()).or_insert_with(|| value.clone());
+        }
+    }
+    Value::Object(context)
+}
+
+fn lookup_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
+    let mut current = value;
+    for part in path.split('.').filter(|part| !part.is_empty()) {
+        current = current.as_object()?.get(part)?;
+    }
+    Some(current)
+}
+
+fn bind_value(value: Value, context: &Value) -> Value {
+    match value {
+        Value::String(text) => Value::String(interpolate(&text, context)),
+        Value::Array(items) => Value::Array(
+            items
+                .into_iter()
+                .map(|item| bind_value(item, context))
+                .collect(),
+        ),
+        Value::Object(mut fields) => {
+            for (key, value) in &mut fields {
+                if matches!(key.as_str(), "name" | "type") {
+                    continue;
+                }
+                *value = bind_value(value.clone(), context);
+            }
+            Value::Object(fields)
+        }
+        value => value,
+    }
+}
+
+fn interpolate(text: &str, context: &Value) -> String {
+    let mut output = String::with_capacity(text.len());
+    let mut rest = text;
+    while let Some(start) = rest.find("{{") {
+        output.push_str(&rest[..start]);
+        let after = &rest[start + 2..];
+        let Some(end) = after.find("}}") else {
+            output.push_str(&rest[start..]);
+            return output;
+        };
+        let path = after[..end].trim();
+        if let Some(value) = lookup_path(context, path) {
+            output.push_str(&stringify(value));
+        }
+        rest = &after[end + 2..];
+    }
+    output.push_str(rest);
+    output
+}
+
+fn stringify(value: &Value) -> String {
+    match value {
+        Value::Null => String::new(),
+        Value::String(text) => text.clone(),
+        Value::Bool(value) => value.to_string(),
+        Value::Number(value) => value.to_string(),
+        Value::Array(_) | Value::Object(_) => serde_json::to_string(value).unwrap_or_default(),
+    }
+}
+
+fn sanitize_prefix(name: &str) -> String {
+    let mut output: String = name
+        .chars()
+        .map(|character| {
+            if character.is_ascii_alphanumeric() {
+                character
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if output.is_empty() {
+        output.push_str("subpage");
+    }
+    if output.as_bytes()[0].is_ascii_digit() {
+        output.insert(0, 's');
+    }
+    output
 }
 
 fn control_payload(object: &Map<String, Value>) -> mlua::Result<Value> {
@@ -551,6 +831,57 @@ impl Measure for PayloadMeasure<'_> {
     }
 }
 
+/// Lua 数据表 → JSON 数据上下文。空表按空数组处理，方便 `items = {}`。
+pub(crate) fn lua_to_json(value: LuaValue) -> mlua::Result<Value> {
+    match value {
+        LuaValue::Nil => Ok(Value::Null),
+        LuaValue::Boolean(value) => Ok(Value::Bool(value)),
+        LuaValue::Integer(value) => Ok(Value::from(value)),
+        LuaValue::Number(value) => Number::from_f64(value)
+            .map(Value::Number)
+            .ok_or_else(|| runtime("数字不是有限值")),
+        LuaValue::String(text) => Ok(Value::String(text.to_str()?.to_owned())),
+        LuaValue::Table(table) => table_to_json(table),
+        other => Err(runtime(format!(
+            "数据上下文只接受字符串 / 数字 / 布尔 / 表，收到 {}",
+            other.type_name()
+        ))),
+    }
+}
+
+fn table_to_json(table: Table) -> mlua::Result<Value> {
+    let length = table.raw_len();
+    let mut array = Vec::with_capacity(length);
+    for index in 1..=length {
+        let value: LuaValue = table.raw_get(index as i64)?;
+        array.push(lua_to_json(value)?);
+    }
+    let mut object = Map::new();
+    for pair in table.pairs::<LuaValue, LuaValue>() {
+        let (key, value) = pair?;
+        match key {
+            LuaValue::Integer(index) if index >= 1 && index as usize <= length => continue,
+            LuaValue::String(key) => {
+                object.insert(key.to_str()?.to_owned(), lua_to_json(value)?);
+            }
+            other => {
+                return Err(runtime(format!(
+                    "数据表的键只能是字符串或连续整数，收到 {}",
+                    other.type_name()
+                )));
+            }
+        }
+    }
+    if !object.is_empty() && !array.is_empty() {
+        return Err(runtime("数据表不能同时混用数组下标和字符串键"));
+    }
+    if object.is_empty() {
+        Ok(Value::Array(array))
+    } else {
+        Ok(Value::Object(object))
+    }
+}
+
 fn runtime(message: impl Into<String>) -> mlua::Error {
     mlua::Error::RuntimeError(message.into())
 }
@@ -562,7 +893,13 @@ mod tests {
     use serde_json::json;
 
     fn run(value: serde_json::Value) -> mlua::Result<super::Layout> {
-        load(&Lua::new(), &value, std::path::Path::new("."), (None, None))
+        load(
+            &Lua::new(),
+            &value,
+            std::path::Path::new("."),
+            (None, None),
+            &serde_json::Value::Null,
+        )
     }
 
     #[test]
@@ -592,5 +929,55 @@ mod tests {
         }))
         .unwrap_err();
         assert!(error.to_string().contains("未知 layout.type"), "{error}");
+    }
+
+    #[test]
+    fn subpages_repeat_instances_and_bind_item_fields() {
+        let dir = std::env::temp_dir().join(format!("cloudime-subpage-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let template = dir.join("row.json");
+        std::fs::write(
+            &template,
+            r##"{
+              "version": 2,
+              "page": {
+                "w": 100, "h": 30,
+                "layout": { "type": "linear", "gap": 2 },
+                "children": [
+                  { "type": "text_block", "name": "title", "w": 60, "h": 20,
+                    "text": "{{item.title}}", "size": 14, "color": "#FF000000" },
+                  { "type": "text_block", "name": "meta", "w": 30, "h": 20,
+                    "text": "{{index}}", "size": 14, "color": "#FF000000" }
+                ]
+              }
+            }"##,
+        )
+        .unwrap();
+        let value = json!({
+            "version": 2,
+            "page": {
+                "w": 100, "h": 100,
+                "layout": { "type": "flex", "direction": "column" },
+                "children": [{
+                    "type": "subpage", "name": "rows", "src": "row.json",
+                    "repeat": "items", "key": "id", "max_instances": 10
+                }]
+            }
+        });
+        let data = json!({ "items": [
+            { "id": 1, "title": "A" },
+            { "id": 2, "title": "B" }
+        ]});
+        let lua = Lua::new();
+        let layout = load(&lua, &value, &dir, (None, None), &data).unwrap();
+        assert_eq!(layout.table.raw_len(), 4);
+        let first: mlua::Table = layout.table.get(1).unwrap();
+        assert_eq!(first.get::<String>("name").unwrap(), "rows_0_title");
+        assert_eq!(first.get::<String>("text").unwrap(), "A");
+        let third: mlua::Table = layout.table.get(3).unwrap();
+        assert_eq!(third.get::<String>("name").unwrap(), "rows_1_title");
+        assert_eq!(third.get::<String>("text").unwrap(), "B");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

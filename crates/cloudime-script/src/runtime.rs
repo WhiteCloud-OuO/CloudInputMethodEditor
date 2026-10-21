@@ -1584,13 +1584,19 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
             let layout = options
                 .get::<Option<String>>("layout")?
                 .filter(|path| !path.trim().is_empty());
+            let data = options
+                .get::<Option<mlua::Table>>("data")?
+                .map(|table| window::lua_data(mlua::Value::Table(table)))
+                .transpose()?
+                .unwrap_or(serde_json::Value::Null);
             let mut document = None;
-            if let Some(path) = layout {
+            if let Some(path) = layout.as_deref() {
                 let parsed = window::load_layout_document(
                     lua,
-                    Path::new(&path),
+                    Path::new(path),
                     (Some(spec.width), Some(spec.height)),
                     &mut create_images.borrow_mut(),
+                    &data,
                 )?;
                 spec.width = parsed.width;
                 spec.height = parsed.height;
@@ -1615,6 +1621,8 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 create_requests.clone(),
                 create_images.clone(),
                 create_texts.clone(),
+                layout.as_ref().map(PathBuf::from),
+                data,
             )
         })?,
     )?;
@@ -1630,13 +1638,19 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
             let layout = options
                 .get::<Option<String>>("layout")?
                 .filter(|path| !path.trim().is_empty());
+            let data = options
+                .get::<Option<mlua::Table>>("data")?
+                .map(|table| window::lua_data(mlua::Value::Table(table)))
+                .transpose()?
+                .unwrap_or(serde_json::Value::Null);
             let mut document = None;
-            if let Some(path) = layout {
+            if let Some(path) = layout.as_deref() {
                 let parsed = window::load_layout_document(
                     lua,
-                    Path::new(&path),
+                    Path::new(path),
                     (spec.width, spec.height),
                     &mut auxiliary_images.borrow_mut(),
+                    &data,
                 )?;
                 spec.width = Some(parsed.width);
                 spec.height = Some(parsed.height);
@@ -1660,6 +1674,8 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 auxiliary_requests.clone(),
                 auxiliary_images.clone(),
                 auxiliary_texts.clone(),
+                layout.as_ref().map(PathBuf::from),
+                data,
             )
         })?,
     )?;

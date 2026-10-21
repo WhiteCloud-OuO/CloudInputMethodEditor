@@ -399,6 +399,8 @@ pub(crate) fn handle(
     requests: Rc<RefCell<Vec<Request>>>,
     images: Rc<RefCell<ImageCache>>,
     texts: TextCache,
+    initial_layout: Option<PathBuf>,
+    initial_data: serde_json::Value,
 ) -> mlua::Result<mlua::Table> {
     let handle = lua.create_table()?;
     handle.set("id", id)?;
@@ -406,6 +408,10 @@ pub(crate) fn handle(
     handle.set("name", name)?;
     handle.set("width", size.0)?;
     handle.set("height", size.1)?;
+
+    // 最近一次布局文件与数据上下文：`set_data` 只重跑布局，不再读文件。
+    let layout_path = Rc::new(RefCell::new(initial_layout));
+    let layout_data = Rc::new(RefCell::new(initial_data));
 
     // 这份窗口的区域镜像：`set_content` / `combine_region` / `prune_region` 时同步更新，
     // `region_contains` / `region_relation` 就在工人线程上直接查它（不用等 UI 线程回话）。
@@ -581,20 +587,63 @@ pub(crate) fn handle(
     let layout_images = images.clone();
     let layout_regions = regions.clone();
     let layout_texts = texts.clone();
+    let current_path = layout_path.clone();
+    let current_data = layout_data.clone();
     handle.set(
         "load_layout",
-        lua.create_function(move |lua, (this, path): (mlua::Table, String)| {
+        lua.create_function(
+            move |lua, (this, path, data): (mlua::Table, String, Option<mlua::Table>)| {
+                let data = match data {
+                    Some(data) => crate::page_layout::lua_to_json(mlua::Value::Table(data))?,
+                    None => current_data.borrow().clone(),
+                };
+                let document = load_layout_document(
+                    lua,
+                    Path::new(&path),
+                    fallback_size(&this),
+                    &mut layout_images.borrow_mut(),
+                    &data,
+                )?;
+                cache_document_texts(&document, id, &layout_texts);
+                this.set("width", document.width)?;
+                this.set("height", document.height)?;
+                *layout_regions.borrow_mut() = document.regions.clone();
+                *current_path.borrow_mut() = Some(PathBuf::from(path));
+                *current_data.borrow_mut() = data;
+                layout_requests
+                    .borrow_mut()
+                    .push(Request::SetContent(id, document));
+                Ok(())
+            },
+        )?,
+    )?;
+
+    let data_requests = requests.clone();
+    let data_images = images.clone();
+    let data_regions = regions.clone();
+    let data_texts = texts.clone();
+    let data_path = layout_path.clone();
+    let data_state = layout_data.clone();
+    handle.set(
+        "set_data",
+        lua.create_function(move |lua, (this, data): (mlua::Table, mlua::Table)| {
+            let data = crate::page_layout::lua_to_json(mlua::Value::Table(data))?;
+            *data_state.borrow_mut() = data.clone();
+            let Some(path) = data_path.borrow().clone() else {
+                return Ok(());
+            };
             let document = load_layout_document(
                 lua,
-                Path::new(&path),
+                &path,
                 fallback_size(&this),
-                &mut layout_images.borrow_mut(),
+                &mut data_images.borrow_mut(),
+                &data,
             )?;
-            cache_document_texts(&document, id, &layout_texts);
+            cache_document_texts(&document, id, &data_texts);
             this.set("width", document.width)?;
             this.set("height", document.height)?;
-            *layout_regions.borrow_mut() = document.regions.clone();
-            layout_requests
+            *data_regions.borrow_mut() = document.regions.clone();
+            data_requests
                 .borrow_mut()
                 .push(Request::SetContent(id, document));
             Ok(())
@@ -810,14 +859,20 @@ fn fallback_size(handle: &mlua::Table) -> (Option<f32>, Option<f32>) {
     )
 }
 
+/// Lua 数据表 → JSON 数据上下文。
+pub(crate) fn lua_data(value: mlua::Value) -> mlua::Result<serde_json::Value> {
+    crate::page_layout::lua_to_json(value)
+}
+
 /// 读一份 JSON 布局并解析成 [`Document`]；错误里带上文件路径。
 pub(crate) fn load_layout_document(
     lua: &mlua::Lua,
     path: &Path,
     fallback: (Option<f32>, Option<f32>),
     images: &mut ImageCache,
+    data: &serde_json::Value,
 ) -> mlua::Result<Document> {
-    let layout = crate::layout_file::read(lua, path, fallback)?;
+    let layout = crate::layout_file::read(lua, path, fallback, data)?;
     let mut document = parse_document(&layout.table, fallback, images).map_err(|error| {
         mlua::Error::RuntimeError(format!("布局文件 {}：{error}", path.display()))
     })?;
@@ -2334,6 +2389,7 @@ mod tests {
             &path,
             (Some(500.0), Some(360.0)),
             &mut ImageCache::default(),
+            &serde_json::Value::Null,
         )
         .unwrap_or_else(|error| panic!("{}：{error}", path.display()));
         assert_eq!((document.width, document.height), (760.0, 640.0));
@@ -2352,6 +2408,87 @@ mod tests {
         assert_eq!(document.control_name(3), Some("search"));
         assert_eq!(document.control_name(5), Some("notes"));
         assert_eq!(document.control_name(7), Some("close"));
+    }
+
+    /// `set_data` 只重跑最近一次布局，不重新读文件；子页面按新数据重建实例。
+    #[test]
+    fn set_data_recomputes_subpage_instances() {
+        let dir = std::env::temp_dir().join(format!("cloudime-set-data-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let template = dir.join("row.json");
+        std::fs::write(
+            &template,
+            r##"{
+              "version": 2,
+              "page": {
+                "w": 100, "h": 30,
+                "layout": { "type": "linear" },
+                "children": [
+                  { "type": "text_block", "name": "title", "w": 100, "h": 30,
+                    "text": "{{item.title}}", "size": 14, "color": "#FF000000" }
+                ]
+              }
+            }"##,
+        )
+        .unwrap();
+        let layout = dir.join("main.json");
+        std::fs::write(
+            &layout,
+            r##"{
+              "version": 2,
+              "page": {
+                "w": 100, "h": 100,
+                "layout": { "type": "flex", "direction": "column" },
+                "children": [{
+                  "type": "subpage", "name": "rows", "src": "row.json",
+                  "repeat": "items", "key": "id"
+                }]
+              }
+            }"##,
+        )
+        .unwrap();
+
+        let lua = mlua::Lua::new();
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let win = handle(
+            &lua,
+            Kind::Independent,
+            1,
+            "测试",
+            (Some(100.0), Some(100.0)),
+            requests.clone(),
+            Rc::new(RefCell::new(ImageCache::default())),
+            Rc::new(RefCell::new(HashMap::new())),
+            None,
+            serde_json::Value::Null,
+        )
+        .unwrap();
+        lua.globals().set("win", win).unwrap();
+        lua.load(format!(
+            "win:load_layout([[{}]], {{ items = {{ {{ title = \"A\" }} }} }})\n\
+             win:set_data{{ items = {{ {{ title = \"B\" }} }} }}",
+            layout.display()
+        ))
+        .exec()
+        .unwrap();
+
+        let documents: Vec<Document> = requests
+            .borrow()
+            .iter()
+            .filter_map(|request| match request {
+                Request::SetContent(_, document) => Some(document.clone()),
+                _ => None,
+            })
+            .collect();
+        assert_eq!(documents.len(), 2);
+        let last = documents.last().unwrap();
+        let text = last.elements.iter().find_map(|element| match element {
+            Element::TextBlock(block) => Some(block.text.as_str()),
+            _ => None,
+        });
+        assert_eq!(text, Some("B"));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// v2 页面树：flex / linear / 绝对定位先展开成同一份 Document。
@@ -2387,6 +2524,7 @@ mod tests {
             &path,
             (Some(300.0), Some(100.0)),
             &mut ImageCache::default(),
+            &serde_json::Value::Null,
         )
         .unwrap_or_else(|error| panic!("v2 布局解析失败：{error}"));
         let _ = std::fs::remove_file(&path);
@@ -2457,6 +2595,8 @@ mod tests {
             requests.clone(),
             Rc::new(RefCell::new(ImageCache::default())),
             cache.clone(),
+            None,
+            serde_json::Value::Null,
         )
         .unwrap();
         lua.globals().set("win", win).unwrap();
@@ -3433,6 +3573,8 @@ mod tests {
             Rc::new(RefCell::new(Vec::new())),
             Rc::new(RefCell::new(ImageCache::default())),
             Rc::new(RefCell::new(std::collections::HashMap::new())),
+            None,
+            serde_json::Value::Null,
         )
         .unwrap();
         lua.globals().set("win", handle).unwrap();

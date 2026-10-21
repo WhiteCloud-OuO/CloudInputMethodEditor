@@ -473,8 +473,9 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 ## crates/cloud-ui-core
 
 页面树与布局核心（2026-10-21 建立）：放几何 / 约束 / 页面树节点 / measure-arrange 布局引擎，
-不依赖 Windows、脚本运行时或渲染器。目前已接入 `linear` / `flex` / `grid` / `responsive` / 绝对定位，
-`cloudime-script` 的 v2 JSON 解析负责把页面树展开成现有 `Document` 控件表；子页面实例化仍待实现。
+不依赖 Windows、脚本运行时或渲染器。目前已接入 `linear` / `flex` / `grid` / `responsive` / 绝对定位；
+`cloudime-script` 的 v2 JSON 解析负责把页面树展开成现有 `Document` 控件表，并已支持子页面模板、
+`repeat` / `key`、`{{item.xxx}}` 绑定和 `win:set_data`。
 `cloud-ui` 的窗口壳和 `cloudime-script` 的 JSON / Lua 绑定共用这里的页面树，避免 `cloud-ui` 与
 `cloudime-script` 互相依赖。
 

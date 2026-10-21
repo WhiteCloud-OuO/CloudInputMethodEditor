@@ -42,7 +42,24 @@ pub(crate) fn read(
     lua: &Lua,
     path: &Path,
     fallback: (Option<f32>, Option<f32>),
+    data: &Value,
 ) -> mlua::Result<Layout> {
+    let value = read_value(path)?;
+    let base = path.parent().unwrap_or_else(|| Path::new("."));
+    let result = if matches!(
+        &value,
+        Value::Object(root) if root.get("version").and_then(Value::as_u64) == Some(2)
+    ) {
+        crate::page_layout::load(lua, &value, base, fallback, data)
+    } else {
+        content(lua, &value, base)
+    };
+    result
+        .map_err(|error| mlua::Error::RuntimeError(format!("布局文件 {}：{error}", path.display())))
+}
+
+/// 只读取并校验 JSON，不转 Lua；子页面模板复用这份检查。
+pub(crate) fn read_value(path: &Path) -> mlua::Result<Value> {
     let metadata = std::fs::metadata(path).map_err(|error| {
         mlua::Error::RuntimeError(format!("读不了布局文件 {}：{error}", path.display()))
     })?;
@@ -57,23 +74,12 @@ pub(crate) fn read(
         mlua::Error::RuntimeError(format!("读不了布局文件 {}：{error}", path.display()))
     })?;
     let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
-    let value: Value = serde_json::from_str(text).map_err(|error| {
+    serde_json::from_str(text).map_err(|error| {
         mlua::Error::RuntimeError(format!(
             "布局文件 {} 不是合法 JSON：{error}",
             path.display()
         ))
-    })?;
-    let base = path.parent().unwrap_or_else(|| Path::new("."));
-    let result = if matches!(
-        &value,
-        Value::Object(root) if root.get("version").and_then(Value::as_u64) == Some(2)
-    ) {
-        crate::page_layout::load(lua, &value, base, fallback)
-    } else {
-        content(lua, &value, base)
-    };
-    result
-        .map_err(|error| mlua::Error::RuntimeError(format!("布局文件 {}：{error}", path.display())))
+    })
 }
 
 /// JSON 根 → 内容表 + 控件名：`{ width, height, regions, <controls 数组> }`。
@@ -282,7 +288,7 @@ pub(crate) fn to_lua(lua: &Lua, value: &Value, base: &Path) -> mlua::Result<LuaV
 
 /// JSON 里的文件路径：绝对路径原样；相对路径先按布局文件目录找，再逐级向上找
 ///（这样 `Scripts/lib/ui.json` 里的 `Images/...` 能落到安装根目录的图片）。
-fn resolve_path(base: &Path, value: &str) -> String {
+pub(crate) fn resolve_path(base: &Path, value: &str) -> String {
     let path = Path::new(value);
     if path.is_absolute() {
         return value.to_owned();
@@ -451,7 +457,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../Scripts/lib/test-caret-window.json");
         let lua = Lua::new();
-        let layout = super::read(&lua, &path, (None, None))
+        let layout = super::read(&lua, &path, (None, None), &serde_json::Value::Null)
             .unwrap_or_else(|error| panic!("{}：{error}", path.display()));
         assert!(
             layout
@@ -480,7 +486,7 @@ mod tests {
         )
         .unwrap();
         let lua = Lua::new();
-        let layout = super::read(&lua, &path, (None, None)).unwrap();
+        let layout = super::read(&lua, &path, (None, None), &serde_json::Value::Null).unwrap();
         assert_eq!(layout.table.get::<f32>("width").unwrap(), 10.0);
         assert_eq!(layout.table.raw_len(), 0);
     }
