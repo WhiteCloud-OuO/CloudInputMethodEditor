@@ -400,6 +400,7 @@ pub(crate) fn handle(
     requests: Rc<RefCell<Vec<Request>>>,
     images: Rc<RefCell<ImageCache>>,
     texts: TextCache,
+    layout_measure: Option<crate::runtime::LayoutMeasureHook>,
     initial_page: Option<crate::page_layout::PageLayout>,
     initial_layout: Option<PathBuf>,
     initial_data: serde_json::Value,
@@ -661,6 +662,8 @@ pub(crate) fn handle(
     let current_path = layout_path.clone();
     let current_data = layout_data.clone();
     let current_page = layout_page.clone();
+    let load_measure = layout_measure.clone();
+    let data_measure = layout_measure;
     handle.set(
         "load_layout",
         lua.create_function(
@@ -675,6 +678,7 @@ pub(crate) fn handle(
                     fallback_size(&this),
                     &mut layout_images.borrow_mut(),
                     &data,
+                    load_measure.as_ref(),
                 )?;
                 let document = loaded.document;
                 cache_document_texts(&document, id, &layout_texts);
@@ -732,6 +736,7 @@ pub(crate) fn handle(
                     fallback_size(&this),
                     &mut data_images.borrow_mut(),
                     &data,
+                    data_measure.as_ref(),
                 )?,
             };
             let document = loaded.document;
@@ -1021,6 +1026,7 @@ pub(crate) fn load_layout_document(
     fallback: (Option<f32>, Option<f32>),
     images: &mut ImageCache,
     data: &serde_json::Value,
+    measure: Option<&crate::runtime::LayoutMeasureHook>,
 ) -> mlua::Result<LoadedLayout> {
     let value = crate::layout_file::read_value(path)?;
     let is_v2 = matches!(
@@ -1030,7 +1036,7 @@ pub(crate) fn load_layout_document(
     );
     if is_v2 {
         let base = path.parent().unwrap_or_else(|| Path::new("."));
-        let page = crate::page_layout::PageLayout::build(&value, base, fallback, data)
+        let page = crate::page_layout::PageLayout::build(&value, base, fallback, data, measure)
             .map_err(|error| layout_error(path, error))?;
         let layout = page
             .render(lua)
@@ -1041,7 +1047,7 @@ pub(crate) fn load_layout_document(
             page: Some(page),
         })
     } else {
-        let layout = crate::layout_file::read(lua, path, fallback, data)?;
+        let layout = crate::layout_file::read(lua, path, fallback, data, measure)?;
         Ok(LoadedLayout {
             document: layout_document(layout, fallback, images)?,
             page: None,
@@ -2591,6 +2597,7 @@ mod tests {
             (Some(500.0), Some(360.0)),
             &mut ImageCache::default(),
             &serde_json::Value::Null,
+            None,
         )
         .unwrap_or_else(|error| panic!("{}：{error}", path.display()))
         .document;
@@ -2664,6 +2671,7 @@ mod tests {
             Rc::new(RefCell::new(HashMap::new())),
             None,
             None,
+            None,
             serde_json::Value::Null,
         )
         .unwrap();
@@ -2728,6 +2736,7 @@ mod tests {
             (Some(300.0), Some(100.0)),
             &mut ImageCache::default(),
             &serde_json::Value::Null,
+            None,
         )
         .unwrap_or_else(|error| panic!("v2 布局解析失败：{error}"))
         .document;
@@ -2799,6 +2808,7 @@ mod tests {
             requests.clone(),
             Rc::new(RefCell::new(ImageCache::default())),
             cache.clone(),
+            None,
             None,
             None,
             serde_json::Value::Null,
@@ -3793,6 +3803,7 @@ mod tests {
             Rc::new(RefCell::new(Vec::new())),
             Rc::new(RefCell::new(ImageCache::default())),
             Rc::new(RefCell::new(std::collections::HashMap::new())),
+            None,
             None,
             None,
             serde_json::Value::Null,

@@ -547,7 +547,7 @@ pub enum MeasureFont {
 
 impl MeasureFont {
     /// 脚本里写的那几个名字。
-    fn from_name(name: &str) -> Option<Self> {
+    pub(crate) fn from_name(name: &str) -> Option<Self> {
         match name {
             "pinyin" => Some(Self::Pinyin),
             "candidate" => Some(Self::Candidate),
@@ -563,6 +563,10 @@ impl MeasureFont {
 
 /// `cloudime.ui.measure` 背后的量尺：由 Server 装（[`Runtime::set_measure`]），单位是**点**。
 pub type MeasureHook = Rc<dyn Fn(&str, MeasureFont) -> Option<(f32, f32)>>;
+
+/// 页面树自动尺寸用的精确量尺：`(文本, 字号, 行距, 字体槽) -> (宽, 高)`，单位是点。
+/// 由 Server 装（[`Runtime::set_layout_measure`]），与候选窗共用同一个渲染器。
+pub type LayoutMeasureHook = Rc<dyn Fn(&str, f32, f32, MeasureFont) -> Option<(f32, f32)>>;
 
 /// `cloudime.get_theme()` 背后的主题：由 Server 装（[`Runtime::set_theme_hook`]），每次调用现读当前主题。
 /// 表形如 `{ candidate = { … }, bar = { … }, tip = { … } }`，颜色是 `#AARRGGBB`。
@@ -716,6 +720,9 @@ pub struct Runtime {
     /// 量尺（`cloudime.ui.measure`）：Server 用 [`Runtime::set_measure`] 装进来。
     measure: Rc<RefCell<Option<MeasureHook>>>,
 
+    /// 页面树自动尺寸量尺：Server 用 [`Runtime::set_layout_measure`] 装进来。
+    layout_measure: Rc<RefCell<Option<LayoutMeasureHook>>>,
+
     /// 当前主题（`cloudime.get_theme()`）：Server 用 [`Runtime::set_theme_hook`] 装进来。
     theme_hook: Rc<RefCell<Option<ThemeHook>>>,
 
@@ -790,6 +797,7 @@ impl Runtime {
             theme: Rc::new(RefCell::new(None)),
             viewport: Rc::new(RefCell::new(None)),
             measure: Rc::new(RefCell::new(None)),
+            layout_measure: Rc::new(RefCell::new(None)),
             theme_hook: Rc::new(RefCell::new(None)),
             text_hook: Rc::new(RefCell::new(None)),
             clipboard_set: Rc::new(RefCell::new(None)),
@@ -1189,6 +1197,11 @@ impl Runtime {
         *self.measure.borrow_mut() = Some(hook);
     }
 
+    /// 装页面树自动尺寸量尺（与候选窗同一个渲染器；单位点）。
+    pub fn set_layout_measure(&self, hook: LayoutMeasureHook) {
+        *self.layout_measure.borrow_mut() = Some(hook);
+    }
+
     /// 装「当前主题」（`cloudime.get_theme()`）：Server 每次调用现读当前生效的主题，
     /// 返回 `{ candidate = { … }, bar = { … }, tip = { … } }`（颜色是 `#AARRGGBB`）。
     pub fn set_theme_hook(&self, hook: ThemeHook) {
@@ -1577,9 +1590,11 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     let create_seq = runtime.window_seq.clone();
     let create_images = runtime.image_cache.clone();
     let create_texts = runtime.window_texts.clone();
+    let create_layout_measure = runtime.layout_measure.clone();
     window_table.set(
         "create",
         lua.create_function(move |lua, options: mlua::Table| {
+            let layout_measure = create_layout_measure.borrow().clone();
             let mut spec = window::parse_window(&options)?;
             let layout = options
                 .get::<Option<String>>("layout")?
@@ -1598,6 +1613,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                     (Some(spec.width), Some(spec.height)),
                     &mut create_images.borrow_mut(),
                     &data,
+                    layout_measure.as_ref(),
                 )?;
                 spec.width = parsed.document.width;
                 spec.height = parsed.document.height;
@@ -1623,6 +1639,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 create_requests.clone(),
                 create_images.clone(),
                 create_texts.clone(),
+                layout_measure,
                 page,
                 layout.as_ref().map(PathBuf::from),
                 data,
@@ -1633,9 +1650,11 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     let auxiliary_seq = runtime.window_seq.clone();
     let auxiliary_images = runtime.image_cache.clone();
     let auxiliary_texts = runtime.window_texts.clone();
+    let auxiliary_layout_measure = runtime.layout_measure.clone();
     window_table.set(
         "create_auxiliary",
         lua.create_function(move |lua, options: mlua::Table| {
+            let layout_measure = auxiliary_layout_measure.borrow().clone();
             let id = next_window_id(&auxiliary_seq);
             let mut spec = window::parse_auxiliary(&options, id)?;
             let layout = options
@@ -1655,6 +1674,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                     (spec.width, spec.height),
                     &mut auxiliary_images.borrow_mut(),
                     &data,
+                    layout_measure.as_ref(),
                 )?;
                 spec.width = Some(parsed.document.width);
                 spec.height = Some(parsed.document.height);
@@ -1679,6 +1699,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 auxiliary_requests.clone(),
                 auxiliary_images.clone(),
                 auxiliary_texts.clone(),
+                layout_measure,
                 page,
                 layout.as_ref().map(PathBuf::from),
                 data,

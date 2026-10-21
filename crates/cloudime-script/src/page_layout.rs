@@ -15,6 +15,7 @@ use mlua::{Lua, Table, Value as LuaValue};
 use serde_json::{Map, Number, Value};
 
 use crate::layout_file::{Layout, read_value, resolve_path, to_lua, validate_name};
+use crate::runtime::{LayoutMeasureHook, MeasureFont};
 
 /// v2 顶层版本号。
 const VERSION: u64 = 2;
@@ -27,11 +28,11 @@ const MAX_SUBPAGE_INSTANCES: usize = 100;
 ///
 /// 与一次性的 [`load`] 不同，这个类型保留节点、数据上下文和“路径 → 节点”的索引，
 /// 供脚本按路径改可见性或后续重排；每次渲染才把树重新量一遍并展开成 `Document` 内容表。
-#[derive(Debug)]
 pub(crate) struct PageLayout {
     value: Value,
     base: PathBuf,
     fallback: (Option<f32>, Option<f32>),
+    measure: Option<LayoutMeasureHook>,
     tree: PageTree,
     payloads: Vec<Option<Value>>,
     instances: HashMap<String, InstanceInfo>,
@@ -46,6 +47,7 @@ impl PageLayout {
         base: &Path,
         fallback: (Option<f32>, Option<f32>),
         data: &Value,
+        measure: Option<&LayoutMeasureHook>,
     ) -> mlua::Result<Self> {
         let root = value
             .as_object()
@@ -93,6 +95,7 @@ impl PageLayout {
             value: value.clone(),
             base: base.to_path_buf(),
             fallback,
+            measure: measure.cloned(),
             tree,
             payloads,
             instances,
@@ -103,7 +106,13 @@ impl PageLayout {
 
     /// 用新的数据上下文重建同一份页面树。
     pub(crate) fn with_data(&self, data: &Value) -> mlua::Result<Self> {
-        Self::build(&self.value, &self.base, self.fallback, data)
+        Self::build(
+            &self.value,
+            &self.base,
+            self.fallback,
+            data,
+            self.measure.as_ref(),
+        )
     }
 
     /// 页面树 → 布局 → 现有控件表。
@@ -111,6 +120,7 @@ impl PageLayout {
         let constraints = root_constraints(&self.tree.nodes[self.tree.root]);
         let mut measure = PayloadMeasure {
             payloads: &self.payloads,
+            measure: self.measure.as_ref(),
         };
         let result = layout(&self.tree, constraints, &mut measure);
 
@@ -172,8 +182,9 @@ pub(crate) fn load(
     base: &Path,
     fallback: (Option<f32>, Option<f32>),
     data: &Value,
+    measure: Option<&LayoutMeasureHook>,
 ) -> mlua::Result<Layout> {
-    PageLayout::build(value, base, fallback, data)?.render(lua)
+    PageLayout::build(value, base, fallback, data, measure)?.render(lua)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -1019,6 +1030,7 @@ fn flatten(
 /// 文本不会塌成 0。
 struct PayloadMeasure<'a> {
     payloads: &'a [Option<Value>],
+    measure: Option<&'a LayoutMeasureHook>,
 }
 
 impl Measure for PayloadMeasure<'_> {
@@ -1043,10 +1055,30 @@ impl Measure for PayloadMeasure<'_> {
             .unwrap_or_default();
         let size = object
             .get("size")
+            .or_else(|| object.get("font_size"))
             .and_then(Value::as_f64)
             .map(|value| value as f32)
             .unwrap_or(14.0);
+        let line_spacing = object
+            .get("line_spacing")
+            .and_then(Value::as_f64)
+            .map(|value| value as f32)
+            .unwrap_or(2.0);
+        let font = object
+            .get("font")
+            .and_then(Value::as_str)
+            .and_then(MeasureFont::from_name)
+            .unwrap_or(MeasureFont::Candidate);
         if !text.is_empty() {
+            if let Some((width, height)) = self
+                .measure
+                .and_then(|measure| measure(&text, size, line_spacing, font))
+            {
+                return Size::new(
+                    width.min(constraints.max_width),
+                    height.min(constraints.max_height),
+                );
+            }
             let lines = text.lines().count().max(1) as f32;
             let width = text
                 .lines()
@@ -1129,6 +1161,7 @@ mod tests {
             std::path::Path::new("."),
             (None, None),
             &serde_json::Value::Null,
+            None,
         )
     }
 
@@ -1180,7 +1213,7 @@ mod tests {
         });
         let data = json!({ "items": [{ "id": 1 }] });
         let lua = Lua::new();
-        let error = load(&lua, &value, &dir, (None, None), &data).unwrap_err();
+        let error = load(&lua, &value, &dir, (None, None), &data, None).unwrap_err();
         assert!(error.to_string().contains("required"), "{error}");
         let _ = std::fs::remove_dir_all(&dir);
     }
@@ -1224,7 +1257,7 @@ mod tests {
             { "id": 2, "title": "B" }
         ]});
         let lua = Lua::new();
-        let layout = load(&lua, &value, &dir, (None, None), &data).unwrap();
+        let layout = load(&lua, &value, &dir, (None, None), &data, None).unwrap();
         assert_eq!(layout.table.raw_len(), 4);
         let first: mlua::Table = layout.table.get(1).unwrap();
         assert_eq!(first.get::<String>("name").unwrap(), "rows_0_title");
@@ -1238,6 +1271,36 @@ mod tests {
         assert_eq!(info.item_key.as_deref(), Some("2"));
         assert_eq!(info.control_path(), "rows[1].title");
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn auto_text_size_uses_the_exact_layout_measure() {
+        let value = json!({
+            "version": 2,
+            "page": {
+                "w": 200, "h": 100,
+                "children": [{
+                    "type": "text_block", "name": "title", "text": "ABC", "size": 20,
+                    "color": "#FF000000"
+                }]
+            }
+        });
+        let hook: crate::runtime::LayoutMeasureHook = std::rc::Rc::new(
+            |_text: &str, _size: f32, _spacing: f32, _font: super::MeasureFont| Some((123.0, 45.0)),
+        );
+        let page = PageLayout::build(
+            &value,
+            std::path::Path::new("."),
+            (None, None),
+            &serde_json::Value::Null,
+            Some(&hook),
+        )
+        .unwrap();
+        let lua = Lua::new();
+        let layout = page.render(&lua).unwrap();
+        let title: mlua::Table = layout.table.get(1).unwrap();
+        assert_eq!(title.get::<f32>("w").unwrap(), 123.0);
+        assert_eq!(title.get::<f32>("h").unwrap(), 45.0);
     }
 
     #[test]
@@ -1273,7 +1336,7 @@ mod tests {
             { "id": "a", "title": "A" },
             { "id": "b", "title": "B" }
         ]});
-        let mut page = PageLayout::build(&value, &dir, (None, None), &data).unwrap();
+        let mut page = PageLayout::build(&value, &dir, (None, None), &data, None).unwrap();
         for path in ["rows[0].title", "rows[a].title", "rows[\"a\"].title"] {
             assert_eq!(page.control_name(path), Some("rows_0_title"), "{path}");
         }

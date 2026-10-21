@@ -44,6 +44,7 @@ pub(crate) fn read(
     path: &Path,
     fallback: (Option<f32>, Option<f32>),
     data: &Value,
+    measure: Option<&crate::runtime::LayoutMeasureHook>,
 ) -> mlua::Result<Layout> {
     let value = read_value(path)?;
     let base = path.parent().unwrap_or_else(|| Path::new("."));
@@ -51,7 +52,7 @@ pub(crate) fn read(
         &value,
         Value::Object(root) if root.get("version").and_then(Value::as_u64) == Some(2)
     ) {
-        crate::page_layout::load(lua, &value, base, fallback, data)
+        crate::page_layout::load(lua, &value, base, fallback, data, measure)
     } else {
         content(lua, &value, base)
     };
@@ -459,7 +460,7 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../Scripts/lib/test-caret-window.json");
         let lua = Lua::new();
-        let layout = super::read(&lua, &path, (None, None), &serde_json::Value::Null)
+        let layout = super::read(&lua, &path, (None, None), &serde_json::Value::Null, None)
             .unwrap_or_else(|error| panic!("{}：{error}", path.display()));
         assert!(
             layout
@@ -488,7 +489,8 @@ mod tests {
         )
         .unwrap();
         let lua = Lua::new();
-        let layout = super::read(&lua, &path, (None, None), &serde_json::Value::Null).unwrap();
+        let layout =
+            super::read(&lua, &path, (None, None), &serde_json::Value::Null, None).unwrap();
         assert_eq!(layout.table.get::<f32>("width").unwrap(), 10.0);
         assert_eq!(layout.table.raw_len(), 0);
     }

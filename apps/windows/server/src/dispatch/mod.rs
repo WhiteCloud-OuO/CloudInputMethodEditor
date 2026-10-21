@@ -239,6 +239,19 @@ impl Router {
                 measurer.measure(settings, text, font)
             })
         });
+        scripts.set_layout_measure({
+            let measure = measure.clone();
+            Rc::new(
+                move |text: &str,
+                      size: f32,
+                      line_spacing: f32,
+                      font: cloudime_script::MeasureFont| {
+                    let mut slot = measure.borrow_mut();
+                    let (settings, measurer) = &mut *slot;
+                    measurer.measure_layout(settings, text, size, line_spacing, font)
+                },
+            )
+        });
         // 输入框文本（`cloudime.text.*`）：快照由 DLL 送（`Surrounding.document`）、按显示宽度切片
         // 都在 `Document` 里；脚本这边通过一个闭包问 —— 拿不到就是 `nil`，同时会请 DLL 下一次带上。
         let document = Document::default();

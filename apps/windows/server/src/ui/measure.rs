@@ -9,7 +9,7 @@
 //! - **不参与缩放**：返回的是**点**（100% 缩放下 1 点 = 1 像素）。窗口渲染时会整体乘 DPI × 缩放，
 //!   所以量出来的这个数直接喂 `cloudime.candidate.set_min_width` 就装得下。
 
-use cloudime_render::{FontLibrary, Renderer, Theme, UiFont, system_fonts};
+use cloudime_render::{FontLibrary, FontSpec, Renderer, Theme, UiFont, system_fonts};
 use cloudime_script::MeasureFont;
 
 use crate::dispatch::RenderSettings;
@@ -84,9 +84,9 @@ impl Measurer {
         self.settings != *settings
     }
 
-    /// 量一段文字，返回（宽, 高）单位**点**。
-    fn measure(&mut self, text: &str, font: MeasureFont) -> (f32, f32) {
-        let (spec, family) = match font {
+    /// 字体槽对应的字号 / 字族。
+    fn font_for(&self, font: MeasureFont) -> (FontSpec, Option<String>) {
+        match font {
             MeasureFont::Pinyin => (self.theme.pinyin_font, self.theme.pinyin_family.clone()),
             MeasureFont::Candidate => (self.theme.text_font, self.theme.text_family.clone()),
             MeasureFont::ItemNumber => (self.theme.index_font, self.theme.index_family.clone()),
@@ -94,8 +94,30 @@ impl Measurer {
                 self.theme.translate_font,
                 self.theme.translate_family.clone(),
             ),
-        };
+        }
+    }
+
+    /// 量一段文字，返回（宽, 高）单位**点**。
+    fn measure(&mut self, text: &str, font: MeasureFont) -> (f32, f32) {
+        let (spec, family) = self.font_for(font);
         self.renderer.measure_font(text, &spec, family.as_ref())
+    }
+
+    /// 页面树自动尺寸：按控件自己的字号 / 行距量，返回（宽, 高）单位**点**。
+    /// 高度按行数累加行距；宽度取渲染器整形后的最大行宽。
+    fn measure_layout(
+        &mut self,
+        text: &str,
+        size: f32,
+        line_spacing: f32,
+        font: MeasureFont,
+    ) -> (f32, f32) {
+        let (_, family) = self.font_for(font);
+        let spec = FontSpec::with_size(size);
+        let (width, line_height) = self.renderer.measure_font(text, &spec, family.as_ref());
+        let lines = text.lines().count().max(1) as f32;
+        let height = line_height * lines + line_spacing.max(0.0) * (lines - 1.0);
+        (width, height)
     }
 }
 
@@ -120,6 +142,28 @@ impl SharedMeasurer {
         text: &str,
         font: MeasureFont,
     ) -> Option<(f32, f32)> {
+        self.rebuild(settings);
+        Some(self.measurer.as_mut()?.measure(text, font))
+    }
+
+    /// 页面树自动尺寸：按控件字号 / 行距量。
+    pub(crate) fn measure_layout(
+        &mut self,
+        settings: &RenderSettings,
+        text: &str,
+        size: f32,
+        line_spacing: f32,
+        font: MeasureFont,
+    ) -> Option<(f32, f32)> {
+        self.rebuild(settings);
+        Some(
+            self.measurer
+                .as_mut()?
+                .measure_layout(text, size, line_spacing, font),
+        )
+    }
+
+    fn rebuild(&mut self, settings: &RenderSettings) {
         if self
             .measurer
             .as_ref()
@@ -127,7 +171,6 @@ impl SharedMeasurer {
         {
             self.measurer = Measurer::new(settings);
         }
-        Some(self.measurer.as_mut()?.measure(text, font))
     }
 }
 
