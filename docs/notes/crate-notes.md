@@ -762,7 +762,8 @@ Server 用 `apply_size_request` 落到 `RouterConfig` 的 `script_min_width` / `
 `RouterConfig::render_settings()` 里由 `load_theme(name)` 读出来 —— 先 `find_theme` 定文件（用户目录优先），再按「路径 + mtime」缓存内容，命中就跳过读盘 + JSON 解析
 （目录扫描每次照做，它决定优先级）；读不到 / 读不动就用缺省主题。`Painter::configure` 比 `RenderSettings` 不等就整体重建：`apply_theme_colors` 把 21 项套到 `Theme.colors`，
 候选窗 / 工具栏 / 提示三份 `Shadow` 也按主题里的阴影色重新构建。画的时候候选窗走 `candidate_shadow`，状态条与状态切换提示经
-`Painter::render_status(.., StatusKind::Bar / StatusKind::Tip)` 各取自己那套背景 / 图标 / 阴影色。
+`Painter::render_status(.., StatusKind::Bar / StatusKind::Tip)` 先按页面树（20 pt 按钮 + 6 pt 间距 / 内边距）
+排好，再展开成 `Document` 走 `render_document`；背景 / 图标 / 阴影色仍按 `StatusKind` 取。
 `apply_config` **不再**用 `settings != previous` 当门：那种 `previous` 是拿**磁盘上刚改过的**主题文件读出来的，两边会相等，
 「重新应用同一个主题」就被吞掉（只有换主题名才生效）——现在每次热加载都推给 `Painter::configure`，由它跟**当前真正生效的**设置比对。
 
