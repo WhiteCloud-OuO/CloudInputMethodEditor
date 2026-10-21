@@ -477,6 +477,11 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 `cloudime-script` 的 v2 JSON 解析负责把页面树展开成现有 `Document` 控件表，并已支持子页面模板、
 `repeat` / `key`、`{{item.xxx}}` 绑定和 `win:set_data`；`Document.instances` 保存控件到实例路径的映射，
 窗口事件据此带 `subpage` / `instance` / `item_index` / `item_key` / `control_path`。
+`PageLayout` 保留页面树与路径索引（下标 + 实例 key），`win:set_visible` / `set_text_at` /
+`update_content_at` / `set_scroll` 只改树或滚动窗口后重排，不重新读文件。
+自动尺寸通过 `LayoutMeasureHook` 调 Server 的 `SharedMeasurer`（与候选窗同一个渲染器），
+不再按字符数估算；`subpage.virtualize` 支持纵向 / 横向可见窗口、固定或 `auto` 逐项量高、`overscan`，
+滚动偏移由脚本 `win:set_scroll` 驱动。
 `cloud-ui` 的窗口壳和 `cloudime-script` 的 JSON / Lua 绑定共用这里的页面树，避免 `cloud-ui` 与
 `cloudime-script` 互相依赖。
 
@@ -541,6 +546,8 @@ LuaJIT 源码随 crate 编译进二进制，装机包不依赖机器上装的 Lu
 继续」的那两拍用。窗口句柄是普通表 + 闭包（`set_content` / `show` / `hide` / `close` / `focus`），`id` 由
 `window_seq` 单调递增；`window` 事件的载荷在 `event_payload` 里拼。坐标一律**点**；限额（512 元素 /
 4096 字符 / 4096² 图 / 8–2048 点）在解析时查，违规当场报 Lua 错（这一次调用中止，窗口保持原样）。
+v2 布局另存 `PageLayout`（页面树 + 路径索引 + 滚动偏移），`set_visible` / `*_at` / `set_scroll`
+走路径而不是前缀控件名；`subpage.virtualize` 在解析阶段只挂可见窗口，变高行逐项调 `LayoutMeasureHook`。
 `update_content` 只改静态 `label` / `text_block`；`set_button_background(name, color)` 改
 `flat_svg_button` 三个状态的背景色（主题色动态套用时用它）。`focus_text(name)` 把键盘焦点交给
 对应 RichEdit 宿主（面板打开后自动聚焦输入框）；`set_selection_background(name, color)` 改编辑框

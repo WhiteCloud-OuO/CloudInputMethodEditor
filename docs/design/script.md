@@ -284,6 +284,10 @@ local aux = cloudime.window.create_auxiliary{
 | `win:set_content{…}` | 换一整份内容（整份替换；见下），尺寸可以跟着变 |
 | `win:load_layout(path, data?)` | 读 JSON 布局文件并整份替换；`data` 是 v2 页面树的数据上下文 |
 | `win:set_data(data)` | 用当前数据重跑最近一次 v2 布局（不重新读文件） |
+| `win:set_visible(path, visible)` | 按页面树路径显示 / 隐藏节点；路径接受实例下标或 key |
+| `win:set_scroll(path, offset)` | 设置虚拟化子页面的滚动偏移（点），只重建可见窗口 |
+| `win:get_text_at(path)` / `win:set_text_at(path, text)` | 按页面树路径读写编辑框文本（实例内同名控件用） |
+| `win:update_content_at(path, content)` | 按页面树路径更新静态控件内容 |
 | `win:get_text(name)` | 读某个 `text_edit` / `text_box` 的最近文本；没有 / 还没收到时给 `nil` |
 | `win:set_text(name, text)` | 设置某个 `text_edit` / `text_box` 的文本（按控件名找） |
 | `win:update_content(name, content)` | 更新静态 `label` / `text_block`：`text_block` 传字符串，`label` 传带颜色的 runs；不改尺寸、不参与交互 |
