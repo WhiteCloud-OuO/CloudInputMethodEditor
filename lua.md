@@ -487,9 +487,12 @@ aux:show()
 | `win:set_content{ … }` | 换一整份内容（整份替换；`width` / `height` 可省，缺省用建窗口时那份） |
 | `win:load_layout(path, data?)` | 读一份 JSON 布局文件并换成整份内容；`data` 是 v2 页面树的数据上下文 |
 | `win:set_data(data)` | 用当前数据重跑最近一次 v2 布局（不重新读文件）；普通控件按控件名更新 |
+| `win:set_visible(path, visible)` | 按页面树路径显示 / 隐藏节点（`visible = false` 不占布局空间）；路径同时接受实例下标与 key，例如 `rows[1].title` / `rows[abc].title` / `rows["abc"].title` |
 | `win:get_text(name)` | 读某个 `text_edit` / `text_box` 最近一次文本；控件不存在 / 还没有文本时给 `nil` |
 | `win:set_text(name, text)` | 设置某个 `text_edit` / `text_box` 的文本（按控件名找，整份替换、光标放到末尾） |
+| `win:get_text_at(path)` / `win:set_text_at(path, text)` | 同上，但按页面树路径定位；子页面实例里同名控件用它避免歧义 |
 | `win:update_content(name, content)` | 更新静态控件显示内容：`text_block` 传字符串；`label` 传 `{ { text = …, color = … }, … }`，每段都必须带颜色。控件仍是静态的，不参与鼠标 / 键盘交互 |
+| `win:update_content_at(path, content)` | 同上，但按页面树路径定位 |
 | `win:set_button_background(name, color)` | 改一个 `flat_svg_button` 的背景色（normal / hovered / pressed 一起改，SVG 染色不变）；颜色写 `#RRGGBB` 或 `#AARRGGBB` |
 | `win:set_selection_background(name, color)` | 改一个 `text_edit` / `text_box` 的选区背景色 |
 | `win:select_all(name, all?)` | 全选；`all` 缺省 `true`，传 `false` 取消选择（选区收在末尾） |
@@ -566,11 +569,13 @@ local win = cloudime.window.create{
 }
 -- 或：win:load_layout("Scripts/lib/list.json", { items = ... })
 win:set_data{ items = { { title = "C" } } }
+win:set_visible("rows[0].title", false)   -- 也接受 key：rows[abc].title / rows["abc"].title
 ```
 
 子页面用 `subpage` 节点 + `repeat` / `key`，模板里写 `{{item.title}}`，实例子页面内控件用局部名事件
 （例如 `event.control = "title"`），完整路径在 `event.control_path`（例如 `rows[1].title`）；
 `subpage.required = { "title", "meta" }` 可声明每个 item 必填的数据字段，缺一项整份布局失败。
+路径 API（`set_visible` / `*_at`）同时接受实例下标和 key；key 优先写成 `rows[abc]` 或 `rows["abc"]`。
 v2 目前是实验接口，细节和限制以设计文档为准。
 
 **元素表**（坐标 / 尺寸都是点，超出内容区的部分被裁掉）：

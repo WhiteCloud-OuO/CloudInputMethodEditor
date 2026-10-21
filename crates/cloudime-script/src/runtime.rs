@@ -1590,6 +1590,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 .transpose()?
                 .unwrap_or(serde_json::Value::Null);
             let mut document = None;
+            let mut page = None;
             if let Some(path) = layout.as_deref() {
                 let parsed = window::load_layout_document(
                     lua,
@@ -1598,9 +1599,10 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                     &mut create_images.borrow_mut(),
                     &data,
                 )?;
-                spec.width = parsed.width;
-                spec.height = parsed.height;
-                document = Some(parsed);
+                spec.width = parsed.document.width;
+                spec.height = parsed.document.height;
+                document = Some(parsed.document);
+                page = parsed.page;
             }
             let id = next_window_id(&create_seq);
             create_requests
@@ -1621,6 +1623,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 create_requests.clone(),
                 create_images.clone(),
                 create_texts.clone(),
+                page,
                 layout.as_ref().map(PathBuf::from),
                 data,
             )
@@ -1644,6 +1647,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 .transpose()?
                 .unwrap_or(serde_json::Value::Null);
             let mut document = None;
+            let mut page = None;
             if let Some(path) = layout.as_deref() {
                 let parsed = window::load_layout_document(
                     lua,
@@ -1652,9 +1656,10 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                     &mut auxiliary_images.borrow_mut(),
                     &data,
                 )?;
-                spec.width = Some(parsed.width);
-                spec.height = Some(parsed.height);
-                document = Some(parsed);
+                spec.width = Some(parsed.document.width);
+                spec.height = Some(parsed.document.height);
+                document = Some(parsed.document);
+                page = parsed.page;
             }
             auxiliary_requests
                 .borrow_mut()
@@ -1674,6 +1679,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 auxiliary_requests.clone(),
                 auxiliary_images.clone(),
                 auxiliary_texts.clone(),
+                page,
                 layout.as_ref().map(PathBuf::from),
                 data,
             )

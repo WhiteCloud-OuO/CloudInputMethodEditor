@@ -3,7 +3,7 @@
 //! 这一步只负责“把 v2 布局展开成现有控件表”，控件字段、图片路径和事件仍交给
 //! [`crate::window`] 的同一套解析器。子页面（可重复实例 / 数据绑定）留到后续步骤。
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::path::{Path, PathBuf};
 
 use cloud_ui_core::{
@@ -23,6 +23,148 @@ const VERSION: u64 = 2;
 const MAX_SUBPAGE_DEPTH: usize = 8;
 const MAX_SUBPAGE_INSTANCES: usize = 100;
 
+/// 一份保留下来的 v2 页面树。
+///
+/// 与一次性的 [`load`] 不同，这个类型保留节点、数据上下文和“路径 → 节点”的索引，
+/// 供脚本按路径改可见性或后续重排；每次渲染才把树重新量一遍并展开成 `Document` 内容表。
+#[derive(Debug)]
+pub(crate) struct PageLayout {
+    value: Value,
+    base: PathBuf,
+    fallback: (Option<f32>, Option<f32>),
+    tree: PageTree,
+    payloads: Vec<Option<Value>>,
+    instances: HashMap<String, InstanceInfo>,
+    paths: HashMap<String, NodeId>,
+    regions: Option<Value>,
+}
+
+impl PageLayout {
+    /// 从 v2 JSON 构建页面树。`data` 为空时使用 `page.data`。
+    pub(crate) fn build(
+        value: &Value,
+        base: &Path,
+        fallback: (Option<f32>, Option<f32>),
+        data: &Value,
+    ) -> mlua::Result<Self> {
+        let root = value
+            .as_object()
+            .ok_or_else(|| runtime("v2 布局根必须是对象"))?;
+        if root.get("version").and_then(Value::as_u64) != Some(VERSION) {
+            return Err(runtime("只支持 version: 2 的页面树"));
+        }
+        let page = root
+            .get("page")
+            .and_then(Value::as_object)
+            .ok_or_else(|| runtime("v2 布局缺 page 对象"))?;
+
+        let data = if data.is_null() {
+            page.get("data").cloned().unwrap_or(Value::Null)
+        } else {
+            data.clone()
+        };
+        let mut tree = PageTree::new(Node::new(NodeKind::Page));
+        apply_common(&mut tree.nodes[0], page, fallback)?;
+        let mut payloads = vec![None];
+        let mut names = HashSet::new();
+        let mut instances = HashMap::new();
+        let mut paths = HashMap::new();
+        let mut templates = HashMap::new();
+        let mut visiting = Vec::new();
+        let children = parse_children(
+            &mut tree,
+            page,
+            base,
+            &mut payloads,
+            &mut names,
+            &mut instances,
+            &mut paths,
+            &data,
+            "",
+            "",
+            None,
+            &mut templates,
+            &mut visiting,
+            0,
+        )?;
+        tree.nodes[0].children = children;
+
+        Ok(Self {
+            value: value.clone(),
+            base: base.to_path_buf(),
+            fallback,
+            tree,
+            payloads,
+            instances,
+            paths,
+            regions: page.get("regions").cloned(),
+        })
+    }
+
+    /// 用新的数据上下文重建同一份页面树。
+    pub(crate) fn with_data(&self, data: &Value) -> mlua::Result<Self> {
+        Self::build(&self.value, &self.base, self.fallback, data)
+    }
+
+    /// 页面树 → 布局 → 现有控件表。
+    pub(crate) fn render(&self, lua: &Lua) -> mlua::Result<Layout> {
+        let constraints = root_constraints(&self.tree.nodes[self.tree.root]);
+        let mut measure = PayloadMeasure {
+            payloads: &self.payloads,
+        };
+        let result = layout(&self.tree, constraints, &mut measure);
+
+        let table = lua.create_table()?;
+        table.raw_set("width", result.size.width)?;
+        table.raw_set("height", result.size.height)?;
+        if let Some(regions) = &self.regions {
+            let Value::Array(_) = regions else {
+                return Err(runtime("page.regions 必须是数组"));
+            };
+            table.raw_set("regions", to_lua(lua, regions, &self.base)?)?;
+        }
+
+        let mut control_names = Vec::new();
+        let mut output_index = 0;
+        flatten(
+            &self.tree,
+            self.tree.root,
+            &result.rects,
+            &self.payloads,
+            lua,
+            &self.base,
+            &table,
+            &mut output_index,
+            &mut control_names,
+        )?;
+        Ok(Layout {
+            table,
+            control_names,
+            instances: self.instances.clone(),
+        })
+    }
+
+    /// 按节点路径设置可见性；找不到路径返回 `false`。
+    ///
+    /// 路径同时接受实例下标与实例 key，例如 `rows[1].title` 和 `rows[abc].title`。
+    pub(crate) fn set_visible(&mut self, path: &str, visible: bool) -> bool {
+        let Some(&id) = self.paths.get(path) else {
+            return false;
+        };
+        self.tree.nodes[id].visible = visible;
+        true
+    }
+
+    /// 路径对应节点的实际控件名（内部带实例前缀）；分组节点返回 `None`。
+    pub(crate) fn control_name(&self, path: &str) -> Option<&str> {
+        let id = *self.paths.get(path)?;
+        match self.tree.nodes[id].kind {
+            NodeKind::Control | NodeKind::Container => self.tree.nodes[id].name.as_deref(),
+            _ => None,
+        }
+    }
+}
+
 /// 解析 v2 布局并展开成 `set_content` 能消费的表。
 pub(crate) fn load(
     lua: &Lua,
@@ -31,79 +173,7 @@ pub(crate) fn load(
     fallback: (Option<f32>, Option<f32>),
     data: &Value,
 ) -> mlua::Result<Layout> {
-    let root = value
-        .as_object()
-        .ok_or_else(|| runtime("v2 布局根必须是对象"))?;
-    if root.get("version").and_then(Value::as_u64) != Some(VERSION) {
-        return Err(runtime("只支持 version: 2 的页面树"));
-    }
-    let page = root
-        .get("page")
-        .and_then(Value::as_object)
-        .ok_or_else(|| runtime("v2 布局缺 page 对象"))?;
-
-    let data = if data.is_null() {
-        page.get("data").cloned().unwrap_or(Value::Null)
-    } else {
-        data.clone()
-    };
-    let mut tree = PageTree::new(Node::new(NodeKind::Page));
-    apply_common(&mut tree.nodes[0], page, fallback)?;
-    let mut payloads = vec![None];
-    let mut names = HashSet::new();
-    let mut instances = std::collections::HashMap::new();
-    let mut templates = std::collections::HashMap::new();
-    let mut visiting = Vec::new();
-    let children = parse_children(
-        &mut tree,
-        page,
-        base,
-        &mut payloads,
-        &mut names,
-        &mut instances,
-        &data,
-        "",
-        None,
-        &mut templates,
-        &mut visiting,
-        0,
-    )?;
-    tree.nodes[0].children = children;
-
-    let constraints = root_constraints(&tree.nodes[0]);
-    let mut measure = PayloadMeasure {
-        payloads: &payloads,
-    };
-    let result = layout(&tree, constraints, &mut measure);
-
-    let table = lua.create_table()?;
-    table.raw_set("width", result.size.width)?;
-    table.raw_set("height", result.size.height)?;
-    if let Some(regions) = page.get("regions") {
-        let Value::Array(_) = regions else {
-            return Err(runtime("page.regions 必须是数组"));
-        };
-        table.raw_set("regions", to_lua(lua, regions, base)?)?;
-    }
-
-    let mut control_names = Vec::new();
-    let mut output_index = 0;
-    flatten(
-        &tree,
-        tree.root,
-        &result.rects,
-        &payloads,
-        lua,
-        base,
-        &table,
-        &mut output_index,
-        &mut control_names,
-    )?;
-    Ok(Layout {
-        table,
-        control_names,
-        instances,
-    })
+    PageLayout::build(value, base, fallback, data)?.render(lua)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -113,11 +183,13 @@ fn parse_children(
     base: &Path,
     payloads: &mut Vec<Option<Value>>,
     names: &mut HashSet<String>,
-    instances: &mut std::collections::HashMap<String, InstanceInfo>,
+    instances: &mut HashMap<String, InstanceInfo>,
+    paths: &mut HashMap<String, NodeId>,
     data: &Value,
     prefix: &str,
+    path_prefix: &str,
     instance: Option<&InstanceInfo>,
-    templates: &mut std::collections::HashMap<PathBuf, Value>,
+    templates: &mut HashMap<PathBuf, Value>,
     visiting: &mut Vec<PathBuf>,
     depth: usize,
 ) -> mlua::Result<Vec<NodeId>> {
@@ -130,8 +202,20 @@ fn parse_children(
     let mut ids = Vec::with_capacity(children.len());
     for child in children {
         ids.push(parse_node(
-            tree, child, base, payloads, names, instances, data, prefix, instance, templates,
-            visiting, depth,
+            tree,
+            child,
+            base,
+            payloads,
+            names,
+            instances,
+            paths,
+            data,
+            prefix,
+            path_prefix,
+            instance,
+            templates,
+            visiting,
+            depth,
         )?);
     }
     Ok(ids)
@@ -144,11 +228,13 @@ fn parse_node(
     base: &Path,
     payloads: &mut Vec<Option<Value>>,
     names: &mut HashSet<String>,
-    instances: &mut std::collections::HashMap<String, InstanceInfo>,
+    instances: &mut HashMap<String, InstanceInfo>,
+    paths: &mut HashMap<String, NodeId>,
     data: &Value,
     prefix: &str,
+    path_prefix: &str,
     instance: Option<&InstanceInfo>,
-    templates: &mut std::collections::HashMap<PathBuf, Value>,
+    templates: &mut HashMap<PathBuf, Value>,
     visiting: &mut Vec<PathBuf>,
     depth: usize,
 ) -> mlua::Result<NodeId> {
@@ -161,7 +247,18 @@ fn parse_node(
         .ok_or_else(|| runtime("页面树节点缺 type"))?;
     if kind_name == "subpage" {
         return parse_subpage(
-            tree, object, base, payloads, names, instances, data, prefix, templates, visiting,
+            tree,
+            object,
+            base,
+            payloads,
+            names,
+            instances,
+            paths,
+            data,
+            prefix,
+            path_prefix,
+            templates,
+            visiting,
             depth,
         );
     }
@@ -173,6 +270,7 @@ fn parse_node(
 
     let local_name = object.get("name").and_then(Value::as_str);
     let name = local_name.map(|name| format!("{prefix}{name}"));
+    let node_path = local_name.map(|name| join_path(path_prefix, name));
     if let Some(name) = &name {
         validate_name(name).map_err(runtime)?;
         if !names.insert(name.clone()) {
@@ -187,6 +285,9 @@ fn parse_node(
     node.name = name;
     let id = tree.push(node);
     payloads.push(None);
+    if let Some(node_path) = &node_path {
+        paths.entry(node_path.clone()).or_insert(id);
+    }
     if matches!(kind, NodeKind::Control | NodeKind::Container) {
         let mut payload = control_payload(object)?;
         if let (Some(name), Some(payload)) = (&tree.nodes[id].name, payload.as_object_mut()) {
@@ -202,8 +303,20 @@ fn parse_node(
         }
     }
     let children = parse_children(
-        tree, object, base, payloads, names, instances, data, prefix, instance, templates,
-        visiting, depth,
+        tree,
+        object,
+        base,
+        payloads,
+        names,
+        instances,
+        paths,
+        data,
+        prefix,
+        node_path.as_deref().unwrap_or(path_prefix),
+        instance,
+        templates,
+        visiting,
+        depth,
     )?;
     tree.nodes[id].children = children;
     Ok(id)
@@ -216,10 +329,12 @@ fn parse_subpage(
     base: &Path,
     payloads: &mut Vec<Option<Value>>,
     names: &mut HashSet<String>,
-    instance_map: &mut std::collections::HashMap<String, InstanceInfo>,
+    instance_map: &mut HashMap<String, InstanceInfo>,
+    paths: &mut HashMap<String, NodeId>,
     data: &Value,
     prefix: &str,
-    templates: &mut std::collections::HashMap<PathBuf, Value>,
+    path_prefix: &str,
+    templates: &mut HashMap<PathBuf, Value>,
     visiting: &mut Vec<PathBuf>,
     depth: usize,
 ) -> mlua::Result<NodeId> {
@@ -263,6 +378,7 @@ fn parse_subpage(
         .and_then(Value::as_str)
         .unwrap_or("subpage");
     let instance_prefix = format!("{}{}_", prefix, sanitize_prefix(local_name));
+    let wrapper_path = join_path(path_prefix, local_name);
     let repeat = object.get("repeat").and_then(Value::as_str);
     let items = match repeat {
         Some(path) => {
@@ -332,11 +448,13 @@ fn parse_subpage(
         } else {
             Some(stringify(&key))
         };
+        let instance_path = format!("{wrapper_path}[{index}]");
+        let key_aliases = key_paths(&wrapper_path, &key);
         let context = make_context(data, item, index, key);
         let instance_prefix = format!("{instance_prefix}{index}_");
         let info = InstanceInfo {
             subpage: local_name.to_owned(),
-            instance: format!("{prefix}{local_name}[{index}]"),
+            instance: instance_path.clone(),
             item_index: index,
             item_key,
             local_name: String::new(),
@@ -350,6 +468,10 @@ fn parse_subpage(
             .unwrap_or(true);
         let id = tree.push(instance);
         payloads.push(None);
+        paths.entry(instance_path.clone()).or_insert(id);
+        for path in &key_aliases {
+            paths.entry(path.clone()).or_insert(id);
+        }
         let children = parse_children(
             tree,
             page,
@@ -357,14 +479,19 @@ fn parse_subpage(
             payloads,
             names,
             instance_map,
+            paths,
             &context,
             &instance_prefix,
+            &instance_path,
             Some(&info),
             templates,
             visiting,
             depth + 1,
         )?;
         tree.nodes[id].children = children;
+        for alias in &key_aliases {
+            alias_subtree(paths, &instance_path, alias);
+        }
         instances.push(id);
     }
     visiting.pop();
@@ -388,6 +515,7 @@ fn parse_subpage(
     wrapper.children = instances;
     let id = tree.push(wrapper);
     payloads.push(None);
+    paths.entry(wrapper_path).or_insert(id);
     Ok(id)
 }
 
@@ -462,6 +590,48 @@ fn stringify(value: &Value) -> String {
         Value::Bool(value) => value.to_string(),
         Value::Number(value) => value.to_string(),
         Value::Array(_) | Value::Object(_) => serde_json::to_string(value).unwrap_or_default(),
+    }
+}
+
+fn join_path(parent: &str, name: &str) -> String {
+    if parent.is_empty() {
+        name.to_owned()
+    } else {
+        format!("{parent}.{name}")
+    }
+}
+
+/// 实例 key 的两种寻址写法：`rows[key]` 与 `rows["key"]`。
+/// 数字 key 与下标无法区分，只保留下标路径。
+fn key_paths(base: &str, key: &Value) -> Vec<String> {
+    let Value::String(key) = key else {
+        return Vec::new();
+    };
+    let mut paths = vec![format!(
+        "{base}[\"{}\"]",
+        key.replace('\\', "\\\\").replace('"', "\\\"")
+    )];
+    if !key.is_empty()
+        && key
+            .chars()
+            .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+    {
+        paths.push(format!("{base}[{key}]"));
+    }
+    paths
+}
+
+/// 把 `base` 子树里已经登记的下标路径复制成 key 路径。
+fn alias_subtree(paths: &mut HashMap<String, NodeId>, base: &str, alias: &str) {
+    let prefix = format!("{base}.");
+    let entries: Vec<(String, NodeId)> = paths
+        .iter()
+        .filter(|(path, _)| path.as_str() == base || path.starts_with(&prefix))
+        .map(|(path, id)| (path.clone(), *id))
+        .collect();
+    for (path, id) in entries {
+        let suffix = &path[base.len()..];
+        paths.entry(format!("{alias}{suffix}")).or_insert(id);
     }
 }
 
@@ -948,7 +1118,7 @@ fn runtime(message: impl Into<String>) -> mlua::Error {
 
 #[cfg(test)]
 mod tests {
-    use super::load;
+    use super::{PageLayout, load};
     use mlua::Lua;
     use serde_json::json;
 
@@ -1067,6 +1237,60 @@ mod tests {
         assert_eq!(info.item_index, 1);
         assert_eq!(info.item_key.as_deref(), Some("2"));
         assert_eq!(info.control_path(), "rows[1].title");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn node_paths_accept_both_instance_index_and_key() {
+        let dir = std::env::temp_dir().join(format!("cloudime-subpage-key-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("row.json"),
+            r##"{
+              "version": 2,
+              "page": {
+                "w": 100, "h": 20,
+                "children": [
+                  { "type": "text_block", "name": "title", "w": 100, "h": 20,
+                    "text": "{{item.title}}", "size": 14, "color": "#FF000000" }
+                ]
+              }
+            }"##,
+        )
+        .unwrap();
+        let value = json!({
+            "version": 2,
+            "page": {
+                "w": 100, "h": 100,
+                "children": [{
+                    "type": "subpage", "name": "rows", "src": "row.json",
+                    "repeat": "items", "key": "id"
+                }]
+            }
+        });
+        let data = json!({ "items": [
+            { "id": "a", "title": "A" },
+            { "id": "b", "title": "B" }
+        ]});
+        let mut page = PageLayout::build(&value, &dir, (None, None), &data).unwrap();
+        for path in ["rows[0].title", "rows[a].title", "rows[\"a\"].title"] {
+            assert_eq!(page.control_name(path), Some("rows_0_title"), "{path}");
+        }
+        for path in ["rows[1].title", "rows[b].title", "rows[\"b\"].title"] {
+            assert_eq!(page.control_name(path), Some("rows_1_title"), "{path}");
+        }
+        assert!(page.set_visible("rows[\"b\"].title", false));
+        let lua = Lua::new();
+        let rendered = page.render(&lua).unwrap();
+        assert_eq!(rendered.table.raw_len(), 1);
+        assert_eq!(
+            rendered
+                .control_names
+                .first()
+                .map(|name| name.name.as_str()),
+            Some("rows_0_title")
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }

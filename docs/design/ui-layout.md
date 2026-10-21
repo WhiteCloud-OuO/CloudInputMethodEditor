@@ -270,8 +270,11 @@ Page（主页面，一窗口一棵）
 ### 6.3 实例路径与事件
 
 - 实例路径形如 `rows[0]`、`rows[1]`；控件完整路径为 `rows[0].title`。
+- 路径 API 同时接受实例下标与实例 key：`rows[1].title`、`rows[abc].title`、`rows["abc"].title`
+  指向同一个节点；数字 key 与下标无法区分，只保留下标写法。
 - 控件名在实例内局部唯一，跨实例允许重名。
-- 事件载荷计划增加：
+- 运行时保留页面树与节点路径索引（`PageLayout`），改可见性 / 数据后重新测量、展开，不重读文件。
+- 事件载荷：
   - `subpage`：子页面名；
   - `instance`：实例路径；
   - `item_index`；
@@ -282,14 +285,17 @@ Page（主页面，一窗口一棵）
   控件内部仍用实例前缀名（例如 `rows_0_title`）保证布局内唯一，但 `event.control` 给**局部名**
   （例如 `title`），完整路径用 `event.control_path`。
 - 一个窗口仍然只有一份 Lua 脚本；子页面不单独运行脚本，事件冒泡到窗口脚本。
-- `win:update_content` 等按控件名寻址的 API 需要支持完整路径或“实例 + 局部名”。
+- 已提供按路径寻址的 `win:set_visible(path, visible)`、`win:get_text_at` / `win:set_text_at` /
+  `win:update_content_at`；旧的按控件名 API 保留给 v1 和非子页面控件。
+- 节点级 `insert` / `remove` 和列表 keyed diff 尚未接入；当前用 `set_data` 整份重建实例。
 
 ### 6.4 生命周期与限制
 
 - 子页面模板按文件路径缓存；文件变化不自动监听，`load_layout` 整份重载。
 - 循环引用、总实例数、总节点数、最大深度都要有限制；沿用并扩展现有 4 MB / 512 元素 / 深度 8 的预算。
 - 子页面不可见（`visible: false`）时不占位，父布局按不存在处理。
-- 列表项过多时的虚拟化 / 截断策略另行定义；第一版先给 `max_instances`。
+- 列表项过多时先受 `max_instances` 限制；虚拟化（变高行、横向、无限滚动）与 keyed diff 是下一阶段，
+  当前 `set_data` 仍整份重建实例。
 
 ## 7. v1 兼容
 

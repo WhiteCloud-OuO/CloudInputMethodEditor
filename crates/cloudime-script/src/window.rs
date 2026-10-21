@@ -400,6 +400,7 @@ pub(crate) fn handle(
     requests: Rc<RefCell<Vec<Request>>>,
     images: Rc<RefCell<ImageCache>>,
     texts: TextCache,
+    initial_page: Option<crate::page_layout::PageLayout>,
     initial_layout: Option<PathBuf>,
     initial_data: serde_json::Value,
 ) -> mlua::Result<mlua::Table> {
@@ -413,6 +414,8 @@ pub(crate) fn handle(
     // 最近一次布局文件与数据上下文：`set_data` 只重跑布局，不再读文件。
     let layout_path = Rc::new(RefCell::new(initial_layout));
     let layout_data = Rc::new(RefCell::new(initial_data));
+    // v2 页面树保留在脚本侧，节点 API 改完直接重排；v1 没有这层状态。
+    let layout_page = Rc::new(RefCell::new(initial_page));
 
     // 这份窗口的区域镜像：`set_content` / `combine_region` / `prune_region` 时同步更新，
     // `region_contains` / `region_relation` 就在工人线程上直接查它（不用等 UI 线程回话）。
@@ -464,6 +467,48 @@ pub(crate) fn handle(
         )?,
     )?;
 
+    let path_texts = texts.clone();
+    let path_text_requests = requests.clone();
+    let path_text_page = layout_page.clone();
+    handle.set(
+        "set_text_at",
+        lua.create_function(
+            move |_, (_this, path, text): (mlua::Table, String, String)| {
+                let name = path_text_page
+                    .borrow()
+                    .as_ref()
+                    .and_then(|page| page.control_name(&path))
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        mlua::Error::RuntimeError(format!(
+                            "页面树里找不到可写文本的控件路径：{path}"
+                        ))
+                    })?;
+                path_texts
+                    .borrow_mut()
+                    .insert((id, name.clone()), text.clone());
+                path_text_requests
+                    .borrow_mut()
+                    .push(Request::SetText { id, name, text });
+                Ok(())
+            },
+        )?,
+    )?;
+
+    let path_get_texts = texts.clone();
+    let path_get_page = layout_page.clone();
+    handle.set(
+        "get_text_at",
+        lua.create_function(move |_, (_this, path): (mlua::Table, String)| {
+            let name = path_get_page
+                .borrow()
+                .as_ref()
+                .and_then(|page| page.control_name(&path))
+                .map(str::to_owned);
+            Ok(name.and_then(|name| path_get_texts.borrow().get(&(id, name)).cloned()))
+        })?,
+    )?;
+
     let update_requests = requests.clone();
     handle.set(
         "update_content",
@@ -471,6 +516,31 @@ pub(crate) fn handle(
             move |_, (_this, name, value): (mlua::Table, String, mlua::Value)| {
                 let content = parse_static_content(value)?;
                 update_requests
+                    .borrow_mut()
+                    .push(Request::UpdateContent { id, name, content });
+                Ok(())
+            },
+        )?,
+    )?;
+
+    let path_update_requests = requests.clone();
+    let path_update_page = layout_page.clone();
+    handle.set(
+        "update_content_at",
+        lua.create_function(
+            move |_, (_this, path, value): (mlua::Table, String, mlua::Value)| {
+                let name = path_update_page
+                    .borrow()
+                    .as_ref()
+                    .and_then(|page| page.control_name(&path))
+                    .map(str::to_owned)
+                    .ok_or_else(|| {
+                        mlua::Error::RuntimeError(format!(
+                            "页面树里找不到可更新内容的控件路径：{path}"
+                        ))
+                    })?;
+                let content = parse_static_content(value)?;
+                path_update_requests
                     .borrow_mut()
                     .push(Request::UpdateContent { id, name, content });
                 Ok(())
@@ -590,6 +660,7 @@ pub(crate) fn handle(
     let layout_texts = texts.clone();
     let current_path = layout_path.clone();
     let current_data = layout_data.clone();
+    let current_page = layout_page.clone();
     handle.set(
         "load_layout",
         lua.create_function(
@@ -598,19 +669,21 @@ pub(crate) fn handle(
                     Some(data) => crate::page_layout::lua_to_json(mlua::Value::Table(data))?,
                     None => current_data.borrow().clone(),
                 };
-                let document = load_layout_document(
+                let loaded = load_layout_document(
                     lua,
                     Path::new(&path),
                     fallback_size(&this),
                     &mut layout_images.borrow_mut(),
                     &data,
                 )?;
+                let document = loaded.document;
                 cache_document_texts(&document, id, &layout_texts);
                 this.set("width", document.width)?;
                 this.set("height", document.height)?;
                 *layout_regions.borrow_mut() = document.regions.clone();
                 *current_path.borrow_mut() = Some(PathBuf::from(path));
                 *current_data.borrow_mut() = data;
+                *current_page.borrow_mut() = loaded.page;
                 layout_requests
                     .borrow_mut()
                     .push(Request::SetContent(id, document));
@@ -625,6 +698,7 @@ pub(crate) fn handle(
     let data_texts = texts.clone();
     let data_path = layout_path.clone();
     let data_state = layout_data.clone();
+    let data_page = layout_page.clone();
     handle.set(
         "set_data",
         lua.create_function(move |lua, (this, data): (mlua::Table, mlua::Table)| {
@@ -633,22 +707,91 @@ pub(crate) fn handle(
             let Some(path) = data_path.borrow().clone() else {
                 return Ok(());
             };
-            let document = load_layout_document(
-                lua,
-                &path,
-                fallback_size(&this),
-                &mut data_images.borrow_mut(),
-                &data,
-            )?;
+            let rebuilt = {
+                let page = data_page.borrow();
+                page.as_ref()
+                    .map(|page| page.with_data(&data))
+                    .transpose()?
+            };
+            let loaded = match rebuilt {
+                Some(page) => {
+                    let layout = page.render(lua)?;
+                    let document = layout_document(
+                        layout,
+                        fallback_size(&this),
+                        &mut data_images.borrow_mut(),
+                    )?;
+                    LoadedLayout {
+                        document,
+                        page: Some(page),
+                    }
+                }
+                None => load_layout_document(
+                    lua,
+                    &path,
+                    fallback_size(&this),
+                    &mut data_images.borrow_mut(),
+                    &data,
+                )?,
+            };
+            let document = loaded.document;
             cache_document_texts(&document, id, &data_texts);
             this.set("width", document.width)?;
             this.set("height", document.height)?;
             *data_regions.borrow_mut() = document.regions.clone();
+            *data_page.borrow_mut() = loaded.page;
             data_requests
                 .borrow_mut()
                 .push(Request::SetContent(id, document));
             Ok(())
         })?,
+    )?;
+
+    let visible_requests = requests.clone();
+    let visible_images = images.clone();
+    let visible_regions = regions.clone();
+    let visible_texts = texts.clone();
+    let visible_page = layout_page.clone();
+    handle.set(
+        "set_visible",
+        lua.create_function(
+            move |lua, (this, path, visible): (mlua::Table, String, bool)| {
+                let Some(mut page) = visible_page.borrow_mut().take() else {
+                    return Err(mlua::Error::RuntimeError(
+                        "set_visible 只支持 v2 页面树布局".to_owned(),
+                    ));
+                };
+                if !page.set_visible(&path, visible) {
+                    *visible_page.borrow_mut() = Some(page);
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "页面树里找不到节点路径：{path}"
+                    )));
+                }
+                let result = page.render(lua).and_then(|layout| {
+                    layout_document(
+                        layout,
+                        fallback_size(&this),
+                        &mut visible_images.borrow_mut(),
+                    )
+                });
+                let document = match result {
+                    Ok(document) => document,
+                    Err(error) => {
+                        *visible_page.borrow_mut() = Some(page);
+                        return Err(error);
+                    }
+                };
+                cache_document_texts(&document, id, &visible_texts);
+                this.set("width", document.width)?;
+                this.set("height", document.height)?;
+                *visible_regions.borrow_mut() = document.regions.clone();
+                *visible_page.borrow_mut() = Some(page);
+                visible_requests
+                    .borrow_mut()
+                    .push(Request::SetContent(id, document));
+                Ok(())
+            },
+        )?,
     )?;
 
     let hide_requests = requests.clone();
@@ -865,6 +1008,12 @@ pub(crate) fn lua_data(value: mlua::Value) -> mlua::Result<serde_json::Value> {
     crate::page_layout::lua_to_json(value)
 }
 
+/// 一份已解析布局的运行时状态：`Document` 给 UI 线程，`PageLayout` 留在脚本侧供节点 API 使用。
+pub(crate) struct LoadedLayout {
+    pub document: Document,
+    pub page: Option<crate::page_layout::PageLayout>,
+}
+
 /// 读一份 JSON 布局并解析成 [`Document`]；错误里带上文件路径。
 pub(crate) fn load_layout_document(
     lua: &mlua::Lua,
@@ -872,14 +1021,47 @@ pub(crate) fn load_layout_document(
     fallback: (Option<f32>, Option<f32>),
     images: &mut ImageCache,
     data: &serde_json::Value,
+) -> mlua::Result<LoadedLayout> {
+    let value = crate::layout_file::read_value(path)?;
+    let is_v2 = matches!(
+        &value,
+        serde_json::Value::Object(root)
+            if root.get("version").and_then(serde_json::Value::as_u64) == Some(2)
+    );
+    if is_v2 {
+        let base = path.parent().unwrap_or_else(|| Path::new("."));
+        let page = crate::page_layout::PageLayout::build(&value, base, fallback, data)
+            .map_err(|error| layout_error(path, error))?;
+        let layout = page
+            .render(lua)
+            .map_err(|error| layout_error(path, error))?;
+        let document = layout_document(layout, fallback, images)?;
+        Ok(LoadedLayout {
+            document,
+            page: Some(page),
+        })
+    } else {
+        let layout = crate::layout_file::read(lua, path, fallback, data)?;
+        Ok(LoadedLayout {
+            document: layout_document(layout, fallback, images)?,
+            page: None,
+        })
+    }
+}
+
+fn layout_document(
+    layout: crate::layout_file::Layout,
+    fallback: (Option<f32>, Option<f32>),
+    images: &mut ImageCache,
 ) -> mlua::Result<Document> {
-    let layout = crate::layout_file::read(lua, path, fallback, data)?;
-    let mut document = parse_document(&layout.table, fallback, images).map_err(|error| {
-        mlua::Error::RuntimeError(format!("布局文件 {}：{error}", path.display()))
-    })?;
+    let mut document = parse_document(&layout.table, fallback, images)?;
     document.control_names = layout.control_names;
     document.instances = layout.instances;
     Ok(document)
+}
+
+fn layout_error(path: &Path, error: mlua::Error) -> mlua::Error {
+    mlua::Error::RuntimeError(format!("布局文件 {}：{error}", path.display()))
 }
 
 /// 把一份内容里的编辑框初始文本写进脚本侧缓存（换内容 / 建布局时用）。
@@ -2410,7 +2592,8 @@ mod tests {
             &mut ImageCache::default(),
             &serde_json::Value::Null,
         )
-        .unwrap_or_else(|error| panic!("{}：{error}", path.display()));
+        .unwrap_or_else(|error| panic!("{}：{error}", path.display()))
+        .document;
         assert_eq!((document.width, document.height), (760.0, 640.0));
         assert!(
             document
@@ -2480,6 +2663,7 @@ mod tests {
             Rc::new(RefCell::new(ImageCache::default())),
             Rc::new(RefCell::new(HashMap::new())),
             None,
+            None,
             serde_json::Value::Null,
         )
         .unwrap();
@@ -2545,7 +2729,8 @@ mod tests {
             &mut ImageCache::default(),
             &serde_json::Value::Null,
         )
-        .unwrap_or_else(|error| panic!("v2 布局解析失败：{error}"));
+        .unwrap_or_else(|error| panic!("v2 布局解析失败：{error}"))
+        .document;
         let _ = std::fs::remove_file(&path);
         assert_eq!((document.width, document.height), (300.0, 100.0));
         assert_eq!(document.elements.len(), 4);
@@ -2614,6 +2799,7 @@ mod tests {
             requests.clone(),
             Rc::new(RefCell::new(ImageCache::default())),
             cache.clone(),
+            None,
             None,
             serde_json::Value::Null,
         )
@@ -3607,6 +3793,7 @@ mod tests {
             Rc::new(RefCell::new(Vec::new())),
             Rc::new(RefCell::new(ImageCache::default())),
             Rc::new(RefCell::new(std::collections::HashMap::new())),
+            None,
             None,
             serde_json::Value::Null,
         )
