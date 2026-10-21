@@ -558,8 +558,9 @@ fn parse_subpage(
         };
         let instance_path = format!("{wrapper_path}[{index}]");
         let key_aliases = key_paths(&wrapper_path, &key);
+        let prefix_key = key_prefix(&key).unwrap_or_else(|| index.to_string());
         let context = make_context(data, item, index, key);
-        let instance_prefix = format!("{instance_prefix}{index}_");
+        let instance_prefix = format!("{instance_prefix}{prefix_key}_");
         let info = InstanceInfo {
             subpage: local_name.to_owned(),
             instance: instance_path.clone(),
@@ -847,6 +848,31 @@ fn stringify(value: &Value) -> String {
         Value::Number(value) => value.to_string(),
         Value::Array(_) | Value::Object(_) => serde_json::to_string(value).unwrap_or_default(),
     }
+}
+
+/// 有稳定 key 的实例用 key 生成内部控件名前缀，列表重排时控件名不变。
+/// 数字 key 与下标无法区分，继续用下标；非 ASCII / 含特殊字符的 key 转成十六进制。
+fn key_prefix(key: &Value) -> Option<String> {
+    let Value::String(key) = key else {
+        return None;
+    };
+    if key.is_empty() {
+        return None;
+    }
+    let stable = if key
+        .chars()
+        .all(|character| character.is_ascii_alphanumeric() || matches!(character, '_' | '-'))
+    {
+        key.clone()
+    } else {
+        let mut hex = String::from("k");
+        for byte in key.bytes() {
+            use std::fmt::Write as _;
+            let _ = write!(hex, "{byte:02x}");
+        }
+        hex
+    };
+    Some(sanitize_prefix(&stable))
 }
 
 fn join_path(parent: &str, name: &str) -> String {
@@ -1551,6 +1577,65 @@ mod tests {
     }
 
     #[test]
+    fn reordering_items_keeps_their_keyed_control_names() {
+        let dir =
+            std::env::temp_dir().join(format!("cloudime-subpage-keyed-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("row.json"),
+            r##"{
+              "version": 2,
+              "page": {
+                "w": 100, "h": 20,
+                "children": [{
+                  "type": "text_block", "name": "title", "w": 100, "h": 20,
+                  "text": "{{item.title}}", "size": 14, "color": "#FF000000"
+                }]
+              }
+            }"##,
+        )
+        .unwrap();
+        let value = json!({
+            "version": 2,
+            "page": {
+                "w": 100, "h": 100,
+                "children": [{
+                    "type": "subpage", "name": "rows", "src": "row.json",
+                    "repeat": "items", "key": "id"
+                }]
+            }
+        });
+        let first = json!({ "items": [
+            { "id": "a", "title": "A" }, { "id": "b", "title": "B" }
+        ]});
+        let second = json!({ "items": [
+            { "id": "b", "title": "B" }, { "id": "a", "title": "A" }
+        ]});
+        let lua = Lua::new();
+        let page =
+            PageLayout::build(&value, &dir, (None, None), &first, &HashMap::new(), None).unwrap();
+        let names: Vec<_> = page
+            .render(&lua)
+            .unwrap()
+            .control_names
+            .into_iter()
+            .map(|name| name.name)
+            .collect();
+        assert_eq!(names, ["rows_a_title", "rows_b_title"]);
+        let page = page.with_data(&second).unwrap();
+        let names: Vec<_> = page
+            .render(&lua)
+            .unwrap()
+            .control_names
+            .into_iter()
+            .map(|name| name.name)
+            .collect();
+        assert_eq!(names, ["rows_b_title", "rows_a_title"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
     fn a_virtualized_subpage_only_instantiates_the_visible_window() {
         let dir =
             std::env::temp_dir().join(format!("cloudime-subpage-virtual-{}", std::process::id()));
@@ -1745,10 +1830,10 @@ mod tests {
         let mut page =
             PageLayout::build(&value, &dir, (None, None), &data, &HashMap::new(), None).unwrap();
         for path in ["rows[0].title", "rows[a].title", "rows[\"a\"].title"] {
-            assert_eq!(page.control_name(path), Some("rows_0_title"), "{path}");
+            assert_eq!(page.control_name(path), Some("rows_a_title"), "{path}");
         }
         for path in ["rows[1].title", "rows[b].title", "rows[\"b\"].title"] {
-            assert_eq!(page.control_name(path), Some("rows_1_title"), "{path}");
+            assert_eq!(page.control_name(path), Some("rows_b_title"), "{path}");
         }
         assert!(page.set_visible("rows[\"b\"].title", false));
         let lua = Lua::new();
@@ -1759,7 +1844,7 @@ mod tests {
                 .control_names
                 .first()
                 .map(|name| name.name.as_str()),
-            Some("rows_0_title")
+            Some("rows_a_title")
         );
         let _ = std::fs::remove_dir_all(&dir);
     }

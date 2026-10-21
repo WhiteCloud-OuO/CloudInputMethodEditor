@@ -318,8 +318,11 @@ Page（主页面，一窗口一棵）
 - `overscan`：可见区外额外创建几项，缺省 1。
 - 只把可见窗口的实例挂到页面上；前面的项用一个固定高度的 spacer 占位，窗口边界由窗口自身裁剪。
 - 滚动由脚本 `win:set_scroll(path, offset)` 驱动；`set_data` 保留当前偏移。
-- 虚拟化时忽略 `max_instances`。当前仍未做 keyed diff 和自动触底加载：数据更新走 `set_data`，
-  `set_scroll` 会重新量可见窗口；自动加载需要脚本在 `wheel` 事件里判断后追加数据。
+- 虚拟化时忽略 `max_instances`。
+- keyed identity：有字符串 `key` 的实例内部控件名前缀用 key（如 `rows_a_title`），重排后名字不变；
+  `cloud-ui` 更新内容时按控件名复用同名编辑框宿主，焦点 / 选区 / 输入中的文本不重建。
+- `set_data` 数据完全相同时直接跳过；变化时重建当前可见窗口。自动触底加载仍需脚本在 `wheel`
+  事件里判断后 `set_data`。
 
 ### 6.6 生命周期与限制
 

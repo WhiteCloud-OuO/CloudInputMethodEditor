@@ -481,7 +481,8 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 `update_content_at` / `set_scroll` 只改树或滚动窗口后重排，不重新读文件。
 自动尺寸通过 `LayoutMeasureHook` 调 Server 的 `SharedMeasurer`（与候选窗同一个渲染器），
 不再按字符数估算；`subpage.virtualize` 支持纵向 / 横向可见窗口、固定或 `auto` 逐项量高、`overscan`，
-滚动偏移由脚本 `win:set_scroll` 驱动。
+滚动偏移由脚本 `win:set_scroll` 驱动；字符串 key 生成稳定的内部控件名前缀，`cloud-ui` 的
+`rebuild_text_edits` 按名字复用同名 RichEdit 宿主（keyed diff），数据没变时 `set_data` 直接跳过。
 `cloud-ui` 的窗口壳和 `cloudime-script` 的 JSON / Lua 绑定共用这里的页面树，避免 `cloud-ui` 与
 `cloudime-script` 互相依赖。
 

@@ -342,6 +342,9 @@ struct TextEditWindow {
     /// 自动区域名 / 控件名，`get_text` / `set_text` / 焦点都按它找。
     name: String,
 
+    /// 是 `text_box`（多行）还是 `text_edit`；同名但类型变了不能复用宿主。
+    multiline: bool,
+
     /// 控件左上角在内容区的绝对位置（点，已经累加父面板偏移）。
     origin: (f32, f32),
 
@@ -587,9 +590,17 @@ impl ScriptWindow {
         }
     }
 
-    /// 按当前内容重建 windowless RichEdit 宿主窗（旧的全部销毁）。
+    /// 按当前内容同步 windowless RichEdit 宿主窗。
+    ///
+    /// 同名、同类型的编辑框保留原宿主（keyed diff）：列表重排 / 只改其它行时，
+    /// 焦点、选区、正在输入的文本都不会被打断；新出现的才建，消失的随 `old` 一起析构。
     fn rebuild_text_edits(&self) {
-        self.destroy_text_edits();
+        let mut old: HashMap<String, TextEditWindow> = self
+            .text_edits
+            .borrow_mut()
+            .drain(..)
+            .map(|edit| (edit.name.clone(), edit))
+            .collect();
         let mut jobs = Vec::new();
         {
             let document = self.document.borrow();
@@ -685,6 +696,18 @@ impl ScriptWindow {
 
         let mut edits = self.text_edits.borrow_mut();
         for job in jobs {
+            if let Some(mut edit) = old.remove(&job.name)
+                && edit.multiline == job.multiline
+            {
+                edit.path = job.path;
+                edit.origin = job.origin;
+                if edit.host.text_string() != job.text {
+                    edit.host.set_text(&job.text);
+                }
+                *edit.last_text.borrow_mut() = job.text;
+                edits.push(edit);
+                continue;
+            }
             let (family, size) = match self.painter.borrow().as_ref() {
                 Some(painter) => painter.text_font(job.font),
                 None => (theme_family.clone(), theme_size),
@@ -747,6 +770,7 @@ impl ScriptWindow {
                     edits.push(TextEditWindow {
                         path: job.path,
                         name: job.name,
+                        multiline: job.multiline,
                         origin: job.origin,
                         last_text: RefCell::new(job.text),
                         host,

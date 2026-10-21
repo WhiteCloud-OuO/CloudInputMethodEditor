@@ -707,6 +707,9 @@ pub(crate) fn handle(
         "set_data",
         lua.create_function(move |lua, (this, data): (mlua::Table, mlua::Table)| {
             let data = crate::page_layout::lua_to_json(mlua::Value::Table(data))?;
+            if *data_state.borrow() == data {
+                return Ok(());
+            }
             *data_state.borrow_mut() = data.clone();
             let Some(path) = data_path.borrow().clone() else {
                 return Ok(());
