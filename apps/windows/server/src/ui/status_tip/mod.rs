@@ -74,7 +74,7 @@ impl StatusTip {
     }
 
     /// 在光标矩形附近画一屏并显示，1 秒后自己收起。画不出来就保持收起。
-    pub(super) fn show(&self, view: &StatusView, caps: bool, anchor: RECT) {
+    pub(super) fn show(&self, view: &StatusView, caps: bool, anchor: RECT, status: Option<RECT>) {
         // DPI 取光标所在显示器的（理由同候选窗，见 #146）。
         let point = POINT {
             x: anchor.left,
@@ -108,7 +108,7 @@ impl StatusTip {
         }
         // 位图四周还有阴影留白，摆的是内容左上角，贴图位置要把留白减掉。
         let margin = bitmap.content_x as i32;
-        let (x, y) = place(anchor, content, (GAP * dpi as i32) / 96);
+        let (x, y) = place(anchor, status, content, (GAP * dpi as i32) / 96);
         let updated = layered::present(self.hwnd, &bitmap.pixmap, (x - margin, y - margin), 255);
         if updated.is_err() {
             self.hide();
@@ -125,12 +125,20 @@ impl StatusTip {
     }
 }
 
-/// 内容左上角：贴光标下方，放不下放上方，再放不下贴屏幕内；都夹在所在显示器工作区里。
-fn place(anchor: RECT, content: (i32, i32), gap: i32) -> (i32, i32) {
+/// 内容左上角：有悬浮工具栏时固定放在工具栏上方；没有工具栏才退回光标附近。
+/// 都夹在所在显示器工作区里。
+fn place(anchor: RECT, status: Option<RECT>, content: (i32, i32), gap: i32) -> (i32, i32) {
     let work = monitor::work_area_near(POINT {
         x: anchor.left,
         y: anchor.top,
     });
+    if let Some(status) = status {
+        let x = status
+            .left
+            .clamp(work.left, (work.right - content.0).max(work.left));
+        let y = (status.top - gap - content.1).max(work.top);
+        return (x, y);
+    }
     let x = anchor
         .left
         .clamp(work.left, (work.right - content.0).max(work.left));
@@ -158,5 +166,30 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::place;
+    use windows::Win32::Foundation::RECT;
+
+    #[test]
+    fn the_tip_sits_above_the_status_bar_when_it_is_visible() {
+        let anchor = RECT {
+            left: 100,
+            top: 900,
+            right: 120,
+            bottom: 920,
+        };
+        let status = RECT {
+            left: 200,
+            top: 1000,
+            right: 500,
+            bottom: 1060,
+        };
+        let (x, y) = place(anchor, Some(status), (120, 40), 6);
+        assert!(x >= status.left);
+        assert!(y + 40 <= status.top);
     }
 }

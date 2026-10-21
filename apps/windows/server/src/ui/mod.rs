@@ -377,7 +377,8 @@ fn apply(
         UiCommand::StatusTip(payload) => {
             let (view, caps, rect) = *payload;
             if let Some(tip) = tip {
-                tip.show(&view, caps, to_win_rect(rect));
+                let status_rect = status.and_then(StatusBar::window_rect);
+                tip.show(&view, caps, to_win_rect(rect), status_rect);
             }
         }
         UiCommand::Configure(settings) => {

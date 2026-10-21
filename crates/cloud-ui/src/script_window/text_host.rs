@@ -21,7 +21,7 @@ use windows::Win32::Graphics::Gdi::{
     CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC, DeleteObject, EndPaint,
     FillRect, GetDC, GetTextExtentPoint32W, GetTextMetricsW, HBRUSH, HDC, HGDIOBJ, InvalidateRect,
     PAINTSTRUCT, ReleaseDC, SRCCOPY, SYS_COLOR_INDEX, SelectObject, SetBkMode, SetTextColor,
-    TEXTMETRICW, TRANSPARENT, TextOutW,
+    TEXTMETRICW, TRANSPARENT, TextOutW, UpdateWindow,
 };
 use windows::Win32::System::Com::DVASPECT_CONTENT;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
@@ -593,6 +593,10 @@ impl TextHostWindow {
                 LPARAM(&mut point as *mut _ as isize),
                 &mut result,
             );
+            // EM_SETSCROLLPOS 只改 RichEdit 的滚动位置，不保证立刻重画；
+            // 拖拽滚动条时脚本窗口已经重画了，但文字宿主还是旧内容，看起来「不跟手」。
+            let _ = InvalidateRect(Some(self.hwnd), None, false);
+            let _ = UpdateWindow(self.hwnd);
         }
         self.notify_scroll();
     }
@@ -904,15 +908,49 @@ impl TextHostWindow {
             let _ = GetClientRect(self.hwnd, &mut client);
             if self.multiline {
                 self.paint_multiline_buffered(hdc, &client);
-                let _ = EndPaint(self.hwnd, &ps);
+            } else {
+                self.paint_single_line_buffered(hdc, &client);
+            }
+            let _ = EndPaint(self.hwnd, &ps);
+        }
+    }
+
+    /// 单行编辑框的双缓冲绘制：拖拽选择时窗口会高频失效，直接往窗口 DC
+    /// 先填背景再画文字会看到文字反复擦掉 / 重画；先画到内存 DC，最后一次 BitBlt。
+    fn paint_single_line_buffered(&self, hdc: HDC, client: &RECT) {
+        let width = client.right.max(1);
+        let height = client.bottom.max(1);
+        unsafe {
+            let memory = CreateCompatibleDC(Some(hdc));
+            if memory.is_invalid() {
+                let _ = FillRect(hdc, client, self.brush);
+                self.paint_single_line(hdc, client);
                 return;
             }
-            let _ = FillRect(hdc, &client, self.brush);
+            let bitmap = CreateCompatibleBitmap(hdc, width, height);
+            if bitmap.is_invalid() {
+                let _ = DeleteDC(memory);
+                let _ = FillRect(hdc, client, self.brush);
+                self.paint_single_line(hdc, client);
+                return;
+            }
+            let old = SelectObject(memory, bitmap.into());
+            let _ = FillRect(memory, client, self.brush);
+            self.paint_single_line(memory, client);
+            let _ = BitBlt(hdc, 0, 0, width, height, Some(memory), 0, 0, SRCCOPY);
+            let _ = SelectObject(memory, old);
+            let _ = DeleteObject(bitmap.into());
+            let _ = DeleteDC(memory);
+        }
+    }
+
+    fn paint_single_line(&self, hdc: HDC, client: &RECT) {
+        unsafe {
             let old_font = SelectObject(hdc, self.font);
             let _ = SetBkMode(hdc, TRANSPARENT);
             let text = self.text();
             let text = self.display_text(&text);
-            let scroll = self.ensure_visible(hdc, &text, &client);
+            let scroll = self.ensure_visible(hdc, &text, client);
             let (start, end) = self.selection(text.len());
             if start < end {
                 let first = 2 - scroll + self.text_width(hdc, &text[..start]);
@@ -928,15 +966,14 @@ impl TextHostWindow {
                 };
                 let _ = FillRect(hdc, &selection, self.highlight.get());
             }
-            self.draw_runs(hdc, &text, &client, 0, text.len(), self.text_color);
+            self.draw_runs(hdc, &text, client, 0, text.len(), self.text_color);
             if start < end {
-                self.draw_runs(hdc, &text, &client, start, end, self.selection_text);
+                self.draw_runs(hdc, &text, client, start, end, self.selection_text);
             }
-            if let Some(caret) = self.caret_rect(hdc, &text, &client) {
+            if let Some(caret) = self.caret_rect(hdc, &text, client) {
                 let _ = FillRect(hdc, &caret, self.caret_brush);
             }
             let _ = SelectObject(hdc, old_font);
-            let _ = EndPaint(self.hwnd, &ps);
         }
     }
 

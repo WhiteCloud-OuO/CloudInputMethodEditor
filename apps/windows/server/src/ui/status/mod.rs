@@ -16,16 +16,16 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 
-use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, WPARAM};
+use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     DragDetect, GetKeyState, ReleaseCapture, VK_CAPITAL,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, GetCursorPos, HTCAPTION, HTCLIENT, IDC_ARROW, KillTimer, LoadCursorW,
-    MA_NOACTIVATE, PostThreadMessageW, SendMessageW, SetTimer, WM_EXITSIZEMOVE, WM_LBUTTONDOWN,
-    WM_MOUSEACTIVATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_TIMER,
+    DefWindowProcW, GetCursorPos, GetWindowRect, HTCAPTION, HTCLIENT, IDC_ARROW, IsWindowVisible,
+    KillTimer, LoadCursorW, MA_NOACTIVATE, PostThreadMessageW, SendMessageW, SetTimer,
+    WM_EXITSIZEMOVE, WM_LBUTTONDOWN, WM_MOUSEACTIVATE, WM_NCHITTEST, WM_NCLBUTTONDOWN, WM_TIMER,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -161,6 +161,16 @@ impl StatusBar {
             (None, dpi) => dpi,
         };
         self.dpi.set(dpi);
+    }
+
+    /// 悬浮工具栏当前窗口矩形（物理像素）；隐藏时返回 `None`。
+    pub(super) fn window_rect(&self) -> Option<RECT> {
+        if !unsafe { IsWindowVisible(self.hwnd).as_bool() } {
+            return None;
+        }
+        let mut rect = RECT::default();
+        unsafe { GetWindowRect(self.hwnd, &mut rect) }.ok()?;
+        Some(rect)
     }
 
     /// 渲染器要的一排按钮：按 cfg 的 `pos` 从左到右，每个按钮按当前状态挑图标；`limit` 只取前几个
