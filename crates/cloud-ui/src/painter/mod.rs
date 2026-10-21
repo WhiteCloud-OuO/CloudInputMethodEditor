@@ -452,3 +452,47 @@ fn family(name: &str) -> Option<String> {
 fn scale(dpi: u32) -> f32 {
     dpi.max(1) as f32 / 96.0
 }
+
+#[cfg(test)]
+mod tests {
+    use super::{Painter, StatusKind};
+    use cloudime_platform::ItemNumberStyle;
+    use cloudime_render::StatusCell;
+
+    fn settings() -> crate::RenderSettings {
+        crate::RenderSettings {
+            pinyin_font: (String::new(), 11.0),
+            candidate_font: (String::new(), 13.0),
+            item_number_font: (String::new(), 11.0),
+            translate_font: (String::new(), 11.0),
+            symbol_font: String::new(),
+            japanese_font: String::new(),
+            min_width_pixels: 0.0,
+            item_number_style: ItemNumberStyle::default(),
+            scale: None,
+            max_cell_width: 0.0,
+            candidate_auxiliary: false,
+            theme: Default::default(),
+        }
+    }
+
+    #[test]
+    fn status_layout_comes_from_the_page_tree() {
+        let Some(mut painter) = Painter::new(&settings()) else {
+            return;
+        };
+        let svg = r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 20 20"><rect x="4" y="4" width="12" height="12"/></svg>"#;
+        let cells = [StatusCell::icon(svg), StatusCell::icon(svg)];
+        let rendered = painter
+            .render_status(&cells, 96, StatusKind::Bar)
+            .expect("状态条该能出图");
+        assert_eq!(
+            (
+                rendered.rendered.content_width,
+                rendered.rendered.content_height
+            ),
+            (58, 32)
+        );
+        assert_eq!(rendered.cell_edges, vec![26.0, 52.0]);
+    }
+}
