@@ -2812,6 +2812,51 @@ mod tests {
         }
     }
 
+    /// v2 页面树里的动态控件也要生成可交互区域和事件处理器。
+    #[test]
+    fn v2_dynamic_controls_keep_their_regions_and_handlers() {
+        let json = r##"{
+          "version": 2,
+          "page": {
+            "w": 200, "h": 40,
+            "children": [{
+              "type": "text_edit", "name": "search", "w": 200, "h": 40,
+              "text": "hi", "events": { "text_changed": "search_changed" }
+            }]
+          }
+        }"##;
+        let path =
+            std::env::temp_dir().join(format!("cloudime-v2-dynamic-{}.json", std::process::id()));
+        std::fs::write(&path, json).expect("写 v2 动态控件布局");
+        let lua = mlua::Lua::new();
+        let document = load_layout_document(
+            &lua,
+            &path,
+            (Some(200.0), Some(40.0)),
+            &mut ImageCache::default(),
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap_or_else(|error| panic!("v2 动态控件解析失败：{error}"))
+        .document;
+        let _ = std::fs::remove_file(&path);
+        assert!(matches!(
+            document.elements.first(),
+            Some(Element::TextEdit(_))
+        ));
+        let region = document
+            .regions
+            .iter()
+            .find(|region| region.name == "search")
+            .expect("动态控件该有自动区域");
+        assert!(
+            region
+                .handlers
+                .iter()
+                .any(|(action, handler)| action == "text_changed" && handler == "search_changed")
+        );
+    }
+
     /// 嵌套在 `panel.children` 里的 `text_edit`：绝对位置、区域和自动名字都要有。
     #[test]
     fn nested_text_edits_get_absolute_placements_and_regions() {

@@ -34,6 +34,7 @@ pub(crate) struct PageLayout {
     fallback: (Option<f32>, Option<f32>),
     data: Value,
     scrolls: HashMap<String, f32>,
+    visibility: HashMap<String, bool>,
     measure: Option<LayoutMeasureHook>,
     tree: PageTree,
     payloads: Vec<Option<Value>>,
@@ -102,6 +103,7 @@ impl PageLayout {
             fallback,
             data,
             scrolls: scrolls.clone(),
+            visibility: HashMap::new(),
             measure: measure.cloned(),
             tree,
             payloads,
@@ -113,28 +115,41 @@ impl PageLayout {
 
     /// 用新的数据上下文重建同一份页面树。
     pub(crate) fn with_data(&self, data: &Value) -> mlua::Result<Self> {
-        Self::build(
+        let mut next = Self::build(
             &self.value,
             &self.base,
             self.fallback,
             data,
             &self.scrolls,
             self.measure.as_ref(),
-        )
+        )?;
+        next.restore_visibility(&self.visibility);
+        Ok(next)
     }
 
     /// 设置某个虚拟列表的滚动偏移（点），并重建可见窗口。
     pub(crate) fn with_scroll(&self, path: &str, offset: f32) -> mlua::Result<Self> {
         let mut scrolls = self.scrolls.clone();
         scrolls.insert(path.to_owned(), offset.max(0.0));
-        Self::build(
+        let mut next = Self::build(
             &self.value,
             &self.base,
             self.fallback,
             &self.data,
             &scrolls,
             self.measure.as_ref(),
-        )
+        )?;
+        next.restore_visibility(&self.visibility);
+        Ok(next)
+    }
+
+    fn restore_visibility(&mut self, visibility: &HashMap<String, bool>) {
+        for (path, visible) in visibility {
+            if let Some(&id) = self.paths.get(path) {
+                self.tree.nodes[id].visible = *visible;
+            }
+        }
+        self.visibility = visibility.clone();
     }
 
     /// 页面树 → 布局 → 现有控件表。
@@ -184,6 +199,7 @@ impl PageLayout {
             return false;
         };
         self.tree.nodes[id].visible = visible;
+        self.visibility.insert(path.to_owned(), visible);
         true
     }
 
@@ -1846,6 +1862,8 @@ mod tests {
                 .map(|name| name.name.as_str()),
             Some("rows_a_title")
         );
+        let page = page.with_data(&data).unwrap();
+        assert_eq!(page.render(&lua).unwrap().table.raw_len(), 1);
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
