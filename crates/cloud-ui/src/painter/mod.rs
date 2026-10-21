@@ -7,8 +7,13 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use cloudime_platform::LayoutMode;
 use cloudime_render::{
-    Color, FontLibrary, FontSlot, Frame, Layout, Preedit, Rendered, RenderedStatus, Renderer, Row,
-    Shadow, StatusCell, Theme, UiFont, system_fonts,
+    Color, Document, Element, FontLibrary, FontSlot, Frame, Layout, Preedit, Rendered,
+    RenderedStatus, Renderer, Row, Shadow, StatusCell, Theme, UiFont, system_fonts,
+};
+
+use cloud_ui_core::{
+    Align, Axis, Constraints, Edges, Justify, LayoutSpec, Node, NodeKind, NoopMeasure, PageTree,
+    SizeSpec, layout,
 };
 
 use crate::RenderSettings;
@@ -291,12 +296,21 @@ impl Painter {
     }
 
     /// 画状态条或状态切换提示：`kind` 决定用哪一套背景 / 图标 / 阴影色。
+    ///
+    /// 几何先走 `cloud-ui-core` 页面树（固定 20×20 按钮 + 6 点间距 + 6 点内边距），
+    /// 再展开成 `Document` 走 `render_document`；这样状态条和脚本窗口共用同一套页面树 /
+    /// 文档渲染链，不再由渲染器里的 `render_status` 单独算坐标。
     pub fn render_status(
         &mut self,
         cells: &[StatusCell],
         dpi: u32,
         kind: StatusKind,
     ) -> Option<RenderedStatus> {
+        if cells.is_empty() {
+            return None;
+        }
+        const BUTTON: f32 = 20.0;
+        const GAP: f32 = 6.0;
         let (background, icon, shadow) = match kind {
             StatusKind::Bar => (
                 self.theme.colors.bar_background,
@@ -309,17 +323,76 @@ impl Painter {
                 &self.tip_shadow,
             ),
         };
+        let buttons = cells.len() as f32;
+        let between = cells.len().saturating_sub(1) as f32;
+        let content_width = buttons * BUTTON + (between + 2.0) * GAP;
+        let content_height = BUTTON + GAP * 2.0;
+
+        let mut page = Node::new(NodeKind::Page);
+        page.width = SizeSpec::Fixed(content_width);
+        page.height = SizeSpec::Fixed(content_height);
+        page.padding = Edges::all(GAP);
+        page.layout = LayoutSpec::Flex {
+            direction: Axis::Row,
+            wrap: false,
+            justify: Justify::Start,
+            align: Align::Start,
+            gap: GAP,
+        };
+        let mut tree = PageTree::new(page);
+        let ids: Vec<_> = cells
+            .iter()
+            .map(|_| {
+                let mut button = Node::new(NodeKind::Control);
+                button.width = SizeSpec::Fixed(BUTTON);
+                button.height = SizeSpec::Fixed(BUTTON);
+                tree.push(button)
+            })
+            .collect();
+        tree.nodes[0].children = ids.clone();
+        let result = layout(
+            &tree,
+            Constraints {
+                min_width: content_width,
+                max_width: content_width,
+                min_height: content_height,
+                max_height: content_height,
+            },
+            &mut NoopMeasure,
+        );
+        let mut elements = Vec::with_capacity(cells.len());
+        let mut cell_edges = Vec::with_capacity(cells.len());
+        for (cell, id) in cells.iter().zip(ids) {
+            let Some(rect) = result.rects.get(id).copied().flatten() else {
+                continue;
+            };
+            elements.push(Element::Svg {
+                x: rect.x,
+                y: rect.y,
+                size: rect.width,
+                source: cell.svg().to_owned(),
+                tint: Some(icon),
+            });
+            cell_edges.push((rect.x + rect.width) * scale(dpi));
+        }
+        let document = Document {
+            width: content_width,
+            height: content_height,
+            elements,
+            regions: Vec::new(),
+            control_names: Vec::new(),
+            instances: Default::default(),
+        };
+        let mut theme = self.theme.clone();
+        theme.colors.background = background;
         self.renderer
-            .render_status(
-                cells,
-                &self.theme,
-                scale(dpi),
-                Some(shadow),
-                background,
-                icon,
-            )
+            .render_document(&document, &theme, scale(dpi), Some(shadow), true)
             .inspect_err(|error| tracing::warn!(%error, "状态条渲染失败"))
             .ok()
+            .map(|rendered| RenderedStatus {
+                rendered: rendered.rendered,
+                cell_edges,
+            })
     }
 }
 
