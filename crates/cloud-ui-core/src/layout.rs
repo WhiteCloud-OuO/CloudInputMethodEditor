@@ -30,6 +30,28 @@ pub enum LayoutKind {
     Responsive,
 }
 
+/// 主轴分配方式。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Justify {
+    #[default]
+    Start,
+    Center,
+    End,
+    SpaceBetween,
+    SpaceAround,
+    SpaceEvenly,
+}
+
+/// 交叉轴对齐方式。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum Align {
+    #[default]
+    Start,
+    Center,
+    End,
+    Stretch,
+}
+
 /// 节点是否参与正常布局流。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub enum Position {
@@ -92,13 +114,15 @@ impl Constraints {
 
 #[cfg(test)]
 mod tests {
-    use super::{Axis, Constraints, LayoutKind, Position};
+    use super::{Align, Axis, Constraints, Justify, LayoutKind, Position};
     use crate::geometry::Size;
 
     #[test]
     fn defaults_match_the_page_tree_contract() {
         assert_eq!(Axis::default(), Axis::Row);
         assert_eq!(LayoutKind::default(), LayoutKind::Flex);
+        assert_eq!(Justify::default(), Justify::Start);
+        assert_eq!(Align::default(), Align::Start);
         assert_eq!(Position::default(), Position::Flow);
     }
 

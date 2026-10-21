@@ -12,6 +12,7 @@
 mod http;
 mod install;
 mod layout_file;
+mod page_layout;
 mod runtime;
 mod window;
 

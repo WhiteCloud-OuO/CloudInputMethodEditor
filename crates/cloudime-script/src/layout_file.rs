@@ -1,5 +1,6 @@
 //! 控件布局文件（JSON）：把前台 UI 文件读成脚本窗口的声明式内容表。
 //!
+//! v1 是绝对坐标；`version: 2` 先由 [`crate::page_layout`] 跑页面树布局，再展开成同一份控件表。
 //! 布局文件只描述控件，真正的默认值 / 几何 / 区域生成仍走 [`crate::window`] 的同一套解析器；
 //! 这样 JSON 与 Lua `set_content` 的元素字段完全一致，只多了顶层 `controls` 数组。
 //! 文件里的路径（`svg_path` / `img.path`）先按布局文件目录找，再逐级向上找；因此放在
@@ -37,7 +38,11 @@ pub(crate) struct Layout {
 }
 
 /// 读一个布局文件，转成 `set_content` 能直接消费的 Lua 表。
-pub(crate) fn read(lua: &Lua, path: &Path) -> mlua::Result<Layout> {
+pub(crate) fn read(
+    lua: &Lua,
+    path: &Path,
+    fallback: (Option<f32>, Option<f32>),
+) -> mlua::Result<Layout> {
     let metadata = std::fs::metadata(path).map_err(|error| {
         mlua::Error::RuntimeError(format!("读不了布局文件 {}：{error}", path.display()))
     })?;
@@ -58,7 +63,16 @@ pub(crate) fn read(lua: &Lua, path: &Path) -> mlua::Result<Layout> {
             path.display()
         ))
     })?;
-    content(lua, &value, path.parent().unwrap_or_else(|| Path::new(".")))
+    let base = path.parent().unwrap_or_else(|| Path::new("."));
+    let result = if matches!(
+        &value,
+        Value::Object(root) if root.get("version").and_then(Value::as_u64) == Some(2)
+    ) {
+        crate::page_layout::load(lua, &value, base, fallback)
+    } else {
+        content(lua, &value, base)
+    };
+    result
         .map_err(|error| mlua::Error::RuntimeError(format!("布局文件 {}：{error}", path.display())))
 }
 
@@ -194,7 +208,7 @@ fn collect_control(
 }
 
 /// 控件名规则：ASCII 字母开头，后续只能是 ASCII 字母 / 数字 / 下划线，最长 255，且不能是 Rust 关键字。
-fn validate_name(name: &str) -> Result<(), String> {
+pub(crate) fn validate_name(name: &str) -> Result<(), String> {
     if name.is_empty() {
         return Err("不能为空".to_owned());
     }
@@ -231,7 +245,7 @@ fn path_label(path: &[usize]) -> String {
 }
 
 /// JSON 值 → Lua 值：数组变 1 起序列，对象变字符串键表，`null` 变 `nil`。
-fn to_lua(lua: &Lua, value: &Value, base: &Path) -> mlua::Result<LuaValue> {
+pub(crate) fn to_lua(lua: &Lua, value: &Value, base: &Path) -> mlua::Result<LuaValue> {
     Ok(match value {
         Value::Null => LuaValue::Nil,
         Value::Bool(value) => LuaValue::Boolean(*value),
@@ -437,8 +451,8 @@ mod tests {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../Scripts/lib/test-caret-window.json");
         let lua = Lua::new();
-        let layout =
-            super::read(&lua, &path).unwrap_or_else(|error| panic!("{}：{error}", path.display()));
+        let layout = super::read(&lua, &path, (None, None))
+            .unwrap_or_else(|error| panic!("{}：{error}", path.display()));
         assert!(
             layout
                 .control_names
@@ -466,7 +480,7 @@ mod tests {
         )
         .unwrap();
         let lua = Lua::new();
-        let layout = super::read(&lua, &path).unwrap();
+        let layout = super::read(&lua, &path, (None, None)).unwrap();
         assert_eq!(layout.table.get::<f32>("width").unwrap(), 10.0);
         assert_eq!(layout.table.raw_len(), 0);
     }

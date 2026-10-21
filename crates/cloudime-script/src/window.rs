@@ -817,7 +817,7 @@ pub(crate) fn load_layout_document(
     fallback: (Option<f32>, Option<f32>),
     images: &mut ImageCache,
 ) -> mlua::Result<Document> {
-    let layout = crate::layout_file::read(lua, path)?;
+    let layout = crate::layout_file::read(lua, path, fallback)?;
     let mut document = parse_document(&layout.table, fallback, images).map_err(|error| {
         mlua::Error::RuntimeError(format!("布局文件 {}：{error}", path.display()))
     })?;
@@ -2352,6 +2352,55 @@ mod tests {
         assert_eq!(document.control_name(3), Some("search"));
         assert_eq!(document.control_name(5), Some("notes"));
         assert_eq!(document.control_name(7), Some("close"));
+    }
+
+    /// v2 页面树：flex / linear / 绝对定位先展开成同一份 Document。
+    #[test]
+    fn v2_page_tree_flattens_into_a_document() {
+        let json = r##"{
+          "version": 2,
+          "page": {
+            "w": 300,
+            "h": 100,
+            "padding": 5,
+            "layout": { "type": "flex", "direction": "column", "gap": 5 },
+            "children": [
+              { "type": "rect", "name": "background", "w": 290, "h": 90, "color": "#FFFFFFFF" },
+              { "type": "stem", "name": "row",
+                "layout": { "type": "linear", "gap": 4 },
+                "children": [
+                  { "type": "text_block", "name": "a", "w": 40, "h": 20, "text": "A", "size": 14, "color": "#FF000000" },
+                  { "type": "text_block", "name": "b", "w": 60, "h": 20, "text": "B", "size": 14, "color": "#FF000000" }
+                ]
+              },
+              { "type": "rect", "name": "overlay", "position": "absolute",
+                "inset": { "top": 2, "right": 3 }, "w": 10, "h": 10, "color": "#FF000000" }
+            ]
+          }
+        }"##;
+        let path =
+            std::env::temp_dir().join(format!("cloudime-v2-layout-{}.json", std::process::id()));
+        std::fs::write(&path, json).expect("写 v2 测试布局");
+        let lua = mlua::Lua::new();
+        let document = load_layout_document(
+            &lua,
+            &path,
+            (Some(300.0), Some(100.0)),
+            &mut ImageCache::default(),
+        )
+        .unwrap_or_else(|error| panic!("v2 布局解析失败：{error}"));
+        let _ = std::fs::remove_file(&path);
+        assert_eq!((document.width, document.height), (300.0, 100.0));
+        assert_eq!(document.elements.len(), 4);
+        for name in ["background", "a", "b", "overlay"] {
+            assert!(
+                document
+                    .control_names
+                    .iter()
+                    .any(|control| control.name == name),
+                "缺控件名 {name}"
+            );
+        }
     }
 
     /// 嵌套在 `panel.children` 里的 `text_edit`：绝对位置、区域和自动名字都要有。
