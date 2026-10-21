@@ -488,6 +488,7 @@ aux:show()
 | `win:load_layout(path, data?)` | 读一份 JSON 布局文件并换成整份内容；`data` 是 v2 页面树的数据上下文 |
 | `win:set_data(data)` | 用当前数据重跑最近一次 v2 布局（不重新读文件）；普通控件按控件名更新 |
 | `win:set_visible(path, visible)` | 按页面树路径显示 / 隐藏节点（`visible = false` 不占布局空间）；路径同时接受实例下标与 key，例如 `rows[1].title` / `rows[abc].title` / `rows["abc"].title` |
+| `win:set_scroll(path, offset)` | 设置虚拟化子页面的滚动偏移（点）；只重建可见窗口，横向 / 纵向由 `virtualize.axis` 决定 |
 | `win:get_text(name)` | 读某个 `text_edit` / `text_box` 最近一次文本；控件不存在 / 还没有文本时给 `nil` |
 | `win:set_text(name, text)` | 设置某个 `text_edit` / `text_box` 的文本（按控件名找，整份替换、光标放到末尾） |
 | `win:get_text_at(path)` / `win:set_text_at(path, text)` | 同上，但按页面树路径定位；子页面实例里同名控件用它避免歧义 |
@@ -576,6 +577,22 @@ win:set_visible("rows[0].title", false)   -- 也接受 key：rows[abc].title / r
 （例如 `event.control = "title"`），完整路径在 `event.control_path`（例如 `rows[1].title`）；
 `subpage.required = { "title", "meta" }` 可声明每个 item 必填的数据字段，缺一项整份布局失败。
 路径 API（`set_visible` / `*_at`）同时接受实例下标和 key；key 优先写成 `rows[abc]` 或 `rows["abc"]`。
+
+大列表可在 `subpage` 上开虚拟化，只创建可见行：
+
+```json
+{
+  "type": "subpage", "name": "rows", "src": "row.json",
+  "repeat": "items", "key": "id",
+  "virtualize": { "axis": "y", "viewport": 300, "overscan": 1 }
+}
+```
+
+`axis` 是 `y`（默认）/ `x`；`viewport` 是可见区高度 / 宽度（点，也可省，用模板 page 的固定高 / 宽）；
+`item_height` 可写数字当固定步长，省略或写 `"auto"` 时用精确文字量尺逐项量高度（变高行）。
+`overscan` 是可见区外多建几行，缺省 `1`。滚动由脚本调 `win:set_scroll("rows", offset)` 驱动，
+窗口 `wheel` 事件里自己加减偏移即可；虚拟化时 `max_instances` 不再限制数据长度，
+但当前仍需脚本把新数据交给 `set_data`（自动触底加载和 keyed diff 尚未接入）。
 v2 目前是实验接口，细节和限制以设计文档为准。
 
 **元素表**（坐标 / 尺寸都是点，超出内容区的部分被裁掉）：

@@ -799,6 +799,54 @@ pub(crate) fn handle(
         )?,
     )?;
 
+    let scroll_requests = requests.clone();
+    let scroll_images = images.clone();
+    let scroll_regions = regions.clone();
+    let scroll_texts = texts.clone();
+    let scroll_page = layout_page.clone();
+    handle.set(
+        "set_scroll",
+        lua.create_function(
+            move |lua, (this, path, offset): (mlua::Table, String, f32)| {
+                let Some(page) = scroll_page.borrow_mut().take() else {
+                    return Err(mlua::Error::RuntimeError(
+                        "set_scroll 只支持 v2 页面树布局".to_owned(),
+                    ));
+                };
+                let next = match page.with_scroll(&path, offset) {
+                    Ok(next) => next,
+                    Err(error) => {
+                        *scroll_page.borrow_mut() = Some(page);
+                        return Err(error);
+                    }
+                };
+                let result = next.render(lua).and_then(|layout| {
+                    layout_document(
+                        layout,
+                        fallback_size(&this),
+                        &mut scroll_images.borrow_mut(),
+                    )
+                });
+                let document = match result {
+                    Ok(document) => document,
+                    Err(error) => {
+                        *scroll_page.borrow_mut() = Some(page);
+                        return Err(error);
+                    }
+                };
+                cache_document_texts(&document, id, &scroll_texts);
+                this.set("width", document.width)?;
+                this.set("height", document.height)?;
+                *scroll_regions.borrow_mut() = document.regions.clone();
+                *scroll_page.borrow_mut() = Some(next);
+                scroll_requests
+                    .borrow_mut()
+                    .push(Request::SetContent(id, document));
+                Ok(())
+            },
+        )?,
+    )?;
+
     let hide_requests = requests.clone();
     handle.set(
         "hide",
@@ -1036,8 +1084,15 @@ pub(crate) fn load_layout_document(
     );
     if is_v2 {
         let base = path.parent().unwrap_or_else(|| Path::new("."));
-        let page = crate::page_layout::PageLayout::build(&value, base, fallback, data, measure)
-            .map_err(|error| layout_error(path, error))?;
+        let page = crate::page_layout::PageLayout::build(
+            &value,
+            base,
+            fallback,
+            data,
+            &HashMap::new(),
+            measure,
+        )
+        .map_err(|error| layout_error(path, error))?;
         let layout = page
             .render(lua)
             .map_err(|error| layout_error(path, error))?;

@@ -32,6 +32,8 @@ pub(crate) struct PageLayout {
     value: Value,
     base: PathBuf,
     fallback: (Option<f32>, Option<f32>),
+    data: Value,
+    scrolls: HashMap<String, f32>,
     measure: Option<LayoutMeasureHook>,
     tree: PageTree,
     payloads: Vec<Option<Value>>,
@@ -47,6 +49,7 @@ impl PageLayout {
         base: &Path,
         fallback: (Option<f32>, Option<f32>),
         data: &Value,
+        scrolls: &HashMap<String, f32>,
         measure: Option<&LayoutMeasureHook>,
     ) -> mlua::Result<Self> {
         let root = value
@@ -81,6 +84,8 @@ impl PageLayout {
             &mut names,
             &mut instances,
             &mut paths,
+            scrolls,
+            measure,
             &data,
             "",
             "",
@@ -95,6 +100,8 @@ impl PageLayout {
             value: value.clone(),
             base: base.to_path_buf(),
             fallback,
+            data,
+            scrolls: scrolls.clone(),
             measure: measure.cloned(),
             tree,
             payloads,
@@ -111,6 +118,21 @@ impl PageLayout {
             &self.base,
             self.fallback,
             data,
+            &self.scrolls,
+            self.measure.as_ref(),
+        )
+    }
+
+    /// 设置某个虚拟列表的滚动偏移（点），并重建可见窗口。
+    pub(crate) fn with_scroll(&self, path: &str, offset: f32) -> mlua::Result<Self> {
+        let mut scrolls = self.scrolls.clone();
+        scrolls.insert(path.to_owned(), offset.max(0.0));
+        Self::build(
+            &self.value,
+            &self.base,
+            self.fallback,
+            &self.data,
+            &scrolls,
             self.measure.as_ref(),
         )
     }
@@ -184,7 +206,7 @@ pub(crate) fn load(
     data: &Value,
     measure: Option<&LayoutMeasureHook>,
 ) -> mlua::Result<Layout> {
-    PageLayout::build(value, base, fallback, data, measure)?.render(lua)
+    PageLayout::build(value, base, fallback, data, &HashMap::new(), measure)?.render(lua)
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -196,6 +218,8 @@ fn parse_children(
     names: &mut HashSet<String>,
     instances: &mut HashMap<String, InstanceInfo>,
     paths: &mut HashMap<String, NodeId>,
+    scrolls: &HashMap<String, f32>,
+    measure: Option<&LayoutMeasureHook>,
     data: &Value,
     prefix: &str,
     path_prefix: &str,
@@ -220,6 +244,8 @@ fn parse_children(
             names,
             instances,
             paths,
+            scrolls,
+            measure,
             data,
             prefix,
             path_prefix,
@@ -241,6 +267,8 @@ fn parse_node(
     names: &mut HashSet<String>,
     instances: &mut HashMap<String, InstanceInfo>,
     paths: &mut HashMap<String, NodeId>,
+    scrolls: &HashMap<String, f32>,
+    measure: Option<&LayoutMeasureHook>,
     data: &Value,
     prefix: &str,
     path_prefix: &str,
@@ -265,6 +293,8 @@ fn parse_node(
             names,
             instances,
             paths,
+            scrolls,
+            measure,
             data,
             prefix,
             path_prefix,
@@ -321,6 +351,8 @@ fn parse_node(
         names,
         instances,
         paths,
+        scrolls,
+        measure,
         data,
         prefix,
         node_path.as_deref().unwrap_or(path_prefix),
@@ -342,6 +374,8 @@ fn parse_subpage(
     names: &mut HashSet<String>,
     instance_map: &mut HashMap<String, InstanceInfo>,
     paths: &mut HashMap<String, NodeId>,
+    scrolls: &HashMap<String, f32>,
+    measure: Option<&LayoutMeasureHook>,
     data: &Value,
     prefix: &str,
     path_prefix: &str,
@@ -402,13 +436,14 @@ fn parse_subpage(
         }
         None => vec![data.clone()],
     };
+    let virtual_spec = parse_virtualize(object, page)?;
     let max_instances = object
         .get("max_instances")
         .and_then(Value::as_u64)
         .map(|value| value as usize)
         .unwrap_or(MAX_SUBPAGE_INSTANCES)
         .min(MAX_SUBPAGE_INSTANCES);
-    if items.len() > max_instances {
+    if virtual_spec.is_none() && items.len() > max_instances {
         return Err(runtime(format!(
             "子页面实例数 {} 超过上限 {max_instances}",
             items.len()
@@ -448,8 +483,70 @@ fn parse_subpage(
         .unwrap_or_else(|| PathBuf::from("."));
     let key_name = object.get("key").and_then(Value::as_str);
     visiting.push(path);
-    let mut instances = Vec::with_capacity(items.len());
-    for (index, item) in items.iter().enumerate() {
+    let (start, end, spacer) = if let Some(spec) = &virtual_spec {
+        let offset = scrolls.get(&wrapper_path).copied().unwrap_or(0.0).max(0.0);
+        let mut prefix = 0.0;
+        let mut first = None;
+        let mut visible_end = 0;
+        for (index, item) in items.iter().enumerate() {
+            let extent = match spec.item_height {
+                Some(height) => height,
+                None => {
+                    let key = key_name
+                        .and_then(|key| item.get(key))
+                        .cloned()
+                        .unwrap_or_else(|| Value::from(index as u64));
+                    let context = make_context(data, item, index, key);
+                    let instance_path = format!("{wrapper_path}[{index}]");
+                    let info = InstanceInfo {
+                        subpage: local_name.to_owned(),
+                        instance: instance_path.clone(),
+                        item_index: index,
+                        item_key: None,
+                        local_name: String::new(),
+                    };
+                    measure_item_extent(
+                        page,
+                        &template_base,
+                        &context,
+                        &format!("measure_{index}_"),
+                        &instance_path,
+                        &info,
+                        scrolls,
+                        measure,
+                        templates,
+                        visiting,
+                        depth + 1,
+                        spec.axis,
+                    )?
+                }
+            };
+            if first.is_none() && prefix >= offset {
+                first = Some((index, prefix));
+            }
+            if prefix < offset + spec.viewport {
+                visible_end = index + 1;
+            }
+            prefix += extent;
+        }
+        let (start, start_prefix) = first.unwrap_or((items.len(), prefix));
+        let end = if start >= items.len() {
+            items.len()
+        } else {
+            (visible_end.max(start + 1) + spec.overscan).min(items.len())
+        };
+        let spacer = if start < items.len() {
+            (start_prefix - offset).max(0.0)
+        } else {
+            0.0
+        };
+        (start, end, spacer)
+    } else {
+        (0, items.len(), 0.0)
+    };
+
+    let mut instances = Vec::with_capacity(end.saturating_sub(start) + 1);
+    for (index, item) in items.iter().enumerate().take(end).skip(start) {
         let key = key_name
             .and_then(|key| item.get(key))
             .cloned()
@@ -491,6 +588,8 @@ fn parse_subpage(
             names,
             instance_map,
             paths,
+            scrolls,
+            measure,
             &context,
             &instance_prefix,
             &instance_path,
@@ -507,18 +606,39 @@ fn parse_subpage(
     }
     visiting.pop();
 
+    if spacer > 0.0 {
+        let mut gap = Node::new(NodeKind::Stem);
+        match virtual_spec.as_ref().map(|spec| spec.axis) {
+            Some(Axis::Row) => gap.width = SizeSpec::Fixed(spacer),
+            _ => gap.height = SizeSpec::Fixed(spacer),
+        }
+        let id = tree.push(gap);
+        payloads.push(None);
+        instances.insert(0, id);
+    }
+
     let mut wrapper = Node::new(NodeKind::Stem);
     wrapper.name = Some(format!(
         "{prefix}{}__instances",
         sanitize_prefix(local_name)
     ));
+    let direction = virtual_spec
+        .as_ref()
+        .map(|spec| spec.axis)
+        .unwrap_or(Axis::Row);
     wrapper.layout = LayoutSpec::Flex {
-        direction: Axis::Row,
-        wrap: true,
+        direction,
+        wrap: virtual_spec.is_none(),
         justify: Justify::Start,
         align: Align::Start,
-        gap: 0.0,
+        gap: virtual_spec.as_ref().map(|spec| spec.gap).unwrap_or(0.0),
     };
+    if let Some(spec) = &virtual_spec {
+        match spec.axis {
+            Axis::Row => wrapper.width = SizeSpec::Fixed(spec.viewport),
+            Axis::Column => wrapper.height = SizeSpec::Fixed(spec.viewport),
+        }
+    }
     wrapper.visible = object
         .get("visible")
         .and_then(Value::as_bool)
@@ -528,6 +648,131 @@ fn parse_subpage(
     payloads.push(None);
     paths.entry(wrapper_path).or_insert(id);
     Ok(id)
+}
+
+struct VirtualSpec {
+    axis: Axis,
+    viewport: f32,
+    overscan: usize,
+    item_height: Option<f32>,
+    gap: f32,
+}
+
+fn parse_virtualize(
+    object: &Map<String, Value>,
+    page: &Map<String, Value>,
+) -> mlua::Result<Option<VirtualSpec>> {
+    let Some(value) = object.get("virtualize") else {
+        return Ok(None);
+    };
+    let config = match value {
+        Value::Bool(true) => None,
+        Value::Bool(false) => return Ok(None),
+        Value::Object(config) => Some(config),
+        _ => return Err(runtime("subpage.virtualize 必须是布尔值或对象")),
+    };
+    let field = |name: &str| {
+        config
+            .and_then(|config| config.get(name))
+            .or_else(|| object.get(name))
+    };
+    let axis = match field("axis").and_then(Value::as_str).unwrap_or("y") {
+        "x" | "row" => Axis::Row,
+        "y" | "column" => Axis::Column,
+        other => return Err(runtime(format!("虚拟化 axis 只能是 x / y：{other}"))),
+    };
+    let viewport = field("viewport")
+        .and_then(Value::as_f64)
+        .map(|value| value as f32)
+        .or_else(|| {
+            let key = match axis {
+                Axis::Row => "width",
+                Axis::Column => "height",
+            };
+            page.get(key)
+                .or_else(|| page.get(if key == "width" { "w" } else { "h" }))
+                .and_then(Value::as_f64)
+                .map(|value| value as f32)
+        })
+        .ok_or_else(|| runtime("虚拟化子页面缺 viewport（或模板 page 的固定宽 / 高）"))?;
+    if viewport <= 0.0 {
+        return Err(runtime("虚拟化 viewport 必须大于 0"));
+    }
+    let item_height = match field("item_height") {
+        None => None,
+        Some(Value::String(text)) if text == "auto" => None,
+        Some(value) => Some(number(value, "item_height")?),
+    };
+    let overscan = field("overscan").and_then(Value::as_u64).unwrap_or(1) as usize;
+    let gap = field("gap")
+        .map(|value| number(value, "gap"))
+        .transpose()?
+        .unwrap_or(0.0)
+        .max(0.0);
+    Ok(Some(VirtualSpec {
+        axis,
+        viewport,
+        overscan,
+        item_height,
+        gap,
+    }))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn measure_item_extent(
+    page: &Map<String, Value>,
+    base: &Path,
+    context: &Value,
+    prefix: &str,
+    instance_path: &str,
+    info: &InstanceInfo,
+    scrolls: &HashMap<String, f32>,
+    measure: Option<&LayoutMeasureHook>,
+    templates: &mut HashMap<PathBuf, Value>,
+    visiting: &mut Vec<PathBuf>,
+    depth: usize,
+    axis: Axis,
+) -> mlua::Result<f32> {
+    let mut tree = PageTree::new(Node::new(NodeKind::Stem));
+    apply_common(&mut tree.nodes[0], page, (None, None))?;
+    let mut payloads = vec![None];
+    let mut names = HashSet::new();
+    let mut instances = HashMap::new();
+    let mut paths = HashMap::new();
+    let children = parse_children(
+        &mut tree,
+        page,
+        base,
+        &mut payloads,
+        &mut names,
+        &mut instances,
+        &mut paths,
+        scrolls,
+        measure,
+        context,
+        prefix,
+        instance_path,
+        Some(info),
+        templates,
+        visiting,
+        depth,
+    )?;
+    tree.nodes[0].children = children;
+    let constraints = Constraints {
+        min_width: 0.0,
+        max_width: f32::INFINITY,
+        min_height: 0.0,
+        max_height: f32::INFINITY,
+    };
+    let mut payload_measure = PayloadMeasure {
+        payloads: &payloads,
+        measure,
+    };
+    let result = layout(&tree, constraints, &mut payload_measure);
+    Ok(match axis {
+        Axis::Row => result.size.width,
+        Axis::Column => result.size.height,
+    })
 }
 
 fn make_context(data: &Value, item: &Value, index: usize, key: Value) -> Value {
@@ -1153,6 +1398,7 @@ mod tests {
     use super::{PageLayout, load};
     use mlua::Lua;
     use serde_json::json;
+    use std::collections::HashMap;
 
     fn run(value: serde_json::Value) -> mlua::Result<super::Layout> {
         load(
@@ -1293,6 +1539,7 @@ mod tests {
             std::path::Path::new("."),
             (None, None),
             &serde_json::Value::Null,
+            &super::HashMap::new(),
             Some(&hook),
         )
         .unwrap();
@@ -1301,6 +1548,165 @@ mod tests {
         let title: mlua::Table = layout.table.get(1).unwrap();
         assert_eq!(title.get::<f32>("w").unwrap(), 123.0);
         assert_eq!(title.get::<f32>("h").unwrap(), 45.0);
+    }
+
+    #[test]
+    fn a_virtualized_subpage_only_instantiates_the_visible_window() {
+        let dir =
+            std::env::temp_dir().join(format!("cloudime-subpage-virtual-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("row.json"),
+            r##"{
+              "version": 2,
+              "page": {
+                "w": 100, "h": 30,
+                "children": [{
+                  "type": "text_block", "name": "title", "w": 100, "h": 30,
+                  "text": "{{item.title}}", "size": 14, "color": "#FF000000"
+                }]
+              }
+            }"##,
+        )
+        .unwrap();
+        let value = json!({
+            "version": 2,
+            "page": {
+                "w": 100, "h": 100,
+                "children": [{
+                    "type": "subpage", "name": "rows", "src": "row.json",
+                    "repeat": "items", "key": "id",
+                    "virtualize": { "axis": "y", "viewport": 100, "item_height": 30,
+                                    "overscan": 0 }
+                }]
+            }
+        });
+        let items: Vec<_> = (0..10)
+            .map(|index| json!({ "id": index, "title": format!("row {index}") }))
+            .collect();
+        let data = json!({ "items": items });
+        let lua = Lua::new();
+        let page =
+            PageLayout::build(&value, &dir, (None, None), &data, &HashMap::new(), None).unwrap();
+        assert_eq!(page.render(&lua).unwrap().control_names.len(), 4);
+        let page = page.with_scroll("rows", 75.0).unwrap();
+        let layout = page.render(&lua).unwrap();
+        assert_eq!(layout.control_names.len(), 3);
+        assert_eq!(
+            layout.control_names.first().map(|name| name.name.as_str()),
+            Some("rows_3_title")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_virtualized_subpage_can_scroll_horizontally() {
+        let dir =
+            std::env::temp_dir().join(format!("cloudime-subpage-virtual-x-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("cell.json"),
+            r##"{
+              "version": 2,
+              "page": {
+                "w": 30, "h": 100,
+                "children": [{
+                  "type": "text_block", "name": "title", "w": 30, "h": 100,
+                  "text": "{{item.title}}", "size": 14, "color": "#FF000000"
+                }]
+              }
+            }"##,
+        )
+        .unwrap();
+        let value = json!({
+            "version": 2,
+            "page": {
+                "w": 100, "h": 100,
+                "children": [{
+                    "type": "subpage", "name": "columns", "src": "cell.json",
+                    "repeat": "items", "key": "id",
+                    "virtualize": { "axis": "x", "viewport": 100, "item_height": 30,
+                                    "overscan": 0 }
+                }]
+            }
+        });
+        let items: Vec<_> = (0..10)
+            .map(|index| json!({ "id": index, "title": format!("{index}") }))
+            .collect();
+        let data = json!({ "items": items });
+        let lua = Lua::new();
+        let page =
+            PageLayout::build(&value, &dir, (None, None), &data, &HashMap::new(), None).unwrap();
+        assert_eq!(page.render(&lua).unwrap().control_names.len(), 4);
+        let page = page.with_scroll("columns", 75.0).unwrap();
+        let layout = page.render(&lua).unwrap();
+        assert_eq!(layout.control_names.len(), 3);
+        assert_eq!(
+            layout.control_names.first().map(|name| name.name.as_str()),
+            Some("columns_3_title")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_virtualized_subpage_can_use_variable_row_heights() {
+        let dir =
+            std::env::temp_dir().join(format!("cloudime-subpage-variable-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join("row.json"),
+            r##"{
+              "version": 2,
+              "page": {
+                "w": 100,
+                "children": [{
+                  "type": "text_block", "name": "title", "w": 100,
+                  "text": "{{item.title}}", "size": 14, "color": "#FF000000"
+                }]
+              }
+            }"##,
+        )
+        .unwrap();
+        let value = json!({
+            "version": 2,
+            "page": {
+                "w": 100, "h": 100,
+                "children": [{
+                    "type": "subpage", "name": "rows", "src": "row.json",
+                    "repeat": "items", "key": "id",
+                    "virtualize": { "axis": "y", "viewport": 100, "overscan": 0 }
+                }]
+            }
+        });
+        let items: Vec<_> = (0..10)
+            .map(|index| json!({ "id": index, "title": format!("row {index}") }))
+            .collect();
+        let data = json!({ "items": items });
+        let hook: crate::runtime::LayoutMeasureHook = std::rc::Rc::new(
+            |_text: &str, _size: f32, _spacing: f32, _font: super::MeasureFont| Some((100.0, 45.0)),
+        );
+        let lua = Lua::new();
+        let page = PageLayout::build(
+            &value,
+            &dir,
+            (None, None),
+            &data,
+            &HashMap::new(),
+            Some(&hook),
+        )
+        .unwrap();
+        assert_eq!(page.render(&lua).unwrap().control_names.len(), 3);
+        let page = page.with_scroll("rows", 70.0).unwrap();
+        let layout = page.render(&lua).unwrap();
+        assert_eq!(layout.control_names.len(), 2);
+        assert_eq!(
+            layout.control_names.first().map(|name| name.name.as_str()),
+            Some("rows_2_title")
+        );
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     #[test]
@@ -1336,7 +1742,8 @@ mod tests {
             { "id": "a", "title": "A" },
             { "id": "b", "title": "B" }
         ]});
-        let mut page = PageLayout::build(&value, &dir, (None, None), &data, None).unwrap();
+        let mut page =
+            PageLayout::build(&value, &dir, (None, None), &data, &HashMap::new(), None).unwrap();
         for path in ["rows[0].title", "rows[a].title", "rows[\"a\"].title"] {
             assert_eq!(page.control_name(path), Some("rows_0_title"), "{path}");
         }

@@ -297,13 +297,37 @@ Page（主页面，一窗口一棵）
 - 多行高度 = 行高 × 行数 + 行距 × (行数 − 1)。
 - 测量单位是点；窗口渲染仍按 DPI / 缩放整体换算。
 
-### 6.5 生命周期与限制
+### 6.5 虚拟化
+
+```json
+{
+  "type": "subpage", "name": "rows", "src": "row.json",
+  "repeat": "items", "key": "id",
+  "virtualize": {
+    "axis": "y",
+    "viewport": 300,
+    "item_height": "auto",
+    "overscan": 1
+  }
+}
+```
+
+- `axis`：`y`（默认，纵向）/ `x`（横向）。
+- `viewport`：可见区高度 / 宽度（点）；省略时用模板 `page` 的固定 `h` / `w`。
+- `item_height`：数字 = 固定步长；省略或 `"auto"` = 用 `LayoutMeasureHook` 逐项量实际高度（变高行）。
+- `overscan`：可见区外额外创建几项，缺省 1。
+- 只把可见窗口的实例挂到页面上；前面的项用一个固定高度的 spacer 占位，窗口边界由窗口自身裁剪。
+- 滚动由脚本 `win:set_scroll(path, offset)` 驱动；`set_data` 保留当前偏移。
+- 虚拟化时忽略 `max_instances`。当前仍未做 keyed diff 和自动触底加载：数据更新走 `set_data`，
+  `set_scroll` 会重新量可见窗口；自动加载需要脚本在 `wheel` 事件里判断后追加数据。
+
+### 6.6 生命周期与限制
 
 - 子页面模板按文件路径缓存；文件变化不自动监听，`load_layout` 整份重载。
 - 循环引用、总实例数、总节点数、最大深度都要有限制；沿用并扩展现有 4 MB / 512 元素 / 深度 8 的预算。
 - 子页面不可见（`visible: false`）时不占位，父布局按不存在处理。
-- 列表项过多时先受 `max_instances` 限制；虚拟化（变高行、横向、无限滚动）与 keyed diff 是下一阶段，
-  当前 `set_data` 仍整份重建实例。
+- 未开 `virtualize` 时列表项仍受 `max_instances` 限制；开了虚拟化后只挂可见窗口，但 `set_data`
+  仍整份重建可见实例，keyed diff 与自动触底加载待接入。
 
 ## 7. v1 兼容
 
