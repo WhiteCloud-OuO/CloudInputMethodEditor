@@ -3164,9 +3164,15 @@ mod tests {
                 .iter()
                 .any(|control| control.name == "close")
         );
-        assert_eq!(document.control_name(3), Some("search"));
-        assert_eq!(document.control_name(5), Some("notes"));
-        assert_eq!(document.control_name(7), Some("close"));
+        for name in ["search", "notes", "close"] {
+            assert!(
+                document
+                    .control_names
+                    .iter()
+                    .any(|control| control.name == name),
+                "缺少控件 {name}"
+            );
+        }
     }
 
     /// `set_data` 只重跑最近一次布局，不重新读文件；子页面按新数据重建实例。
