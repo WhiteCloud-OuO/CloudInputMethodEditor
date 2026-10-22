@@ -47,6 +47,16 @@ impl Render {
         self.canvas.into_pixmap()
     }
 
+    /// 共享同一套字形缓存 / 整形器，供自绘面板的离屏画布使用。
+    pub(crate) fn text_handle(&self) -> Rc<RefCell<TextPainter>> {
+        self.text.clone()
+    }
+
+    /// 把一张离屏位图按 source-over 合成到 `(x, y)`（像素坐标）。
+    pub(crate) fn blend_pixmap_at(&mut self, x: i32, y: i32, layer: &Pixmap) {
+        self.canvas.blend_pixmap(x, y, layer);
+    }
+
     /// 内存区域宽（像素）。
     pub fn width(&self) -> u32 {
         self.canvas.width()

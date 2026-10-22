@@ -17,9 +17,9 @@ use std::time::SystemTime;
 use cloudime_render::{
     ButtonColors, ButtonShape, ButtonState, Color, Document, Element, FlatSvgButton, FontSlot,
     HitRect, HitShape, InstanceInfo, Label, LabelRun, Panel, PathCommand, Pixmap, Region,
-    ScrollAxis, ScrollBar, StaticImage, StaticShape, StaticTextContent, SvgAlign, TextBlock,
-    TextBox, TextBoxScroll, TextEdit, flip_image, gray_image, load_image, mask_image, rotate_image,
-    scale_image, svg_size,
+    ScrollAxis, ScrollBar, SelfDrawingPanel, StaticImage, StaticShape, StaticTextContent, SvgAlign,
+    TextBlock, TextBox, TextBoxScroll, TextEdit, flip_image, gray_image, load_image, mask_image,
+    rotate_image, scale_image, svg_size,
 };
 
 use crate::mlua;
@@ -33,6 +33,22 @@ pub(crate) type TextCache = Rc<RefCell<HashMap<(WindowId, String), String>>>;
 
 /// 一个脚本窗口最多画几个元素（超了当场报错 —— 一份内容要在一帧里画完）。
 const MAX_ELEMENTS: usize = 512;
+
+thread_local! {
+    /// 解析 v1 `set_content` / JSON 时临时借给自绘面板的精确量尺。
+    static PARSE_MEASURE: RefCell<Option<crate::runtime::LayoutMeasureHook>> =
+        const { RefCell::new(None) };
+}
+
+fn with_parse_measure<T>(
+    measure: Option<&crate::runtime::LayoutMeasureHook>,
+    body: impl FnOnce() -> T,
+) -> T {
+    let previous = PARSE_MEASURE.with(|slot| slot.replace(measure.cloned()));
+    let result = body();
+    PARSE_MEASURE.with(|slot| *slot.borrow_mut() = previous);
+    result
+}
 
 /// 内容区尺寸上下限（点）：太小放不下一个元素，太大一块位图太重。
 const MIN_SIZE: f32 = 8.0;
@@ -426,14 +442,17 @@ pub(crate) fn handle(
     let content_images = images.clone();
     let content_regions = regions.clone();
     let content_texts = texts.clone();
+    let content_measure = layout_measure.clone();
     handle.set(
         "set_content",
         lua.create_function(move |_, (this, content): (mlua::Table, mlua::Table)| {
-            let document = parse_document(
-                &content,
-                fallback_size(&this),
-                &mut content_images.borrow_mut(),
-            )?;
+            let document = with_parse_measure(content_measure.as_ref(), || {
+                parse_document(
+                    &content,
+                    fallback_size(&this),
+                    &mut content_images.borrow_mut(),
+                )
+            })?;
             cache_document_texts(&document, id, &content_texts);
             *content_regions.borrow_mut() = document.regions.clone();
             content_requests
@@ -850,6 +869,171 @@ pub(crate) fn handle(
         )?,
     )?;
 
+    let draw_requests = requests.clone();
+    let draw_images = images.clone();
+    let draw_regions = regions.clone();
+    let draw_texts = texts.clone();
+    let draw_page = layout_page.clone();
+    handle.set(
+        "set_draw_at",
+        lua.create_function(
+            move |lua, (this, path, draw): (mlua::Table, String, mlua::Table)| {
+                let serde_json::Value::Array(draw) =
+                    crate::page_layout::lua_to_json(mlua::Value::Table(draw))?
+                else {
+                    return Err(mlua::Error::RuntimeError(
+                        "set_draw_at 的 draw 必须是数组".to_owned(),
+                    ));
+                };
+                update_page_and_render(
+                    lua,
+                    &this,
+                    id,
+                    draw_page.clone(),
+                    draw_images.clone(),
+                    draw_texts.clone(),
+                    draw_regions.clone(),
+                    draw_requests.clone(),
+                    |page| page.set_draw(&path, draw),
+                    "set_draw_at",
+                )
+            },
+        )?,
+    )?;
+
+    let update_draw_page = layout_page.clone();
+    let update_draw_images = images.clone();
+    let update_draw_regions = regions.clone();
+    let update_draw_texts = texts.clone();
+    let update_draw_requests = requests.clone();
+    handle.set(
+        "update_draw_at",
+        lua.create_function(
+            move |lua, (this, path, name, element): (mlua::Table, String, String, mlua::Table)| {
+                let element = crate::page_layout::lua_to_json(mlua::Value::Table(element))?;
+                if element.get("name").and_then(serde_json::Value::as_str) != Some(name.as_str()) {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "update_draw_at 的元素 name 必须和参数一致：{name}"
+                    )));
+                }
+                update_page_and_render(
+                    lua,
+                    &this,
+                    id,
+                    update_draw_page.clone(),
+                    update_draw_images.clone(),
+                    update_draw_texts.clone(),
+                    update_draw_regions.clone(),
+                    update_draw_requests.clone(),
+                    |page| page.update_draw(&path, &name, element),
+                    "update_draw_at",
+                )
+            },
+        )?,
+    )?;
+
+    let insert_draw_page = layout_page.clone();
+    let insert_draw_images = images.clone();
+    let insert_draw_regions = regions.clone();
+    let insert_draw_texts = texts.clone();
+    let insert_draw_requests = requests.clone();
+    handle.set(
+        "insert_draw_at",
+        lua.create_function(
+            move |lua, (this, path, index, element): (mlua::Table, String, usize, mlua::Table)| {
+                let element = crate::page_layout::lua_to_json(mlua::Value::Table(element))?;
+                update_page_and_render(
+                    lua,
+                    &this,
+                    id,
+                    insert_draw_page.clone(),
+                    insert_draw_images.clone(),
+                    insert_draw_texts.clone(),
+                    insert_draw_regions.clone(),
+                    insert_draw_requests.clone(),
+                    |page| page.insert_draw(&path, index, element),
+                    "insert_draw_at",
+                )
+            },
+        )?,
+    )?;
+
+    let remove_draw_page = layout_page.clone();
+    let remove_draw_images = images.clone();
+    let remove_draw_regions = regions.clone();
+    let remove_draw_texts = texts.clone();
+    let remove_draw_requests = requests.clone();
+    handle.set(
+        "remove_draw_at",
+        lua.create_function(
+            move |lua, (this, path, name): (mlua::Table, String, String)| {
+                update_page_and_render(
+                    lua,
+                    &this,
+                    id,
+                    remove_draw_page.clone(),
+                    remove_draw_images.clone(),
+                    remove_draw_texts.clone(),
+                    remove_draw_regions.clone(),
+                    remove_draw_requests.clone(),
+                    |page| page.remove_draw(&path, &name),
+                    "remove_draw_at",
+                )
+            },
+        )?,
+    )?;
+
+    let update_region_page = layout_page.clone();
+    let update_region_images = images.clone();
+    let update_region_regions = regions.clone();
+    let update_region_texts = texts.clone();
+    let update_region_requests = requests.clone();
+    handle.set(
+        "update_region_at",
+        lua.create_function(
+            move |lua, (this, path, name, region): (mlua::Table, String, String, mlua::Table)| {
+                let region = crate::page_layout::lua_to_json(mlua::Value::Table(region))?;
+                update_page_and_render(
+                    lua,
+                    &this,
+                    id,
+                    update_region_page.clone(),
+                    update_region_images.clone(),
+                    update_region_texts.clone(),
+                    update_region_regions.clone(),
+                    update_region_requests.clone(),
+                    |page| page.update_region(&path, &name, region),
+                    "update_region_at",
+                )
+            },
+        )?,
+    )?;
+
+    let remove_region_page = layout_page.clone();
+    let remove_region_images = images.clone();
+    let remove_region_regions = regions.clone();
+    let remove_region_texts = texts.clone();
+    let remove_region_requests = requests.clone();
+    handle.set(
+        "remove_region_at",
+        lua.create_function(
+            move |lua, (this, path, name): (mlua::Table, String, String)| {
+                update_page_and_render(
+                    lua,
+                    &this,
+                    id,
+                    remove_region_page.clone(),
+                    remove_region_images.clone(),
+                    remove_region_texts.clone(),
+                    remove_region_regions.clone(),
+                    remove_region_requests.clone(),
+                    |page| page.remove_region(&path, &name),
+                    "remove_region_at",
+                )
+            },
+        )?,
+    )?;
+
     let hide_requests = requests.clone();
     handle.set(
         "hide",
@@ -1099,7 +1283,7 @@ pub(crate) fn load_layout_document(
         let layout = page
             .render(lua)
             .map_err(|error| layout_error(path, error))?;
-        let document = layout_document(layout, fallback, images)?;
+        let document = with_parse_measure(measure, || layout_document(layout, fallback, images))?;
         Ok(LoadedLayout {
             document,
             page: Some(page),
@@ -1107,7 +1291,7 @@ pub(crate) fn load_layout_document(
     } else {
         let layout = crate::layout_file::read(lua, path, fallback, data, measure)?;
         Ok(LoadedLayout {
-            document: layout_document(layout, fallback, images)?,
+            document: with_parse_measure(measure, || layout_document(layout, fallback, images))?,
             page: None,
         })
     }
@@ -1126,6 +1310,52 @@ fn layout_document(
 
 fn layout_error(path: &Path, error: mlua::Error) -> mlua::Error {
     mlua::Error::RuntimeError(format!("布局文件 {}：{error}", path.display()))
+}
+
+/// 对保留的 v2 页面树做一次节点更新，然后重排、重画并排队。
+#[allow(clippy::too_many_arguments)]
+fn update_page_and_render(
+    lua: &mlua::Lua,
+    this: &mlua::Table,
+    id: WindowId,
+    page_state: Rc<RefCell<Option<crate::page_layout::PageLayout>>>,
+    images: Rc<RefCell<ImageCache>>,
+    texts: TextCache,
+    regions: Rc<RefCell<Vec<Region>>>,
+    requests: Rc<RefCell<Vec<Request>>>,
+    update: impl FnOnce(&mut crate::page_layout::PageLayout) -> bool,
+    api: &str,
+) -> mlua::Result<()> {
+    let Some(mut page) = page_state.borrow_mut().take() else {
+        return Err(mlua::Error::RuntimeError(format!(
+            "{api} 只支持 v2 页面树布局"
+        )));
+    };
+    if !update(&mut page) {
+        *page_state.borrow_mut() = Some(page);
+        return Err(mlua::Error::RuntimeError(format!(
+            "{api}：页面树里找不到目标自绘面板或元素"
+        )));
+    }
+    let result = page
+        .render(lua)
+        .and_then(|layout| layout_document(layout, fallback_size(this), &mut images.borrow_mut()));
+    let document = match result {
+        Ok(document) => document,
+        Err(error) => {
+            *page_state.borrow_mut() = Some(page);
+            return Err(error);
+        }
+    };
+    cache_document_texts(&document, id, &texts);
+    this.set("width", document.width)?;
+    this.set("height", document.height)?;
+    *regions.borrow_mut() = document.regions.clone();
+    *page_state.borrow_mut() = Some(page);
+    requests
+        .borrow_mut()
+        .push(Request::SetContent(id, document));
+    Ok(())
 }
 
 /// 把一份内容里的编辑框初始文本写进脚本侧缓存（换内容 / 建布局时用）。
@@ -1192,6 +1422,7 @@ fn parse_document(
                     | Element::TextEdit(_)
                     | Element::TextBox(_)
                     | Element::ScrollBar(_)
+                    | Element::SelfDrawingPanel(_)
             )
         {
             return Err(mlua::Error::RuntimeError(
@@ -1293,6 +1524,7 @@ fn parse_document(
         }
         regions.push(region);
     }
+    regions.extend(self_panel_regions(&elements, (0.0, 0.0)));
 
     Ok(Document {
         width,
@@ -1326,6 +1558,7 @@ fn assign_nested_text_names(elements: &mut [Element], path: &mut Vec<usize>) {
                 edit.region_name = format!("text_box_{suffix}");
             }
             Element::Panel(panel) => assign_nested_text_names(&mut panel.children, path),
+            Element::SelfDrawingPanel(panel) => assign_nested_text_names(&mut panel.children, path),
             _ => {}
         }
         path.pop();
@@ -1352,6 +1585,49 @@ fn nested_text_edit_regions(elements: &[Element], origin: (f32, f32), nested: bo
                 &panel.children,
                 (origin.0 + panel.x, origin.1 + panel.y),
                 true,
+            )),
+            Element::SelfDrawingPanel(panel) => regions.extend(nested_text_edit_regions(
+                &panel.children,
+                (origin.0 + panel.x, origin.1 + panel.y),
+                true,
+            )),
+            _ => {}
+        }
+    }
+    regions
+}
+
+/// 自绘面板的局部区域展开到内容坐标；面板里的子控件继续递归。
+fn self_panel_regions(elements: &[Element], origin: (f32, f32)) -> Vec<Region> {
+    let mut regions = Vec::new();
+    for element in elements {
+        match element {
+            Element::SelfDrawingPanel(panel) => {
+                let panel_origin = (origin.0 + panel.x, origin.1 + panel.y);
+                for region in &panel.regions {
+                    let mut local = Region::new(
+                        region.name.clone(),
+                        region.shape.translated(panel_origin.0, panel_origin.1),
+                        region.draggable,
+                    );
+                    local.handlers = region.handlers.clone();
+                    local.combined = region
+                        .combined
+                        .iter()
+                        .map(|shape| shape.translated(panel_origin.0, panel_origin.1))
+                        .collect();
+                    local.pruned = region
+                        .pruned
+                        .iter()
+                        .map(|shape| shape.translated(panel_origin.0, panel_origin.1))
+                        .collect();
+                    regions.push(local);
+                }
+                regions.extend(self_panel_regions(&panel.children, panel_origin));
+            }
+            Element::Panel(panel) => regions.extend(self_panel_regions(
+                &panel.children,
+                (origin.0 + panel.x, origin.1 + panel.y),
             )),
             _ => {}
         }
@@ -1488,6 +1764,218 @@ fn shape_from_table(table: &mlua::Table) -> mlua::Result<HitShape> {
     }
 }
 
+/// 自绘面板：内部只允许 Render 基础元素；`children` 才是动态控件。
+fn parse_self_drawing_panel(
+    table: &mlua::Table,
+    images: &mut ImageCache,
+    depth: usize,
+) -> mlua::Result<Element> {
+    if depth >= MAX_PANEL_DEPTH {
+        return Err(mlua::Error::RuntimeError(format!(
+            "self_drawing_panel 最多套 {MAX_PANEL_DEPTH} 层"
+        )));
+    }
+    let mut draw = Vec::new();
+    let mut draw_names = std::collections::HashSet::new();
+    if let Some(list) = table.get::<Option<mlua::Table>>("draw")? {
+        for child in list.sequence_values::<mlua::Table>() {
+            let child = child?;
+            let name = child
+                .get::<Option<String>>("name")?
+                .map(|name| name.trim().to_owned())
+                .filter(|name| !name.is_empty())
+                .ok_or_else(|| {
+                    mlua::Error::RuntimeError(
+                        "self_drawing_panel.draw 的每个元素都必须有非空 name".to_owned(),
+                    )
+                })?;
+            if !draw_names.insert(name.clone()) {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "self_drawing_panel.draw 的 name 重复（大小写敏感）：{name}"
+                )));
+            }
+            if draw.len() >= MAX_ELEMENTS {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "一个自绘面板最多 {MAX_ELEMENTS} 个 draw 元素"
+                )));
+            }
+            let element = parse_element(&child, images, depth + 1)?;
+            if !matches!(
+                element,
+                Element::Rect { .. }
+                    | Element::Line { .. }
+                    | Element::Circle { .. }
+                    | Element::Text { .. }
+                    | Element::Svg { .. }
+                    | Element::Image { .. }
+                    | Element::Path { .. }
+            ) {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "self_drawing_panel.draw 只接受 rect / line / circle / text / svg / img / path，收到 {name}"
+                )));
+            }
+            draw.push(element);
+        }
+    }
+
+    let mut children = Vec::new();
+    if let Some(list) = table.get::<Option<mlua::Table>>("children")? {
+        for child in list.sequence_values::<mlua::Table>() {
+            if children.len() >= MAX_ELEMENTS {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "一个自绘面板最多 {MAX_ELEMENTS} 个子控件"
+                )));
+            }
+            children.push(parse_element(&child?, images, depth + 1)?);
+        }
+    }
+
+    let explicit_width = optional_positive(table, "w")?;
+    let explicit_height = optional_positive(table, "h")?;
+    let auto_size = match table.get::<Option<String>>("auto_size")?.as_deref() {
+        None => false,
+        Some("draw") => true,
+        Some(other) => {
+            return Err(mlua::Error::RuntimeError(format!(
+                "self_drawing_panel.auto_size 只接受 \"draw\"，收到 {other}"
+            )));
+        }
+    };
+    let measured = auto_size.then(|| draw_bounds(&draw));
+    let width = explicit_width
+        .or_else(|| measured.map(|size| size.0))
+        .ok_or_else(|| {
+            mlua::Error::RuntimeError(
+                "self_drawing_panel 缺 w；要按 draw 内容测量请写 auto_size = \"draw\"".to_owned(),
+            )
+        })?;
+    let height = explicit_height
+        .or_else(|| measured.map(|size| size.1))
+        .ok_or_else(|| {
+            mlua::Error::RuntimeError(
+                "self_drawing_panel 缺 h；要按 draw 内容测量请写 auto_size = \"draw\"".to_owned(),
+            )
+        })?;
+
+    let mut regions = parse_regions(table)?;
+    let handlers = parse_handlers(table)?;
+    if !handlers.is_empty() {
+        let name = table
+            .get::<Option<String>>("name")?
+            .filter(|name| !name.trim().is_empty())
+            .ok_or_else(|| {
+                mlua::Error::RuntimeError(
+                    "self_drawing_panel 写 events 时必须同时写 name".to_owned(),
+                )
+            })?;
+        let mut region = Region::new(
+            name,
+            HitShape::Rect(HitRect::new(0.0, 0.0, width, height)),
+            false,
+        );
+        region.handlers = handlers;
+        regions.push(region);
+    }
+
+    Ok(Element::SelfDrawingPanel(SelfDrawingPanel {
+        x: number(table, "x", 0.0)?,
+        y: number(table, "y", 0.0)?,
+        width,
+        height,
+        clip: table.get::<Option<bool>>("clip")?.unwrap_or(true),
+        draw,
+        children,
+        regions,
+    }))
+}
+
+fn draw_bounds(elements: &[Element]) -> (f32, f32) {
+    let hook = PARSE_MEASURE.with(|slot| slot.borrow().clone());
+    let mut max_x = 0.0_f32;
+    let mut max_y = 0.0_f32;
+    for element in elements {
+        let (x, y, width, height) = match element {
+            Element::Rect {
+                x,
+                y,
+                width,
+                height,
+                ..
+            }
+            | Element::Image {
+                x,
+                y,
+                width,
+                height,
+                ..
+            } => (*x, *y, *width, *height),
+            Element::Line {
+                from,
+                to,
+                thickness,
+                ..
+            } => (
+                from.0.min(to.0),
+                from.1.min(to.1),
+                (from.0 - to.0).abs() + *thickness * 0.5,
+                (from.1 - to.1).abs() + *thickness * 0.5,
+            ),
+            Element::Circle { cx, cy, radius, .. } => {
+                (cx - radius, cy - radius, radius * 2.0, radius * 2.0)
+            }
+            Element::Svg { x, y, size, .. } => (*x, *y, *size, *size),
+            Element::Text {
+                x,
+                y,
+                text,
+                size,
+                slot,
+                ..
+            } => {
+                let font = match slot {
+                    FontSlot::Pinyin => crate::runtime::MeasureFont::Pinyin,
+                    FontSlot::ItemNumber => crate::runtime::MeasureFont::ItemNumber,
+                    FontSlot::Translate => crate::runtime::MeasureFont::Translate,
+                    FontSlot::Candidate => crate::runtime::MeasureFont::Candidate,
+                };
+                let measured = hook
+                    .as_ref()
+                    .and_then(|hook| hook(text, *size, 0.0, font))
+                    .unwrap_or_else(|| (text.chars().count() as f32 * *size * 0.6, *size * 1.25));
+                (*x, *y, measured.0, measured.1)
+            }
+            Element::Path { commands, .. } => {
+                let (width, height) = path_bounds(commands);
+                (0.0, 0.0, width, height)
+            }
+            _ => continue,
+        };
+        max_x = max_x.max(x + width);
+        max_y = max_y.max(y + height);
+    }
+    (max_x.max(0.0), max_y.max(0.0))
+}
+
+fn path_bounds(commands: &[PathCommand]) -> (f32, f32) {
+    let mut max_x = 0.0_f32;
+    let mut max_y = 0.0_f32;
+    for command in commands {
+        let coordinates = match command {
+            PathCommand::MoveTo(x, y) | PathCommand::LineTo(x, y) => vec![(*x, *y)],
+            PathCommand::QuadTo(cx, cy, x, y) => vec![(*cx, *cy), (*x, *y)],
+            PathCommand::CubicTo(cx1, cy1, cx2, cy2, x, y) => {
+                vec![(*cx1, *cy1), (*cx2, *cy2), (*x, *y)]
+            }
+            PathCommand::Close => Vec::new(),
+        };
+        for (x, y) in coordinates {
+            max_x = max_x.max(x);
+            max_y = max_y.max(y);
+        }
+    }
+    (max_x.max(0.0), max_y.max(0.0))
+}
+
 /// 表里有没有这个字段（`nil` 也算没有）。
 fn has_field(table: &mlua::Table, key: &str) -> mlua::Result<bool> {
     Ok(!matches!(
@@ -1570,7 +2058,8 @@ fn parse_element(
 ) -> mlua::Result<Element> {
     let kind: String = table.get("type").map_err(|_| {
         mlua::Error::RuntimeError(
-            "元素缺 type（可用：rect / circle / line / text / svg / img / path）".to_owned(),
+            "元素缺 type（可用：rect / circle / line / text / svg / img / path / panel / self_drawing_panel）"
+                .to_owned(),
         )
     })?;
     match kind.as_str() {
@@ -1666,6 +2155,7 @@ fn parse_element(
         "static_shape" => parse_static_shape(table),
         "static_image" => parse_static_image(table, images),
         "panel" => parse_panel(table, images, depth),
+        "self_drawing_panel" => parse_self_drawing_panel(table, images, depth),
         "flat_svg_button" => parse_flat_svg_button(table),
         "text_edit" => parse_text_edit(table),
         "text_box" => parse_text_box(table),
@@ -1675,8 +2165,8 @@ fn parse_element(
         }
         other => Err(mlua::Error::RuntimeError(format!(
             "元素 type 不认识：{other}（可用：rect / circle / line / text / svg / img / path / \
-             label / text_block / static_shape / static_image / panel / flat_svg_button / text_edit / \
-             hscroll_bar / vscroll_bar）"
+             label / text_block / static_shape / static_image / panel / self_drawing_panel / \
+             flat_svg_button / text_edit / hscroll_bar / vscroll_bar）"
         ))),
     }
 }
@@ -2855,6 +3345,245 @@ mod tests {
                 .iter()
                 .any(|(action, handler)| action == "text_changed" && handler == "search_changed")
         );
+    }
+
+    #[test]
+    fn a_self_drawing_panel_parses_draw_and_local_regions() {
+        let json = r##"{
+          "version": 2,
+          "page": {
+            "w": 100, "h": 100,
+            "children": [{
+              "type": "self_drawing_panel", "name": "canvas",
+              "x": 5, "y": 7, "w": 80, "h": 60, "clip": true,
+              "draw": [
+                { "name": "bg", "type": "rect", "x": 0, "y": 0, "w": 80, "h": 60,
+                  "color": "#FFFFFFFF" },
+                { "name": "BG", "type": "text", "x": 4, "y": 4,
+                  "text": "A", "size": 14, "color": "#FF000000" }
+              ],
+              "regions": [{
+                "name": "row", "shape": "rect", "x": 0, "y": 0, "w": 80, "h": 20,
+                "events": { "mouse_clicked": "hit" }
+              }]
+            }]
+          }
+        }"##;
+        let path =
+            std::env::temp_dir().join(format!("cloudime-self-panel-{}.json", std::process::id()));
+        std::fs::write(&path, json).expect("写自绘面板布局");
+        let lua = mlua::Lua::new();
+        let document = load_layout_document(
+            &lua,
+            &path,
+            (Some(100.0), Some(100.0)),
+            &mut ImageCache::default(),
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap_or_else(|error| panic!("自绘面板解析失败：{error}"))
+        .document;
+        let _ = std::fs::remove_file(&path);
+        let Some(Element::SelfDrawingPanel(panel)) = document.elements.first() else {
+            panic!("应得到自绘面板");
+        };
+        assert_eq!(panel.draw.len(), 2);
+        assert_eq!(panel.regions.len(), 1);
+        let region = document
+            .regions
+            .iter()
+            .find(|region| region.name == "row")
+            .expect("局部区域应展开到 Document.regions");
+        assert!(region.shape.contains(6.0, 8.0));
+    }
+
+    #[test]
+    fn a_v1_self_drawing_panel_can_auto_size_with_the_parse_measure() {
+        let lua = mlua::Lua::new();
+        let content = lua
+            .load(
+                r##"return {
+                    { type = "self_drawing_panel", name = "canvas",
+                      auto_size = "draw",
+                      draw = {
+                        { name = "label", type = "text", x = 0, y = 0,
+                          text = "ABC", size = 20, color = "#FF000000" }
+                      } }
+                }"##,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let hook: crate::runtime::LayoutMeasureHook =
+            Rc::new(|_text, _size, _spacing, _font| Some((123.0, 25.0)));
+        let document = with_parse_measure(Some(&hook), || {
+            parse_document(
+                &content,
+                (Some(300.0), Some(200.0)),
+                &mut ImageCache::default(),
+            )
+        })
+        .unwrap();
+        let Some(Element::SelfDrawingPanel(panel)) = document.elements.first() else {
+            panic!("应得到自绘面板");
+        };
+        assert_eq!((panel.width, panel.height), (123.0, 25.0));
+    }
+
+    #[test]
+    fn v2_self_drawing_panel_nests_its_children_inside_the_panel() {
+        let json = r##"{
+          "version": 2,
+          "page": {
+            "w": 120, "h": 80,
+            "children": [{
+              "type": "self_drawing_panel", "name": "canvas", "w": 100, "h": 60,
+              "draw": [
+                { "name": "bg", "type": "rect", "x": 0, "y": 0, "w": 100, "h": 60,
+                  "color": "#FFFFFFFF" }
+              ],
+              "children": [{
+                "type": "text_block", "name": "child", "w": 40, "h": 20,
+                "text": "inside", "size": 14, "color": "#FF000000"
+              }]
+            }]
+          }
+        }"##;
+        let path = std::env::temp_dir().join(format!(
+            "cloudime-self-panel-child-{}.json",
+            std::process::id()
+        ));
+        std::fs::write(&path, json).unwrap();
+        let lua = mlua::Lua::new();
+        let document = load_layout_document(
+            &lua,
+            &path,
+            (Some(120.0), Some(80.0)),
+            &mut ImageCache::default(),
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap_or_else(|error| panic!("自绘面板子控件解析失败：{error}"))
+        .document;
+        let _ = std::fs::remove_file(&path);
+        let Some(Element::SelfDrawingPanel(panel)) = document.elements.first() else {
+            panic!("应得到自绘面板");
+        };
+        assert_eq!(panel.children.len(), 1);
+        assert!(matches!(
+            panel.children.first(),
+            Some(Element::TextBlock(_))
+        ));
+    }
+
+    #[test]
+    fn self_drawing_panel_rejects_duplicate_or_non_primitive_draw_elements() {
+        let json = r##"{
+          "version": 2,
+          "page": {
+            "w": 100, "h": 100,
+            "children": [{
+              "type": "self_drawing_panel", "name": "canvas", "w": 80, "h": 60,
+              "draw": [
+                { "name": "same", "type": "rect", "x": 0, "y": 0, "w": 80, "h": 60,
+                  "color": "#FFFFFFFF" },
+                { "name": "same", "type": "rect", "x": 0, "y": 0, "w": 80, "h": 60,
+                  "color": "#FFFFFFFF" }
+              ]
+            }]
+          }
+        }"##;
+        let dir =
+            std::env::temp_dir().join(format!("cloudime-self-panel-bad-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let path = dir.join("layout.json");
+        std::fs::write(&path, json).unwrap();
+        let lua = mlua::Lua::new();
+        let error = load_layout_document(
+            &lua,
+            &path,
+            (Some(100.0), Some(100.0)),
+            &mut ImageCache::default(),
+            &serde_json::Value::Null,
+            None,
+        )
+        .err()
+        .expect("重名应失败");
+        assert!(error.to_string().contains("name 重复"), "{error}");
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_self_drawing_panel_draw_element_can_be_updated_in_place() {
+        let dir =
+            std::env::temp_dir().join(format!("cloudime-self-draw-update-{}", std::process::id()));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let layout = dir.join("layout.json");
+        std::fs::write(
+            &layout,
+            r##"{
+              "version": 2,
+              "page": {
+                "w": 120, "h": 80,
+                "children": [{
+                  "type": "self_drawing_panel", "name": "canvas",
+                  "w": 100, "h": 60,
+                  "draw": [
+                    { "name": "bg", "type": "rect", "x": 0, "y": 0,
+                      "w": 10, "h": 10, "color": "#FFFFFFFF" }
+                  ]
+                }]
+              }
+            }"##,
+        )
+        .unwrap();
+        let lua = mlua::Lua::new();
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let win = handle(
+            &lua,
+            Kind::Independent,
+            1,
+            "测试",
+            (Some(120.0), Some(80.0)),
+            requests.clone(),
+            Rc::new(RefCell::new(ImageCache::default())),
+            Rc::new(RefCell::new(HashMap::new())),
+            None,
+            None,
+            None,
+            serde_json::Value::Null,
+        )
+        .unwrap();
+        lua.globals().set("win", win).unwrap();
+        lua.load(format!("win:load_layout([[{}]])", layout.display()))
+            .exec()
+            .unwrap();
+        lua.load(
+            r##"win:update_draw_at("canvas", "bg", {
+                name = "bg", type = "rect", x = 0, y = 0, w = 42, h = 24,
+                color = "#FFFFFFFF"
+            })"##,
+        )
+        .exec()
+        .unwrap();
+        let document = requests
+            .borrow()
+            .iter()
+            .rev()
+            .find_map(|request| match request {
+                Request::SetContent(_, document) => Some(document.clone()),
+                _ => None,
+            })
+            .expect("更新后应有新内容");
+        let Some(Element::SelfDrawingPanel(panel)) = document.elements.first() else {
+            panic!("应保留自绘面板");
+        };
+        let Some(Element::Rect { width, height, .. }) = panel.draw.first() else {
+            panic!("应保留 draw 元素");
+        };
+        assert_eq!((*width, *height), (42.0, 24.0));
+        let _ = std::fs::remove_dir_all(&dir);
     }
 
     /// 嵌套在 `panel.children` 里的 `text_edit`：绝对位置、区域和自动名字都要有。

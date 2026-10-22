@@ -976,6 +976,38 @@ fn draw_element(
             }
             None
         }
+        Element::SelfDrawingPanel(panel) => {
+            if panel.clip {
+                let width = (panel.width * scale).ceil().max(1.0) as u32;
+                let height = (panel.height * scale).ceil().max(1.0) as u32;
+                if let Ok(mut layer) = Render::new(width, height, render.text_handle()) {
+                    let local = Metrics {
+                        theme: m.theme,
+                        scale: m.scale,
+                    };
+                    for element in &panel.draw {
+                        let _ = draw_element(&mut layer, element, &local, 0.0, (0.0, 0.0));
+                    }
+                    for child in &panel.children {
+                        let _ = draw_element(&mut layer, child, &local, 0.0, (0.0, 0.0));
+                    }
+                    render.blend_pixmap_at(
+                        x_at(panel.x).round() as i32,
+                        y_at(panel.y).round() as i32,
+                        &layer.into_pixmap(),
+                    );
+                }
+            } else {
+                let child_origin = (origin.0 + panel.x, origin.1 + panel.y);
+                for element in &panel.draw {
+                    let _ = draw_element(render, element, m, margin, child_origin);
+                }
+                for child in &panel.children {
+                    let _ = draw_element(render, child, m, margin, child_origin);
+                }
+            }
+            None
+        }
         Element::FlatSvgButton(button) => {
             button.draw(render, scale, origin, margin);
             Some(button.hit_shape(origin))
@@ -1454,6 +1486,47 @@ mod tests {
     }
 
     /// 扁平 SVG 按钮：背景形状 / 区域一致，状态颜色自动切换，命中框是可交互的。
+    #[test]
+    fn a_self_drawing_panel_clips_its_draw_list() {
+        use crate::color::Color;
+        use crate::document::{Document, Element, SelfDrawingPanel};
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let document = Document {
+            width: 40.0,
+            height: 40.0,
+            elements: vec![Element::SelfDrawingPanel(SelfDrawingPanel {
+                x: 10.0,
+                y: 10.0,
+                width: 10.0,
+                height: 10.0,
+                clip: true,
+                draw: vec![Element::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: 30.0,
+                    height: 30.0,
+                    radius: 0.0,
+                    color: Color::rgb(255, 0, 0),
+                }],
+                children: Vec::new(),
+                regions: Vec::new(),
+            })],
+            regions: Vec::new(),
+            control_names: Vec::new(),
+            instances: Default::default(),
+        };
+        let rendered = renderer
+            .render_document(&document, &Theme::new(), 1.0, None, false)
+            .expect("自绘面板该能出图");
+        let inside = rendered.rendered.pixmap.pixel(15, 15).unwrap();
+        let outside = rendered.rendered.pixmap.pixel(25, 25).unwrap();
+        assert_eq!((inside.red(), inside.green(), inside.blue()), (255, 0, 0));
+        assert_eq!(outside.alpha(), 0, "面板外的 draw 内容必须被裁掉");
+    }
+
     #[test]
     fn flat_svg_buttons_switch_colors_by_state() {
         use crate::color::Color;

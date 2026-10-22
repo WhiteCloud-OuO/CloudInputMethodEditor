@@ -489,6 +489,10 @@ aux:show()
 | `win:set_data(data)` | 用当前数据重跑最近一次 v2 布局（不重新读文件）；普通控件按控件名更新 |
 | `win:set_visible(path, visible)` | 按页面树路径显示 / 隐藏节点（`visible = false` 不占布局空间）；路径同时接受实例下标与 key，例如 `rows[1].title` / `rows[abc].title` / `rows["abc"].title` |
 | `win:set_scroll(path, offset)` | 设置虚拟化子页面的滚动偏移（点）；只重建可见窗口，横向 / 纵向由 `virtualize.axis` 决定 |
+| `win:set_draw_at(path, draw)` | 整份替换自绘面板的 draw 列表 |
+| `win:update_draw_at(path, name, element)` | 按 draw 元素的唯一 `name` 替换一个元素（大小写敏感） |
+| `win:insert_draw_at(path, index, element)` / `win:remove_draw_at(path, name)` | 插入 / 删除 draw 元素 |
+| `win:update_region_at(path, name, region)` / `win:remove_region_at(path, name)` | 更新 / 删除自绘面板的局部命中区域 |
 | `win:get_text(name)` | 读某个 `text_edit` / `text_box` 最近一次文本；控件不存在 / 还没有文本时给 `nil` |
 | `win:set_text(name, text)` | 设置某个 `text_edit` / `text_box` 的文本（按控件名找，整份替换、光标放到末尾） |
 | `win:get_text_at(path)` / `win:set_text_at(path, text)` | 同上，但按页面树路径定位；子页面实例里同名控件用它避免歧义 |
@@ -611,6 +615,7 @@ v2 目前是实验接口，细节和限制以设计文档为准。
 | `static_shape` | `shape` = `line` / `rect` / `round_rect` / `circle` / `path`；字段与该形状同名（`from`/`to`/`x`/`y`/`w`/`h`/`radius`/`cx`/`cy`/`commands`）+ `color` |
 | `static_image` | `x` / `y` / `w` / `h`（可省，缺省图片像素尺寸）+ `image`（`cloudime.image.load` 的句柄）或 `path`（PNG / BMP / JPG） |
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（**边缘**颜色，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1 点，100% 缩放下 1 像素）/ `fill`（可选填充，不写 = 无填充）/ `children = { …元素… }`；子控件用面板内相对坐标 |
+| `self_drawing_panel` | 自绘容器：`name` / `x` / `y` / `w` / `h`（可省，写 `auto_size = "draw"` 时按 draw 量尺寸）/ `clip`（缺省 true）/ `draw = { … }` / `regions = { … }` / `children = { … }`。`draw` 只接受 `rect` / `line` / `circle` / `text` / `svg` / `img` / `path`，每项必须有唯一非空 `name`（大小写敏感）；draw 用面板左上角局部坐标，不扣 padding；draw 先画，children 后画 |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省取 SVG 画板）；`svg`（整段 SVG）或 `svg_path`（文件）；`shape = rect / round_rect / circle / path` + `radius`；`name`（自动区域名）；`normal` / `hovered` / `pressed = { background = …, svg = … }`；`events = { 动作名 = "处理器名" }` |
 | `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 `h/2`）；`read_only` / `passkey`；`back_color`（背景）/ `edge_color`（边框）/ `edge_width`（缺省 1 点，100% 缩放下 1 像素；0 不显示）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align = left / right`；`font_name` / `font_size` / `font_flag`；`text` 初始文本；`font`（缺省 `candidate`）；`name`（自动区域名）；`events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
 | `text_box` | 多行编辑框：`x` / `y` / `w` / `h`；`radius`（缺省 6）；`read_only`；`back_color` / `edge_color` / `edge_width`（缺省 1 点，100% 缩放下 1 像素；0 不显示）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color`；`font_name` / `font_size` / `font_flag`；`auto_line_wrap`（缺省 true，启用时无水平滚动条）/ `line_spacing`（u16，缺省 8）；`text` / `font` / `name` / `events`；没有 `passkey` 和 SVG 属性；`text_edit` 的文本方法 / 事件都适用 |

@@ -116,10 +116,11 @@ impl Document {
         let (first, rest) = path.split_first()?;
         let mut element = self.elements.get_mut(*first)?;
         for index in rest {
-            let Element::Panel(panel) = element else {
-                return None;
+            element = match element {
+                Element::Panel(panel) => panel.children.get_mut(*index)?,
+                Element::SelfDrawingPanel(panel) => panel.children.get_mut(*index)?,
+                _ => return None,
             };
-            element = panel.children.get_mut(*index)?;
         }
         Some(element)
     }
@@ -129,10 +130,11 @@ impl Document {
         let (first, rest) = path.split_first()?;
         let mut element = self.elements.get(*first)?;
         for index in rest {
-            let Element::Panel(panel) = element else {
-                return None;
+            element = match element {
+                Element::Panel(panel) => panel.children.get(*index)?,
+                Element::SelfDrawingPanel(panel) => panel.children.get(*index)?,
+                _ => return None,
             };
-            element = panel.children.get(*index)?;
         }
         Some(element)
     }
@@ -210,6 +212,12 @@ fn collect_text_edits(
                 path,
                 placements,
             ),
+            Element::SelfDrawingPanel(panel) => collect_text_edits(
+                &panel.children,
+                (origin.0 + panel.x, origin.1 + panel.y),
+                path,
+                placements,
+            ),
             _ => {}
         }
         path.pop();
@@ -231,6 +239,12 @@ fn collect_text_boxes(
                 y: origin.1 + edit.y,
             }),
             Element::Panel(panel) => collect_text_boxes(
+                &panel.children,
+                (origin.0 + panel.x, origin.1 + panel.y),
+                path,
+                placements,
+            ),
+            Element::SelfDrawingPanel(panel) => collect_text_boxes(
                 &panel.children,
                 (origin.0 + panel.x, origin.1 + panel.y),
                 path,
@@ -601,6 +615,23 @@ pub enum PathCommand {
     Close,
 }
 
+/// 自绘面板：容器坐标 + 内部 Render 基础元素 + 子控件。
+///
+/// `draw` 和 `children` 的坐标都相对面板左上角；`clip = true` 时先画到一块离屏
+/// 画布再合成，天然裁在面板矩形内。命中区域由上层 `Document.regions` 提供。
+#[derive(Clone)]
+pub struct SelfDrawingPanel {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub clip: bool,
+    pub draw: Vec<Element>,
+    pub children: Vec<Element>,
+    /// 面板局部命中区域；展开到 `Document.regions` 时按面板原点偏移。
+    pub regions: Vec<Region>,
+}
+
 /// 一类元素（坐标 / 尺寸都是**点**）。
 #[derive(Clone)]
 pub enum Element {
@@ -690,6 +721,9 @@ pub enum Element {
     TextBox(TextBox),
 
     TextEdit(TextEdit),
+
+    /// 自绘面板：内部 Render 基础元素 + 子控件，默认裁剪在面板矩形内。
+    SelfDrawingPanel(SelfDrawingPanel),
 }
 
 /// 元素在内容区里的命中区域（**点**）。
@@ -735,6 +769,51 @@ impl HitShape {
     pub fn from_path(commands: &[PathCommand]) -> Option<Self> {
         let contours = path_contours(commands);
         (!contours.is_empty()).then_some(Self::Path { contours })
+    }
+
+    /// 按 `(dx, dy)` 平移一份形状（页面树 / 面板局部区域展开到内容坐标时用）。
+    pub fn translated(&self, dx: f32, dy: f32) -> Self {
+        match self {
+            Self::Rect(rect) => Self::Rect(HitRect::new(
+                rect.x + dx,
+                rect.y + dy,
+                rect.width,
+                rect.height,
+            )),
+            Self::RoundRect {
+                x,
+                y,
+                width,
+                height,
+                radius,
+            } => Self::RoundRect {
+                x: x + dx,
+                y: y + dy,
+                width: *width,
+                height: *height,
+                radius: *radius,
+            },
+            Self::Circle { cx, cy, radius } => Self::Circle {
+                cx: cx + dx,
+                cy: cy + dy,
+                radius: *radius,
+            },
+            Self::Segment {
+                from,
+                to,
+                thickness,
+            } => Self::Segment {
+                from: (from.0 + dx, from.1 + dy),
+                to: (to.0 + dx, to.1 + dy),
+                thickness: *thickness,
+            },
+            Self::Path { contours } => Self::Path {
+                contours: contours
+                    .iter()
+                    .map(|contour| contour.iter().map(|(x, y)| (x + dx, y + dy)).collect())
+                    .collect(),
+            },
+        }
     }
 
     /// 点是不是落在这块区域里（含边界）。
@@ -1146,6 +1225,12 @@ impl std::fmt::Debug for Element {
             Self::TextEdit(edit) => f
                 .debug_struct("TextEdit")
                 .field("text", &edit.text)
+                .finish(),
+            Self::SelfDrawingPanel(panel) => f
+                .debug_struct("SelfDrawingPanel")
+                .field("draw", &panel.draw.len())
+                .field("children", &panel.children.len())
+                .field("clip", &panel.clip)
                 .finish(),
         }
     }

@@ -1,6 +1,7 @@
 # 自绘面板（self_drawing_panel）
 
-状态：设计定稿，待实现。自绘面板是独立控件类型，不是 `panel` 的扩展。
+状态：基础实现已落地（render 元素、v1/v2 解析、draw/children、裁剪、auto_size、局部 regions、
+单元素 draw/region 更新）。自绘面板是独立控件类型，不是 `panel` 的扩展。
 
 ## 1. 定位
 
@@ -84,9 +85,8 @@
 
 事件上下文：
 
-- `event.control = 面板的 name`；
-- `event.region = 局部区域 name`；
-- `event.control_path = 面板的页面树路径`；
+- 面板级 `events` 的 `event.control = 面板的 name`；
+- 局部 `regions` 目前用 `event.region = 局部区域 name` 区分，`event.control` 尚未映射回面板名；
 - 多实例面板再叠加 `event.instance` / `item_index` / `item_key`。
 
 面板本身也可以写 `events`：等价于覆盖整个面板的一个自动区域，区域名用面板名。
@@ -95,7 +95,7 @@
 
 - `clip` 缺省 `true`；`draw` 和 `children` 都裁在面板矩形内。
 - `clip: false` 仅用于确实需要溢出的特殊场景。
-- 裁剪只影响绘制与命中，不改变布局。
+- 当前裁剪只作用于绘制，不改变布局；局部 `regions` 的命中尚未额外裁到面板矩形内。
 
 ## 3. 尺寸
 
@@ -119,7 +119,7 @@
 - `img`：`x..x+w` / `y..y+h`；`auto_size` 下 `img` 必须显式写 `w/h`，否则报错；
 - `path`：按命令的几何包围盒。
 
-面板尺寸 = draw 包围盒覆盖的最小外框；padding 不额外加在 draw 外框上（draw 是外框坐标）。没有量尺时退回现有字符估算，并记一次 warn。
+面板尺寸 = draw 包围盒覆盖的最小外框；padding 不额外加在 draw 外框上（draw 是外框坐标）。没有量尺时退回现有字符估算。
 
 ## 4. 更新接口
 
@@ -134,9 +134,9 @@
 | `win:update_region_at(path, name, region)` | 更新一个局部区域 |
 | `win:remove_region_at(path, name)` | 删除一个局部区域 |
 
-v1 / 非页面树窗口使用对应的控件名版本（`win:update_draw(name, ...)` 等），内部仍解析到同一个自绘面板 payload。
+当前 Lua 入口只实现了 v2 页面树版本（`*_at`）；v1 / 非页面树窗口按控件名的版本尚未接入，后续补。
 
-单元素更新只重建 draw/region 数据和 Document，不重新测量布局；`auto_size` 面板改 draw 内容后必须重排一次。
+单元素更新会重新走一次页面树布局并重建 Document；`auto_size` 面板改 draw 内容后尺寸会跟着更新，显式 `w/h` 不变。
 
 ## 5. 渲染模型
 
@@ -148,6 +148,7 @@ SelfDrawingPanel {
   clip: bool,
   draw: Vec<Element>,     // 只含纯绘制元素
   children: Vec<Element>, // 动态控件
+  regions: Vec<Region>,   // 面板局部命中区域，展开时按面板原点平移
 }
 ```
 

@@ -28,6 +28,12 @@ const MAX_SUBPAGE_INSTANCES: usize = 100;
 ///
 /// 与一次性的 [`load`] 不同，这个类型保留节点、数据上下文和“路径 → 节点”的索引，
 /// 供脚本按路径改可见性或后续重排；每次渲染才把树重新量一遍并展开成 `Document` 内容表。
+#[derive(Clone)]
+struct PanelOverride {
+    draw: Option<Value>,
+    regions: Option<Value>,
+}
+
 pub(crate) struct PageLayout {
     value: Value,
     base: PathBuf,
@@ -35,6 +41,7 @@ pub(crate) struct PageLayout {
     data: Value,
     scrolls: HashMap<String, f32>,
     visibility: HashMap<String, bool>,
+    overrides: HashMap<String, PanelOverride>,
     measure: Option<LayoutMeasureHook>,
     tree: PageTree,
     payloads: Vec<Option<Value>>,
@@ -104,6 +111,7 @@ impl PageLayout {
             data,
             scrolls: scrolls.clone(),
             visibility: HashMap::new(),
+            overrides: HashMap::new(),
             measure: measure.cloned(),
             tree,
             payloads,
@@ -124,6 +132,7 @@ impl PageLayout {
             self.measure.as_ref(),
         )?;
         next.restore_visibility(&self.visibility);
+        next.apply_overrides(&self.overrides);
         Ok(next)
     }
 
@@ -140,6 +149,7 @@ impl PageLayout {
             self.measure.as_ref(),
         )?;
         next.restore_visibility(&self.visibility);
+        next.apply_overrides(&self.overrides);
         Ok(next)
     }
 
@@ -150,6 +160,138 @@ impl PageLayout {
             }
         }
         self.visibility = visibility.clone();
+    }
+
+    fn apply_overrides(&mut self, overrides: &HashMap<String, PanelOverride>) {
+        for (path, override_value) in overrides {
+            let Some(payload) = self.panel_payload_mut(path) else {
+                continue;
+            };
+            if let Some(draw) = &override_value.draw {
+                payload.insert("draw".to_owned(), draw.clone());
+            }
+            if let Some(regions) = &override_value.regions {
+                payload.insert("regions".to_owned(), regions.clone());
+            }
+        }
+        self.overrides = overrides.clone();
+    }
+
+    fn remember_panel(&mut self, path: &str) {
+        let Some(payload) = self.panel_payload_mut(path) else {
+            return;
+        };
+        let draw = payload.get("draw").cloned();
+        let regions = payload.get("regions").cloned();
+        self.overrides
+            .insert(path.to_owned(), PanelOverride { draw, regions });
+    }
+
+    /// 按路径找到自绘面板的 payload（`draw` / `regions` 所在对象）。
+    fn panel_payload_mut(&mut self, path: &str) -> Option<&mut Map<String, Value>> {
+        let id = *self.paths.get(path)?;
+        self.payloads.get_mut(id)?.as_mut()?.as_object_mut()
+    }
+
+    /// 替换自绘面板的整份 draw 列表；返回是否找到面板。
+    pub(crate) fn set_draw(&mut self, path: &str, draw: Vec<Value>) -> bool {
+        let Some(payload) = self.panel_payload_mut(path) else {
+            return false;
+        };
+        payload.insert("draw".to_owned(), Value::Array(draw));
+        self.remember_panel(path);
+        true
+    }
+
+    /// 替换一个具名 draw 元素；name 大小写敏感。
+    pub(crate) fn update_draw(&mut self, path: &str, name: &str, element: Value) -> bool {
+        let Some(payload) = self.panel_payload_mut(path) else {
+            return false;
+        };
+        let Some(Value::Array(draw)) = payload.get_mut("draw") else {
+            return false;
+        };
+        let Some(slot) = draw
+            .iter_mut()
+            .find(|item| item.get("name").and_then(Value::as_str) == Some(name))
+        else {
+            return false;
+        };
+        *slot = element;
+        self.remember_panel(path);
+        true
+    }
+
+    /// 在一个具名 draw 元素前 / 后插入；`index` 是 draw 数组下标。
+    pub(crate) fn insert_draw(&mut self, path: &str, index: usize, element: Value) -> bool {
+        let Some(payload) = self.panel_payload_mut(path) else {
+            return false;
+        };
+        let Some(Value::Array(draw)) = payload.get_mut("draw") else {
+            return false;
+        };
+        if index > draw.len() {
+            return false;
+        }
+        draw.insert(index, element);
+        self.remember_panel(path);
+        true
+    }
+
+    /// 删除一个具名 draw 元素。
+    pub(crate) fn remove_draw(&mut self, path: &str, name: &str) -> bool {
+        let Some(payload) = self.panel_payload_mut(path) else {
+            return false;
+        };
+        let Some(Value::Array(draw)) = payload.get_mut("draw") else {
+            return false;
+        };
+        let Some(index) = draw
+            .iter()
+            .position(|item| item.get("name").and_then(Value::as_str) == Some(name))
+        else {
+            return false;
+        };
+        draw.remove(index);
+        self.remember_panel(path);
+        true
+    }
+
+    /// 更新 / 删除自绘面板的局部区域。
+    pub(crate) fn update_region(&mut self, path: &str, name: &str, region: Value) -> bool {
+        let Some(payload) = self.panel_payload_mut(path) else {
+            return false;
+        };
+        let Some(Value::Array(regions)) = payload.get_mut("regions") else {
+            return false;
+        };
+        let Some(slot) = regions
+            .iter_mut()
+            .find(|item| item.get("name").and_then(Value::as_str) == Some(name))
+        else {
+            return false;
+        };
+        *slot = region;
+        self.remember_panel(path);
+        true
+    }
+
+    pub(crate) fn remove_region(&mut self, path: &str, name: &str) -> bool {
+        let Some(payload) = self.panel_payload_mut(path) else {
+            return false;
+        };
+        let Some(Value::Array(regions)) = payload.get_mut("regions") else {
+            return false;
+        };
+        let Some(index) = regions
+            .iter()
+            .position(|item| item.get("name").and_then(Value::as_str) == Some(name))
+        else {
+            return false;
+        };
+        regions.remove(index);
+        self.remember_panel(path);
+        true
     }
 
     /// 页面树 → 布局 → 现有控件表。
@@ -183,6 +325,8 @@ impl PageLayout {
             &table,
             &mut output_index,
             &mut control_names,
+            (0.0, 0.0),
+            &mut Vec::new(),
         )?;
         Ok(Layout {
             table,
@@ -321,7 +465,7 @@ fn parse_node(
     }
     let kind = match kind_name {
         "stem" => NodeKind::Stem,
-        "panel" => NodeKind::Container,
+        "panel" | "self_drawing_panel" => NodeKind::Container,
         _ => NodeKind::Control,
     };
 
@@ -1260,6 +1404,8 @@ fn flatten(
     table: &Table,
     output_index: &mut usize,
     names: &mut Vec<ControlName>,
+    origin: (f32, f32),
+    path_prefix: &mut Vec<usize>,
 ) -> mlua::Result<()> {
     let node = &tree.nodes[id];
     if !node.visible {
@@ -1279,22 +1425,51 @@ fn flatten(
             .as_object()
             .cloned()
             .ok_or_else(|| runtime("控件 payload 必须是对象"))?;
-        object.insert("x".to_owned(), Value::from(rect.x));
-        object.insert("y".to_owned(), Value::from(rect.y));
+        object.insert("x".to_owned(), Value::from(rect.x - origin.0));
+        object.insert("y".to_owned(), Value::from(rect.y - origin.1));
         object.insert("w".to_owned(), Value::from(rect.width));
         object.insert("h".to_owned(), Value::from(rect.height));
         let name = object
             .get("name")
             .and_then(Value::as_str)
             .ok_or_else(|| runtime("控件缺 name"))?;
+        let is_self_panel =
+            object.get("type").and_then(Value::as_str) == Some("self_drawing_panel");
+        let mut name_path = path_prefix.clone();
+        name_path.push(*output_index);
         names.push(ControlName {
             name: name.to_owned(),
-            path: vec![*output_index],
+            path: name_path,
         });
-        table.raw_set(
-            *output_index as i64 + 1,
-            to_lua(lua, &Value::Object(object), base)?,
-        )?;
+        let lua_object = to_lua(lua, &Value::Object(object), base)?;
+        let LuaValue::Table(lua_object) = lua_object else {
+            return Err(runtime("控件 payload 必须生成 Lua 表"));
+        };
+        table.raw_set(*output_index as i64 + 1, lua_object.clone())?;
+        if is_self_panel {
+            let children = lua.create_table()?;
+            let mut child_index = 0;
+            let mut child_prefix = path_prefix.clone();
+            child_prefix.push(*output_index);
+            for child in &node.children {
+                flatten(
+                    tree,
+                    *child,
+                    rects,
+                    payloads,
+                    lua,
+                    base,
+                    &children,
+                    &mut child_index,
+                    names,
+                    (rect.x, rect.y),
+                    &mut child_prefix,
+                )?;
+            }
+            lua_object.raw_set("children", children)?;
+            *output_index += 1;
+            return Ok(());
+        }
         *output_index += 1;
     }
     for child in &node.children {
@@ -1308,6 +1483,8 @@ fn flatten(
             table,
             output_index,
             names,
+            origin,
+            path_prefix,
         )?;
     }
     Ok(())
@@ -1328,6 +1505,15 @@ impl Measure for PayloadMeasure<'_> {
         let Some(object) = payload.as_object() else {
             return Size::ZERO;
         };
+        if object.get("type").and_then(Value::as_str) == Some("self_drawing_panel")
+            && object.get("auto_size").and_then(Value::as_str) == Some("draw")
+            && let Some((width, height)) = self.draw_bounds(object)
+        {
+            return Size::new(
+                width.min(constraints.max_width),
+                height.min(constraints.max_height),
+            );
+        }
         let text = object
             .get("text")
             .and_then(Value::as_str)
@@ -1378,6 +1564,121 @@ impl Measure for PayloadMeasure<'_> {
         }
         Size::ZERO
     }
+}
+
+impl PayloadMeasure<'_> {
+    /// 自绘面板 `auto_size = "draw"` 的包围盒；坐标从面板左上角起。
+    fn draw_bounds(&self, object: &Map<String, Value>) -> Option<(f32, f32)> {
+        let draw = object.get("draw")?.as_array()?;
+        let mut max_x = 0.0_f32;
+        let mut max_y = 0.0_f32;
+        for element in draw {
+            let element = element.as_object()?;
+            let x = element.get("x").and_then(Value::as_f64).unwrap_or(0.0) as f32;
+            let y = element.get("y").and_then(Value::as_f64).unwrap_or(0.0) as f32;
+            let (width, height) = match element.get("type").and_then(Value::as_str)? {
+                "rect" => (
+                    element.get("w").and_then(Value::as_f64).unwrap_or(0.0) as f32,
+                    element.get("h").and_then(Value::as_f64).unwrap_or(0.0) as f32,
+                ),
+                "line" => {
+                    let (fx, fy) = point_json(element.get("from"))?;
+                    let (tx, ty) = point_json(element.get("to"))?;
+                    let thickness = element
+                        .get("thickness")
+                        .and_then(Value::as_f64)
+                        .unwrap_or(1.0) as f32;
+                    (fx.max(tx) + thickness * 0.5, fy.max(ty) + thickness * 0.5)
+                }
+                "circle" => {
+                    let radius = element.get("radius").and_then(Value::as_f64)? as f32;
+                    (
+                        element.get("cx").and_then(Value::as_f64).unwrap_or(0.0) as f32 + radius,
+                        element.get("cy").and_then(Value::as_f64).unwrap_or(0.0) as f32 + radius,
+                    )
+                }
+                "text" => {
+                    let text = element.get("text").and_then(Value::as_str).unwrap_or("");
+                    let size = element.get("size").and_then(Value::as_f64).unwrap_or(16.0) as f32;
+                    let font = element
+                        .get("font")
+                        .and_then(Value::as_str)
+                        .and_then(MeasureFont::from_name)
+                        .unwrap_or(MeasureFont::Candidate);
+                    if text.is_empty() {
+                        (0.0, 0.0)
+                    } else if let Some((width, height)) = self
+                        .measure
+                        .and_then(|measure| measure(text, size, 0.0, font))
+                    {
+                        (width, height)
+                    } else {
+                        (text.chars().count() as f32 * size * 0.6, size * 1.25)
+                    }
+                }
+                "svg" => {
+                    let size = element.get("size").and_then(Value::as_f64)? as f32;
+                    (size, size)
+                }
+                "img" => (
+                    element.get("w").and_then(Value::as_f64)? as f32,
+                    element.get("h").and_then(Value::as_f64)? as f32,
+                ),
+                "path" => {
+                    let commands = element.get("commands")?.as_array()?;
+                    let (mut px, mut py) = (0.0_f32, 0.0_f32);
+                    let mut path_max_x = 0.0_f32;
+                    let mut path_max_y = 0.0_f32;
+                    for command in commands {
+                        let command = command.as_array()?;
+                        let verb = command.first()?.as_str()?;
+                        let values: Vec<f32> = command
+                            .iter()
+                            .skip(1)
+                            .filter_map(Value::as_f64)
+                            .map(|value| value as f32)
+                            .collect();
+                        match verb.to_ascii_uppercase().as_str() {
+                            "M" | "L" if values.len() >= 2 => {
+                                px = values[0];
+                                py = values[1];
+                            }
+                            "Q" if values.len() >= 4 => {
+                                path_max_x = path_max_x.max(values[0]).max(values[2]);
+                                path_max_y = path_max_y.max(values[1]).max(values[3]);
+                                px = values[2];
+                                py = values[3];
+                            }
+                            "C" if values.len() >= 6 => {
+                                path_max_x =
+                                    path_max_x.max(values[0]).max(values[2]).max(values[4]);
+                                path_max_y =
+                                    path_max_y.max(values[1]).max(values[3]).max(values[5]);
+                                px = values[4];
+                                py = values[5];
+                            }
+                            _ => {}
+                        }
+                        path_max_x = path_max_x.max(px);
+                        path_max_y = path_max_y.max(py);
+                    }
+                    (path_max_x, path_max_y)
+                }
+                _ => return None,
+            };
+            max_x = max_x.max(x + width);
+            max_y = max_y.max(y + height);
+        }
+        Some((max_x, max_y))
+    }
+}
+
+fn point_json(value: Option<&Value>) -> Option<(f32, f32)> {
+    let object = value?.as_object()?;
+    Some((
+        object.get("x").and_then(Value::as_f64)? as f32,
+        object.get("y").and_then(Value::as_f64)? as f32,
+    ))
 }
 
 /// Lua 数据表 → JSON 数据上下文。空表按空数组处理，方便 `items = {}`。
@@ -1808,6 +2109,118 @@ mod tests {
             Some("rows_2_title")
         );
         let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn a_self_drawing_panel_can_size_itself_from_its_draw_list() {
+        let value = json!({
+            "version": 2,
+            "page": {
+                "w": 200, "h": 100,
+                "children": [{
+                    "type": "self_drawing_panel", "name": "canvas",
+                    "auto_size": "draw",
+                    "draw": [
+                        { "name": "bg", "type": "rect", "x": 0, "y": 0,
+                          "w": 80, "h": 40, "color": "#FFFFFFFF" }
+                    ]
+                }]
+            }
+        });
+        let lua = Lua::new();
+        let page = PageLayout::build(
+            &value,
+            std::path::Path::new("."),
+            (None, None),
+            &serde_json::Value::Null,
+            &HashMap::new(),
+            None,
+        )
+        .unwrap();
+        let layout = page.render(&lua).unwrap();
+        let canvas: mlua::Table = layout.table.get(1).unwrap();
+        assert_eq!(canvas.get::<f32>("w").unwrap(), 80.0);
+        assert_eq!(canvas.get::<f32>("h").unwrap(), 40.0);
+    }
+
+    #[test]
+    fn self_drawing_panel_auto_size_uses_the_layout_measure_hook() {
+        let value = json!({
+            "version": 2,
+            "page": {
+                "w": 300, "h": 200,
+                "children": [{
+                    "type": "self_drawing_panel", "name": "canvas",
+                    "auto_size": "draw",
+                    "draw": [{
+                        "name": "label", "type": "text", "x": 0, "y": 0,
+                        "text": "ABC", "size": 20, "color": "#FF000000"
+                    }]
+                }]
+            }
+        });
+        let hook: crate::runtime::LayoutMeasureHook = std::rc::Rc::new(
+            |_text: &str, _size: f32, _spacing: f32, _font: super::MeasureFont| Some((123.0, 25.0)),
+        );
+        let lua = Lua::new();
+        let page = PageLayout::build(
+            &value,
+            std::path::Path::new("."),
+            (None, None),
+            &serde_json::Value::Null,
+            &HashMap::new(),
+            Some(&hook),
+        )
+        .unwrap();
+        let layout = page.render(&lua).unwrap();
+        let canvas: mlua::Table = layout.table.get(1).unwrap();
+        assert_eq!(canvas.get::<f32>("w").unwrap(), 123.0);
+        assert_eq!(canvas.get::<f32>("h").unwrap(), 25.0);
+    }
+
+    #[test]
+    fn updating_a_draw_element_resizes_an_auto_sized_panel() {
+        let value = json!({
+            "version": 2,
+            "page": {
+                "w": 300, "h": 200,
+                "children": [{
+                    "type": "self_drawing_panel", "name": "canvas",
+                    "auto_size": "draw",
+                    "draw": [
+                        { "name": "bg", "type": "rect", "x": 0, "y": 0,
+                          "w": 80, "h": 40, "color": "#FFFFFFFF" }
+                    ]
+                }]
+            }
+        });
+        let mut page = PageLayout::build(
+            &value,
+            std::path::Path::new("."),
+            (None, None),
+            &serde_json::Value::Null,
+            &HashMap::new(),
+            None,
+        )
+        .unwrap();
+        assert!(page.update_draw(
+            "canvas",
+            "bg",
+            json!({ "name": "bg", "type": "rect", "x": 0, "y": 0,
+                    "w": 120, "h": 55, "color": "#FFFFFFFF" }),
+        ));
+        let lua = Lua::new();
+        let layout = page.render(&lua).unwrap();
+        let canvas: mlua::Table = layout.table.get(1).unwrap();
+        assert_eq!(canvas.get::<f32>("w").unwrap(), 120.0);
+        assert_eq!(canvas.get::<f32>("h").unwrap(), 55.0);
+
+        // 后续 set_data / set_scroll 重建页面树时，draw 单元素更新不能丢。
+        let page = page.with_data(&serde_json::Value::Null).unwrap();
+        let layout = page.render(&lua).unwrap();
+        let canvas: mlua::Table = layout.table.get(1).unwrap();
+        assert_eq!(canvas.get::<f32>("w").unwrap(), 120.0);
+        assert_eq!(canvas.get::<f32>("h").unwrap(), 55.0);
     }
 
     #[test]

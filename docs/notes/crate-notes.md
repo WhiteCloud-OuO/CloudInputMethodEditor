@@ -549,6 +549,14 @@ LuaJIT 源码随 crate 编译进二进制，装机包不依赖机器上装的 Lu
 4096 字符 / 4096² 图 / 8–2048 点）在解析时查，违规当场报 Lua 错（这一次调用中止，窗口保持原样）。
 v2 布局另存 `PageLayout`（页面树 + 路径索引 + 滚动偏移），`set_visible` / `*_at` / `set_scroll`
 走路径而不是前缀控件名；`subpage.virtualize` 在解析阶段只挂可见窗口，变高行逐项调 `LayoutMeasureHook`。
+`self_drawing_panel`（2026-10-22）是独立容器：`draw` 只收 `rect` / `line` / `circle` / `text` / `svg` /
+`img` / `path`，每项必须有大小写敏感的唯一 `name`；draw 坐标从面板左上角起，`clip` 缺省 true（离屏合成裁剪），
+先画 draw 再画 `children`。`auto_size = "draw"` 用 `LayoutMeasureHook` 量文字、按 draw 包围盒定尺寸，显式
+`w/h` 优先；v1 与 v2 都支持。局部 `regions` 展开到 `Document.regions` 时按面板原点平移。
+`PageLayout` 的 `set_draw` / `update_draw` / `insert_draw` / `remove_draw` / `update_region` /
+`remove_region` 会记覆盖并在 `set_data` / `set_scroll` 重建后重新套用；Lua 入口对应
+`win:set_draw_at` / `update_draw_at` / `insert_draw_at` / `remove_draw_at` / `update_region_at` /
+`remove_region_at`（仅 v2）。
 `update_content` 只改静态 `label` / `text_block`；`set_button_background(name, color)` 改
 `flat_svg_button` 三个状态的背景色（主题色动态套用时用它）。`focus_text(name)` 把键盘焦点交给
 对应 RichEdit 宿主（面板打开后自动聚焦输入框）；`set_selection_background(name, color)` 改编辑框
