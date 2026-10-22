@@ -990,8 +990,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 全 / 半角、简 / 繁、中文 / 西文标点任一变了，就在输入光标附近弹一个停留 1 秒的小条 —— 样式与悬浮状态条同一套图标，
 只取排布表的前四个（`ui/status/mod.rs::StatusIcons`，`TIP_BUTTONS = 4`，`Arrangement` 只在本模块可见，提示窗经它拿图标）；
 窗口由独立窗口模板建（`transparent = true`：`WS_EX_TRANSPARENT` 点不着、`WS_EX_NOACTIVATE` 不抢焦点），
-位置贴光标下方、放不下放上方（`place`，
-比候选窗那套简单：不用避让高亮行）。触发在 Router（`dispatch/status/mod.rs::check_status_tip`）：与 `reconcile_status` 分开，
+位置优先贴光标下方、放不下放上方（`place`）；只有和悬浮工具栏重叠时才挪到工具栏上方，其他时候跟着光标走。触发在 Router（`dispatch/status/mod.rs::check_status_tip`）：与 `reconcile_status` 分开，
 只在**用户切状态**的几条路（`handle_mode_changed`、`handle_status_event`（状态条三格与两个内置热键都汇到这里）、每拍 `SyncMode`）上调，
 配置热加载**不**走它（改设置不该弹提示）；比较 `TipState`（中英 + Caps + 全半角 + 简繁 + 当前模式的标点），第一次观察只记不弹。
 只在 `ime_active && !mode.disabled() && in_text_input` 且拿到过光标矩形时弹 —— 「在不在输入状态」与 Caps 都由 DLL 每拍
