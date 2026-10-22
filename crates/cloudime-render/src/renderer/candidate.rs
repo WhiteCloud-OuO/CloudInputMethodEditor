@@ -351,14 +351,15 @@ impl Renderer {
     }
 
     fn candidate_info_height(&self, view: &CandidateView, m: &Metrics) -> f32 {
-        if view.tip.is_none() && view.footer.is_none() && view.online.is_none() {
-            return 0.0;
-        }
-        let mut height = m.px(m.theme.translate_font.line_height);
-        if let Some(footer) = view.footer.as_deref() {
-            height = height.max(self.measure(footer, &m.footer_style()).height);
-        }
-        height += m.row_padding();
+        let mut height = if view.tip.is_none() && view.footer.is_none() {
+            0.0
+        } else {
+            let mut bottom = m.px(m.theme.translate_font.line_height);
+            if let Some(footer) = view.footer.as_deref() {
+                bottom = bottom.max(self.measure(footer, &m.footer_style()).height);
+            }
+            bottom + m.row_padding()
+        };
         if let Some(online) = view.online.as_deref() {
             height += m.px(m.theme.translate_font.line_height) * online_lines(online).len() as f32;
             height += m.row_padding();

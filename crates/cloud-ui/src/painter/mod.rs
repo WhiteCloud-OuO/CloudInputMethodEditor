@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use cloudime_platform::LayoutMode;
 use cloudime_render::{
-    CandidateView, Color, Document, Element, FontLibrary, FontSlot, Frame, Layout, Preedit,
-    Rendered, RenderedStatus, Renderer, Row, Shadow, StatusCell, Theme, UiFont, system_fonts,
+    CandidateView, Color, Document, Element, FontLibrary, FontSlot, Layout, Preedit, Rendered,
+    RenderedStatus, Renderer, Row, Shadow, StatusCell, Theme, UiFont, system_fonts,
 };
 
 use cloud_ui_core::{
@@ -283,16 +283,26 @@ impl Painter {
     ///
     /// 给「窗口模板」算默认大小用：竖排量 9 个候选的高度、横排量 6 个两字候选的宽度。
     pub fn candidate_size(&mut self, layout: Layout, rows: usize, dpi: u32) -> (i32, i32) {
-        let frame = Frame {
+        let view = CandidateView {
             preedit: Some(Preedit::plain("shu'ru'fa", 0)),
             rows: (0..rows).map(|index| Row::plain(index, "国国")).collect(),
             footer: Some("1/1".to_owned()),
-            ..Frame::default()
+            ..CandidateView::default()
         };
-        let (width, height) = self
-            .renderer
-            .measure_frame(&frame, layout, &self.theme, scale(dpi));
-        (width as i32, height as i32)
+        self.renderer
+            .render_candidate_view(
+                &view,
+                layout,
+                &self.theme,
+                scale(dpi),
+                Some(&self.candidate_shadow),
+            )
+            .map_or((0, 0), |rendered| {
+                (
+                    rendered.content_width as i32,
+                    rendered.content_height as i32,
+                )
+            })
     }
 
     /// 画状态条或状态切换提示：`kind` 决定用哪一套背景 / 图标 / 阴影色。

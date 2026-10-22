@@ -1900,6 +1900,60 @@ mod tests {
     }
 
     #[test]
+    fn the_page_tree_candidate_matches_online_only_and_status_only() {
+        use crate::frame::{CandidateView, Preedit, PreeditSegment, PreeditStyle, TipSegment};
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let theme = Theme::new();
+        let frames = [
+            Frame {
+                rows: vec![Row::plain(0, "你好")],
+                highlighted: Some(0),
+                online: Some(vec![TipSegment::new("online", Tone::Online, false)]),
+                ..Frame::default()
+            },
+            Frame {
+                preedit: Some(Preedit {
+                    segments: vec![PreeditSegment {
+                        text: "ni".to_owned(),
+                        style: PreeditStyle::Typed,
+                    }],
+                    cursor: 1,
+                }),
+                status: Some("状态".to_owned()),
+                rows: vec![Row::plain(0, "你好")],
+                highlighted: Some(0),
+                ..Frame::default()
+            },
+        ];
+        for frame in frames {
+            for layout in [Layout::Vertical, Layout::Horizontal] {
+                let direct = renderer
+                    .render_direct(&frame, layout, &theme, 1.25, None)
+                    .unwrap();
+                let page_tree = renderer
+                    .render_candidate_view(&CandidateView::from(&frame), layout, &theme, 1.25, None)
+                    .unwrap();
+                assert_eq!(
+                    (direct.content_width, direct.content_height),
+                    (page_tree.content_width, page_tree.content_height),
+                    "layout={layout:?}"
+                );
+                let differing = direct
+                    .pixmap
+                    .pixels()
+                    .iter()
+                    .zip(page_tree.pixmap.pixels())
+                    .filter(|(a, b)| a != b)
+                    .count();
+                assert_eq!(differing, 0, "layout={layout:?}");
+            }
+        }
+    }
+
+    #[test]
     fn a_panel_keeps_the_size_it_was_given() {
         let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
             return;
