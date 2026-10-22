@@ -7,7 +7,7 @@ use crate::frame::{Frame, HighlightRect, Row};
 
 /// 一项的内容宽度：序号 + 候选词 +（有辅助码时）一个空格 + 码 +（有角标时）间隔 + 角标。
 /// `badge_gap` 是候选词与角标之间的间隔（横排用两个候选字宽，见 `Renderer::horizontal_badge_gap`）。
-fn item_width(item: &Item, m: &Metrics, badge_gap: f32) -> f32 {
+pub(super) fn item_width(item: &Item, m: &Metrics, badge_gap: f32) -> f32 {
     let badge = if item.badge_width > 0.0 {
         badge_gap + item.badge_width
     } else {
@@ -43,7 +43,11 @@ impl Renderer {
     }
 
     /// 横排时高亮候选的译文行尺寸；高亮候选没有译文时为 `None`。
-    fn highlighted_annotation_size(&self, frame: &Frame, m: &Metrics) -> Option<(f32, f32)> {
+    pub(super) fn highlighted_annotation_size(
+        &self,
+        frame: &Frame,
+        m: &Metrics,
+    ) -> Option<(f32, f32)> {
         let row = frame.rows.get(frame.highlighted?)?;
         if row.annotation.is_empty() {
             return None;
@@ -58,7 +62,7 @@ impl Renderer {
     }
 
     /// 横排各项的尺寸与统一行高。
-    fn items(&self, rows: &[Row], m: &Metrics) -> (Vec<Item>, f32) {
+    pub(super) fn items(&self, rows: &[Row], m: &Metrics) -> (Vec<Item>, f32) {
         let mut row_height: f32 = 0.0;
         let text_style = m.text_style();
         let index_style = m.index_style(false);

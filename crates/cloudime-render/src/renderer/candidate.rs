@@ -7,6 +7,7 @@ use cloud_ui_core::{
     Constraints, Insets, LayoutResult, Node, NodeKind, PageTree, Position, SizeSpec, layout,
 };
 
+use super::item::Item;
 use super::{Metrics, Renderer, online_lines, record::DrawRecorder, truncate_with};
 use crate::document::{Document, Element, HitRect, HitShape, Region, SelfDrawingPanel};
 use crate::elements::{RectElement, TextElement};
@@ -25,7 +26,6 @@ struct Columns {
 }
 
 struct CandidateLayout {
-    tree: PageTree,
     rects: Vec<Option<cloud_ui_core::Rect>>,
     top: Option<usize>,
     footer: Option<usize>,
@@ -44,6 +44,9 @@ impl Renderer {
         scale: f32,
         shadow: Option<&Shadow>,
     ) -> Result<crate::renderer::Rendered, RenderError> {
+        if layout_mode == Layout::Horizontal && view.columns == 0 {
+            return self.render_candidate_horizontal(view, theme, scale, shadow);
+        }
         let metrics = Metrics { theme, scale };
         let candidate = self.candidate_layout(view, layout_mode, &metrics)?;
         let margin = shadow.map_or(0.0, |s| metrics.px(s.margin()));
@@ -58,11 +61,10 @@ impl Renderer {
         );
         let mut y = margin + metrics.padding();
         self.draw_candidate_top(&mut recorder, view, &metrics, margin, y);
-        y += candidate.top.map_or(0.0, |id| {
-            candidate.tree.nodes.get(id).map_or(0.0, |_| {
-                candidate_rect(&candidate.rects, id).map_or(0.0, |r| r.height)
-            })
-        });
+        y += candidate
+            .top
+            .and_then(|id| candidate_rect(&candidate.rects, id))
+            .map_or(0.0, |rect| rect.height);
         self.draw_candidate_rows(&mut recorder, view, &metrics, &candidate, margin, y);
         if candidate.footer.is_some() {
             self.draw_candidate_info(
@@ -219,7 +221,6 @@ impl Renderer {
             })
             .collect();
         Ok(CandidateLayout {
-            tree,
             rects: result.rects,
             top,
             footer,
@@ -472,6 +473,220 @@ impl Renderer {
             let used = render.text(&shown, &style, x, y);
             x += used;
             budget -= used;
+        }
+    }
+}
+
+struct HorizontalLayout {
+    rects: Vec<Option<cloud_ui_core::Rect>>,
+    rows: Vec<usize>,
+    items: Vec<Item>,
+    row_height: f32,
+    content: (f32, f32),
+    annotation_height: f32,
+    highlight_rects: Vec<HighlightRect>,
+}
+
+impl Renderer {
+    fn render_candidate_horizontal(
+        &self,
+        view: &CandidateView,
+        theme: &crate::theme::Theme,
+        scale: f32,
+        shadow: Option<&Shadow>,
+    ) -> Result<crate::renderer::Rendered, RenderError> {
+        let m = Metrics { theme, scale };
+        let laid = self.candidate_horizontal_layout(view, &m);
+        let margin = shadow.map_or(0.0, |s| m.px(s.margin()));
+        let mut recorder = DrawRecorder::new(self.text.clone(), scale, (margin, margin));
+        recorder.round_rect(
+            margin,
+            margin,
+            laid.content.0,
+            laid.content.1,
+            m.corner_radius(),
+            theme.colors.background,
+        );
+        let y = margin + m.padding();
+        self.draw_candidate_top(&mut recorder, view, &m, margin, y);
+        let top = y + self.candidate_top_size(view, &m).1;
+        let inset = m.px(super::HIGHLIGHT_INSET);
+        if let Some(rect) = highlight_rect(view, &laid.highlight_rects) {
+            recorder.round_rect(
+                margin + rect.left,
+                margin + rect.top,
+                rect.width(),
+                rect.height(),
+                m.corner_radius() / 2.0,
+                theme.colors.highlight,
+            );
+        }
+        for (index, (row, item)) in view.rows.iter().zip(&laid.items).enumerate() {
+            let rect = candidate_rect(&laid.rects, laid.rows[index]).unwrap_or_default();
+            let x = margin + rect.x;
+            let text_top = margin + rect.y + m.row_padding();
+            recorder.text(
+                &row.index,
+                &m.index_style(view.highlighted == Some(index)),
+                x,
+                text_top + m.index_offset(m.px(m.theme.text_font.line_height)),
+            );
+            let color = if view.highlighted == Some(index) {
+                theme.colors.highlight_text
+            } else {
+                theme.colors.text
+            };
+            let style = m
+                .style(m.theme.text_font, color)
+                .with_family(m.theme.text_family.as_ref());
+            let text_x = x + item.index_width + m.px(super::INDEX_GAP);
+            recorder.text(&row.text, &style, text_x, text_top);
+            self.draw_auxiliary(
+                &mut recorder,
+                &m,
+                row.auxiliary.as_ref(),
+                text_x + item.text_width + self.space_width(&m),
+                text_top,
+            );
+            let badge_x =
+                x + super::horizontal::item_width(item, &m, self.horizontal_badge_gap(&m))
+                    - item.badge_width;
+            self.draw_badge(&mut recorder, &m, row.badge.as_deref(), badge_x, text_top);
+        }
+        if let Some(row) = view.highlighted.and_then(|index| view.rows.get(index)) {
+            let annotation_top = top + laid.row_height + m.row_padding() / 2.0;
+            let mut x = margin + m.padding() + inset;
+            for (segment, tone) in &row.annotation {
+                let style = m.annotation_style(m.tone_color(*tone));
+                x += recorder.text(segment, &style, x, annotation_top);
+            }
+        }
+        let info_top = if laid.annotation_height > 0.0 {
+            top + laid.row_height + laid.annotation_height
+        } else {
+            y + m.row_padding() + laid.row_height
+        };
+        self.draw_candidate_info(&mut recorder, view, &m, margin, info_top, laid.content.0);
+
+        let scale = scale.max(f32::EPSILON);
+        let panel = SelfDrawingPanel {
+            x: 0.0,
+            y: 0.0,
+            width: laid.content.0 / scale,
+            height: laid.content.1 / scale,
+            clip: true,
+            draw: recorder.into_elements(),
+            children: Vec::new(),
+            regions: Vec::new(),
+        };
+        let document = Document {
+            width: panel.width,
+            height: panel.height,
+            elements: vec![Element::SelfDrawingPanel(panel)],
+            regions: Vec::new(),
+            control_names: Vec::new(),
+            instances: Default::default(),
+        };
+        let mut rendered = self
+            .render_document(&document, theme, scale, shadow, false)?
+            .rendered;
+        rendered.regions = laid
+            .highlight_rects
+            .iter()
+            .enumerate()
+            .map(|(index, rect)| {
+                Region::new(
+                    format!("candidate_{index}"),
+                    HitShape::Rect(HitRect::new(
+                        rect.left / scale,
+                        rect.top / scale,
+                        rect.width() / scale,
+                        rect.height() / scale,
+                    )),
+                    false,
+                )
+            })
+            .collect();
+        rendered.highlight_rects = laid.highlight_rects;
+        Ok(rendered)
+    }
+
+    fn candidate_horizontal_layout(&self, view: &CandidateView, m: &Metrics) -> HorizontalLayout {
+        let (items, row_height) = self.items(&view.rows, m);
+        let badge_gap = self.horizontal_badge_gap(m);
+        let inset = m.px(super::HIGHLIGHT_INSET);
+        let mut width = items
+            .iter()
+            .map(|item| super::horizontal::item_width(item, m, badge_gap))
+            .sum::<f32>()
+            + m.column_gap() * items.len().saturating_sub(1) as f32
+            + inset * 2.0
+            + m.padding() * 2.0;
+        let top_size = self.candidate_top_size(view, m);
+        if let Some(footer) = view.footer.as_deref() {
+            width = width.max(m.column_gap() + self.measure(footer, &m.footer_style()).width);
+        }
+        width = width.max(m.px(m.theme.min_width_pixels));
+        let annotation_height = view
+            .highlighted
+            .and_then(|index| view.rows.get(index))
+            .filter(|row| !row.annotation.is_empty())
+            .map_or(0.0, |_| {
+                m.px(m.theme.annotation_font.line_height) + m.row_padding()
+            });
+        let height = m.padding() * 2.0
+            + top_size.1
+            + row_height
+            + annotation_height
+            + self.candidate_info_height(view, m);
+        let mut tree = PageTree::new(Node::new(NodeKind::Page));
+        tree.node_mut(tree.root).width = SizeSpec::Fixed(width);
+        tree.node_mut(tree.root).height = SizeSpec::Fixed(height);
+        let top = (top_size.1 > 0.0)
+            .then(|| add_absolute(&mut tree, m.padding(), m.padding(), width, top_size.1));
+        let rows_top = m.padding() + top_size.1;
+        let mut x = m.padding() + inset;
+        let mut rows = Vec::with_capacity(items.len());
+        let mut highlight_rects = Vec::with_capacity(items.len());
+        for item in &items {
+            let item_width = super::horizontal::item_width(item, m, badge_gap);
+            rows.push(add_absolute(&mut tree, x, rows_top, item_width, row_height));
+            highlight_rects.push(HighlightRect::new(
+                x - inset,
+                rows_top,
+                x + item_width + inset,
+                rows_top + row_height,
+            ));
+            x += item_width + m.column_gap();
+        }
+        let footer_top = rows_top + row_height + annotation_height + m.row_padding();
+        let footer = (self.candidate_info_height(view, m) > 0.0).then(|| {
+            add_absolute(
+                &mut tree,
+                m.padding(),
+                footer_top,
+                width - m.padding() * 2.0,
+                self.candidate_info_height(view, m),
+            )
+        });
+        let mut children = Vec::new();
+        if let Some(top) = top {
+            children.push(top);
+        }
+        children.extend(rows.iter().copied());
+        if let Some(footer) = footer {
+            children.push(footer);
+        }
+        tree.set_children(tree.root, children);
+        let result = layout(&tree, Constraints::loose(), &mut cloud_ui_core::NoopMeasure);
+        HorizontalLayout {
+            rects: result.rects,
+            rows,
+            items,
+            row_height,
+            content: (width, height),
+            annotation_height,
+            highlight_rects,
         }
     }
 }

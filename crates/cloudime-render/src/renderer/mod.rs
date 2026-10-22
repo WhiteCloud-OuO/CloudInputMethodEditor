@@ -1686,6 +1686,54 @@ mod tests {
     }
 
     #[test]
+    fn the_page_tree_candidate_matches_the_horizontal_render() {
+        use crate::frame::CandidateView;
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let frame = Frame {
+            rows: (0..4)
+                .map(|index| Row {
+                    index: (index + 1).to_string(),
+                    text: format!("候选{index}"),
+                    annotation: Vec::new(),
+                    badge: None,
+                    auxiliary: None,
+                })
+                .collect(),
+            highlighted: Some(1),
+            footer: Some("1/2".to_owned()),
+            ..Frame::default()
+        };
+        let theme = Theme::new();
+        let direct = renderer
+            .render_direct(&frame, Layout::Horizontal, &theme, 1.0, None)
+            .unwrap();
+        let page_tree = renderer
+            .render_candidate_view(
+                &CandidateView::from(&frame),
+                Layout::Horizontal,
+                &theme,
+                1.0,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            (direct.content_width, direct.content_height),
+            (page_tree.content_width, page_tree.content_height)
+        );
+        let differing = direct
+            .pixmap
+            .pixels()
+            .iter()
+            .zip(page_tree.pixmap.pixels())
+            .filter(|(a, b)| a != b)
+            .count();
+        assert_eq!(differing, 0, "页面树候选路径应与横排直接绘制一致");
+    }
+
+    #[test]
     fn a_panel_keeps_the_size_it_was_given() {
         let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
             return;
