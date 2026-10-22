@@ -7,6 +7,7 @@ mod sink;
 use std::mem::ManuallyDrop;
 use std::rc::Rc;
 
+use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_BACK, VK_DELETE};
 use windows::Win32::UI::TextServices::{
     INSERT_TEXT_AT_SELECTION_FLAGS, ITfComposition, ITfCompositionSink, ITfContext,
     ITfContextComposition, ITfInsertAtSelection, ITfRange, ITfRangeACP, TF_AE_END, TF_ANCHOR_END,
@@ -45,6 +46,9 @@ pub(crate) struct Update {
 
     /// 上屏前先删掉光标前几个字符（符号映射的两键规则把上一个键的输出换掉）。
     pub delete_before: u16,
+
+    /// 上屏前先删掉光标后几个字符（U 模式 Delete）。
+    pub delete_after: u16,
 }
 
 impl Update {
@@ -54,6 +58,7 @@ impl Update {
             && self.preedit.is_empty()
             && self.caret_shift == 0
             && self.delete_before == 0
+            && self.delete_after == 0
     }
 }
 
@@ -89,7 +94,20 @@ pub(crate) fn apply(
         )?,
         // 没有要上屏的文本：先按 Server 要求删光标前字符（u 模式 Backspace），再挪补全光标。
         None if update.delete_before > 0 => {
-            delete_before_caret(context, ec, update.delete_before)?;
+            // 组句范围会挡住“删光标前一个字”，先结束组句，删完再按 preedit 重建。
+            if shared.composition().is_some() {
+                end_composition(shared, ec)?;
+            }
+            delete_before_caret(shared, context, ec, update.delete_before)?;
+            if update.caret_shift != 0 {
+                shift_caret(context, ec, update.caret_shift)?;
+            }
+        }
+        None if update.delete_after > 0 => {
+            if shared.composition().is_some() {
+                end_composition(shared, ec)?;
+            }
+            delete_after_caret(shared, context, ec, update.delete_after)?;
             if update.caret_shift != 0 {
                 shift_caret(context, ec, update.caret_shift)?;
             }
@@ -189,7 +207,7 @@ fn commit_text(
         }
         None => {
             if delete_before > 0 {
-                delete_before_caret(context, ec, delete_before)?;
+                delete_before_caret(shared, context, ec, delete_before)?;
             }
             let insert: ITfInsertAtSelection = context.cast()?;
             // 标志不能用 NOQUERY：它不回传 range，windows-rs 会把 NULL 当失败。
@@ -270,13 +288,47 @@ fn nudge_caret_by_key(steps: i32) -> bool {
     ok
 }
 
+/// 补发一个真正给应用的退格 / 删除键，并让按键回调放行它。
+///
+/// 有些宿主（Windows 11 记事本的 TSF 上下文）在符号上屏后把插入点留在 `0..0` 的局部上下文里，往回、往前
+/// 都拉不开范围；这时只能让应用自己删。注入的键排在编辑会话之后，等文本落定才被处理。
+fn inject_key(shared: &Shared, key: VIRTUAL_KEY) -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
+    };
+    let input = |flags: KEYBD_EVENT_FLAGS| INPUT {
+        r#type: INPUT_KEYBOARD,
+        Anonymous: INPUT_0 {
+            ki: KEYBDINPUT {
+                wVk: key,
+                dwFlags: flags,
+                ..Default::default()
+            },
+        },
+    };
+    let inputs = [input(KEYBD_EVENT_FLAGS(0)), input(KEYEVENTF_KEYUP)];
+    shared.mark_injected_key(key.0);
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    if sent == inputs.len() as u32 {
+        true
+    } else {
+        shared.clear_injected_key();
+        super::log::log(&format!(
+            "补发按键 vk={} 失败（只送进 {sent} 个输入）",
+            key.0
+        ));
+        false
+    }
+}
+
 /// 删掉光标前 `count` 个字符（符号映射的两键规则把上一个键的输出换掉，`~=` → `≈`）。
 ///
 /// 真机上发现：TSF 只在「收成哪一端就挪哪一端」时才真正拉开范围。原来的写法收成**末尾**再
 /// `ShiftStart`，范围不动，于是两键规则只上屏后一个符号、前一个留在原地（`！≠`）。
 /// 改成收成**起点**再 `ShiftStart`（与 `surrounding.rs` 往左读前文同款），真拉开了才 `SetText`；
-/// 拉不开再按 ACP 位置直接圈 `[光标-count, 光标]`；都不行只记日志。
-fn delete_before_caret(context: &ITfContext, ec: u32, count: u16) -> Result<()> {
+/// 拉不开再按 ACP 位置直接圈 `[光标-count, 光标]`；宿主上下文太窄（Windows 11 记事本在符号上屏后只剩
+/// `0..0`）就补发一个退格键给应用自己删。
+fn delete_before_caret(shared: &Shared, context: &ITfContext, ec: u32, count: u16) -> Result<()> {
     let mut selections = [TF_SELECTION::default()];
     let mut fetched = 0;
     unsafe { context.GetSelection(ec, TF_DEFAULT_SELECTION, &mut selections, &mut fetched)? };
@@ -288,11 +340,21 @@ fn delete_before_caret(context: &ITfContext, ec: u32, count: u16) -> Result<()> 
         // 用 `GetSelection` 给的**原始**范围去挪：`surrounding.rs` 往左读前文一直这么用、一直好用；
         // 之前先 `Clone` 再挪，真机上 `ShiftStart` 报告「挪了 0」，怎么都不动。
         let by_acp = unsafe { selected.Clone()? };
+        // 选区可能是反向的 / 停在组句起点；先收成结束端（真正的光标处）再往左删。
+        if unsafe { selected.Collapse(ec, TF_ANCHOR_END) }.is_err() {
+            continue;
+        }
         if pull_start_back(&selected, ec, count) {
             return Ok(());
         }
         if delete_by_acp(&by_acp, ec, count) {
             super::log::log(&format!("删光标前 {count} 个字符：按 ACP 位置圈"));
+            return Ok(());
+        }
+        if inject_key(shared, VK_BACK) {
+            super::log::log(&format!(
+                "删光标前 {count} 个字符：TSF 范围动不了，补发退格键"
+            ));
             return Ok(());
         }
         super::log::log(&format!("删光标前 {count} 个字符失败：范围拉不开"));
@@ -337,6 +399,61 @@ fn delete_by_acp(caret: &ITfRange, ec: u32, count: i32) -> bool {
         return false;
     };
     // 空范围上 SetText 本来就什么都不删，不必先用 IsEmpty 挡一道（那个在部分宿主上会失败）
+    unsafe { acp.SetExtent(start, count) }.is_ok() && unsafe { acp.SetText(ec, 0, &[]) }.is_ok()
+}
+
+/// 光标后删除：选区 / 组句范围先收成结束端，再往后扩 `count` 个字符。
+fn delete_after_caret(shared: &Shared, context: &ITfContext, ec: u32, count: u16) -> Result<()> {
+    let mut selections = [TF_SELECTION::default()];
+    let mut fetched = 0;
+    unsafe { context.GetSelection(ec, TF_DEFAULT_SELECTION, &mut selections, &mut fetched)? };
+    let count = i32::from(count);
+    for selection in selections {
+        let Some(selected) = ManuallyDrop::into_inner(selection.range) else {
+            continue;
+        };
+        let by_acp = unsafe { selected.Clone()? };
+        if pull_end_forward(&selected, ec, count) {
+            return Ok(());
+        }
+        if delete_by_acp_after(&by_acp, ec, count) {
+            return Ok(());
+        }
+        if inject_key(shared, VK_DELETE) {
+            super::log::log(&format!(
+                "删光标后 {count} 个字符：TSF 范围动不了，补发删除键"
+            ));
+            return Ok(());
+        }
+        break;
+    }
+    Ok(())
+}
+
+fn pull_end_forward(range: &ITfRange, ec: u32, count: i32) -> bool {
+    if unsafe { range.Collapse(ec, TF_ANCHOR_END) }.is_err() {
+        return false;
+    }
+    let mut shifted = 0;
+    if unsafe { range.ShiftEnd(ec, count, &mut shifted, std::ptr::null()) }.is_err() {
+        return false;
+    }
+    let deleted = shifted > 0 && unsafe { range.SetText(ec, 0, &[]) }.is_ok();
+    super::log::log(&format!(
+        "删光标后 {count} 个字符：收成终点 + ShiftEnd 挪了 {shifted}"
+    ));
+    deleted
+}
+
+fn delete_by_acp_after(caret: &ITfRange, ec: u32, count: i32) -> bool {
+    let Ok(acp) = caret.cast::<ITfRangeACP>() else {
+        return false;
+    };
+    let (mut anchor, mut extent) = (0i32, 0i32);
+    if unsafe { acp.GetExtent(&mut anchor, &mut extent) }.is_err() {
+        return false;
+    }
+    let start = anchor.saturating_add(extent).max(0);
     unsafe { acp.SetExtent(start, count) }.is_ok() && unsafe { acp.SetText(ec, 0, &[]) }.is_ok()
 }
 

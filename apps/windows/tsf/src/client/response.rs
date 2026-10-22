@@ -39,6 +39,9 @@ pub struct KeyResponse {
     /// 上屏前先删掉光标前这么多个字符（符号映射的两键规则用）。
     pub delete_before: u16,
 
+    /// 上屏前先删掉光标后这么多个字符（U 模式 Delete）。
+    pub delete_after: u16,
+
     /// 处理后的组句状态（preedit + 候选）；空帧表示收起候选窗口。
     pub frame: Frame,
 

@@ -72,6 +72,7 @@ impl<S: Read + Write> EngineClient<S> {
                 commit,
                 caret_shift,
                 delete_before,
+                delete_after,
                 frame,
                 want_caret,
                 ..
@@ -80,6 +81,7 @@ impl<S: Read + Write> EngineClient<S> {
                 commit,
                 caret_shift,
                 delete_before,
+                delete_after,
                 frame,
                 want_caret,
             }),

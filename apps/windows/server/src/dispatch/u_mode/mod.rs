@@ -266,8 +266,9 @@ impl Router {
             return Effect::Changed(None);
         }
         if event.virtual_key == 0x2E {
-            // Delete 同样不能落进 TSF 把组句收掉；u 模式下先消费，窗口保持。
+            // Delete 也不能落进 TSF 把组句收掉；通过 delete_after 删光标后字符。
             self.u_mode = Some(u);
+            self.delete_after = 1;
             return Effect::Changed(None);
         }
         if event.virtual_key == 0x20 {

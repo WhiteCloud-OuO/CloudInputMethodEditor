@@ -34,6 +34,10 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
     /// 所有键（含之后被吃掉的）都先经过这里，Shift 单击的判定放在这一层。
     fn OnTestKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         let vk = wparam.0 as u32;
+        // 刚补发的退格 / 删除键：这是给应用自己的，别再吃一遍（否则会递归）。
+        if self.shared.is_injected_key(vk as u16) {
+            return Ok(FALSE);
+        }
         self.note_key_down(vk, lparam);
         if self.keyboard_disabled(&pic) {
             return Ok(FALSE);
@@ -63,6 +67,9 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
 
     fn OnKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
         let vk = wparam.0 as u32;
+        if self.shared.take_injected_key(vk as u16) {
+            return Ok(FALSE);
+        }
         self.note_key_down(vk, lparam);
         if self.keyboard_disabled(&pic) {
             return Ok(FALSE);
@@ -349,6 +356,7 @@ impl TextService_Impl {
                         preedit,
                         caret_shift: response.caret_shift,
                         delete_before: response.delete_before,
+                        delete_after: response.delete_after,
                         consumed,
                     }
                 }
@@ -403,6 +411,7 @@ impl TextService_Impl {
                     preedit,
                     caret_shift,
                     delete_before,
+                    delete_after,
                     ..
                 },
                 _,
@@ -414,6 +423,7 @@ impl TextService_Impl {
                         preedit,
                         caret_shift,
                         delete_before,
+                        delete_after,
                     },
                 );
                 true

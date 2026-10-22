@@ -328,6 +328,12 @@ DLL 据此在**组句里**把这一个键送来问一趟（`eats_key` 里那条�
 量插入点（`com/edit/caret.rs`，与读光标前文同一套，不能同步）；Server 把矩形按所在显示器 DPI 换算成点
 （另带工作区）派 `caret` 事件。
 
+**v21** 给 `ServerMessage::KeyResult` 加了 `delete_after`（U 模式符号窗口开着时按 `Delete` 删光标右字符，
+与 `delete_before` 对称）。老 DLL 不读新字段，表现为 `Delete` 没反应，所以按规矩 +1。DLL 侧 U 模式符号窗口
+强制用 `PreeditMode::Window`：行内组句会让 Windows 11 记事本把 TSF 上下文收成 `0..0`，已上屏的符号落在
+上下文外，`ShiftStart` / `ShiftEnd` 都拉不开范围；范围删不动时改为 `SendInput` 补发一个退格 / 删除键，并把
+它登记在 `Shared::injected_key` 里让 `OnTestKeyDown` / `OnKeyDown` 放行，应用自己删。
+
 **主题文件**（`theme.rs`）：`Themes\*.json` 装候选窗口 / 悬浮工具栏 / 状态切换提示三个窗口的 21 个颜色，分 `candidate`（15 项）/ `bar`（背景 / 图标 / 阴影）/ `tip`（同三项）三组；`ThemeColor` 是一个 `#AARRGGBB`（也认 `#RRGGBB`，serde 走字符串、缺键回缺省，`Default` 对齐现有观感）。`ThemeFile::{load, save}`（`save` 建父目录 + 美化 JSON）；`theme_dirs(bundled_root)` 给出两个候选目录 —— 用户目录 `%APPDATA%\CloudIME\Themes`（可写）与随包目录 `<安装目录>\Themes`（只读），`list_themes` 两处都扫、**用户目录优先**（同名盖掉随包的）、按名字排序，`find_theme` 在它上面按名字找（可带 / 不带 `.json`、大小写不敏感）；`DEFAULT_THEME_FILE` = `Default.json`（随包另有一份 `Panic.json`，两份都是内置主题）、`THEMES_DIR` = `Themes`。`[theme]` 只有一个 `curr_theme`（文件名，不是路径；缺省 `Default.json`），设置页「主题」页写它、Server 靠它选主题。注解色（`gloss` / `pos` / `fresh`）暂不进主题文件。
 
 **输入方案文件**（`input_schemes`，2026-10-10；规范见 `docs/design/input-schemes.md`）：`double_keys.rs` 读双键拼音方案文件（`.toml` / `.ini`）——

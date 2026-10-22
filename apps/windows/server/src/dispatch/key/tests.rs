@@ -6,6 +6,7 @@ use cloudime_core::{CandidateKind, CustomPhrase, Engine};
 use cloudime_dictionary::{Dictionary, WordList};
 use cloudime_platform::LayoutMode;
 use cloudime_platform::MouseWordSelection;
+use cloudime_platform::PreeditMode;
 use cloudime_platform::protocol::{
     ClientMessage, Frame, KeyEvent, KeyModifiers, KeyOutcome, OnlineLine, OnlineState,
     PROTOCOL_VERSION, ScreenRect, ServerMessage, SessionId,
@@ -1579,8 +1580,16 @@ fn u_mode_backspace_keeps_the_symbol_window_and_deletes_one_char() {
     assert_eq!(outcome, KeyOutcome::Consumed);
     assert_eq!(commit, None);
     assert_eq!(frame.candidates.items.len(), 6, "符号候选仍在");
+    assert_eq!(
+        frame.preedit_mode,
+        PreeditMode::Window,
+        "符号窗口不放行内组句"
+    );
     assert!(r.u_mode.expect("u 模式不该退出").symbol_ui);
     assert_eq!(r.delete_before, 1, "由 DLL 删光标前一个字");
+    let (outcome, _, _) = key(&mut r, 0x2E, None, normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(r.delete_after, 1, "Delete 由 DLL 删光标后一个字");
 }
 
 /// 拼音串一旦不只是 `u`，Space 就是普通选词 / 上屏，切不到符号输入。

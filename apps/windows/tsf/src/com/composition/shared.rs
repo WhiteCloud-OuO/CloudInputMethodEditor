@@ -1,5 +1,6 @@
 use std::cell::{Cell, RefCell};
 use std::rc::Rc;
+use std::time::{Duration, Instant};
 
 use windows::Win32::UI::TextServices::{ITfComposition, ITfContext};
 
@@ -28,6 +29,9 @@ pub(crate) struct Shared {
 
     /// 与 `TextService` 共用的引擎客户端；DLL 侧结束组句时要通知 Server 收候选窗口（它无从知晓）。
     client: SharedClient,
+
+    /// 刚用 `SendInput` 补发的退格 / 删除键：TSF 这层要放行，别再送回 Server（否则递归）。
+    injected_key: Cell<Option<(u16, Instant)>>,
 }
 
 impl Shared {
@@ -40,6 +44,7 @@ impl Shared {
             server_stale: Cell::new(false),
             foreground: Cell::new(false),
             client,
+            injected_key: Cell::new(None),
         })
     }
 
@@ -49,6 +54,38 @@ impl Shared {
 
     pub(crate) fn set_foreground(&self, value: bool) {
         self.foreground.set(value);
+    }
+
+    /// 记下即将补发的按键，交给按键回调放行。
+    pub(crate) fn mark_injected_key(&self, vk: u16) {
+        self.injected_key.set(Some((vk, Instant::now())));
+    }
+
+    /// 刚补发的按键要不要放行；超过 1 秒没被回调看到就作废，免得吞掉用户真正的下一个按键。
+    pub(crate) fn is_injected_key(&self, vk: u16) -> bool {
+        match self.injected_key.get() {
+            Some((key, at)) if key == vk && at.elapsed() < Duration::from_secs(1) => true,
+            Some(_) => {
+                self.injected_key.set(None);
+                false
+            }
+            None => false,
+        }
+    }
+
+    /// 放行并清掉标记（`OnKeyDown` 只应看到一次）。
+    pub(crate) fn take_injected_key(&self, vk: u16) -> bool {
+        if self.is_injected_key(vk) {
+            self.injected_key.set(None);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// 补发失败：撤销标记。
+    pub(crate) fn clear_injected_key(&self) {
+        self.injected_key.set(None);
     }
 
     pub(crate) fn last_context(&self) -> Option<ITfContext> {

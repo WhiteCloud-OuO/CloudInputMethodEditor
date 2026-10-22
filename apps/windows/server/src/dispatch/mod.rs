@@ -168,6 +168,9 @@ pub struct Router {
     /// 本次按键上屏前要先删掉光标前几个字符（符号映射的两键规则），随 `KeyResult` 下发。
     delete_before: u16,
 
+    /// 本键处理完要删掉光标后的字符数（U 模式 Delete）。
+    delete_after: u16,
+
     /// 上一键成对补全补上的右半边（用户敲的那个键）；紧接着又敲它一下就是「跳过」。
     pending_close: Option<char>,
 
@@ -312,6 +315,7 @@ impl Router {
             rescore: RescoreState::default(),
             caret_shift: 0,
             delete_before: 0,
+            delete_after: 0,
             pending_close: None,
             restart_pending: false,
             pending_commit: None,

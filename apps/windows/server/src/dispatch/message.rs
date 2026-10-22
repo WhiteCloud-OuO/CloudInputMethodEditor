@@ -183,6 +183,7 @@ impl Router {
         self.notice = None;
         self.caret_shift = 0;
         self.delete_before = 0;
+        self.delete_after = 0;
         // 脚本把这一键接管了：不吃，原样交给应用（游戏里抢键）。
         if actions.passthrough {
             let shown = self.self_drawn_frame();
@@ -193,6 +194,7 @@ impl Router {
                 commit: None,
                 caret_shift: 0,
                 delete_before: 0,
+                delete_after: 0,
                 want_caret,
                 frame: self.current_frame(),
             };
@@ -206,6 +208,7 @@ impl Router {
                 commit: Some(text),
                 caret_shift: 0,
                 delete_before: 0,
+                delete_after: 0,
                 want_caret,
                 frame: self.current_frame(),
             };
@@ -250,6 +253,7 @@ impl Router {
             commit,
             caret_shift: self.caret_shift,
             delete_before: self.delete_before,
+            delete_after: self.delete_after,
             want_caret,
             frame: self.current_frame(),
         }

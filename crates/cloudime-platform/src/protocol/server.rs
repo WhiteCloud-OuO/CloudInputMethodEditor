@@ -149,6 +149,10 @@ pub enum ServerMessage {
         #[serde(default)]
         delete_before: u16,
 
+        /// 上屏之前先删掉光标后这么多个字符（U 模式 Delete 保持符号窗口时用）。
+        #[serde(default)]
+        delete_after: u16,
+
         /// 脚本要光标位置（`cloudime.caret()`）：这次按键处理完请量一下插入点，用
         /// [`super::ClientMessage::Caret`] 送回来。老 Server 不带该字段 → 读成 `false`。
         #[serde(default)]

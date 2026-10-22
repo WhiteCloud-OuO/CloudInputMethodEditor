@@ -16,6 +16,9 @@ pub(super) enum Next {
         /// 上屏前先删掉光标前这么多个字符（符号映射的两键规则把上一个键的输出换掉）。
         delete_before: u16,
 
+        /// 上屏前先删掉光标后这么多个字符（U 模式 Delete）。
+        delete_after: u16,
+
         /// 这个键吃不吃。
         consumed: bool,
     },

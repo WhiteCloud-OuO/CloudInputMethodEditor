@@ -4,6 +4,7 @@ mod state;
 
 use cloudime_core::{Candidate, CandidateLayout, CandidateList, Query};
 use cloudime_platform::LayoutMode;
+use cloudime_platform::PreeditMode;
 use cloudime_platform::protocol::{Frame, PreeditKind, PreeditSegment, TipChoices};
 
 pub(super) use self::state::Composed;
@@ -384,9 +385,16 @@ impl Router {
                 let page = highlight / page_size;
                 let items: Vec<Candidate> = layout.page(page).to_vec();
                 let candidates = CandidateList { items };
+                // 符号窗口期间不放行内组句：TSF 的组句会把宿主上下文收成一小段，退格 / 删除
+                // 就删不到已经上屏的符号（记事本实测）。当前模式由符号窗口本身提示。
+                let preedit_mode = if self.u_mode.is_some_and(|u| u.symbol_ui) {
+                    PreeditMode::Window
+                } else {
+                    self.config.preedit
+                };
                 Frame {
                     preedit: preedit.clone(),
-                    preedit_mode: self.config.preedit,
+                    preedit_mode,
                     cursor: *cursor,
                     candidates,
                     highlight: highlight - page * page_size,
