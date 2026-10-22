@@ -1794,6 +1794,8 @@ fn parse_self_drawing_panel(
                     "self_drawing_panel.draw 的 name 重复（大小写敏感）：{name}"
                 )));
             }
+            // 统一成去掉首尾空白的 name，后续 update_draw_at 才能按同一个名字找到。
+            child.set("name", name.clone())?;
             if draw.len() >= MAX_ELEMENTS {
                 return Err(mlua::Error::RuntimeError(format!(
                     "一个自绘面板最多 {MAX_ELEMENTS} 个 draw 元素"
