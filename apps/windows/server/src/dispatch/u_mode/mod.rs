@@ -258,9 +258,17 @@ impl Router {
         if event.modifiers.has_command_key() {
             return Effect::Passthrough;
         }
-        if matches!(event.virtual_key, 0x08 | 0x2E) {
-            // Backspace / Delete 保持应用里的删除行为；u 模式与符号窗不退出。
-            return Effect::Passthrough;
+        if event.virtual_key == 0x08 {
+            // Backspace 删光标前一个字，但不能把拼音串里的 `u` 删掉——否则 TSF 结束组句，
+            // 符号窗口跟着关。用 delete_before 让 DLL 删，Server 这边保留 u 模式与符号窗。
+            self.u_mode = Some(u);
+            self.delete_before = 1;
+            return Effect::Changed(None);
+        }
+        if event.virtual_key == 0x2E {
+            // Delete 同样不能落进 TSF 把组句收掉；u 模式下先消费，窗口保持。
+            self.u_mode = Some(u);
+            return Effect::Changed(None);
         }
         if event.virtual_key == 0x20 {
             // 支持混输时 Space 切回字母输入；没有混输时仍只吞键。

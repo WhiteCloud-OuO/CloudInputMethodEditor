@@ -87,7 +87,13 @@ pub(crate) fn apply(
             update.caret_shift,
             update.delete_before,
         )?,
-        // 没有要上屏的文本：只是把光标往前跳过补好的右半边
+        // 没有要上屏的文本：先按 Server 要求删光标前字符（u 模式 Backspace），再挪补全光标。
+        None if update.delete_before > 0 => {
+            delete_before_caret(context, ec, update.delete_before)?;
+            if update.caret_shift != 0 {
+                shift_caret(context, ec, update.caret_shift)?;
+            }
+        }
         None if update.caret_shift != 0 => shift_caret(context, ec, update.caret_shift)?,
         None => {}
     }

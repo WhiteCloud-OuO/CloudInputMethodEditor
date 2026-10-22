@@ -1567,6 +1567,22 @@ fn full_pinyin_u_starts_in_letter_mode_and_space_toggles_symbols() {
     assert!(r.u_mode.is_some(), "字母输入仍留在 u 模式");
 }
 
+/// u 模式符号窗口里按退格：消费这一键并让 DLL 删光标前字符，不能把组句里的 `u` 删掉，
+/// 否则 TSF 结束组句、候选窗口提前关闭。
+#[test]
+fn u_mode_backspace_keeps_the_symbol_window_and_deletes_one_char() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    key(&mut r, 0x55, Some('u'), normal);
+    key(&mut r, 0x20, Some(' '), normal);
+    let (outcome, commit, frame) = key(&mut r, 0x08, None, normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit, None);
+    assert_eq!(frame.candidates.items.len(), 6, "符号候选仍在");
+    assert!(r.u_mode.expect("u 模式不该退出").symbol_ui);
+    assert_eq!(r.delete_before, 1, "由 DLL 删光标前一个字");
+}
+
 /// 拼音串一旦不只是 `u`，Space 就是普通选词 / 上屏，切不到符号输入。
 #[test]
 fn space_after_more_letters_commits_instead_of_toggling_symbols() {
