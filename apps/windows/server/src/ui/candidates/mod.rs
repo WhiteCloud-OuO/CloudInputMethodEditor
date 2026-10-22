@@ -208,7 +208,7 @@ pub(crate) struct CandidateWindow {
     hover: Cell<Option<usize>>,
 
     /// 上次**收起态**画出来的候选高亮条有多宽：展开成网格时它当每格的最小宽度
-    /// （见 [`cloudime_render::Frame::min_cell_width`]），免得单字候选挤成一小团。
+    /// （见 [`cloudime_render::CandidateView::min_cell_width`]），免得单字候选挤成一小团。
     collapsed_width: Cell<f32>,
 
     /// 上一次真正贴出去的内容尺寸（物理像素）。展开过渡的起点按它算，
@@ -523,11 +523,11 @@ impl CandidateWindow {
         let rendered = {
             let animation = self.current_animation();
             let data = self.data.borrow();
-            let frame = data.render_frame(animation, self.collapsed_width.get());
+            let view = data.candidate_view(animation, self.collapsed_width.get());
             self.painter
                 .borrow_mut()
                 .as_mut()
-                .and_then(|painter| painter.render_frame(&frame, data.layout, dpi))
+                .and_then(|painter| painter.render_candidate(&view, data.layout, dpi))
         };
         let Some(rendered) = rendered else {
             // 字体库加载失败或渲染出错（已记日志）：不贴图、不显示。

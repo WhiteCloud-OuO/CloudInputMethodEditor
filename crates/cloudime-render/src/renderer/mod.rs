@@ -86,6 +86,9 @@ pub struct Renderer {
 
     /// 上一帧内容不变时的 draw 列表缓存；高亮滑动只改其中一个矩形，不重新排版 / 录制。
     frame_cache: RefCell<Option<FrameCache>>,
+
+    /// 新候选页面树路径的同类缓存。
+    candidate_cache: RefCell<Option<candidate::CandidateCache>>,
 }
 
 /// 候选帧内容不变时留下的自绘文档。
@@ -262,6 +265,7 @@ impl Renderer {
             text: Rc::new(RefCell::new(text)),
             shadows: RefCell::new(Vec::new()),
             frame_cache: RefCell::new(None),
+            candidate_cache: RefCell::new(None),
         }
     }
 
@@ -1775,6 +1779,123 @@ mod tests {
                 .filter(|(a, b)| a != b)
                 .count();
             assert_eq!(differing, 0, "页面树矩阵路径应与直接绘制一致（{layout:?}）");
+        }
+    }
+
+    #[test]
+    fn the_page_tree_candidate_matches_rich_content_in_every_layout() {
+        use crate::frame::{CandidateView, Preedit, PreeditSegment, PreeditStyle, TipSegment};
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let frame = Frame {
+            preedit: Some(Preedit {
+                segments: vec![
+                    PreeditSegment {
+                        text: "ni".to_owned(),
+                        style: PreeditStyle::Typed,
+                    },
+                    PreeditSegment {
+                        text: "hao".to_owned(),
+                        style: PreeditStyle::Rest,
+                    },
+                ],
+                cursor: 2,
+            }),
+            status: Some("删词".to_owned()),
+            rows: vec![
+                Row {
+                    index: "1".to_owned(),
+                    text: "你好".to_owned(),
+                    annotation: vec![("r".to_owned(), Tone::Gloss)],
+                    badge: Some("造".to_owned()),
+                    auxiliary: Some(Auxiliary::split("XH", "X")),
+                },
+                Row {
+                    index: "2".to_owned(),
+                    text: "拟好".to_owned(),
+                    annotation: Vec::new(),
+                    badge: None,
+                    auxiliary: None,
+                },
+            ],
+            highlighted: Some(0),
+            footer: Some("1/1".to_owned()),
+            tip: Some(vec![TipSegment::new("hello", Tone::TranslateFresh, false)]),
+            online: Some(vec![TipSegment::new("online", Tone::Online, false)]),
+            ..Frame::default()
+        };
+        let theme = Theme::new();
+        for layout in [Layout::Vertical, Layout::Horizontal] {
+            let direct = renderer
+                .render_direct(&frame, layout, &theme, 1.25, None)
+                .unwrap();
+            let page_tree = renderer
+                .render_candidate_view(&CandidateView::from(&frame), layout, &theme, 1.25, None)
+                .unwrap();
+            assert_eq!(
+                (direct.content_width, direct.content_height),
+                (page_tree.content_width, page_tree.content_height),
+                "layout={layout:?}"
+            );
+            let differing = direct
+                .pixmap
+                .pixels()
+                .iter()
+                .zip(page_tree.pixmap.pixels())
+                .filter(|(a, b)| a != b)
+                .count();
+            assert_eq!(differing, 0, "layout={layout:?} 的富内容应与直接绘制一致");
+        }
+    }
+
+    #[test]
+    fn page_tree_highlight_slide_matches_direct() {
+        use crate::frame::CandidateView;
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let theme = Theme::new();
+        let mut frame = Frame {
+            rows: (0..4)
+                .map(|index| Row {
+                    index: (index + 1).to_string(),
+                    text: format!("候选{index}"),
+                    annotation: Vec::new(),
+                    badge: None,
+                    auxiliary: None,
+                })
+                .collect(),
+            highlighted: Some(2),
+            ..Frame::default()
+        };
+        for progress in [0.0, 0.5, 1.0] {
+            frame.highlight_animation = Some(HighlightAnimation {
+                from: HighlightRect::new(0.0, 0.0, 100.0, 20.0),
+                progress,
+            });
+            let direct = renderer
+                .render_direct(&frame, Layout::Vertical, &theme, 1.0, None)
+                .unwrap();
+            let page_tree = renderer
+                .render_candidate_view(
+                    &CandidateView::from(&frame),
+                    Layout::Vertical,
+                    &theme,
+                    1.0,
+                    None,
+                )
+                .unwrap();
+            let differing = direct
+                .pixmap
+                .pixels()
+                .iter()
+                .zip(page_tree.pixmap.pixels())
+                .filter(|(a, b)| a != b)
+                .count();
+            assert_eq!(differing, 0, "progress={progress}");
         }
     }
 

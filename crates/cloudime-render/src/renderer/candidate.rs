@@ -25,6 +25,17 @@ struct Columns {
     row_height: f32,
 }
 
+pub(super) struct CandidateCache {
+    base: CandidateView,
+    layout: Layout,
+    theme: crate::theme::Theme,
+    scale: f32,
+    shadow: Option<Shadow>,
+    document: Document,
+    highlight_index: Option<usize>,
+    highlight_rects: Vec<HighlightRect>,
+}
+
 struct CandidateLayout {
     rects: Vec<Option<cloud_ui_core::Rect>>,
     top: Option<usize>,
@@ -44,6 +55,34 @@ impl Renderer {
         scale: f32,
         shadow: Option<&Shadow>,
     ) -> Result<crate::renderer::Rendered, RenderError> {
+        let base = CandidateView {
+            highlight_animation: None,
+            ..view.clone()
+        };
+        let cached = self.candidate_cache.borrow_mut().take();
+        if let Some(mut cache) = cached
+            && cache.base == base
+            && cache.layout == layout_mode
+            && cache.theme == *theme
+            && (cache.scale - scale).abs() <= f32::EPSILON
+            && cache.shadow == shadow.copied()
+        {
+            super::set_highlight(
+                &mut cache.document,
+                cache.highlight_index,
+                highlight_rect(view, &cache.highlight_rects),
+                scale,
+            );
+            let result = self
+                .render_document(&cache.document, &cache.theme, scale, shadow, false)
+                .map(|document| {
+                    let mut rendered = document.rendered;
+                    super::apply_hit_geometry(&mut rendered, &cache.highlight_rects, scale);
+                    rendered
+                });
+            *self.candidate_cache.borrow_mut() = Some(cache);
+            return result;
+        }
         if view.columns > 0 {
             return self.render_candidate_matrix(view, layout_mode, theme, scale, shadow);
         }
@@ -120,7 +159,42 @@ impl Renderer {
             })
             .collect();
         rendered.highlight_rects = candidate.highlight_rects;
+        self.remember_candidate(
+            view,
+            layout_mode,
+            theme,
+            scale,
+            shadow,
+            &document,
+            &rendered.highlight_rects,
+        );
         Ok(rendered)
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn remember_candidate(
+        &self,
+        view: &CandidateView,
+        layout: Layout,
+        theme: &crate::theme::Theme,
+        scale: f32,
+        shadow: Option<&Shadow>,
+        document: &Document,
+        highlight_rects: &[HighlightRect],
+    ) {
+        *self.candidate_cache.borrow_mut() = Some(CandidateCache {
+            base: CandidateView {
+                highlight_animation: None,
+                ..view.clone()
+            },
+            layout,
+            theme: theme.clone(),
+            scale,
+            shadow: shadow.copied(),
+            document: document.clone(),
+            highlight_index: super::highlight_element_index(document, theme),
+            highlight_rects: highlight_rects.to_vec(),
+        });
     }
 
     fn candidate_layout(
@@ -611,6 +685,15 @@ impl Renderer {
             })
             .collect();
         rendered.highlight_rects = laid.highlight_rects;
+        self.remember_candidate(
+            view,
+            Layout::Horizontal,
+            theme,
+            scale,
+            shadow,
+            &document,
+            &rendered.highlight_rects,
+        );
         Ok(rendered)
     }
 
@@ -869,6 +952,15 @@ impl Renderer {
             })
             .collect();
         rendered.highlight_rects = highlight_rects;
+        self.remember_candidate(
+            view,
+            layout_mode,
+            theme,
+            scale,
+            shadow,
+            &document,
+            &rendered.highlight_rects,
+        );
         Ok(rendered)
     }
 }

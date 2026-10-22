@@ -7,8 +7,8 @@ use std::sync::atomic::{AtomicU64, Ordering};
 
 use cloudime_platform::LayoutMode;
 use cloudime_render::{
-    Color, Document, Element, FontLibrary, FontSlot, Frame, Layout, Preedit, Rendered,
-    RenderedStatus, Renderer, Row, Shadow, StatusCell, Theme, UiFont, system_fonts,
+    CandidateView, Color, Document, Element, FontLibrary, FontSlot, Frame, Layout, Preedit,
+    Rendered, RenderedStatus, Renderer, Row, Shadow, StatusCell, Theme, UiFont, system_fonts,
 };
 
 use cloud_ui_core::{
@@ -151,10 +151,10 @@ impl Painter {
         *painter = Self::new(settings);
     }
 
-    /// 画一帧候选窗口；`dpi` 96 为 100%。失败记日志返回 `None`，调用方不显示候选窗口。
-    pub fn render_frame(
+    /// 画一帧候选窗口的新路径：`CandidateView` → 页面树 → Document；`dpi` 96 为 100%。
+    pub fn render_candidate(
         &mut self,
-        frame: &Frame,
+        view: &CandidateView,
         layout: LayoutMode,
         dpi: u32,
     ) -> Option<Rendered> {
@@ -165,20 +165,20 @@ impl Painter {
         let started = std::time::Instant::now();
         let rendered = self
             .renderer
-            .render(
-                frame,
+            .render_candidate_view(
+                view,
                 layout,
                 &self.theme,
                 scale(dpi),
                 Some(&self.candidate_shadow),
             )
-            .inspect_err(|error| tracing::warn!(%error, "候选窗渲染失败"))
+            .inspect_err(|error| tracing::warn!(%error, "候选窗页面树渲染失败"))
             .ok()?;
         tracing::debug!(
             elapsed = ?started.elapsed(),
             width = rendered.content_width,
             height = rendered.content_height,
-            "候选窗位图已画"
+            "候选窗页面树位图已画"
         );
         Some(rendered)
     }

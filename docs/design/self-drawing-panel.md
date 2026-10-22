@@ -161,15 +161,12 @@ SelfDrawingPanel {
 - v2 页面树新增节点类型 `self_drawing_panel`，按 Container 参与布局；`draw` 不占布局空间。
 - `auto_size` 在 `cloudime-script` 的页面树测量阶段调用 `LayoutMeasureHook`。
 - 候选窗口迁移进度：
-  - `Renderer::render` 已把候选 `Frame` 的拼音行、候选行、高亮、页码、译文录进一个
-    `SelfDrawingPanel.draw`，再交给 `render_document` 出图；候选窗口外观与旧的直接位图路径
-    逐像素一致（阴影边缘在非整数缩放下有少量抗锯齿差，已在测试里限定）；
-  - 新路径 `CandidateView` + `PageTree` 已能生成竖排 / 横排 / 矩阵候选的 Document（拼音行 / 每个候选行或格 /
-    底部信息都是页面树节点）；
+  - 候选窗口现在走 `CandidateView` → `PageTree`（拼音行 / 每个候选行或格 / 底部信息）→
+    `Document`；协议层 `Frame` 只留在 IPC，不再进入候选渲染器；
+  - 竖排 / 横排 / 矩阵三种页面树候选路径都与旧直接绘制做了逐像素对照；
   - 候选行同时生成 `Rendered.regions`（`candidate_<index>`），鼠标悬停 / 点击已优先走区域；
-    仍保留 `Frame` / `render_frame` 入口和 `highlight_rects` 供高亮动画使用；
-  - 高亮滑动会复用上一帧 draw 列表，只改高亮矩形再合成；位图仍是整块重画，
-    但不再重复排版 / 录制；
+  - 旧 `Frame` 渲染只保留给设置页预览和测试对照；
+  - 高亮滑动目前仍走完整 `render_document`，页面树路径的 draw 缓存下一步接；
   - 键位映射等资产仍按现有辅助窗口处理。
 
 ## 7. 实现顺序

@@ -1,4 +1,4 @@
-//! 候选窗口一次绘制要用的全部内容，由帧换算而来；渲染器要的帧由 [`RenderData::render_frame`] 再换一次。
+//! 候选窗口一次绘制要用的全部内容，由协议帧换算而来；页面树路径直接用 [`RenderData::candidate_view`]。
 
 use cloudime_platform::ItemNumberStyle;
 use cloudime_platform::LayoutMode;
@@ -127,14 +127,13 @@ impl RenderData {
         self.notice = frame.notice.clone();
     }
 
-    /// 渲染器要的帧。提示（删了什么词）在渲染器里画在拼音行右侧；`highlight_animation` 是纯展示的
-    /// 高亮条滑动信息，`None` 直接画在高亮行；`min_cell_width` 是展开成网格时每格的最小宽度，见
-    /// [`cloudime_render::Frame::min_cell_width`]。
-    pub(super) fn render_frame(
+    /// 候选页面树 + Document 路径要的视图。提示（删了什么词）画在拼音行右侧；
+    /// `highlight_animation` 是纯展示的高亮条滑动信息；`min_cell_width` 是展开成网格时每格的最小宽度。
+    pub(super) fn candidate_view(
         &self,
         highlight_animation: Option<HighlightAnimation>,
         min_cell_width: f32,
-    ) -> cloudime_render::Frame {
+    ) -> cloudime_render::CandidateView {
         let preedit = (!self.preedit.is_empty()).then(|| Preedit {
             segments: self
                 .preedit
@@ -150,7 +149,7 @@ impl RenderData {
                 .collect(),
             cursor: self.cursor,
         });
-        cloudime_render::Frame {
+        cloudime_render::CandidateView {
             preedit,
             rows: self.rows.clone(),
             // 协议里 usize::MAX 表示不高亮。

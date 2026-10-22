@@ -433,7 +433,8 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 `render_document`。旧的直接绘制保留为测试用的 `render_direct`，逐像素对照；阴影 + 非整数缩放只在面板边缘
 有少量抗锯齿差。新的 `CandidateView` + 页面树路径（`render_candidate_view`）已覆盖竖排 / 横排 / 矩阵：
 拼音行、每个候选行 / 格、底部信息都是 `PageTree` 节点，Document 直接从节点矩形生成；三种布局都和旧路径
-做了逐像素对照。候选窗口还没切到新入口，旧 `Frame` 路径暂时保留。`Rendered.regions` 同步生成 `candidate_<index>` 候选行区域（内容区点坐标），候选窗口的
+做了逐像素对照。Server 的候选窗口已切到 `CandidateView` / `render_candidate`，协议 `Frame` 只留在 IPC；
+旧 `cloudime_render::Frame` 渲染只给设置页预览和测试对照。`Rendered.regions` 同步生成 `candidate_<index>` 候选行区域（内容区点坐标），候选窗口的
 `cell_at` 优先按区域找行、再回退到旧的 `highlight_rects`。`Renderer` 还缓存上一帧内容不变时的 draw 列表：
 高亮滑动只改 `SelfDrawingPanel.draw` 里的高亮矩形再走 `render_document`，不重新排版 / 录制；位图本身仍整块重画。
 候选行右侧的**来源角标**：`Row.badge`（Server `dispatch/candidates/mod.rs::badges_of` 按 `kind == Custom` 判「短」、
