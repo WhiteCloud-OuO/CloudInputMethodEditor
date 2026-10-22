@@ -125,33 +125,40 @@ impl StatusTip {
     }
 }
 
-/// 内容左上角：有悬浮工具栏时固定放在工具栏上方；没有工具栏才退回光标附近。
+/// 内容左上角：优先跟随输入光标；只有和悬浮工具栏重叠时才挪到工具栏上方。
 /// 都夹在所在显示器工作区里。
 fn place(anchor: RECT, status: Option<RECT>, content: (i32, i32), gap: i32) -> (i32, i32) {
     let work = monitor::work_area_near(POINT {
         x: anchor.left,
         y: anchor.top,
     });
-    if let Some(status) = status {
-        let x = status
-            .left
-            .clamp(work.left, (work.right - content.0).max(work.left));
-        let y = (status.top - gap - content.1).max(work.top);
-        return (x, y);
-    }
     let x = anchor
         .left
         .clamp(work.left, (work.right - content.0).max(work.left));
     let below = anchor.bottom + gap;
     let above = anchor.top - gap - content.1;
-    let y = if below + content.1 <= work.bottom {
+    let mut y = if below + content.1 <= work.bottom {
         below
     } else if above >= work.top {
         above
     } else {
         (work.bottom - content.1).max(work.top)
     };
+    if let Some(status) = status
+        && overlaps(x, y, content, &status)
+    {
+        // 工具栏在光标附近时提示条优先让位：贴在工具栏上方，x 仍跟着光标。
+        y = (status.top - gap - content.1).max(work.top);
+    }
     (x, y)
+}
+
+/// 提示条矩形是否和工具栏相交（留 `gap` 的间距也算贴上了）。
+fn overlaps(x: i32, y: i32, content: (i32, i32), status: &RECT) -> bool {
+    x < status.right
+        && x + content.0 > status.left
+        && y < status.bottom
+        && y + content.1 > status.top
 }
 
 /// 分层窗口无需 `WM_PAINT`；到点收起。
@@ -175,7 +182,7 @@ mod tests {
     use windows::Win32::Foundation::RECT;
 
     #[test]
-    fn the_tip_sits_above_the_status_bar_when_it_is_visible() {
+    fn the_tip_follows_the_caret_when_it_does_not_hit_the_status_bar() {
         let anchor = RECT {
             left: 100,
             top: 900,
@@ -188,8 +195,25 @@ mod tests {
             right: 500,
             bottom: 1060,
         };
+        assert_eq!(place(anchor, Some(status), (120, 40), 6), (100, 926));
+    }
+
+    #[test]
+    fn the_tip_moves_above_the_status_bar_when_it_would_overlap() {
+        let anchor = RECT {
+            left: 250,
+            top: 980,
+            right: 270,
+            bottom: 996,
+        };
+        let status = RECT {
+            left: 200,
+            top: 1000,
+            right: 500,
+            bottom: 1060,
+        };
         let (x, y) = place(anchor, Some(status), (120, 40), 6);
-        assert!(x >= status.left);
+        assert_eq!(x, 250);
         assert!(y + 40 <= status.top);
     }
 }
