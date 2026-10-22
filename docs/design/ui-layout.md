@@ -290,7 +290,7 @@ Page（主页面，一窗口一棵）
 - 状态条与状态切换提示的几何已改为页面树 → `Document` → `render_document`；候选窗仍从
   `Frame` 进入 `render_frame`，但 `Renderer` 内部已把这一帧录成自绘面板的 draw 列表再走
   `render_document`。候选行同时生成 `Rendered.regions`（`candidate_<index>`），鼠标命中已优先走区域。
-  候选高亮动画仍是整帧重绘，逐 draw 元素更新还没接。
+  候选高亮滑动会复用上一帧的 draw 列表，只改高亮矩形再合成（不再重新排版 / 录制）；位图本身仍整块重画。
 - 节点级 `insert` / `remove` 和列表 keyed diff 尚未接入；当前用 `set_data` 整份重建实例。
 
 ### 6.4 文字测量

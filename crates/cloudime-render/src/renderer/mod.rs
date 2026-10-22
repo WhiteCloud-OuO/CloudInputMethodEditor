@@ -82,6 +82,24 @@ pub struct Renderer {
 
     /// 阴影层缓存（最多 [`SHADOW_CACHE_ENTRIES`] 份）：阴影只跟尺寸 / 圆角 / 参数有关，跟内容无关。
     shadows: RefCell<Vec<(ShadowKey, tiny_skia::Pixmap)>>,
+
+    /// 上一帧内容不变时的 draw 列表缓存；高亮滑动只改其中一个矩形，不重新排版 / 录制。
+    frame_cache: RefCell<Option<FrameCache>>,
+}
+
+/// 候选帧内容不变时留下的自绘文档。
+struct FrameCache {
+    /// 去掉 `highlight_animation` 的帧；用于判断是否只有滑动进度变了。
+    base_frame: Frame,
+    layout: Layout,
+    theme: Theme,
+    scale: f32,
+    shadow: Option<Shadow>,
+    document: Document,
+    /// 高亮条在 `SelfDrawingPanel.draw` 里的下标；没有高亮时为空。
+    highlight_index: Option<usize>,
+    /// 每行 / 每格的静态高亮矩形（像素），动画只做插值。
+    highlight_rects: Vec<HighlightRect>,
 }
 
 /// 阴影层缓存留几份（候选窗 / 键位映射参考 / 状态条 / 状态提示各一份就够）。
@@ -242,6 +260,7 @@ impl Renderer {
         Self {
             text: Rc::new(RefCell::new(text)),
             shadows: RefCell::new(Vec::new()),
+            frame_cache: RefCell::new(None),
         }
     }
 
@@ -257,8 +276,25 @@ impl Renderer {
         scale: f32,
         shadow: Option<&Shadow>,
     ) -> Result<Rendered, RenderError> {
+        let base_frame = Frame {
+            highlight_animation: None,
+            ..frame.clone()
+        };
+        let cached = self.frame_cache.borrow_mut().take();
+        if let Some(mut cache) = cached
+            && cache.base_frame == base_frame
+            && cache.layout == layout
+            && cache.theme == *theme
+            && (cache.scale - scale).abs() <= f32::EPSILON
+            && cache.shadow == shadow.copied()
+        {
+            let result = self.render_cached(&mut cache, frame, scale, shadow);
+            *self.frame_cache.borrow_mut() = Some(cache);
+            return result;
+        }
+
         let metrics = Metrics { theme, scale };
-        let (content_width, content_height) = self.preferred_size(frame, layout, &metrics);
+        let (content_width, content_height) = self.preferred_size(&base_frame, layout, &metrics);
         let margin = shadow.map_or(0.0, |s| metrics.px(s.margin()));
         let mut recorder = record::DrawRecorder::new(self.text.clone(), scale, (margin, margin));
         recorder.round_rect(
@@ -270,11 +306,11 @@ impl Renderer {
             theme.colors.background,
         );
         let mut y = margin + metrics.padding();
-        y += self.draw_top_line(&mut recorder, frame, &metrics, margin, y);
-        let highlight_rects = if frame.columns > 0 {
+        y += self.draw_top_line(&mut recorder, &base_frame, &metrics, margin, y);
+        let highlight_rects = if base_frame.columns > 0 {
             self.draw_matrix(
                 &mut recorder,
-                frame,
+                &base_frame,
                 &metrics,
                 layout,
                 margin,
@@ -283,12 +319,22 @@ impl Renderer {
             )
         } else {
             match layout {
-                Layout::Vertical => {
-                    self.draw_vertical(&mut recorder, frame, &metrics, margin, y, content_width)
-                }
-                Layout::Horizontal => {
-                    self.draw_horizontal(&mut recorder, frame, &metrics, margin, y, content_width)
-                }
+                Layout::Vertical => self.draw_vertical(
+                    &mut recorder,
+                    &base_frame,
+                    &metrics,
+                    margin,
+                    y,
+                    content_width,
+                ),
+                Layout::Horizontal => self.draw_horizontal(
+                    &mut recorder,
+                    &base_frame,
+                    &metrics,
+                    margin,
+                    y,
+                    content_width,
+                ),
             }
         };
         let scale = scale.max(f32::EPSILON);
@@ -302,7 +348,7 @@ impl Renderer {
             children: Vec::new(),
             regions: Vec::new(),
         };
-        let document = Document {
+        let mut document = Document {
             width: panel.width,
             height: panel.height,
             elements: vec![Element::SelfDrawingPanel(panel)],
@@ -310,26 +356,49 @@ impl Renderer {
             control_names: Vec::new(),
             instances: Default::default(),
         };
+        let highlight_index = highlight_element_index(&document, theme);
+        set_highlight(
+            &mut document,
+            highlight_index,
+            highlight_rect(frame, &highlight_rects),
+            scale,
+        );
         let mut rendered = self
             .render_document(&document, theme, scale, shadow, false)?
             .rendered;
-        rendered.regions = highlight_rects
-            .iter()
-            .enumerate()
-            .map(|(index, rect)| {
-                Region::new(
-                    format!("candidate_{index}"),
-                    HitShape::Rect(HitRect::new(
-                        rect.left / scale,
-                        rect.top / scale,
-                        rect.width() / scale,
-                        rect.height() / scale,
-                    )),
-                    false,
-                )
-            })
-            .collect();
-        rendered.highlight_rects = highlight_rects;
+        apply_hit_geometry(&mut rendered, &highlight_rects, scale);
+        *self.frame_cache.borrow_mut() = Some(FrameCache {
+            base_frame,
+            layout,
+            theme: theme.clone(),
+            scale,
+            shadow: shadow.copied(),
+            document,
+            highlight_index,
+            highlight_rects,
+        });
+        Ok(rendered)
+    }
+
+    /// 内容没变、只有高亮滑动：复用上一帧的 draw 列表，只改高亮矩形再合成。
+    fn render_cached(
+        &self,
+        cache: &mut FrameCache,
+        frame: &Frame,
+        scale: f32,
+        shadow: Option<&Shadow>,
+    ) -> Result<Rendered, RenderError> {
+        let scale = scale.max(f32::EPSILON);
+        set_highlight(
+            &mut cache.document,
+            cache.highlight_index,
+            highlight_rect(frame, &cache.highlight_rects),
+            scale,
+        );
+        let mut rendered = self
+            .render_document(&cache.document, &cache.theme, scale, shadow, false)?
+            .rendered;
+        apply_hit_geometry(&mut rendered, &cache.highlight_rects, scale);
         Ok(rendered)
     }
 
@@ -1176,6 +1245,80 @@ fn online_lines(segments: &[TipSegment]) -> Vec<Vec<TipSegment>> {
 
 /// 目标高亮条的矩形（内容区坐标）：有动画信息时从它的起点矩形 lerp 到目标行矩形，否则就是目标行矩形。
 /// `rects` 是各候选行 / 格的高亮矩形，下标与 `frame.rows` 对齐。
+/// 找 `SelfDrawingPanel.draw` 里的高亮条：颜色是主题高亮色、圆角大于 0 的矩形。
+fn highlight_element_index(document: &Document, theme: &Theme) -> Option<usize> {
+    let Element::SelfDrawingPanel(panel) = document.elements.first()? else {
+        return None;
+    };
+    panel.draw.iter().position(|element| {
+        matches!(
+            element,
+            Element::Rect {
+                radius,
+                color,
+                ..
+            } if *radius > 0.0 && *color == theme.colors.highlight
+        )
+    })
+}
+
+/// 只改高亮条矩形的几何；`rect` 是内容区像素坐标。
+fn set_highlight(
+    document: &mut Document,
+    index: Option<usize>,
+    rect: Option<HighlightRect>,
+    scale: f32,
+) {
+    let Some(index) = index else {
+        return;
+    };
+    let Some(Element::SelfDrawingPanel(panel)) = document.elements.first_mut() else {
+        return;
+    };
+    let Some(Element::Rect {
+        x,
+        y,
+        width,
+        height,
+        ..
+    }) = panel.draw.get_mut(index)
+    else {
+        return;
+    };
+    if let Some(rect) = rect {
+        let scale = scale.max(f32::EPSILON);
+        *x = rect.left / scale;
+        *y = rect.top / scale;
+        *width = rect.width() / scale;
+        *height = rect.height() / scale;
+    } else {
+        *width = 0.0;
+        *height = 0.0;
+    }
+}
+
+/// 把静态高亮矩形同步到 `Rendered`：区域给鼠标用，矩形给高亮动画用。
+fn apply_hit_geometry(rendered: &mut Rendered, rects: &[HighlightRect], scale: f32) {
+    let scale = scale.max(f32::EPSILON);
+    rendered.regions = rects
+        .iter()
+        .enumerate()
+        .map(|(index, rect)| {
+            Region::new(
+                format!("candidate_{index}"),
+                HitShape::Rect(HitRect::new(
+                    rect.left / scale,
+                    rect.top / scale,
+                    rect.width() / scale,
+                    rect.height() / scale,
+                )),
+                false,
+            )
+        })
+        .collect();
+    rendered.highlight_rects = rects.to_vec();
+}
+
 fn highlight_rect(frame: &Frame, rects: &[HighlightRect]) -> Option<HighlightRect> {
     let to = frame.highlighted?;
     let target = *rects.get(to)?;
@@ -1414,6 +1557,52 @@ mod tests {
                 "layout={layout:?} columns={columns} 的录制结果应与直接绘制一致"
             );
             assert_eq!(direct.highlight_rects, recorded.highlight_rects);
+        }
+    }
+
+    #[test]
+    fn highlight_slide_reuses_the_cached_draw_list() {
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let theme = Theme::new();
+        let mut frame = Frame {
+            rows: (0..4)
+                .map(|index| Row {
+                    index: (index + 1).to_string(),
+                    text: format!("候选{index}"),
+                    annotation: Vec::new(),
+                    badge: None,
+                    auxiliary: None,
+                })
+                .collect(),
+            highlighted: Some(1),
+            highlight_animation: Some(HighlightAnimation {
+                from: HighlightRect::new(0.0, 0.0, 100.0, 20.0),
+                progress: 0.0,
+            }),
+            ..Frame::default()
+        };
+        for progress in [0.0, 0.25, 0.5, 0.75, 1.0] {
+            frame.highlight_animation = Some(HighlightAnimation {
+                from: HighlightRect::new(0.0, 0.0, 100.0, 20.0),
+                progress,
+            });
+            let direct = renderer
+                .render_direct(&frame, Layout::Vertical, &theme, 1.0, None)
+                .unwrap();
+            let cached = renderer
+                .render(&frame, Layout::Vertical, &theme, 1.0, None)
+                .unwrap();
+            let differing = direct
+                .pixmap
+                .pixels()
+                .iter()
+                .zip(cached.pixmap.pixels())
+                .filter(|(a, b)| a != b)
+                .count();
+            assert_eq!(differing, 0, "progress={progress} 的滑动帧应与直接绘制一致");
+            assert_eq!(cached.regions.len(), 4);
         }
     }
 
