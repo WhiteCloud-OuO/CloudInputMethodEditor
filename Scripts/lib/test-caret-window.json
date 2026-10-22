@@ -1,219 +1,311 @@
 {
-  "width": 760,
-  "height": 640,
-  "controls": [
-    {
-      "name": "background",
-      "type": "rect",
-      "x": 0,
-      "y": 0,
-      "w": 760,
-      "h": 640,
-      "radius": 12,
-      "color": "#FFFFFFFF"
-    },
-    {
-      "name": "panel",
-      "type": "panel",
-      "x": 8,
-      "y": 8,
-      "w": 744,
-      "h": 624,
-      "children": [
-        {
-          "name": "title",
-          "type": "label",
-          "x": 88,
-          "y": 18,
-          "size": 20,
-          "runs": [
-            { "text": "云朵", "color": "#FF4A90E2" },
-            { "text": "输入法", "color": "#FF222222" }
-          ]
-        },
-        {
-          "name": "subtitle",
-          "type": "text_block",
-          "x": 88,
-          "y": 54,
-          "size": 14,
-          "line_spacing": 5,
-          "text": "760 × 640\nCtrl+Alt+F3 只创建",
-          "color": "#FF888888"
-        },
-        {
-          "name": "divider",
-          "type": "static_shape",
-          "shape": "line",
-          "from": { "x": 16, "y": 110 },
-          "to": { "x": 728, "y": 110 },
-          "thickness": 1,
-          "color": "#FF888888"
-        },
-        {
-          "name": "demo_bar",
-          "type": "static_shape",
-          "shape": "round_rect",
-          "x": 16,
-          "y": 122,
-          "w": 712,
-          "h": 28,
-          "radius": 8,
-          "color": "#FFF0C8FF"
-        },
-        {
-          "name": "demo_label",
-          "type": "label",
-          "x": 28,
-          "y": 127,
-          "size": 14,
-          "runs": [
-            { "text": "静态控件演示", "color": "#FF222222" }
-          ]
-        },
-        {
-          "name": "nested",
-          "type": "text_edit",
-          "x": 16,
-          "y": 160,
-          "w": 320,
-          "h": 32,
-          "font": "candidate",
-          "back_color": "#FFFFFFFF",
-          "edge_color": "#FFD0D0D0",
-          "edge_width": 1,
-          "text_color": "#FF222222",
-          "sel_back_color": "#FF33FF33",
-          "sel_text_color": "#FFFFFFFF",
-          "cursor_color": "#FFFF0000",
-          "font_size": 18,
-          "font_flag": 0,
-          "text": "面板里的输入框"
+  "version": 2,
+  "page": {
+    "w": 760,
+    "h": 640,
+    "children": [
+      {
+        "name": "background",
+        "type": "rect",
+        "w": 760,
+        "h": 640,
+        "radius": 12,
+        "color": "#FFFFFFFF",
+        "position": "absolute",
+        "inset": {
+          "left": 0,
+          "top": 0
         }
-      ]
-    },
-    {
-      "type": "text_edit",
-      "name": "search",
-      "x": 24,
-      "y": 210,
-      "w": 320,
-      "h": 32,
-      "font": "candidate",
-      "svg_path": "Images/SVG/打勾.svg",
-      "svg_align": "left",
-      "back_color": "#FFFFFFFF",
-      "edge_color": "#FFD0D0D0",
-      "edge_width": 1,
-      "text_color": "#FF222222",
-      "sel_back_color": "#FF33FF33",
-      "sel_text_color": "#FFFFFFFF",
-      "cursor_color": "#FFFF0000",
-      "fill_color": "#FF00AA00",
-      "font_size": 18,
-      "font_flag": 0,
-      "events": { "on_key_pressed": "search_key", "on_focused": "search_focus", "on_unfocused": "search_blur" },
-      "text": "在这里输入"
-    },
-    {
-      "type": "text_edit",
-      "name": "plain",
-      "x": 24,
-      "y": 254,
-      "w": 320,
-      "h": 32,
-      "font": "candidate",
-      "back_color": "#FFFFFFFF",
-      "edge_color": "#FFD0D0D0",
-      "edge_width": 1,
-      "text_color": "#FF222222",
-      "sel_back_color": "#FF33FF33",
-      "sel_text_color": "#FFFFFFFF",
-      "cursor_color": "#FFFF0000",
-      "font_size": 18,
-      "font_flag": 2,
-      "text": "没有图标的输入框"
-    },
-    {
-      "type": "text_box",
-      "name": "notes",
-      "x": 24,
-      "y": 300,
-      "w": 680,
-      "h": 150,
-      "font": "candidate",
-      "font_size": 16,
-      "line_spacing": 8,
-      "auto_line_wrap": true,
-      "back_color": "#FFFFFFFF",
-      "edge_color": "#FFD0D0D0",
-      "edge_width": 1,
-      "text_color": "#FF222222",
-      "sel_back_color": "#FF33FF33",
-      "sel_text_color": "#FFFFFFFF",
-      "cursor_color": "#FFFF0000",
-      "events": { "on_key_pressed": "notes_key", "on_focused": "notes_focus", "on_unfocused": "notes_blur" },
-      "text": "多行编辑框（自动换行）\n这里可以输入多行文字。自动换行启用时没有水平滚动条，内容超出可视区域后右侧出现垂直滚动条。\n第二行：云朵输入法。\n第三行：试着输入更多内容，让文本超过这个区域的高度。\n第四行：拖动右侧滚动条，或者用滚轮滚动。\n第五行：line_spacing = 8。\n第六行：这是一个很长很长的句子，用来检查自动换行是否会在文本区宽度处折行，而不是一直向右延伸。\n第七行：结尾。"
-    },
-    {
-      "type": "text_box",
-      "name": "code",
-      "x": 24,
-      "y": 466,
-      "w": 680,
-      "h": 100,
-      "font": "candidate",
-      "font_size": 16,
-      "line_spacing": 8,
-      "auto_line_wrap": false,
-      "back_color": "#FFFFFFFF",
-      "edge_color": "#FFD0D0D0",
-      "edge_width": 1,
-      "text_color": "#FF222222",
-      "sel_back_color": "#FF33FF33",
-      "sel_text_color": "#FFFFFFFF",
-      "cursor_color": "#FFFF0000",
-      "text": "多行编辑框（不自动换行）\n这一行非常非常长，用来触发底部的水平滚动条；拖动底部滚动条可以查看这一行的后半段。\n第二行。\n第三行。\n第四行。\n第五行。"
-    },
-    {
-      "type": "flat_svg_button",
-      "name": "close",
-      "x": 732,
-      "y": 8,
-      "svg_path": "Images/SVG/打叉.svg",
-      "shape": "round_rect",
-      "radius": 3,
-      "normal": { "background": "#00000000", "svg": "#FF000000" },
-      "hovered": { "background": "#FFFF3300", "svg": "#FFFFFFFF" },
-      "pressed": { "background": "#FFCC2900", "svg": "#FFFFFFFF" },
-      "events": { "mouse_clicked": "close" }
-    },
-    {
-      "name": "horizontal_scroll",
-      "type": "hscroll_bar",
-      "x": 24,
-      "y": 584,
-      "w": 320,
-      "value": 40,
-      "min_value": 0,
-      "max_value": 100,
-      "step": 5,
-      "background_color": "#FFE0E0E0",
-      "thumb_color": "#FF4A90E2",
-      "events": { "value_changed": "horizontal_changed" }
-    },
-    {
-      "name": "vertical_scroll",
-      "type": "vscroll_bar",
-      "x": 716,
-      "y": 210,
-      "h": 76,
-      "value": 20,
-      "min_value": 0,
-      "max_value": 100,
-      "step": 5,
-      "background_color": "#FFE0E0E0",
-      "thumb_color": "#FF4A90E2"
-    }
-  ]
+      },
+      {
+        "name": "panel",
+        "type": "panel",
+        "w": 744,
+        "h": 624,
+        "children": [
+          {
+            "name": "title",
+            "type": "label",
+            "size": 20,
+            "runs": [
+              {
+                "text": "云朵",
+                "color": "#FF4A90E2"
+              },
+              {
+                "text": "输入法",
+                "color": "#FF222222"
+              }
+            ],
+            "position": "absolute",
+            "inset": {
+              "left": 88,
+              "top": 18
+            }
+          },
+          {
+            "name": "subtitle",
+            "type": "text_block",
+            "size": 14,
+            "line_spacing": 5,
+            "text": "760 × 640\nCtrl+Alt+F3 只创建",
+            "color": "#FF888888",
+            "position": "absolute",
+            "inset": {
+              "left": 88,
+              "top": 54
+            }
+          },
+          {
+            "name": "divider",
+            "type": "static_shape",
+            "shape": "line",
+            "from": {
+              "x": 16,
+              "y": 110
+            },
+            "to": {
+              "x": 728,
+              "y": 110
+            },
+            "thickness": 1,
+            "color": "#FF888888",
+            "w": 712,
+            "h": 1,
+            "position": "absolute",
+            "inset": {
+              "left": 16,
+              "top": 110
+            }
+          },
+          {
+            "name": "demo_bar",
+            "type": "static_shape",
+            "shape": "round_rect",
+            "w": 712,
+            "h": 28,
+            "radius": 8,
+            "color": "#FFF0C8FF",
+            "position": "absolute",
+            "inset": {
+              "left": 16,
+              "top": 122
+            }
+          },
+          {
+            "name": "demo_label",
+            "type": "label",
+            "size": 14,
+            "runs": [
+              {
+                "text": "静态控件演示",
+                "color": "#FF222222"
+              }
+            ],
+            "position": "absolute",
+            "inset": {
+              "left": 28,
+              "top": 127
+            }
+          },
+          {
+            "name": "nested",
+            "type": "text_edit",
+            "w": 320,
+            "h": 32,
+            "font": "candidate",
+            "back_color": "#FFFFFFFF",
+            "edge_color": "#FFD0D0D0",
+            "edge_width": 1,
+            "text_color": "#FF222222",
+            "sel_back_color": "#FF33FF33",
+            "sel_text_color": "#FFFFFFFF",
+            "cursor_color": "#FFFF0000",
+            "font_size": 18,
+            "font_flag": 0,
+            "text": "面板里的输入框",
+            "position": "absolute",
+            "inset": {
+              "left": 16,
+              "top": 160
+            }
+          }
+        ],
+        "position": "absolute",
+        "inset": {
+          "left": 8,
+          "top": 8
+        }
+      },
+      {
+        "type": "text_edit",
+        "name": "search",
+        "w": 320,
+        "h": 32,
+        "font": "candidate",
+        "svg_path": "Images/SVG/打勾.svg",
+        "svg_align": "left",
+        "back_color": "#FFFFFFFF",
+        "edge_color": "#FFD0D0D0",
+        "edge_width": 1,
+        "text_color": "#FF222222",
+        "sel_back_color": "#FF33FF33",
+        "sel_text_color": "#FFFFFFFF",
+        "cursor_color": "#FFFF0000",
+        "fill_color": "#FF00AA00",
+        "font_size": 18,
+        "font_flag": 0,
+        "events": {
+          "on_key_pressed": "search_key",
+          "on_focused": "search_focus",
+          "on_unfocused": "search_blur"
+        },
+        "text": "在这里输入",
+        "position": "absolute",
+        "inset": {
+          "left": 24,
+          "top": 210
+        }
+      },
+      {
+        "type": "text_edit",
+        "name": "plain",
+        "w": 320,
+        "h": 32,
+        "font": "candidate",
+        "back_color": "#FFFFFFFF",
+        "edge_color": "#FFD0D0D0",
+        "edge_width": 1,
+        "text_color": "#FF222222",
+        "sel_back_color": "#FF33FF33",
+        "sel_text_color": "#FFFFFFFF",
+        "cursor_color": "#FFFF0000",
+        "font_size": 18,
+        "font_flag": 2,
+        "text": "没有图标的输入框",
+        "position": "absolute",
+        "inset": {
+          "left": 24,
+          "top": 254
+        }
+      },
+      {
+        "type": "text_box",
+        "name": "notes",
+        "w": 680,
+        "h": 150,
+        "font": "candidate",
+        "font_size": 16,
+        "line_spacing": 8,
+        "auto_line_wrap": true,
+        "back_color": "#FFFFFFFF",
+        "edge_color": "#FFD0D0D0",
+        "edge_width": 1,
+        "text_color": "#FF222222",
+        "sel_back_color": "#FF33FF33",
+        "sel_text_color": "#FFFFFFFF",
+        "cursor_color": "#FFFF0000",
+        "events": {
+          "on_key_pressed": "notes_key",
+          "on_focused": "notes_focus",
+          "on_unfocused": "notes_blur"
+        },
+        "text": "多行编辑框（自动换行）\n这里可以输入多行文字。自动换行启用时没有水平滚动条，内容超出可视区域后右侧出现垂直滚动条。\n第二行：云朵输入法。\n第三行：试着输入更多内容，让文本超过这个区域的高度。\n第四行：拖动右侧滚动条，或者用滚轮滚动。\n第五行：line_spacing = 8。\n第六行：这是一个很长很长的句子，用来检查自动换行是否会在文本区宽度处折行，而不是一直向右延伸。\n第七行：结尾。",
+        "position": "absolute",
+        "inset": {
+          "left": 24,
+          "top": 300
+        }
+      },
+      {
+        "type": "text_box",
+        "name": "code",
+        "w": 680,
+        "h": 100,
+        "font": "candidate",
+        "font_size": 16,
+        "line_spacing": 8,
+        "auto_line_wrap": false,
+        "back_color": "#FFFFFFFF",
+        "edge_color": "#FFD0D0D0",
+        "edge_width": 1,
+        "text_color": "#FF222222",
+        "sel_back_color": "#FF33FF33",
+        "sel_text_color": "#FFFFFFFF",
+        "cursor_color": "#FFFF0000",
+        "text": "多行编辑框（不自动换行）\n这一行非常非常长，用来触发底部的水平滚动条；拖动底部滚动条可以查看这一行的后半段。\n第二行。\n第三行。\n第四行。\n第五行。",
+        "position": "absolute",
+        "inset": {
+          "left": 24,
+          "top": 466
+        }
+      },
+      {
+        "type": "flat_svg_button",
+        "name": "close",
+        "svg_path": "Images/SVG/打叉.svg",
+        "shape": "round_rect",
+        "radius": 3,
+        "normal": {
+          "background": "#00000000",
+          "svg": "#FF000000"
+        },
+        "hovered": {
+          "background": "#FFFF3300",
+          "svg": "#FFFFFFFF"
+        },
+        "pressed": {
+          "background": "#FFCC2900",
+          "svg": "#FFFFFFFF"
+        },
+        "events": {
+          "mouse_clicked": "close"
+        },
+        "position": "absolute",
+        "inset": {
+          "left": 732,
+          "top": 8
+        },
+        "w": 20,
+        "h": 20
+      },
+      {
+        "name": "horizontal_scroll",
+        "type": "hscroll_bar",
+        "w": 320,
+        "value": 40,
+        "min_value": 0,
+        "max_value": 100,
+        "step": 5,
+        "background_color": "#FFE0E0E0",
+        "thumb_color": "#FF4A90E2",
+        "events": {
+          "value_changed": "horizontal_changed"
+        },
+        "position": "absolute",
+        "inset": {
+          "left": 24,
+          "top": 584
+        },
+        "h": 8
+      },
+      {
+        "name": "vertical_scroll",
+        "type": "vscroll_bar",
+        "h": 76,
+        "value": 20,
+        "min_value": 0,
+        "max_value": 100,
+        "step": 5,
+        "background_color": "#FFE0E0E0",
+        "thumb_color": "#FF4A90E2",
+        "position": "absolute",
+        "inset": {
+          "left": 716,
+          "top": 210
+        },
+        "w": 8
+      }
+    ]
+  }
 }
