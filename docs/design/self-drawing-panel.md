@@ -164,8 +164,9 @@ SelfDrawingPanel {
   - `Renderer::render` 已把候选 `Frame` 的拼音行、候选行、高亮、页码、译文录进一个
     `SelfDrawingPanel.draw`，再交给 `render_document` 出图；候选窗口外观与旧的直接位图路径
     逐像素一致（阴影边缘在非整数缩放下有少量抗锯齿差，已在测试里限定）；
-  - 目前仍保留 `Frame` / `render_frame` 入口和 `highlight_rects` 鼠标命中；逐行 `regions`、
-    按 draw 元素更新动画还没接到候选窗口；
+  - 候选行同时生成 `Rendered.regions`（`candidate_<index>`），鼠标悬停 / 点击已优先走区域；
+    仍保留 `Frame` / `render_frame` 入口和 `highlight_rects` 供高亮动画使用；
+  - 高亮动画仍是整帧重绘，按 draw 元素更新动画还没接到候选窗口；
   - 键位映射等资产仍按现有辅助窗口处理。
 
 ## 7. 实现顺序

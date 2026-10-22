@@ -2,7 +2,7 @@
 
 use tiny_skia::Pixmap;
 
-use crate::document::HitShape;
+use crate::document::{HitShape, Region};
 use crate::frame::HighlightRect;
 
 pub struct Rendered {
@@ -22,9 +22,13 @@ pub struct Rendered {
     /// 渲染用的倍数，壳把像素换回点用。
     pub scale: f32,
 
-    /// 每行 / 每格的高亮条矩形（内容区坐标），下标与帧的 `rows` 对齐。
+    /// 每行 / 每格的高亮条矩形（内容区像素坐标），下标与帧的 `rows` 对齐。
     /// 壳按它算连按时滑动的起点；没有高亮的帧为空。
     pub highlight_rects: Vec<HighlightRect>,
+
+    /// 与 `highlight_rects` 同序的候选行命中区域（内容区**点**坐标），
+    /// 名字固定为 `candidate_<index>`；候选窗口的鼠标命中改用它。
+    pub regions: Vec<Region>,
 }
 
 impl Rendered {

@@ -431,7 +431,8 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 对 `ControlRender` 泛型，由 `renderer/record.rs::DrawRecorder` 把文字 / 矩形 / 圆角矩形 / 高亮录成
 `SelfDrawingPanel.draw`（文字用 `Element::StyledText` 保留字族、行高、删除线、下划线与 gamma），最后走
 `render_document`。旧的直接绘制保留为测试用的 `render_direct`，逐像素对照；阴影 + 非整数缩放只在面板边缘
-有少量抗锯齿差。候选鼠标命中仍用原有 `highlight_rects`，逐行 regions / 单元素动画待接。
+有少量抗锯齿差。`Rendered.regions` 同步生成 `candidate_<index>` 候选行区域（内容区点坐标），候选窗口的
+`cell_at` 优先按区域找行、再回退到旧的 `highlight_rects`；高亮动画仍是整帧重绘。
 候选行右侧的**来源角标**：`Row.badge`（Server `dispatch/candidates/mod.rs::badges_of` 按 `kind == Custom` 判「短」、
 `kind == Sentence` 判「句」、`Learner::is_user_word` 判「造」，其余没有），用序号字体、`Palette.badge` = `#888888` 右对齐画在候选格内（间距 4 pt）；
 横排按项宽、竖排按行宽给它留出位置。

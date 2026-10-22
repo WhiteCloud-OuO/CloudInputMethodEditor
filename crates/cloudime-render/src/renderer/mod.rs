@@ -17,7 +17,7 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::color::Color;
-use crate::document::{self, Document, Element, HitRect, HitShape, SelfDrawingPanel};
+use crate::document::{self, Document, Element, HitRect, HitShape, Region, SelfDrawingPanel};
 use crate::elements::{
     ControlRender, ImageElement, LineElement, PathElement, RectElement, StrokeElement, SvgElement,
     TextElement,
@@ -313,6 +313,22 @@ impl Renderer {
         let mut rendered = self
             .render_document(&document, theme, scale, shadow, false)?
             .rendered;
+        rendered.regions = highlight_rects
+            .iter()
+            .enumerate()
+            .map(|(index, rect)| {
+                Region::new(
+                    format!("candidate_{index}"),
+                    HitShape::Rect(HitRect::new(
+                        rect.left / scale,
+                        rect.top / scale,
+                        rect.width() / scale,
+                        rect.height() / scale,
+                    )),
+                    false,
+                )
+            })
+            .collect();
         rendered.highlight_rects = highlight_rects;
         Ok(rendered)
     }
@@ -379,6 +395,7 @@ impl Renderer {
             content_height: content_height.ceil() as u32,
             scale,
             highlight_rects,
+            regions: Vec::new(),
         })
     }
 
@@ -540,6 +557,7 @@ impl Renderer {
             content_height: content.1.ceil() as u32,
             scale,
             highlight_rects: Vec::new(),
+            regions: Vec::new(),
         }
     }
 
@@ -1326,6 +1344,18 @@ mod tests {
                 "scale={scale}"
             );
             assert_eq!(direct.highlight_rects, recorded.highlight_rects);
+            assert_eq!(recorded.regions.len(), recorded.highlight_rects.len());
+            for (index, (region, rect)) in recorded
+                .regions
+                .iter()
+                .zip(&recorded.highlight_rects)
+                .enumerate()
+            {
+                assert_eq!(region.name, format!("candidate_{index}"));
+                let x = (rect.left + rect.width() / 2.0) / scale;
+                let y = (rect.top + rect.height() / 2.0) / scale;
+                assert!(region.shape.contains(x, y));
+            }
             let differing = direct
                 .pixmap
                 .pixels()

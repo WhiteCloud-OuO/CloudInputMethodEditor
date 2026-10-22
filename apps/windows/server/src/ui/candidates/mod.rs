@@ -31,7 +31,7 @@ use cloudime_platform::ItemNumberStyle;
 use cloudime_platform::LayoutMode;
 use cloudime_platform::input_schemes::{KeyMapLayout, KeyMapReference};
 use cloudime_platform::protocol::Frame;
-use cloudime_render::{HighlightAnimation, HighlightRect, Pixmap, clip_pixmap};
+use cloudime_render::{HighlightAnimation, HighlightRect, Pixmap, Region, clip_pixmap};
 
 pub(crate) use self::render_data::RenderData;
 use super::key_map::KeyMapWindow;
@@ -180,6 +180,9 @@ pub(crate) struct CandidateWindow {
     /// 上一次重画时每一行 / 每一格的高亮矩形（内容区坐标）；连按时算当前视觉位置用。
     last_rects: RefCell<Vec<HighlightRect>>,
 
+    /// 候选行命中区域（内容区点坐标，名字 `candidate_<index>`）；鼠标优先走它。
+    last_regions: RefCell<Vec<Region>>,
+
     /// 上次 `show` 的定位 anchor；滑动期间按它原地重画，不跟着光标跳。
     anchor: Cell<Option<RECT>>,
 
@@ -278,6 +281,7 @@ impl CandidateWindow {
             data,
             slide: RefCell::new(None),
             last_rects: RefCell::new(Vec::new()),
+            last_regions: RefCell::new(Vec::new()),
             anchor: Cell::new(None),
             dpi: Cell::new(dpi),
             logged_dpi: Cell::new(None),
@@ -488,6 +492,7 @@ impl CandidateWindow {
         self.symbol_assets_on.set(false);
         self.template.hide_assets();
         self.last_rects.borrow_mut().clear();
+        self.last_regions.borrow_mut().clear();
         // 收起态的宽度也跟着作废：换了个应用（窗口宽度不同）不该拿上一段组句的宽度当最小宽度。
         self.collapsed_width.set(0.0);
         // 滚轮缩放是临时的：窗口一关就回到 100%，下次弹出是正常大小。
@@ -530,6 +535,7 @@ impl CandidateWindow {
             return;
         };
         *self.last_rects.borrow_mut() = rendered.highlight_rects.clone();
+        *self.last_regions.borrow_mut() = rendered.regions.clone();
         // 收起态：把高亮那条的宽度记下来，展开成网格时当每格的最小宽度。
         {
             let data = self.data.borrow();
@@ -667,6 +673,13 @@ impl CandidateWindow {
     /// 所以单击在两种状态下都认；悬停另有一道闸（见 [`Self::on_mouse_move`]）。
     fn cell_at(&self, client: (i32, i32)) -> Option<usize> {
         let (margin_x, margin_y) = self.margin.get();
+        let scale = self.effective_dpi() as f32 / 96.0;
+        let x = (client.0 - margin_x) as f32 / scale.max(f32::EPSILON);
+        let y = (client.1 - margin_y) as f32 / scale.max(f32::EPSILON);
+        if let Some(index) = region_index(&self.last_regions.borrow(), x, y) {
+            return Some(index);
+        }
+        // 兼容旧帧 / 渲染失败前留下的几何：区域为空时仍按高亮矩形找。
         let x = (client.0 - margin_x) as f32;
         let y = (client.1 - margin_y) as f32;
         self.last_rects
@@ -802,6 +815,14 @@ impl CandidateWindow {
             "候选窗口缩放值"
         );
     }
+}
+
+/// 从自绘面板的候选行区域里找下标；名字约定为 `candidate_<index>`，坐标是内容区点。
+fn region_index(regions: &[Region], x: f32, y: f32) -> Option<usize> {
+    regions.iter().find_map(|region| {
+        let index = region.name.strip_prefix("candidate_")?.parse().ok()?;
+        region.shape.contains(x, y).then_some(index)
+    })
 }
 
 /// 候选窗口是名下资产（辅助窗口）的**所有者**：资产要什么只能经这条**桥接**路跟它要
@@ -999,11 +1020,11 @@ mod tests {
     use std::time::{Duration, Instant};
 
     use cloudime_platform::LayoutMode;
-    use cloudime_render::{HighlightRect, Row, TipSegment, Tone};
+    use cloudime_render::{HighlightRect, HitRect, HitShape, Region, Row, TipSegment, Tone};
 
     use super::{
         HIGHLIGHT_SLIDE_MS, RenderData, Slide, SlidePlan, TRANSITION_MS, ZOOM_MAX_STEP,
-        ZOOM_MIN_STEP, eased_progress, next_zoom_step, plan_slide, transition_frame,
+        ZOOM_MIN_STEP, eased_progress, next_zoom_step, plan_slide, region_index, transition_frame,
         transition_plan, visual_rect, zoom_factor,
     };
 
@@ -1026,6 +1047,31 @@ mod tests {
 
     fn slide(from: HighlightRect, started: Instant) -> Slide {
         Slide { from, started }
+    }
+
+    #[test]
+    fn candidate_regions_map_back_to_row_indexes() {
+        let regions = vec![
+            Region::new(
+                "candidate_0".to_owned(),
+                HitShape::Rect(HitRect::new(0.0, 0.0, 100.0, 20.0)),
+                false,
+            ),
+            Region::new(
+                "candidate_1".to_owned(),
+                HitShape::Rect(HitRect::new(0.0, 20.0, 100.0, 20.0)),
+                false,
+            ),
+            Region::new(
+                "not-a-candidate".to_owned(),
+                HitShape::Rect(HitRect::new(0.0, 40.0, 100.0, 20.0)),
+                false,
+            ),
+        ];
+        assert_eq!(region_index(&regions, 50.0, 10.0), Some(0));
+        assert_eq!(region_index(&regions, 50.0, 30.0), Some(1));
+        assert_eq!(region_index(&regions, 50.0, 50.0), None);
+        assert_eq!(region_index(&regions, 150.0, 10.0), None);
     }
 
     /// 高亮没变的新帧（重排、只挪窗口）不能打断正在跑的动画。
