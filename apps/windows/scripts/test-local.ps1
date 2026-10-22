@@ -64,8 +64,11 @@ if (-not $SkipBuild) {
     # 旧的那次注册可能还指着 `target\debug`，TSF 会按需把 DLL 载进各个宿主（记事本、终端、资源管理器…）。
     # 被载着时编译写不进去，cargo 报的是「failed to remove file ... 拒绝访问」，看着像代码坏了。
     # 先查出来点名，别让人去猜。
+    # tasklist 的 /m 不能重复写（Windows PowerShell 会报「无效语法」），两种 DLL 分开查。
     $holders = @(
-        tasklist /m cloudime_tsf_x64.dll /m cloudime_tsf.dll /NH 2>$null |
+        tasklist /m cloudime_tsf_x64.dll /NH 2>$null |
+            Select-String -SimpleMatch 'cloudime_tsf'
+        tasklist /m cloudime_tsf.dll /NH 2>$null |
             Select-String -SimpleMatch 'cloudime_tsf'
     )
     if ($holders.Count -gt 0) {
