@@ -47,6 +47,47 @@ pub struct Frame {
     pub status: Option<String>,
 }
 
+/// 候选窗口的新视图模型：不再经过渲染器的 `Frame` 中间层。
+///
+/// 字段与协议帧 / 旧 `Frame` 一一对应，先由 Server 的 `RenderData` 直接构造，
+/// 再交给页面树布局和 `Document` 生成。
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct CandidateView {
+    pub preedit: Option<Preedit>,
+    pub rows: Vec<Row>,
+    pub highlighted: Option<usize>,
+    pub highlight_animation: Option<HighlightAnimation>,
+    pub columns: usize,
+    pub min_cell_width: f32,
+    pub footer: Option<String>,
+    pub tip: Option<Vec<TipSegment>>,
+    pub online: Option<Vec<TipSegment>>,
+    pub status: Option<String>,
+}
+
+impl From<&Frame> for CandidateView {
+    fn from(frame: &Frame) -> Self {
+        Self {
+            preedit: frame.preedit.clone(),
+            rows: frame.rows.clone(),
+            highlighted: frame.highlighted,
+            highlight_animation: frame.highlight_animation,
+            columns: frame.columns,
+            min_cell_width: frame.min_cell_width,
+            footer: frame.footer.clone(),
+            tip: frame.tip.clone(),
+            online: frame.online.clone(),
+            status: frame.status.clone(),
+        }
+    }
+}
+
+impl CandidateView {
+    pub fn has_top_line(&self) -> bool {
+        self.preedit.is_some() || self.status.is_some()
+    }
+}
+
 impl Frame {
     pub fn is_empty(&self) -> bool {
         self.rows.is_empty() && self.preedit.is_none() && self.status.is_none()

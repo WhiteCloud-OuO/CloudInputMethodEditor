@@ -53,8 +53,8 @@ pub use error::RenderError;
 pub use fonts::directwrite as system_fonts;
 pub use fonts::{FontLibrary, UiFont};
 pub use frame::{
-    Auxiliary, Frame, HighlightAnimation, HighlightRect, Preedit, PreeditSegment, PreeditStyle,
-    Row, TipSegment, Tone,
+    Auxiliary, CandidateView, Frame, HighlightAnimation, HighlightRect, Preedit, PreeditSegment,
+    PreeditStyle, Row, TipSegment, Tone,
 };
 pub use image::{
     decode_image, draw_image, flip_image, gray_image, load_image, mask_image, read_image,

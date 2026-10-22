@@ -2,6 +2,7 @@
 //!
 //! 内部全用像素：主题里的点数进来先乘缩放倍数。文字的 y 都指行框顶边，字形在行高里垂直居中。
 
+mod candidate;
 mod columns;
 mod horizontal;
 mod item;
@@ -1604,6 +1605,84 @@ mod tests {
             assert_eq!(differing, 0, "progress={progress} 的滑动帧应与直接绘制一致");
             assert_eq!(cached.regions.len(), 4);
         }
+    }
+
+    #[test]
+    fn the_page_tree_candidate_matches_the_vertical_direct_render() {
+        use crate::frame::{CandidateView, Preedit, PreeditSegment, PreeditStyle, TipSegment};
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let frame = Frame {
+            preedit: Some(Preedit {
+                segments: vec![PreeditSegment {
+                    text: "ni'hao".to_owned(),
+                    style: PreeditStyle::Typed,
+                }],
+                cursor: 2,
+            }),
+            rows: vec![
+                Row {
+                    index: "1".to_owned(),
+                    text: "你好".to_owned(),
+                    annotation: Vec::new(),
+                    badge: None,
+                    auxiliary: None,
+                },
+                Row {
+                    index: "2".to_owned(),
+                    text: "拟好".to_owned(),
+                    annotation: Vec::new(),
+                    badge: None,
+                    auxiliary: None,
+                },
+            ],
+            highlighted: Some(0),
+            footer: Some("1/1".to_owned()),
+            tip: Some(vec![TipSegment::new("hello", Tone::TranslateFresh, false)]),
+            ..Frame::default()
+        };
+        let theme = Theme::new();
+        let direct = renderer
+            .render_direct(&frame, Layout::Vertical, &theme, 1.0, None)
+            .unwrap();
+        let page_tree = renderer
+            .render_candidate_view(
+                &CandidateView::from(&frame),
+                Layout::Vertical,
+                &theme,
+                1.0,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            (direct.content_width, direct.content_height),
+            (page_tree.content_width, page_tree.content_height)
+        );
+        let mut differing = 0;
+        let (mut min_x, mut min_y, mut max_x, mut max_y) = (u32::MAX, u32::MAX, 0, 0);
+        for (index, (a, b)) in direct
+            .pixmap
+            .pixels()
+            .iter()
+            .zip(page_tree.pixmap.pixels())
+            .enumerate()
+        {
+            if a != b {
+                differing += 1;
+                let x = index as u32 % direct.pixmap.width();
+                let y = index as u32 / direct.pixmap.width();
+                min_x = min_x.min(x);
+                min_y = min_y.min(y);
+                max_x = max_x.max(x);
+                max_y = max_y.max(y);
+            }
+        }
+        assert_eq!(
+            differing, 0,
+            "页面树候选路径应与竖排直接绘制一致（差异范围 {min_x},{min_y}..{max_x},{max_y}）"
+        );
     }
 
     #[test]

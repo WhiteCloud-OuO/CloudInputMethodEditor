@@ -555,6 +555,7 @@ name = "cloudime-render"
 version = "0.0.3"
 dependencies = [
  "clap",
+ "cloud-ui-core",
  "cosmic-text",
  "i_overlay",
  "image",
