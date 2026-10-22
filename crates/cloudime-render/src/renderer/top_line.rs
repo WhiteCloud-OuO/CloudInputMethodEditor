@@ -1,9 +1,8 @@
 //! 顶部拼音行：各段按样式画、自己画光标、右侧临时状态。
 
 use super::{CARET_WIDTH, Metrics, Renderer, STATUS_GAP};
-use crate::elements::{RectElement, TextElement};
+use crate::elements::ControlRender;
 use crate::frame::{Frame, Preedit, PreeditStyle};
-use crate::render::Render;
 
 impl Renderer {
     /// 顶部拼音行（含右侧状态）需要的宽高；没有这一行时都是 0。
@@ -29,7 +28,7 @@ impl Renderer {
     /// 返回占用高度。`left` 是内容区左边。
     pub(super) fn draw_top_line(
         &self,
-        render: &mut Render,
+        render: &mut impl ControlRender,
         frame: &Frame,
         m: &Metrics,
         left: f32,
@@ -58,7 +57,7 @@ impl Renderer {
     /// 画拼音行的各段与光标，返回占用宽度（含光标）。
     fn draw_preedit(
         &self,
-        render: &mut Render,
+        render: &mut impl ControlRender,
         m: &Metrics,
         preedit: &Preedit,
         x: f32,

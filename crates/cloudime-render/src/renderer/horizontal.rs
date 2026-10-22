@@ -2,9 +2,8 @@
 
 use super::item::Item;
 use super::{HIGHLIGHT_INSET, INDEX_GAP, Metrics, Renderer, highlight_rect};
-use crate::elements::TextElement;
+use crate::elements::ControlRender;
 use crate::frame::{Frame, HighlightRect, Row};
-use crate::render::Render;
 
 /// 一项的内容宽度：序号 + 候选词 +（有辅助码时）一个空格 + 码 +（有角标时）间隔 + 角标。
 /// `badge_gap` 是候选词与角标之间的间隔（横排用两个候选字宽，见 `Renderer::horizontal_badge_gap`）。
@@ -84,7 +83,7 @@ impl Renderer {
 
     pub(super) fn draw_horizontal(
         &self,
-        render: &mut Render,
+        render: &mut impl ControlRender,
         frame: &Frame,
         m: &Metrics,
         left: f32,

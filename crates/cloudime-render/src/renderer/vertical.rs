@@ -2,9 +2,8 @@
 
 use super::columns::Columns;
 use super::{BADGE_GAP, Metrics, Renderer, highlight_rect};
-use crate::elements::TextElement;
+use crate::elements::ControlRender;
 use crate::frame::{Frame, HighlightRect, Row};
-use crate::render::Render;
 
 impl Renderer {
     pub(super) fn vertical_size(&self, frame: &Frame, m: &Metrics) -> (f32, f32) {
@@ -57,7 +56,7 @@ impl Renderer {
 
     pub(super) fn draw_vertical(
         &self,
-        render: &mut Render,
+        render: &mut impl ControlRender,
         frame: &Frame,
         m: &Metrics,
         left: f32,

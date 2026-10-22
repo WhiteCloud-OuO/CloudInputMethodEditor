@@ -6,9 +6,8 @@ use super::{
     BADGE_GAP, HIGHLIGHT_INSET, INDEX_GAP, Layout, Metrics, Renderer, VERTICAL_CELL_MIN_EMS,
     highlight_rect, truncate_with,
 };
-use crate::elements::TextElement;
+use crate::elements::ControlRender;
 use crate::frame::{Frame, HighlightRect};
-use crate::render::Render;
 
 /// 帧没给列宽时，一格里候选词最多多宽（按候选字号的倍数）。
 const MAX_CELL_EMS: f32 = 4.0;
@@ -58,7 +57,7 @@ impl Renderer {
     #[allow(clippy::too_many_arguments)]
     pub(super) fn draw_matrix(
         &self,
-        render: &mut Render,
+        render: &mut impl ControlRender,
         frame: &Frame,
         m: &Metrics,
         layout: Layout,

@@ -672,6 +672,22 @@ pub enum Element {
         italic: bool,
     },
 
+    /// 带完整 `TextStyle` 的文字：内部录制候选窗口时用，保证字族 / 行高 / 删除线 /
+    /// 下划线 / gamma 与原绘制完全一致；脚本的 `text` 仍走 [`Element::Text`]。
+    StyledText {
+        x: f32,
+        y: f32,
+        text: String,
+        size: f32,
+        line_height: f32,
+        family: Option<String>,
+        color: Color,
+        italic: bool,
+        strike: bool,
+        underline: bool,
+        gamma: f32,
+    },
+
     /// SVG：按自身宽高比等比塞进 `size` 见方的框；`tint` 给 `Some` 时整张按该颜色染。
     Svg {
         x: f32,
@@ -1159,6 +1175,29 @@ impl std::fmt::Debug for Element {
                 .field("slot", slot)
                 .field("color", color)
                 .field("italic", italic)
+                .finish(),
+            Self::StyledText {
+                x,
+                y,
+                text,
+                size,
+                family,
+                color,
+                italic,
+                strike,
+                underline,
+                ..
+            } => f
+                .debug_struct("StyledText")
+                .field("x", x)
+                .field("y", y)
+                .field("text", text)
+                .field("size", size)
+                .field("family", family)
+                .field("color", color)
+                .field("italic", italic)
+                .field("strike", strike)
+                .field("underline", underline)
                 .finish(),
             Self::Svg {
                 x,

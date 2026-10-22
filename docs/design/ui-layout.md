@@ -287,8 +287,9 @@ Page（主页面，一窗口一棵）
 - 一个窗口仍然只有一份 Lua 脚本；子页面不单独运行脚本，事件冒泡到窗口脚本。
 - 已提供按路径寻址的 `win:set_visible(path, visible)`、`win:get_text_at` / `win:set_text_at` /
   `win:update_content_at`；旧的按控件名 API 保留给 v1 和非子页面控件。
-- 状态条与状态切换提示的几何已改为页面树 → `Document` → `render_document`；候选窗仍走
-  `render_frame` 的候选专用绘制管线，待迁移。
+- 状态条与状态切换提示的几何已改为页面树 → `Document` → `render_document`；候选窗仍从
+  `Frame` 进入 `render_frame`，但 `Renderer` 内部已把这一帧录成自绘面板的 draw 列表再走
+  `render_document`，鼠标命中继续用原来的 `highlight_rects`。候选窗口的逐元素更新 / 区域化还在后面。
 - 节点级 `insert` / `remove` 和列表 keyed diff 尚未接入；当前用 `set_data` 整份重建实例。
 
 ### 6.4 文字测量

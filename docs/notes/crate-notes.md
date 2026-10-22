@@ -427,6 +427,11 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 `examples/preview.rs` 出 PNG 与真机截图并排比、`--measure` 量宽度。Windows 壳候选窗口与悬浮状态条都走这条渲染路径（`cloud_ui::painter`，`cloud_ui::layered` 贴位图），
 字体库加载失败时都不绘制、不显示并记日志；`[general] font` 是候选窗字族名（空为系统字体，`fonts/directwrite.rs` 按字族名找字体文件只加载那几个，没装就回系统字体；
 设置页 `candidates.rs` 的字体框是边输入边提示的自动补全）。设计与验收见 `docs/design/rendering.md`。
+候选窗口（2026-10-22）已从直接位图绘制迁到自绘面板：`Renderer::render` 仍接收 `Frame`，但排版函数改为
+对 `ControlRender` 泛型，由 `renderer/record.rs::DrawRecorder` 把文字 / 矩形 / 圆角矩形 / 高亮录成
+`SelfDrawingPanel.draw`（文字用 `Element::StyledText` 保留字族、行高、删除线、下划线与 gamma），最后走
+`render_document`。旧的直接绘制保留为测试用的 `render_direct`，逐像素对照；阴影 + 非整数缩放只在面板边缘
+有少量抗锯齿差。候选鼠标命中仍用原有 `highlight_rects`，逐行 regions / 单元素动画待接。
 候选行右侧的**来源角标**：`Row.badge`（Server `dispatch/candidates/mod.rs::badges_of` 按 `kind == Custom` 判「短」、
 `kind == Sentence` 判「句」、`Learner::is_user_word` 判「造」，其余没有），用序号字体、`Palette.badge` = `#888888` 右对齐画在候选格内（间距 4 pt）；
 横排按项宽、竖排按行宽给它留出位置。

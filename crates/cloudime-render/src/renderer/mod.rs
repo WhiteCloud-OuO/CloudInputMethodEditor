@@ -7,6 +7,7 @@ mod horizontal;
 mod item;
 mod key_map;
 mod matrix;
+mod record;
 mod rendered;
 mod status;
 mod top_line;
@@ -16,9 +17,10 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::color::Color;
-use crate::document::{self, Document, Element, HitRect, HitShape};
+use crate::document::{self, Document, Element, HitRect, HitShape, SelfDrawingPanel};
 use crate::elements::{
-    ImageElement, LineElement, PathElement, RectElement, StrokeElement, SvgElement, TextElement,
+    ControlRender, ImageElement, LineElement, PathElement, RectElement, StrokeElement, SvgElement,
+    TextElement,
 };
 use crate::error::RenderError;
 use crate::fonts::FontLibrary;
@@ -244,7 +246,80 @@ impl Renderer {
     }
 
     /// 画一帧。`scale` 是点 → 像素的倍数（Retina 为 2）；带 `shadow` 时位图四周留出阴影的边。
+    ///
+    /// 候选窗口已经走自绘面板：排版函数把原语录进 `SelfDrawingPanel.draw`，再交给
+    /// [`Self::render_document`] 出图；这样候选内容以后可以按 draw 元素单独更新。
     pub fn render(
+        &self,
+        frame: &Frame,
+        layout: Layout,
+        theme: &Theme,
+        scale: f32,
+        shadow: Option<&Shadow>,
+    ) -> Result<Rendered, RenderError> {
+        let metrics = Metrics { theme, scale };
+        let (content_width, content_height) = self.preferred_size(frame, layout, &metrics);
+        let margin = shadow.map_or(0.0, |s| metrics.px(s.margin()));
+        let mut recorder = record::DrawRecorder::new(self.text.clone(), scale, (margin, margin));
+        recorder.round_rect(
+            margin,
+            margin,
+            content_width,
+            content_height,
+            metrics.corner_radius(),
+            theme.colors.background,
+        );
+        let mut y = margin + metrics.padding();
+        y += self.draw_top_line(&mut recorder, frame, &metrics, margin, y);
+        let highlight_rects = if frame.columns > 0 {
+            self.draw_matrix(
+                &mut recorder,
+                frame,
+                &metrics,
+                layout,
+                margin,
+                y,
+                content_width,
+            )
+        } else {
+            match layout {
+                Layout::Vertical => {
+                    self.draw_vertical(&mut recorder, frame, &metrics, margin, y, content_width)
+                }
+                Layout::Horizontal => {
+                    self.draw_horizontal(&mut recorder, frame, &metrics, margin, y, content_width)
+                }
+            }
+        };
+        let scale = scale.max(f32::EPSILON);
+        let panel = SelfDrawingPanel {
+            x: 0.0,
+            y: 0.0,
+            width: content_width / scale,
+            height: content_height / scale,
+            clip: true,
+            draw: recorder.into_elements(),
+            children: Vec::new(),
+            regions: Vec::new(),
+        };
+        let document = Document {
+            width: panel.width,
+            height: panel.height,
+            elements: vec![Element::SelfDrawingPanel(panel)],
+            regions: Vec::new(),
+            control_names: Vec::new(),
+            instances: Default::default(),
+        };
+        let mut rendered = self
+            .render_document(&document, theme, scale, shadow, false)?
+            .rendered;
+        rendered.highlight_rects = highlight_rects;
+        Ok(rendered)
+    }
+
+    /// 旧的直接画位图路径：保留给对照测试；候选窗口不再走它。
+    #[cfg(test)]
+    fn render_direct(
         &self,
         frame: &Frame,
         layout: Layout,
@@ -521,7 +596,7 @@ impl Renderer {
     /// 候选词本体。`highlighted` 是高亮的那一条，用另一个颜色。
     fn draw_word(
         &self,
-        render: &mut Render,
+        render: &mut impl ControlRender,
         m: &Metrics,
         row: &Row,
         x: f32,
@@ -589,7 +664,7 @@ impl Renderer {
     /// 横排是「候选文字右边再加 2 个字宽」），与序号一样垂直居中。
     pub(super) fn draw_badge(
         &self,
-        render: &mut Render,
+        render: &mut impl ControlRender,
         m: &Metrics,
         badge: Option<&str>,
         left: f32,
@@ -608,7 +683,7 @@ impl Renderer {
     /// 两头补 `[` `]`（不参与下划线），**已经敲上的那几位画下划线**（表示这段码已经打上去了）。
     pub(super) fn draw_auxiliary(
         &self,
-        render: &mut Render,
+        render: &mut impl ControlRender,
         m: &Metrics,
         auxiliary: Option<&Auxiliary>,
         left: f32,
@@ -636,7 +711,13 @@ impl Renderer {
     }
 
     /// 画高亮条。`rect` 用内容区坐标；`origin` 是内容区左上角在画布里的像素坐标，画前搬过去。
-    fn fill_highlight(&self, render: &mut Render, m: &Metrics, rect: HighlightRect, origin: f32) {
+    fn fill_highlight(
+        &self,
+        render: &mut impl ControlRender,
+        m: &Metrics,
+        rect: HighlightRect,
+        origin: f32,
+    ) {
         let rect = rect.translated(origin, origin);
         render.round_rect(
             rect.left,
@@ -674,7 +755,7 @@ impl Renderer {
     /// 画底部信息区：`y` 是本地 Tip / 页码那一行的顶边，在线翻译那一块紧贴在它下面（可能有几行）。
     pub(super) fn draw_info(
         &self,
-        render: &mut Render,
+        render: &mut impl ControlRender,
         frame: &Frame,
         m: &Metrics,
         left: f32,
@@ -705,7 +786,7 @@ impl Renderer {
     /// 页码靠右、翻译 Tip 靠左，放不下就把 Tip 截断。
     pub(super) fn draw_bottom_line(
         &self,
-        render: &mut Render,
+        render: &mut impl ControlRender,
         frame: &Frame,
         m: &Metrics,
         left: f32,
@@ -730,7 +811,7 @@ impl Renderer {
     /// `budget` 是还剩多少宽度（点），放不下就把这一段截断。
     fn draw_segments(
         &self,
-        render: &mut Render,
+        render: &mut impl ControlRender,
         segments: &[TipSegment],
         m: &Metrics,
         x: f32,
@@ -875,6 +956,33 @@ fn draw_element(
             let mut style = TextStyle::new(font, *size, *color, m.theme.text_gamma);
             style.family = document::family_for(m.theme, *slot).cloned();
             style.italic = *italic;
+            let width = render.text(text, &style, x_at(*x), y_at(*y)) / scale;
+            Some(HitShape::Rect(HitRect::new(
+                *x,
+                *y,
+                width,
+                font.line_height / scale,
+            )))
+        }
+        Element::StyledText {
+            x,
+            y,
+            text,
+            size,
+            line_height,
+            family,
+            color,
+            italic,
+            strike,
+            underline,
+            gamma,
+        } => {
+            let font = FontSpec::new(*size, *line_height).scaled(scale);
+            let mut style = TextStyle::new(font, *size, *color, *gamma);
+            style.family = family.clone();
+            style.italic = *italic;
+            style.strike = *strike;
+            style.underline = *underline;
             let width = render.text(text, &style, x_at(*x), y_at(*y)) / scale;
             Some(HitShape::Rect(HitRect::new(
                 *x,
@@ -1157,6 +1265,128 @@ mod tests {
     }
 
     /// 窗口模板要的**空面板**：内容区尺寸就是要的那个（不跟内容走），且尺寸与位图一致。
+    #[test]
+    fn recorded_self_panel_matches_the_direct_frame_render() {
+        use crate::frame::{Preedit, PreeditSegment, PreeditStyle, TipSegment};
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let frame = Frame {
+            preedit: Some(Preedit {
+                segments: vec![PreeditSegment {
+                    text: "ni'hao".to_owned(),
+                    style: PreeditStyle::Typed,
+                }],
+                cursor: 2,
+            }),
+            rows: vec![
+                Row {
+                    index: "1".to_owned(),
+                    text: "你好".to_owned(),
+                    annotation: Vec::new(),
+                    badge: None,
+                    auxiliary: None,
+                },
+                Row {
+                    index: "2".to_owned(),
+                    text: "拟好".to_owned(),
+                    annotation: vec![("gloss".to_owned(), Tone::Gloss)],
+                    badge: None,
+                    auxiliary: None,
+                },
+            ],
+            highlighted: Some(0),
+            footer: Some("1/1".to_owned()),
+            tip: Some(vec![TipSegment::new("hello", Tone::TranslateFresh, false)]),
+            ..Frame::default()
+        };
+        let theme = Theme::new();
+        let shadow = crate::shadow::Shadow::panel();
+        for (scale, shadow) in [
+            (1.0, None),
+            (1.25, None),
+            (1.5, Some(&shadow)),
+            (2.0, Some(&shadow)),
+        ] {
+            let direct = renderer
+                .render_direct(&frame, Layout::Vertical, &theme, scale, shadow)
+                .unwrap();
+            let recorded = renderer
+                .render(&frame, Layout::Vertical, &theme, scale, shadow)
+                .unwrap();
+            assert_eq!(
+                (direct.pixmap.width(), direct.pixmap.height()),
+                (recorded.pixmap.width(), recorded.pixmap.height()),
+                "scale={scale}"
+            );
+            assert_eq!(
+                (direct.content_width, direct.content_height),
+                (recorded.content_width, recorded.content_height),
+                "scale={scale}"
+            );
+            assert_eq!(direct.highlight_rects, recorded.highlight_rects);
+            let differing = direct
+                .pixmap
+                .pixels()
+                .iter()
+                .zip(recorded.pixmap.pixels())
+                .filter(|(a, b)| a != b)
+                .count();
+            // 阴影 + 非整数缩放下，离屏面板边缘会有一两个像素的抗锯齿差；
+            // 正文 / 高亮矩形必须完全一致，整体差异限制在面板边缘。
+            let limit = if shadow.is_some() { 128 } else { 0 };
+            assert!(
+                differing <= limit,
+                "scale={scale} 时自绘面板与直接绘制的像素差 {differing} 超过 {limit}"
+            );
+        }
+    }
+
+    #[test]
+    fn recorded_self_panel_matches_horizontal_and_matrix_layouts() {
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let theme = Theme::new();
+        for (layout, columns) in [
+            (Layout::Horizontal, 0),
+            (Layout::Vertical, 3),
+            (Layout::Horizontal, 3),
+        ] {
+            let frame = Frame {
+                rows: (0..6)
+                    .map(|index| Row {
+                        index: (index + 1).to_string(),
+                        text: format!("候选{index}"),
+                        annotation: Vec::new(),
+                        badge: None,
+                        auxiliary: None,
+                    })
+                    .collect(),
+                highlighted: Some(2),
+                columns,
+                ..Frame::default()
+            };
+            let direct = renderer
+                .render_direct(&frame, layout, &theme, 1.0, None)
+                .unwrap();
+            let recorded = renderer.render(&frame, layout, &theme, 1.0, None).unwrap();
+            let differing = direct
+                .pixmap
+                .pixels()
+                .iter()
+                .zip(recorded.pixmap.pixels())
+                .filter(|(a, b)| a != b)
+                .count();
+            assert_eq!(
+                differing, 0,
+                "layout={layout:?} columns={columns} 的录制结果应与直接绘制一致"
+            );
+            assert_eq!(direct.highlight_rects, recorded.highlight_rects);
+        }
+    }
+
     #[test]
     fn a_panel_keeps_the_size_it_was_given() {
         let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
