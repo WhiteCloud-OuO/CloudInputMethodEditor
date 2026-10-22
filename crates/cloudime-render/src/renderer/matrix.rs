@@ -7,34 +7,34 @@ use super::{
     highlight_rect, truncate_with,
 };
 use crate::elements::ControlRender;
-use crate::frame::{Frame, HighlightRect};
+use crate::frame::{CandidateView, Frame, HighlightRect};
 
 /// 帧没给列宽时，一格里候选词最多多宽（按候选字号的倍数）。
 const MAX_CELL_EMS: f32 = 4.0;
 
 /// 量好的网格：每格显示的文字（可能已截断）、各列的宽度与统一的行高（像素）。
-struct Cells {
-    texts: Vec<(String, bool)>,
+pub(super) struct Cells {
+    pub(super) texts: Vec<(String, bool)>,
 
-    index_width: f32,
+    pub(super) index_width: f32,
 
     /// 每列一格的宽度（序号 + 间距 + 候选词）；展开「更多候选项」时每列一样宽。
-    column_widths: Vec<f32>,
+    pub(super) column_widths: Vec<f32>,
 
     /// 实际用了几列：候选不够一屏时不留空列，窗口不会白宽一截。
-    columns: usize,
+    pub(super) columns: usize,
 
-    row_height: f32,
+    pub(super) row_height: f32,
 }
 
 impl Cells {
     /// 第 `column` 列左边相对网格起点的偏移。
-    fn offset(&self, column: usize, gap: f32) -> f32 {
+    pub(super) fn offset(&self, column: usize, gap: f32) -> f32 {
         self.column_widths[..column].iter().sum::<f32>() + gap * column as f32
     }
 
     /// 网格总宽（不含两侧高亮留边）。
-    fn width(&self, gap: f32) -> f32 {
+    pub(super) fn width(&self, gap: f32) -> f32 {
         self.column_widths.iter().sum::<f32>()
             + gap * self.column_widths.len().saturating_sub(1) as f32
     }
@@ -45,7 +45,8 @@ impl Renderer {
         if frame.rows.is_empty() {
             return (0.0, 0.0);
         }
-        let cells = self.matrix_cells(frame, m, layout);
+        let view = CandidateView::from(frame);
+        let cells = self.matrix_cells(&view, m, layout);
         let grid_rows = frame.rows.len().div_ceil(cells.columns);
         let info = self.info_height(frame, m);
         (
@@ -68,7 +69,8 @@ impl Renderer {
         if frame.rows.is_empty() {
             return Vec::new();
         }
-        let cells = self.matrix_cells(frame, m, layout);
+        let view = CandidateView::from(frame);
+        let cells = self.matrix_cells(&view, m, layout);
         let columns = cells.columns;
         let text_height = m.px(m.theme.text_font.line_height);
         let inset = m.px(HIGHLIGHT_INSET);
@@ -143,7 +145,7 @@ impl Renderer {
     /// 单格封顶 [`MAX_CELL_EMS`]。
     /// **横排另有两档**（都是按候选字宽算的，见 `Renderer::char_width`）：候选词与角标之间的最小间隔
     /// 是 2 个字宽；每格最小宽度是 6 个字宽 + 角标宽度（角标不能把候选词挤没）。
-    fn matrix_cells(&self, frame: &Frame, m: &Metrics, layout: Layout) -> Cells {
+    pub(super) fn matrix_cells(&self, frame: &CandidateView, m: &Metrics, layout: Layout) -> Cells {
         let text_style = m.text_style();
         let columns = frame.columns.max(1);
         let em = m.px(m.theme.text_font.size);

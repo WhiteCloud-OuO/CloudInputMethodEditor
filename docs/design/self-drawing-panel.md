@@ -164,7 +164,8 @@ SelfDrawingPanel {
   - `Renderer::render` 已把候选 `Frame` 的拼音行、候选行、高亮、页码、译文录进一个
     `SelfDrawingPanel.draw`，再交给 `render_document` 出图；候选窗口外观与旧的直接位图路径
     逐像素一致（阴影边缘在非整数缩放下有少量抗锯齿差，已在测试里限定）；
-  - 新路径 `CandidateView` + `PageTree` 已能生成竖排候选的 Document（拼音行 / 每个候选行 / 底部信息都是页面树节点）；
+  - 新路径 `CandidateView` + `PageTree` 已能生成竖排 / 横排 / 矩阵候选的 Document（拼音行 / 每个候选行或格 /
+    底部信息都是页面树节点）；
   - 候选行同时生成 `Rendered.regions`（`candidate_<index>`），鼠标悬停 / 点击已优先走区域；
     仍保留 `Frame` / `render_frame` 入口和 `highlight_rects` 供高亮动画使用；
   - 高亮滑动会复用上一帧 draw 列表，只改高亮矩形再合成；位图仍是整块重画，

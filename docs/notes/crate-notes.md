@@ -431,8 +431,9 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 对 `ControlRender` 泛型，由 `renderer/record.rs::DrawRecorder` 把文字 / 矩形 / 圆角矩形 / 高亮录成
 `SelfDrawingPanel.draw`（文字用 `Element::StyledText` 保留字族、行高、删除线、下划线与 gamma），最后走
 `render_document`。旧的直接绘制保留为测试用的 `render_direct`，逐像素对照；阴影 + 非整数缩放只在面板边缘
-有少量抗锯齿差。新的 `CandidateView` + 页面树路径（`render_candidate_view`）先落竖排：拼音行、每个候选行、
-底部信息都是 `PageTree` 节点，Document 直接从节点矩形生成；横排 / 矩阵仍走旧路径，下一步接入。`Rendered.regions` 同步生成 `candidate_<index>` 候选行区域（内容区点坐标），候选窗口的
+有少量抗锯齿差。新的 `CandidateView` + 页面树路径（`render_candidate_view`）已覆盖竖排 / 横排 / 矩阵：
+拼音行、每个候选行 / 格、底部信息都是 `PageTree` 节点，Document 直接从节点矩形生成；三种布局都和旧路径
+做了逐像素对照。候选窗口还没切到新入口，旧 `Frame` 路径暂时保留。`Rendered.regions` 同步生成 `candidate_<index>` 候选行区域（内容区点坐标），候选窗口的
 `cell_at` 优先按区域找行、再回退到旧的 `highlight_rects`。`Renderer` 还缓存上一帧内容不变时的 draw 列表：
 高亮滑动只改 `SelfDrawingPanel.draw` 里的高亮矩形再走 `render_document`，不重新排版 / 录制；位图本身仍整块重画。
 候选行右侧的**来源角标**：`Row.badge`（Server `dispatch/candidates/mod.rs::badges_of` 按 `kind == Custom` 判「短」、

@@ -44,7 +44,10 @@ impl Renderer {
         scale: f32,
         shadow: Option<&Shadow>,
     ) -> Result<crate::renderer::Rendered, RenderError> {
-        if layout_mode == Layout::Horizontal && view.columns == 0 {
+        if view.columns > 0 {
+            return self.render_candidate_matrix(view, layout_mode, theme, scale, shadow);
+        }
+        if layout_mode == Layout::Horizontal {
             return self.render_candidate_horizontal(view, theme, scale, shadow);
         }
         let metrics = Metrics { theme, scale };
@@ -688,6 +691,185 @@ impl Renderer {
             annotation_height,
             highlight_rects,
         }
+    }
+}
+
+impl Renderer {
+    fn render_candidate_matrix(
+        &self,
+        view: &CandidateView,
+        layout_mode: Layout,
+        theme: &crate::theme::Theme,
+        scale: f32,
+        shadow: Option<&Shadow>,
+    ) -> Result<crate::renderer::Rendered, RenderError> {
+        let m = Metrics { theme, scale };
+        let cells = self.matrix_cells(view, &m, layout_mode);
+        let grid_rows = view.rows.len().div_ceil(cells.columns.max(1));
+        let inset = m.px(super::HIGHLIGHT_INSET);
+        let top_size = self.candidate_top_size(view, &m);
+        let info_height = self.candidate_info_height(view, &m);
+        let width = cells.width(m.column_gap()) + inset * 2.0 + m.padding() * 2.0;
+        let height =
+            m.padding() * 2.0 + top_size.1 + cells.row_height * grid_rows as f32 + info_height;
+        let mut tree = PageTree::new(Node::new(NodeKind::Page));
+        tree.node_mut(tree.root).width = SizeSpec::Fixed(width);
+        tree.node_mut(tree.root).height = SizeSpec::Fixed(height);
+        let top = (top_size.1 > 0.0)
+            .then(|| add_absolute(&mut tree, m.padding(), m.padding(), width, top_size.1));
+        let rows_top = m.padding() + top_size.1;
+        let mut rows = Vec::with_capacity(view.rows.len());
+        let mut highlight_rects = Vec::with_capacity(view.rows.len());
+        for index in 0..view.rows.len() {
+            let column = index % cells.columns.max(1);
+            let x = m.padding() + inset + cells.offset(column, m.column_gap());
+            let y = rows_top + cells.row_height * (index / cells.columns.max(1)) as f32;
+            rows.push(add_absolute(
+                &mut tree,
+                x,
+                y,
+                cells.column_widths[column],
+                cells.row_height,
+            ));
+            highlight_rects.push(HighlightRect::new(
+                x - inset,
+                y,
+                x + cells.column_widths[column] + inset,
+                y + cells.row_height,
+            ));
+        }
+        let footer_top = rows_top + cells.row_height * grid_rows as f32 + m.row_padding();
+        let footer = (info_height > 0.0).then(|| {
+            add_absolute(
+                &mut tree,
+                m.padding(),
+                footer_top,
+                width - m.padding() * 2.0,
+                info_height,
+            )
+        });
+        let mut children = Vec::new();
+        if let Some(top) = top {
+            children.push(top);
+        }
+        children.extend(rows.iter().copied());
+        if let Some(footer) = footer {
+            children.push(footer);
+        }
+        tree.set_children(tree.root, children);
+        let result = layout(&tree, Constraints::loose(), &mut cloud_ui_core::NoopMeasure);
+        let margin = shadow.map_or(0.0, |s| m.px(s.margin()));
+        let mut recorder = DrawRecorder::new(self.text.clone(), scale, (margin, margin));
+        recorder.round_rect(
+            margin,
+            margin,
+            width,
+            height,
+            m.corner_radius(),
+            theme.colors.background,
+        );
+        self.draw_candidate_top(&mut recorder, view, &m, margin, margin + m.padding());
+        if let Some(rect) = highlight_rect(view, &highlight_rects) {
+            recorder.round_rect(
+                margin + rect.left,
+                margin + rect.top,
+                rect.width(),
+                rect.height(),
+                m.corner_radius() / 2.0,
+                theme.colors.highlight,
+            );
+        }
+        let text_height = m.px(m.theme.text_font.line_height);
+        for (index, row) in view.rows.iter().enumerate() {
+            let rect = candidate_rect(&result.rects, rows[index]).unwrap_or_default();
+            let (text, _) = &cells.texts[index];
+            if text.is_empty() && row.index.is_empty() {
+                continue;
+            }
+            let x = margin + rect.x;
+            let top = margin + rect.y + m.row_padding();
+            if !row.index.is_empty() {
+                recorder.text(
+                    &row.index,
+                    &m.index_style(view.highlighted == Some(index)),
+                    x,
+                    top + m.index_offset(text_height),
+                );
+            }
+            let color = if view.highlighted == Some(index) {
+                theme.colors.highlight_text
+            } else {
+                theme.colors.text
+            };
+            let style = m
+                .style(m.theme.text_font, color)
+                .with_family(m.theme.text_family.as_ref());
+            let text_x = x + cells.index_width + m.px(super::INDEX_GAP);
+            recorder.text(text, &style, text_x, top);
+            let shown_width = recorder.measure(text, &m.text_style()).width;
+            self.draw_auxiliary(
+                &mut recorder,
+                &m,
+                row.auxiliary.as_ref(),
+                text_x + shown_width + self.space_width(&m),
+                top,
+            );
+            let badge_width = self.badge_width(row.badge.as_deref(), &m);
+            self.draw_badge(
+                &mut recorder,
+                &m,
+                row.badge.as_deref(),
+                x + rect.width - m.px(super::BADGE_GAP) - badge_width,
+                top,
+            );
+        }
+        self.draw_candidate_info(
+            &mut recorder,
+            view,
+            &m,
+            margin,
+            margin + rows_top + cells.row_height * grid_rows as f32 + m.row_padding(),
+            width,
+        );
+        let panel = SelfDrawingPanel {
+            x: 0.0,
+            y: 0.0,
+            width: width / scale.max(f32::EPSILON),
+            height: height / scale.max(f32::EPSILON),
+            clip: true,
+            draw: recorder.into_elements(),
+            children: Vec::new(),
+            regions: Vec::new(),
+        };
+        let document = Document {
+            width: panel.width,
+            height: panel.height,
+            elements: vec![Element::SelfDrawingPanel(panel)],
+            regions: Vec::new(),
+            control_names: Vec::new(),
+            instances: Default::default(),
+        };
+        let mut rendered = self
+            .render_document(&document, theme, scale, shadow, false)?
+            .rendered;
+        rendered.regions = highlight_rects
+            .iter()
+            .enumerate()
+            .map(|(index, rect)| {
+                Region::new(
+                    format!("candidate_{index}"),
+                    HitShape::Rect(HitRect::new(
+                        rect.left / scale.max(f32::EPSILON),
+                        rect.top / scale.max(f32::EPSILON),
+                        rect.width() / scale.max(f32::EPSILON),
+                        rect.height() / scale.max(f32::EPSILON),
+                    )),
+                    false,
+                )
+            })
+            .collect();
+        rendered.highlight_rects = highlight_rects;
+        Ok(rendered)
     }
 }
 

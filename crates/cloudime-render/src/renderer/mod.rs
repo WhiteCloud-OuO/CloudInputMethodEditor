@@ -1734,6 +1734,51 @@ mod tests {
     }
 
     #[test]
+    fn the_page_tree_candidate_matches_the_matrix_render() {
+        use crate::frame::CandidateView;
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let frame = Frame {
+            rows: (0..6)
+                .map(|index| Row {
+                    index: (index + 1).to_string(),
+                    text: format!("候选{index}"),
+                    annotation: Vec::new(),
+                    badge: None,
+                    auxiliary: None,
+                })
+                .collect(),
+            highlighted: Some(2),
+            columns: 3,
+            footer: Some("1/2".to_owned()),
+            ..Frame::default()
+        };
+        let theme = Theme::new();
+        for layout in [Layout::Vertical, Layout::Horizontal] {
+            let direct = renderer
+                .render_direct(&frame, layout, &theme, 1.0, None)
+                .unwrap();
+            let page_tree = renderer
+                .render_candidate_view(&CandidateView::from(&frame), layout, &theme, 1.0, None)
+                .unwrap();
+            assert_eq!(
+                (direct.content_width, direct.content_height),
+                (page_tree.content_width, page_tree.content_height)
+            );
+            let differing = direct
+                .pixmap
+                .pixels()
+                .iter()
+                .zip(page_tree.pixmap.pixels())
+                .filter(|(a, b)| a != b)
+                .count();
+            assert_eq!(differing, 0, "页面树矩阵路径应与直接绘制一致（{layout:?}）");
+        }
+    }
+
+    #[test]
     fn a_panel_keeps_the_size_it_was_given() {
         let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
             return;
