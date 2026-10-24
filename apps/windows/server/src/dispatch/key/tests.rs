@@ -1841,6 +1841,36 @@ fn double_pinyin_i_stays_an_initial_and_i_mode_hides_key_map_reference() {
     );
 }
 
+/// 全拼没有双拼键位映射参考，i 模式不该去动它的显示方式。
+#[test]
+fn full_pinyin_i_mode_leaves_key_map_reference_untouched() {
+    let dir = std::env::temp_dir().join("cloudime-key-tests-i-mode-full-pinyin-map");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write_i_script(&dir, "a.lua", "全拼脚本", "", "");
+    let mut r = router(9);
+    r.scripts = cloudime_script::Runtime::load(&dir, &[]);
+    let recorded = Arc::new(Recorded::default());
+    r.set_candidate_sink(Box::new(RecordingSink(recorded.clone())));
+    recorded.auxiliary_modes.lock().unwrap().clear();
+    let normal = KeyModifiers::default();
+    let hotkey = KeyModifiers {
+        ctrl: true,
+        alt: true,
+        ..KeyModifiers::default()
+    };
+
+    key(&mut r, 0x49, Some('\u{9}'), hotkey);
+    assert!(r.i_mode);
+    assert!(
+        recorded.auxiliary_modes.lock().unwrap().is_empty(),
+        "全拼不碰映射参考"
+    );
+    key(&mut r, 0x1B, None, normal);
+    assert!(!r.i_mode);
+    assert!(recorded.auxiliary_modes.lock().unwrap().is_empty());
+}
+
 /// 空格运行高亮脚本；脚本返回的 commit 直接上屏，i 模式收起。
 #[test]
 fn i_mode_space_runs_the_highlighted_script() {

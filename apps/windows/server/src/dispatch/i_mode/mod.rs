@@ -35,6 +35,10 @@ impl Router {
             return;
         }
         self.i_mode = on;
+        // 全拼没有双拼键位映射参考；只有双拼/形码这类方案才需要临时收起。
+        if self.config.full_pinyin {
+            return;
+        }
         let mode = if on {
             KeyMapReference::Off
         } else {

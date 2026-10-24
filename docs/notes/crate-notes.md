@@ -1327,7 +1327,7 @@ u 模式复用同一件资产，但走 `CandidateSink::set_symbol_aux(Option<Key
 随 `InputSettings::key_map_modifiers` / `key_map_key` 下发，DLL 在组句里专程送这一个键（见 `eats_key`）。
 
 **i 模式**（`server/src/dispatch/i_mode/`）：全拼空组句按 `i`、或 `Ctrl+Alt+I` 进（双拼的 `i` 是声母，只走
-`Ctrl+Alt+I`）；`set_i_mode` 统一切换 `Router::i_mode`，进入时把键位映射参考设为 `Off`、退出时恢复配置。
+`Ctrl+Alt+I`）；`set_i_mode` 统一切换 `Router::i_mode`，双拼 / 形码进入时把键位映射参考设为 `Off`、退出时恢复配置；全拼没有这套映射参考，不碰它。
 `recompose_i_mode` 在缓冲区只有 `i` 时只用 `Runtime::script_infos()` 里 `manual = true`（清单 `trigger_condition = "manual"`）的脚本，按脚本文件名顺序生成候选（`text = 文件名`、
 `display = 清单 name`，`CandidateKind::Shortcut`，候选角标在 `candidate_badges` 里特判成空），超过一个字母且开了
 中英混输时改调 `Engine::query_english_words()` 只出英文词。按键在 `i_mode_key`：空格运行高亮脚本、Enter
