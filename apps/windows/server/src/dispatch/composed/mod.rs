@@ -148,6 +148,7 @@ impl Router {
                 .scripts
                 .script_infos()
                 .iter()
+                .filter(|info| info.manual)
                 .map(|info| Candidate {
                     text: info.file.clone(),
                     display: Some(info.name.clone()),

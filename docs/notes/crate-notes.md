@@ -1327,7 +1327,7 @@ u 模式复用同一件资产，但走 `CandidateSink::set_symbol_aux(Option<Key
 随 `InputSettings::key_map_modifiers` / `key_map_key` 下发，DLL 在组句里专程送这一个键（见 `eats_key`）。
 
 **i 模式**（`server/src/dispatch/i_mode/`）：全拼空组句按 `i`、或 `Ctrl+Alt+I` 进；`Router::i_mode` 置位，
-`recompose_i_mode` 在缓冲区只有 `i` 时用 `Runtime::script_infos()` 按脚本文件名顺序生成候选（`text = 文件名`、
+`recompose_i_mode` 在缓冲区只有 `i` 时只用 `Runtime::script_infos()` 里 `manual = true`（清单 `trigger_condition = "manual"`）的脚本，按脚本文件名顺序生成候选（`text = 文件名`、
 `display = 清单 name`，`CandidateKind::Shortcut`，候选角标在 `candidate_badges` 里特判成空），超过一个字母且开了
 中英混输时改调 `Engine::query_english_words()` 只出英文词。按键在 `i_mode_key`：空格运行高亮脚本、Enter
 `take_raw()` 上屏 `i`、Esc 清组句，数字按页内下标直接运行；`Ctrl+数字` 把 `description` 写进候选窗的 `online`

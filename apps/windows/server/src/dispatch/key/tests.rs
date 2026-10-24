@@ -1740,11 +1740,21 @@ fn i_mode_scripts(dir: &std::path::Path) {
     write_i_script(dir, "b.lua", "脚本乙", "乙的介绍", "运行乙");
 }
 
+/// 非 manual 的脚本即使有 manual 处理函数也不进 i 模式候选。
+fn write_non_manual_script(dir: &std::path::Path) {
+    std::fs::write(
+        dir.join("c.lua"),
+        "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'ctrl+alt', keys = { 'f3' }, name = '组合键脚本', budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\ncloudime.on('manual', function(event) return { commit = '不应运行' } end)\n",
+    )
+    .unwrap();
+}
+
 /// i 模式按文件顺序列脚本；只有 i 时 Enter 上屏字面量 i 并收起候选。
 #[test]
 fn i_mode_lists_scripts_by_file_and_enter_commits_i() {
     let dir = std::env::temp_dir().join("cloudime-key-tests-i-mode-list");
     i_mode_scripts(&dir);
+    write_non_manual_script(&dir);
     let mut r = router(9);
     r.scripts = cloudime_script::Runtime::load(&dir, &[]);
     let normal = KeyModifiers::default();

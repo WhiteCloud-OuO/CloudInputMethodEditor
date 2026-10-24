@@ -408,6 +408,9 @@ pub struct ScriptInfo {
 
     /// 脚本文件名（含 `.lua`），i 模式按它排序与定位。
     pub file: String,
+
+    /// 清单 `trigger_condition = "manual"`：只有这类脚本会进 i 模式候选。
+    pub manual: bool,
 }
 
 /// 一个脚本的清单（`cloudime.script{…}`）：每个脚本必须**最先**声明一次。
@@ -968,6 +971,7 @@ impl Runtime {
             name: manifest.name.clone(),
             description: manifest.description.clone(),
             file: manifest.file.clone(),
+            manual: manifest.trigger == TriggerCondition::Manual,
         });
         self.triggers.push(manifest.trigger);
         self.needs_context |= manifest.needs_context;

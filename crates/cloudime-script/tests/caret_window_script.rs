@@ -1,5 +1,5 @@
 //! 随包的测试脚本（`Scripts/lib/test-caret-window.lua`）的行为：
-//! 按键请求光标 → `caret` 事件建窗口 / 读 SVG → 点扁平按钮的自动区域销毁。
+//! `manual` 事件请求光标 → `caret` 事件建窗口 / 读 SVG → 点扁平按钮的自动区域销毁。
 
 use std::path::{Path, PathBuf};
 
@@ -42,19 +42,8 @@ fn the_caret_window_script_draws_and_closes_itself() {
     runtime.set_install_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
     assert!(runtime.scripts().iter().any(|name| name == "光标窗口测试"));
 
-    // Ctrl+Alt+F3：脚本请求光标位置。
-    let key = event(
-        &runtime,
-        &[
-            ("vk", mlua::Value::Integer(0x72)),
-            ("ctrl", mlua::Value::Boolean(true)),
-            ("alt", mlua::Value::Boolean(true)),
-            ("shift", mlua::Value::Boolean(false)),
-            ("win", mlua::Value::Boolean(false)),
-            ("composing", mlua::Value::Boolean(false)),
-        ],
-    );
-    runtime.dispatch("key", key.clone(), None);
+    // i 模式选中脚本（`manual`）：脚本请求光标位置。
+    runtime.dispatch("manual", event(&runtime, &[]), None);
     assert!(runtime.take_caret_request());
 
     // DLL 回来光标矩形（屏幕点）：窗口摆在光标上方 30 点。
@@ -138,8 +127,8 @@ fn the_caret_window_script_draws_and_closes_itself() {
             .any(|control| control.name == "close")
     );
 
-    // 开着窗口再按 F3：不创建、不关闭。
-    runtime.dispatch("key", key, None);
+    // 开着窗口再运行一次：不创建、不关闭。
+    runtime.dispatch("manual", event(&runtime, &[]), None);
     assert!(
         !runtime
             .take_window_requests()

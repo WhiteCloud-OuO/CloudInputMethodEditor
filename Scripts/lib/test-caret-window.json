@@ -48,7 +48,7 @@
             "type": "text_block",
             "size": 14,
             "line_spacing": 5,
-            "text": "760 × 640\nCtrl+Alt+F3 只创建",
+            "text": "760 × 640\ni 模式运行，只创建",
             "color": "#FF888888",
             "position": "absolute",
             "inset": {

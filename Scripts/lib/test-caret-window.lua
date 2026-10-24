@@ -1,7 +1,7 @@
 -- 测试：光标位置 + 独立窗口 + JSON 布局解析 + SVG 文件 + 区域点击关闭。
 --
 -- 用法：把这个文件从 `Scripts\lib\` 拷到 `Scripts\` 下（或直接放在 `Scripts\` 里），重启输入法服务。
--- 在任意文本编辑器里按 **Ctrl + Alt + F3**：
+-- 在任意文本编辑器里按 `i` 进 i 模式，选中「光标窗口测试」运行：
 --   * 光标上方 30 点摆一块 760 × 640 的独立窗口；
 --   * 上方放不下（会超出显示器工作区）就改到光标下方 30 点；
 --   * 窗口内容来自 `Scripts/lib/test-caret-window.json`：静态控件、两个单行编辑框、
@@ -10,7 +10,7 @@
 --     `event.handler` 分发；
 --   * 窗口背景 / 圆角由布局文件里的 `rect` 画（`create` 用 `background = false`），
 --     阴影与候选窗同一套（`shadow` 缺省开启）。
--- F3 只负责创建：窗口已经开着时再按不会关它。
+-- 运行只负责创建：窗口已经开着时再运行不会关它。
 --
 -- 用到的接口：
 --   * `cloudime.caret()`：请 DLL 量一次插入点；结果以 `caret` 事件送来（屏幕坐标 / 点）；
@@ -19,11 +19,9 @@
 
 cloudime.script{
     name                  = "光标窗口测试",
-    description           = "Ctrl+Alt+F3：光标上方 30 点开一块 760×640 的 JSON 布局测试窗口（含多行编辑框，右上角 × 关闭）",
+    description           = "i 模式运行：光标上方 30 点开一块 760×640 的 JSON 布局测试窗口（含多行编辑框，右上角 × 关闭）",
     api                   = 2,
-    trigger_condition     = "combination_key",
-    combination_modifiers = "ctrl+alt",
-    keys                  = { "f3" },
+    trigger_condition     = "manual",
     timeout               = 200,
     sync                  = true,
     handover              = "return",
@@ -53,11 +51,8 @@ local function place(pos)
     win:show{ x = x, y = y }
 end
 
-cloudime.on("key", function(event)
-    if event.vk ~= 0x72 then               -- F3
-        return
-    end
-    -- 已经开着就什么都别做：这个键只负责「创建」，不负责关闭。
+cloudime.on("manual", function(event)
+    -- 已经开着就什么都别做：这个入口只负责「创建」，不负责关闭。
     if win then
         return
     end

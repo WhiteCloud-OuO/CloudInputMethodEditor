@@ -177,7 +177,7 @@ impl Router {
             self.script_actions(&event)
         };
         // 脚本在这次（或之前某次回调里）要过光标位置：这一拍的 KeyResult 顺路请 DLL 量一次。
-        let want_caret = self.scripts.take_caret_request();
+        let mut want_caret = self.scripts.take_caret_request();
         // 脚本给的加权 / 降权：排序仍在 Core，这里只把参数递过去（没给就不动 Core 那份）
         if let Some(adjustments) = &actions.adjust {
             self.engine
@@ -225,6 +225,8 @@ impl Router {
             Effect::Navigated => (None, KeyOutcome::Consumed),
             Effect::Passthrough => (None, KeyOutcome::Passthrough),
         };
+        // 脚本在这一键里（例如 i 模式运行的 manual 脚本）才调 `cloudime.caret()`：也要带上。
+        want_caret |= self.scripts.take_caret_request();
         // 脚本要的在线翻译那一行（`online`）：放在按键派发**之后**，脚本看到的是这一拍之后的状态
         self.apply_online_actions(&actions);
         // 脚本换主题：动作表里的 `theme` 是这一拍的最终决定，其次才看 `cloudime.apply_theme` 提的请求
