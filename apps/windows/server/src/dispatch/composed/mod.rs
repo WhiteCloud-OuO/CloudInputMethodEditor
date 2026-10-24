@@ -139,7 +139,7 @@ impl Router {
     fn recompose_i_mode(&mut self) -> bool {
         let text = self.engine.composition().text().to_owned();
         if text.is_empty() {
-            self.i_mode = false;
+            self.set_i_mode(false);
             return false;
         }
         let page_size = self.page_size();

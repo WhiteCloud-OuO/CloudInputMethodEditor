@@ -83,7 +83,7 @@ impl Router {
         if self.u_mode.take().is_some() {
             self.candidates.set_symbol_aux(None);
         }
-        self.i_mode = false;
+        self.set_i_mode(false);
         self.composed = None;
         self.notice = None;
         self.highlight = 0;

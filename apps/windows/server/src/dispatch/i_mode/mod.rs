@@ -7,6 +7,7 @@ use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use cloudime_platform::LayoutMode;
+use cloudime_platform::input_schemes::KeyMapReference;
 use cloudime_platform::protocol::{KeyEvent, OnlineLine, OnlineState};
 
 use super::Router;
@@ -27,6 +28,21 @@ const OEM_4: u32 = 0xDB;
 const OEM_6: u32 = 0xDD;
 
 impl Router {
+    /// 切 i 模式时把键位映射参考收起来：i 模式里没有拼音可参考，候选只列 manual 脚本。
+    /// 退出时恢复用户配置的显示方式（off / hotkey / always）。
+    pub(super) fn set_i_mode(&mut self, on: bool) {
+        if self.i_mode == on {
+            return;
+        }
+        self.i_mode = on;
+        let mode = if on {
+            KeyMapReference::Off
+        } else {
+            self.config.key_map_reference
+        };
+        self.candidates.set_auxiliary_mode(mode);
+    }
+
     /// 从空组句进入 i 模式；已经在组句里就不动。
     pub(super) fn enter_i_mode(&mut self) {
         if self.composing() {
@@ -36,7 +52,7 @@ impl Router {
             self.candidates.set_symbol_aux(None);
         }
         self.engine.push('i');
-        self.i_mode = true;
+        self.set_i_mode(true);
         self.highlight = 0;
     }
 
@@ -67,13 +83,13 @@ impl Router {
         match event.virtual_key {
             ESCAPE => {
                 self.engine.clear();
-                self.i_mode = false;
+                self.set_i_mode(false);
                 self.online.clear();
                 return Some(Effect::Changed(None));
             }
             RETURN => {
                 let raw = self.engine.take_raw();
-                self.i_mode = false;
+                self.set_i_mode(false);
                 self.online.clear();
                 return Some(Effect::Changed((!raw.is_empty()).then_some(raw)));
             }
@@ -84,7 +100,7 @@ impl Router {
                     self.engine.delete_forward();
                 }
                 if self.engine.composition().is_empty() {
-                    self.i_mode = false;
+                    self.set_i_mode(false);
                 }
                 return Some(Effect::Changed(None));
             }
@@ -137,7 +153,7 @@ impl Router {
         match event.virtual_key {
             ESCAPE => {
                 self.engine.clear();
-                self.i_mode = false;
+                self.set_i_mode(false);
                 self.online.clear();
                 return Some(Effect::Changed(None));
             }
@@ -228,7 +244,7 @@ impl Router {
     /// i 模式运行完脚本（或起了后台实例）后收起候选窗口；脚本自己创建的独立窗口不受影响。
     fn finish_i_mode(&mut self) {
         self.engine.clear();
-        self.i_mode = false;
+        self.set_i_mode(false);
         self.online.clear();
     }
 

@@ -7,6 +7,7 @@ use cloudime_dictionary::{Dictionary, WordList};
 use cloudime_platform::LayoutMode;
 use cloudime_platform::MouseWordSelection;
 use cloudime_platform::PreeditMode;
+use cloudime_platform::input_schemes::KeyMapReference;
 use cloudime_platform::protocol::{
     ClientMessage, Frame, KeyEvent, KeyModifiers, KeyOutcome, OnlineLine, OnlineState,
     PROTOCOL_VERSION, ScreenRect, ServerMessage, SessionId,
@@ -21,6 +22,8 @@ struct Recorded {
     shows: Mutex<Vec<(Frame, ScreenRect)>>,
     /// 「辅助窗口」被开关了几次（`CandidateSink::auxiliary_toggle`）。
     auxiliary_toggles: Mutex<u32>,
+    /// 下发给候选窗口的键位映射参考显示方式（`CandidateSink::set_auxiliary_mode`）。
+    auxiliary_modes: Mutex<Vec<KeyMapReference>>,
 }
 
 struct RecordingSink(Arc<Recorded>);
@@ -36,6 +39,10 @@ impl CandidateSink for RecordingSink {
 
     fn auxiliary_toggle(&self) {
         *self.0.auxiliary_toggles.lock().unwrap() += 1;
+    }
+
+    fn set_auxiliary_mode(&self, mode: KeyMapReference) {
+        self.0.auxiliary_modes.lock().unwrap().push(mode);
     }
 }
 
@@ -1778,6 +1785,60 @@ fn i_mode_lists_scripts_by_file_and_enter_commits_i() {
     assert_eq!(commit.as_deref(), Some("i"));
     assert!(!r.i_mode);
     assert!(frame.candidates.items.is_empty());
+}
+
+/// 双拼下 `i` 是声母键，不直接进 i 模式；`Ctrl+Alt+I` 进入后收起键位映射参考。
+#[test]
+fn double_pinyin_i_stays_an_initial_and_i_mode_hides_key_map_reference() {
+    let dir = std::env::temp_dir().join("cloudime-key-tests-i-mode-double-pinyin");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write_i_script(&dir, "a.lua", "双拼脚本", "", "");
+    let engine = Engine::new(Dictionary::parse("你\tni\t100\n").unwrap())
+        .with_english(WordList::parse("if\tif\t100\n").unwrap());
+    let mut r = Router::new(
+        engine,
+        RouterConfig {
+            full_pinyin: false,
+            key_map_reference: KeyMapReference::Always,
+            ..Default::default()
+        },
+    );
+    r.handle(ClientMessage::OpenSession {
+        session: SessionId(1),
+        app: None,
+        protocol: PROTOCOL_VERSION,
+    });
+    r.scripts = cloudime_script::Runtime::load(&dir, &[]);
+    let recorded = Arc::new(Recorded::default());
+    r.set_candidate_sink(Box::new(RecordingSink(recorded.clone())));
+    let normal = KeyModifiers::default();
+    let hotkey = KeyModifiers {
+        ctrl: true,
+        alt: true,
+        ..KeyModifiers::default()
+    };
+
+    key(&mut r, 0x49, Some('i'), normal);
+    assert!(!r.i_mode, "双拼的 i 是声母，不进 i 模式");
+    assert_eq!(r.engine.composition().text(), "i");
+    key(&mut r, 0x1B, None, normal);
+    assert!(!r.composing());
+
+    key(&mut r, 0x49, Some('\u{9}'), hotkey);
+    assert!(r.i_mode, "Ctrl+Alt+I 仍能进 i 模式");
+    assert_eq!(
+        recorded.auxiliary_modes.lock().unwrap().last().copied(),
+        Some(KeyMapReference::Off),
+        "i 模式不应显示键位映射参考"
+    );
+    key(&mut r, 0x1B, None, normal);
+    assert!(!r.i_mode);
+    assert_eq!(
+        recorded.auxiliary_modes.lock().unwrap().last().copied(),
+        Some(KeyMapReference::Always),
+        "退出 i 模式恢复用户配置"
+    );
 }
 
 /// 空格运行高亮脚本；脚本返回的 commit 直接上屏，i 模式收起。
