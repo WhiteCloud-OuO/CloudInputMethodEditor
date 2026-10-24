@@ -1797,6 +1797,26 @@ fn i_mode_space_runs_the_highlighted_script() {
     assert!(!r.composing());
 }
 
+/// 脚本没有返回 commit 也要收起候选窗口（脚本自己的窗口不受影响）。
+#[test]
+fn i_mode_run_without_commit_closes_the_candidate_window() {
+    let dir = std::env::temp_dir().join("cloudime-key-tests-i-mode-no-commit");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write_i_script(&dir, "a.lua", "无返回脚本", "", "");
+    let mut r = router(9);
+    r.scripts = cloudime_script::Runtime::load(&dir, &[]);
+    let normal = KeyModifiers::default();
+
+    key(&mut r, 0x49, Some('i'), normal);
+    let (outcome, commit, frame) = key(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit, None);
+    assert!(!r.i_mode);
+    assert!(!r.composing());
+    assert!(frame.candidates.items.is_empty());
+}
+
 /// 数字直接运行对应下标，不是运行当前高亮；Ctrl+数字只写额外内容。
 #[test]
 fn i_mode_digits_run_the_selected_script_and_ctrl_shows_description() {
@@ -1924,6 +1944,8 @@ fn i_mode_shift_digit_runs_in_background_and_forwards_windows() {
 
     key(&mut r, 0x49, Some('i'), normal);
     key(&mut r, 0x31, Some('!'), shift);
+    assert!(!r.i_mode, "运行后台脚本后收起 i 模式");
+    assert!(!r.composing(), "候选窗口应关闭");
     let mut requests = Vec::new();
     for _ in 0..100 {
         r.tick();

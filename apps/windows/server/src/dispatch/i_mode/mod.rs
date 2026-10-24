@@ -206,11 +206,8 @@ impl Router {
         }
         if event.modifiers.shift {
             self.spawn_manual_script(&file);
-            self.notice = Some(format!(
-                "已在后台运行脚本：{}",
-                info.map_or(file, |info| info.name)
-            ));
-            return Some(Effect::Navigated);
+            self.finish_i_mode();
+            return Some(Effect::Changed(None));
         }
         Some(self.run_script_file(&file))
     }
@@ -223,15 +220,16 @@ impl Router {
     }
 
     fn run_script_file(&mut self, file: &str) -> Effect {
-        match self.run_manual_script(file) {
-            Some(text) if !text.is_empty() => {
-                self.engine.clear();
-                self.i_mode = false;
-                self.online.clear();
-                Effect::Changed(Some(text))
-            }
-            _ => Effect::Navigated,
-        }
+        let commit = self.run_manual_script(file);
+        self.finish_i_mode();
+        Effect::Changed(commit.filter(|text| !text.is_empty()))
+    }
+
+    /// i 模式运行完脚本（或起了后台实例）后收起候选窗口；脚本自己创建的独立窗口不受影响。
+    fn finish_i_mode(&mut self) {
+        self.engine.clear();
+        self.i_mode = false;
+        self.online.clear();
     }
 
     /// Alt+数字：用记事本打开脚本文件，以及脚本源码里引用到的 JSON 布局。

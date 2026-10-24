@@ -1332,7 +1332,8 @@ u 模式复用同一件资产，但走 `CandidateSink::set_symbol_aux(Option<Key
 中英混输时改调 `Engine::query_english_words()` 只出英文词。按键在 `i_mode_key`：空格运行高亮脚本、Enter
 `take_raw()` 上屏 `i`、Esc 清组句，数字按页内下标直接运行；`Ctrl+数字` 把 `description` 写进候选窗的 `online`
 那一行，`Alt+数字` 用记事本打开 Lua 和源码里引用的 JSON，`Shift+数字` 起独立线程。运行走
-`Runtime::dispatch_to_script(file, "manual", …)`（`ScriptInfo` / `Manifest.file` 记住文件名）；后台线程用
+`Runtime::dispatch_to_script(file, "manual", …)`（`ScriptInfo` / `Manifest.file` 记住文件名）；无论有没有
+`commit`，`finish_i_mode` 都清组句并收起候选窗口（只清输入法组句，脚本自己的独立窗口不动）。后台线程用
 `Runtime::load_file` 建新 Lua 状态，窗口编号从 `0x4000_0000` 起，结果经 mpsc 回工人线程，由
 `poll_background_scripts` 在 `tick` 里落地。
 
