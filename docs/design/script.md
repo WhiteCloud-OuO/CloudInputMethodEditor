@@ -41,7 +41,7 @@ cloudime.script{
 
 | 字段 | 必写 | 语义 |
 |---|---|---|
-| `trigger_condition` | **是** | 五选一：`"combination_key"` 按下组合键（收 `key`）/ `"time_range"` 某个时间段（收 `time`，每段只触发一次）/ `"candidate_context"` 候选窗口出现且拼音串等于指定内容（收 `candidates`）/ `"focus_app"` 编辑光标位于指定程序（收 `focus`）/ `"manual"` 手动触发（i 模式预留，永不自动派发）；写别的判无效 |
+| `trigger_condition` | **是** | 五选一：`"combination_key"` 按下组合键（收 `key`）/ `"time_range"` 某个时间段（收 `time`，每段只触发一次）/ `"candidate_context"` 候选窗口出现且拼音串等于指定内容（收 `candidates`）/ `"focus_app"` 编辑光标位于指定程序（收 `focus`）/ `"manual"` 手动触发（i 模式列在候选里运行，收 `manual`）；写别的判无效 |
 | `combination_modifiers` | `combination_key` 时**是** | 要哪一套修饰键：`"none"`（不按修饰键，单键）/ `"ctrl"` / `"ctrl+alt"` / `"ctrl+shift"` / `"alt+shift"` / `"alt"` / `"win+ctrl"` / `"win+alt"` / `"win+shift"` / `"win+alt+ctrl"` / `"win+ctrl+shift"`；**精确匹配**，多按一个修饰键就不算 |
 | `keys` | `combination_key` 时**是** | 要哪几个键：`"enter"` / `"tab"` / `"space"` / `"backspace"` / `"delete"` / `"esc"` / `"left"` / `"up"` / `"right"` / `"down"` / `"home"` / `"end"` / `"pageup"` / `"pagedown"` / `"f1"`…`"f12"`，或单个字母 / 数字 / 标点（`"a"`–`"z"`、`"0"`–`"9"`、`` "`" `` `"-"` `"="` `"["` `"]"` `"\\"` `";"` `"'"` `","` `"."` `"/"`）。可写多个、自动去重；有一个不认识判无效 |
 | `time_range` | `time_range` 时**是** | `{ from = "20:00", to = "06:00" }`（本地时间，左闭右开；`from > to` 表示跨夜）。**每个时间段窗口只触发一次**（例如 20:00 开的那一晚到次日 06:00 只派一次） |
@@ -125,10 +125,11 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
 | `caret` | 脚本调过 `cloudime.caret()`，DLL 量到插入点之后（`ClientMessage::Caret`） | 同「没有按键的那一拍」；载荷是插入点矩形 + 所在显示器工作区（屏幕坐标 / **点**）。不受 `trigger_condition` 限制 |
 | 异步回调 | 结果回来那一拍 `tick`（`http_get` / `http_post`） | 同 `candidates`：`order` / `display` / `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 不认 |
 | `time` | 本地时间**第一次**落进清单 `time_range` 那个时间段（跨夜按「昨晚开的窗口」算） | 同「没有按键的那一拍」：`notice` / `adjust` / `online` / `theme`；载荷同 `cloudime.get_time()` 另加 `app`。**每个时间段窗口只派一次** |
+| `manual` | i 模式在候选里选中脚本后 | 只派给选中的那一个脚本；载荷 `{ app, file, source = "i_mode" }`；`commit` 直接上屏并结束 i 模式，`notice` / `online` / `theme` / 窗口请求照常生效 |
 
 - 多个脚本按登记顺序合并，**后面的盖前面的**；返回值类型严格匹配（写错记一条日志当没写）。
 - **只有触发条件对上的事件才派**：清单的 `trigger_condition` 决定收哪种（`combination_key` → `key`、
-  `candidate_context` → `candidates`、`focus_app` → `focus`、`time_range` → `time`；`manual` 一个都不收），
+  `candidate_context` → `candidates`、`focus_app` → `focus`、`time_range` → `time`、`manual` → `manual`），
   `startup` / `window` / HTTP 回调不受它限制。
 - **组合键不受候选窗口开没开影响**：清单的键折进下发给 DLL 的 `InputSettings` —— 没组句时 DLL 也在
   TSF 的按键路径上先问一趟 Server（`script_keys` 位图 + `script_key_modifiers` 修饰键集合），脚本不吃就

@@ -51,6 +51,7 @@ use cloudime_script::mlua;
 use windows::Win32::Foundation::POINT;
 
 use std::collections::HashMap;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use super::Router;
 use super::composed::Composed;
@@ -127,6 +128,18 @@ pub(super) enum OnlineCommand {
     /// 写这一行（`online = "文本"` / `online = { text = …, state = … }`）。
     Set(OnlineLine),
 }
+
+/// 一个后台脚本实例跑完之后送回工人线程的东西。
+pub(super) struct BackgroundScript {
+    /// 脚本返回的动作（`notice` / `online` / `theme` / `commit` 等）。
+    actions: ScriptActions,
+
+    /// 脚本在建 / 改 / 收的窗口；编号已抬到高位，避免和主运行时撞。
+    windows: Vec<cloudime_script::WindowRequest>,
+}
+
+/// 后台脚本窗口编号的下一个起点。
+static NEXT_BACKGROUND_WINDOW: AtomicU32 = AtomicU32::new(0x4000_0000);
 
 impl ScriptActions {
     /// 有没有要改的东西。
@@ -443,6 +456,92 @@ impl Router {
         actions
     }
 
+    /// i 模式运行一个脚本的 `manual` 处理函数；返回值里的 `commit` 交给调用方上屏。
+    ///
+    /// 只在主脚本运行时上同步执行；脚本期间产生的窗口 / 主题 / 提示等动作按普通规则落地。
+    pub(super) fn run_manual_script(&mut self, file: &str) -> Option<String> {
+        let payload = match self.manual_payload(file) {
+            Ok(payload) => payload,
+            Err(error) => {
+                tracing::warn!(%error, file, "拼 i 模式脚本载荷失败");
+                return None;
+            }
+        };
+        let app = self.focused_app().map(str::to_owned);
+        let actions = self.with_script_actions_for("manual", payload, app.as_deref(), Some(file));
+        self.apply_manual_actions(&actions);
+        self.flush_script_windows();
+        actions.commit
+    }
+
+    /// Shift+数字：在新的线程里用新的脚本运行时跑这个脚本，允许多开。
+    ///
+    /// 独立线程起一个新的 Lua 运行时；跑完把动作和窗口请求送回工人线程，窗口编号抬到高位。
+    pub(super) fn spawn_manual_script(&self, file: &str) {
+        let Some(dir) = &self.config.scripts_dir else {
+            tracing::warn!(file, "没有脚本目录，i 模式无法后台运行");
+            return;
+        };
+        let path = dir.join(file);
+        let file = file.to_owned();
+        let app = self.focused_app().map(str::to_owned);
+        let surrounding = self.surrounding.clone();
+        let sender = self.background_sender.clone();
+        let window_base = NEXT_BACKGROUND_WINDOW.fetch_add(1000, Ordering::Relaxed);
+        std::thread::spawn(move || {
+            let runtime = cloudime_script::Runtime::load_file(&path);
+            runtime.set_context(&surrounding);
+            runtime.set_window_id_base(window_base);
+            let payload = match runtime.lua().create_table() {
+                Ok(table) => table,
+                Err(error) => {
+                    tracing::warn!(%error, file, "后台脚本载荷创建失败");
+                    return;
+                }
+            };
+            let _ = payload.set("app", app.as_deref());
+            let _ = payload.set("file", file.as_str());
+            let _ = payload.set("source", "i_mode");
+            let responses = runtime.dispatch_to_script(&file, "manual", payload, app.as_deref());
+            let mut actions = ScriptActions::default();
+            for response in &responses {
+                actions.merge(response);
+            }
+            let windows = runtime.take_window_requests();
+            tracing::info!(
+                script = %file,
+                responses = responses.len(),
+                windows = windows.len(),
+                "i 模式后台脚本结束"
+            );
+            let _ = sender.send(BackgroundScript { actions, windows });
+        });
+    }
+
+    /// i 模式 `manual` 事件的载荷：应用名 / 文件名 / 来源。
+    fn manual_payload(&self, file: &str) -> mlua::Result<mlua::Table> {
+        let payload = self.scripts.lua().create_table()?;
+        payload.set("app", self.focused_app())?;
+        payload.set("file", file)?;
+        payload.set("source", "i_mode")?;
+        Ok(payload)
+    }
+
+    /// 运行手动脚本后的动作：没有按键语义，`passthrough` / `commit` 由调用方处理。
+    fn apply_manual_actions(&mut self, actions: &ScriptActions) {
+        if let Some(adjustments) = &actions.adjust {
+            self.engine
+                .set_word_adjustments(adjustments.iter().cloned());
+        }
+        if actions.notice.is_some() {
+            self.notice = actions.notice.clone();
+        }
+        self.apply_online_actions(actions);
+        if let Some(command) = &actions.theme {
+            self.apply_script_theme(Some(command.clone()));
+        }
+    }
+
     /// 引擎排完候选之后把这一屏交给脚本：`order` 改顺序、`display` 改显示。
     ///
     /// 改的是 `composed` 里那份布局本身（**不绕开引擎**）：之后的方向键、数字键、鼠标点选都按新顺序走，
@@ -655,11 +754,26 @@ impl Router {
         payload: mlua::Table,
         app: Option<&str>,
     ) -> ScriptActions {
+        self.with_script_actions_for(event, payload, app, None)
+    }
+
+    /// 与 [`Self::with_script_actions`] 相同，但只派给 `only_file` 这个脚本（i 模式按数字运行）。
+    fn with_script_actions_for(
+        &self,
+        event: &str,
+        payload: mlua::Table,
+        app: Option<&str>,
+        only_file: Option<&str>,
+    ) -> ScriptActions {
         self.scripts.set_context(&self.surrounding);
         // 候选窗现在多大（点）：脚本 `cloudime.candidate.width()` 折行时用
         self.scripts.set_viewport(self.candidates.viewport());
         let mut actions = ScriptActions::default();
-        for response in self.scripts.dispatch(event, payload, app) {
+        let responses = match only_file {
+            Some(file) => self.scripts.dispatch_to_script(file, event, payload, app),
+            None => self.scripts.dispatch(event, payload, app),
+        };
+        for response in responses {
             actions.merge(&response);
         }
         actions
@@ -766,6 +880,23 @@ impl Router {
     /// 收脚本的 HTTP 结果：调回调，把回调要改的（候选 / 提示 / 加权）落到当前这一屏上再重画。
     ///
     /// 这是「没有按键的那一拍」：`passthrough` / `commit` 无从谈起，给了也忽略（记一条日志）。
+    /// 收后台脚本的结果：动作落到当前状态，窗口请求转给 UI 线程。
+    pub(super) fn poll_background_scripts(&mut self) {
+        while let Ok(result) = self.background_scripts.try_recv() {
+            if result.actions.commit.is_some() {
+                tracing::warn!("后台脚本返回了 commit：没有对应会话，忽略");
+            }
+            self.apply_manual_actions(&result.actions);
+            for request in result.windows {
+                if self.script_windows_ready {
+                    self.script_windows.script_window(request);
+                } else {
+                    self.pending_script_windows.push(request);
+                }
+            }
+        }
+    }
+
     pub(super) fn poll_scripts_requests(&mut self) {
         if !self.scripts.has_pending_requests() {
             return;

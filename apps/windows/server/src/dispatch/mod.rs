@@ -7,6 +7,7 @@ mod clipboard;
 mod composed;
 mod config;
 mod document;
+mod i_mode;
 mod key;
 mod keyboard;
 mod message;
@@ -22,6 +23,7 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
+use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use cloudime_core::Engine;
@@ -42,6 +44,7 @@ use self::reload::ConfigReload;
 pub use self::reload::DataDirs;
 pub use self::rescore::find_model;
 use self::rescore::{ModelLoader, RescoreState};
+use self::script::BackgroundScript;
 pub use self::script::{NoopScriptWindowSink, ScriptWindowSink};
 use self::session::SessionInfo;
 pub use self::status::{NoopStatusSink, StatusEvent, StatusSink, StatusView};
@@ -70,6 +73,9 @@ pub struct Router {
 
     /// u 模式状态；`Some` 时候选窗口固定显示六类符号，旁边挂符号输入窗口。
     u_mode: Option<UMode>,
+
+    /// i 模式状态：缓冲区以 `i` 开头时，候选窗口列脚本 / 只匹配英文单词。
+    i_mode: bool,
 
     /// 屏幕提示（脚本可以写；双键拼音辅助码筛空候选时 Server 也写一行），随下一帧下发、下一次按键清。
     notice: Option<String>,
@@ -188,6 +194,10 @@ pub struct Router {
     /// 之后每次按键派发一次事件（见 [`script`]）。
     scripts: cloudime_script::Runtime,
 
+    /// i 模式 Shift+数字起的后台脚本把结果送回工人线程。
+    background_sender: Sender<BackgroundScript>,
+    background_scripts: Receiver<BackgroundScript>,
+
     /// 脚本 `cloudime.get_curr_config()` 读的那份配置快照：建 Router 时与每次热加载后刷新
     /// （[`Router::set_script_config`]）。存的是 `Config` 的一份拷贝，所以脚本拿到的总是当前那份。
     script_config: Rc<RefCell<cloudime_platform::Config>>,
@@ -275,6 +285,7 @@ impl Router {
                 .clone()
                 .unwrap_or_else(|| config.curr_theme.clone()),
         ));
+        let (background_sender, background_scripts) = mpsc::channel();
         let mut router = Self {
             engine,
             config: RouterConfig {
@@ -285,6 +296,7 @@ impl Router {
             focused: None,
             composed: None,
             u_mode: None,
+            i_mode: false,
             notice: None,
             surrounding: String::new(),
             candidate_weights: HashMap::new(),
@@ -331,6 +343,8 @@ impl Router {
             measure,
             document,
             scripts,
+            background_sender,
+            background_scripts,
             script_config: Rc::new(RefCell::new(cloudime_platform::Config::default())),
             script_theme_name,
             focused_app_snapshot: Rc::new(RefCell::new(None)),

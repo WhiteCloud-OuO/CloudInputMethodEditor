@@ -1,6 +1,6 @@
 //! 按键处理：键码 / 字符解析在 [`codes`]，分流在 [`input`]，一次按键的结果是 [`Effect`]。
 
-mod codes;
+pub(super) mod codes;
 mod effect;
 pub(super) mod input;
 

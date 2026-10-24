@@ -161,6 +161,8 @@ impl Router {
         self.poll_config_reload();
         // 脚本的 HTTP 结果也借这一拍收：到了就调回调、按回调要的改候选显示再重画
         self.poll_scripts_requests();
+        // i 模式 Shift+数字 起的后台脚本结果
+        self.poll_background_scripts();
         // `time_range` 脚本到点了（本地时间落在它声明的时间段里）也借这一拍派一次 `time`
         self.poll_script_time();
     }

@@ -397,8 +397,24 @@ fn parse_time_range(range: &Table) -> mlua::Result<TimeRange> {
     Ok(TimeRange { from, to })
 }
 
+/// 一个已加载脚本的公开信息：i 模式按文件顺序列脚本、显示名称与介绍。
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScriptInfo {
+    /// 清单里 `cloudime.script{ name = ... }` 的名字。
+    pub name: String,
+
+    /// 清单里的 `description`；没写为 `None`。
+    pub description: Option<String>,
+
+    /// 脚本文件名（含 `.lua`），i 模式按它排序与定位。
+    pub file: String,
+}
+
 /// 一个脚本的清单（`cloudime.script{…}`）：每个脚本必须**最先**声明一次。
 struct Manifest {
+    /// 脚本文件名（含 `.lua`）；清单没写 `name` 时也拿它当名字。
+    file: String,
+
     /// 日志里点名用；缺省 = 文件名。
     name: String,
 
@@ -747,6 +763,9 @@ pub struct Runtime {
     /// 加载成功的脚本名（清单里的 `name`，按加载顺序）。
     scripts: Vec<String>,
 
+    /// 与 [`Self::scripts`] 一一对应的公开信息（名字 / 介绍 / 文件名）。
+    script_infos: Vec<ScriptInfo>,
+
     /// 各脚本清单里的 `trigger_condition`（与 `scripts` 一一对应）：Server 据此决定
     /// 「要不要让 DLL 在没有组句时也送 Ctrl 组合」「要不要跑定时检查」。
     triggers: Vec<TriggerCondition>,
@@ -807,6 +826,7 @@ impl Runtime {
             app_hook: Rc::new(RefCell::new(None)),
             host: Rc::new(RefCell::new(None)),
             scripts: Vec::new(),
+            script_infos: Vec::new(),
             triggers: Vec::new(),
             combination_modifiers: Vec::new(),
             combination_hotkeys: Vec::new(),
@@ -876,6 +896,22 @@ impl Runtime {
         runtime
     }
 
+    /// 只加载一个脚本文件（i 模式的 Shift+数字在独立线程里跑脚本时用）：不读同目录其它脚本。
+    ///
+    /// 安装目录按「脚本目录的上一级」推；和 [`Self::load`] 的规则一致。
+    pub fn load_file(path: &Path) -> Self {
+        let mut runtime = Self::none();
+        if let Some(root) = path
+            .parent()
+            .and_then(Path::parent)
+            .filter(|parent| !parent.as_os_str().is_empty())
+        {
+            runtime.set_install_dir(root.to_path_buf());
+        }
+        runtime.run(path);
+        runtime
+    }
+
     /// 执行一个脚本文件。**加载期出错（含清单不合法）= 这个脚本无效**：记一条日志、继续下一个；
     /// 它注册过一半的处理函数也一并撤掉（不然「无效」的脚本还会被派发到）。
     fn run(&mut self, path: &Path) {
@@ -928,6 +964,11 @@ impl Runtime {
             "脚本已加载"
         );
         self.scripts.push(manifest.name.clone());
+        self.script_infos.push(ScriptInfo {
+            name: manifest.name.clone(),
+            description: manifest.description.clone(),
+            file: manifest.file.clone(),
+        });
         self.triggers.push(manifest.trigger);
         self.needs_context |= manifest.needs_context;
         if manifest.trigger == TriggerCondition::CombinationKey {
@@ -959,6 +1000,27 @@ impl Runtime {
     /// 返回处理函数们**返回的表**（按 `priority` + 登记顺序）：返回 `nil` 或别的东西的当没说话，跳过。
     /// 某个处理函数报错 / 超限额只中止这一次（先调它清单里的 `on_error`），其余照常。
     pub fn dispatch(&self, event: &str, payload: Table, app: Option<&str>) -> Vec<Table> {
+        self.dispatch_filtered(event, payload, app, None)
+    }
+
+    /// 只把事件派给 `file` 这个脚本（i 模式按数字运行指定脚本）。
+    pub fn dispatch_to_script(
+        &self,
+        file: &str,
+        event: &str,
+        payload: Table,
+        app: Option<&str>,
+    ) -> Vec<Table> {
+        self.dispatch_filtered(event, payload, app, Some(file))
+    }
+
+    fn dispatch_filtered(
+        &self,
+        event: &str,
+        payload: Table,
+        app: Option<&str>,
+        only_file: Option<&str>,
+    ) -> Vec<Table> {
         // UI 线程的编辑框文本变化先落进脚本侧缓存，`win:get_text` 不用等下一个来回。
         if event == "window" {
             let id = payload.get::<u32>("id").ok();
@@ -991,6 +1053,10 @@ impl Runtime {
             .get(event)
             .map(|list| {
                 list.iter()
+                    .filter(|handler| {
+                        only_file
+                            .is_none_or(|file| handler.manifest.file.eq_ignore_ascii_case(file))
+                    })
                     .filter(|handler| app.is_none_or(|app| handler.manifest.runs_in(app)))
                     .filter(|handler| handler.manifest.accepts(event, key, pinyin.as_deref()))
                     .map(|handler| (handler.manifest.clone(), handler.function.clone()))
@@ -1044,6 +1110,11 @@ impl Runtime {
         &self.scripts
     }
 
+    /// 加载成功的脚本信息，顺序与 [`Self::scripts`] 一致（按脚本文件名排序）。
+    pub fn script_infos(&self) -> &[ScriptInfo] {
+        &self.script_infos
+    }
+
     /// 有没有脚本关心这类事件。没人登记时派发方连载荷都不用拼。
     pub fn has_handlers(&self, event: &str) -> bool {
         self.handlers
@@ -1079,6 +1150,11 @@ impl Runtime {
     /// 装安装目录（`cloudime.install_dir()` / `install_path()` 用）。Server 建 Router 时调一次。
     pub fn set_install_dir(&self, dir: PathBuf) {
         self.install.set(dir);
+    }
+
+    /// 新运行时的窗口编号起点（后台脚本避免和主运行时撞号）。
+    pub fn set_window_id_base(&self, base: u32) {
+        self.window_seq.set(base);
     }
 
     /// 取一次脚本对窗口的操作（`cloudime.window.*`），取了就清。
@@ -2298,6 +2374,7 @@ fn parse_manifest(options: &Table, default_name: &str) -> mlua::Result<Manifest>
         .get::<Option<String>>("description")?
         .filter(|description| !description.trim().is_empty());
     Ok(Manifest {
+        file: default_name.to_owned(),
         name,
         description,
         budget,

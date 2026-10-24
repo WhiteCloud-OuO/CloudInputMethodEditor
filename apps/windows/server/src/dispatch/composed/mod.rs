@@ -2,7 +2,7 @@
 
 mod state;
 
-use cloudime_core::{Candidate, CandidateLayout, CandidateList, Query};
+use cloudime_core::{Candidate, CandidateKind, CandidateLayout, CandidateList, Query};
 use cloudime_platform::LayoutMode;
 use cloudime_platform::PreeditMode;
 use cloudime_platform::protocol::{Frame, PreeditKind, PreeditSegment, TipChoices};
@@ -43,6 +43,9 @@ impl Router {
 
     /// 缓冲变化后：按 Engine 状态重建 [`Composed`]，归零高亮。
     pub(super) fn recompose(&mut self) {
+        if self.i_mode && self.recompose_i_mode() {
+            return;
+        }
         // 鼠标正指着高亮那一格时不归零：用户是拿鼠标点着那一格在打字，拉回页首之后高亮条还会补一段
         // 从页首滑到鼠标那儿的动画，看着像它自己跑过去。保持不动就是「钉在鼠标上」（收起态同理）。
         let page_size = self.page_size();
@@ -128,6 +131,63 @@ impl Router {
         if self.notice.is_none() {
             self.notice = self.auxiliary_filter_notice();
         }
+    }
+
+    /// i 模式的候选：只有 `i` 时列脚本；中英混输下超过一个字母时只查英文词。
+    ///
+    /// 返回 `false` 表示不归 i 模式管（例如缓冲区非空却被清掉），调用方继续走普通重算。
+    fn recompose_i_mode(&mut self) -> bool {
+        let text = self.engine.composition().text().to_owned();
+        if text.is_empty() {
+            self.i_mode = false;
+            return false;
+        }
+        let page_size = self.page_size();
+        if text.chars().count() <= 1 {
+            let items: Vec<Candidate> = self
+                .scripts
+                .script_infos()
+                .iter()
+                .map(|info| Candidate {
+                    text: info.file.clone(),
+                    display: Some(info.name.clone()),
+                    kind: CandidateKind::Shortcut,
+                    syllables: Vec::new(),
+                    reading: None,
+                    auxiliary: None,
+                    auxiliary_typed: None,
+                })
+                .collect();
+            self.highlight = self.highlight.min(items.len().saturating_sub(1));
+            self.candidate_weights.clear();
+            self.stop_rescoring();
+            self.show_more = false;
+            self.hover_cell = None;
+            self.composed = Some(Composed::Candidates {
+                preedit: vec![PreeditSegment {
+                    text: "i".to_owned(),
+                    kind: PreeditKind::Typed,
+                }],
+                cursor: 1,
+                layout: CandidateLayout::new(items, page_size),
+            });
+            return true;
+        }
+        if !self.mixture_enabled() {
+            return false;
+        }
+        let query = self.engine.query_english_words();
+        let (preedit, cursor) = marked_parts(&query);
+        self.candidate_weights = query.weights;
+        self.stop_rescoring();
+        self.show_more = false;
+        self.hover_cell = None;
+        self.composed = Some(Composed::Candidates {
+            preedit,
+            cursor,
+            layout: CandidateLayout::new(query.candidates.items, page_size),
+        });
+        true
     }
 
     /// 双键拼音带辅助码时，敲了大写辅助码却筛到一个候选都不剩 → 「辅助码对不上」。

@@ -1725,3 +1725,208 @@ fn ctrl_alt_u_and_v_enter_modes_in_both_schemes() {
     key(&mut dual, 0x56, Some('\u{16}'), hotkey);
     assert!(dual.engine.expression_mode(), "非全拼 Ctrl+Alt+V");
 }
+
+fn write_i_script(dir: &std::path::Path, file: &str, name: &str, description: &str, commit: &str) {
+    let source = format!(
+        "cloudime.script{{ api = 2, trigger_condition = 'manual', name = '{name}', description = '{description}', budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }}\ncloudime.on('manual', function(event) return {{ commit = '{commit}' }} end)\n"
+    );
+    std::fs::write(dir.join(file), source).unwrap();
+}
+
+fn i_mode_scripts(dir: &std::path::Path) {
+    let _ = std::fs::remove_dir_all(dir);
+    std::fs::create_dir_all(dir).unwrap();
+    write_i_script(dir, "a.lua", "脚本甲", "甲的介绍", "运行甲");
+    write_i_script(dir, "b.lua", "脚本乙", "乙的介绍", "运行乙");
+}
+
+/// i 模式按文件顺序列脚本；只有 i 时 Enter 上屏字面量 i 并收起候选。
+#[test]
+fn i_mode_lists_scripts_by_file_and_enter_commits_i() {
+    let dir = std::env::temp_dir().join("cloudime-key-tests-i-mode-list");
+    i_mode_scripts(&dir);
+    let mut r = router(9);
+    r.scripts = cloudime_script::Runtime::load(&dir, &[]);
+    let normal = KeyModifiers::default();
+
+    let (outcome, commit, frame) = key(&mut r, 0x49, Some('i'), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit, None);
+    assert_eq!(
+        frame
+            .candidates
+            .items
+            .iter()
+            .map(|candidate| candidate.display_text())
+            .collect::<Vec<_>>(),
+        ["脚本甲", "脚本乙"]
+    );
+    assert!(r.i_mode);
+
+    let (outcome, commit, frame) = key(&mut r, 0x0D, None, normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit.as_deref(), Some("i"));
+    assert!(!r.i_mode);
+    assert!(frame.candidates.items.is_empty());
+}
+
+/// 空格运行高亮脚本；脚本返回的 commit 直接上屏，i 模式收起。
+#[test]
+fn i_mode_space_runs_the_highlighted_script() {
+    let dir = std::env::temp_dir().join("cloudime-key-tests-i-mode-space");
+    i_mode_scripts(&dir);
+    let mut r = router(9);
+    r.scripts = cloudime_script::Runtime::load(&dir, &[]);
+    let normal = KeyModifiers::default();
+
+    key(&mut r, 0x49, Some('i'), normal);
+    let (outcome, commit, _) = key(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit.as_deref(), Some("运行甲"));
+    assert!(!r.i_mode);
+    assert!(!r.composing());
+}
+
+/// 数字直接运行对应下标，不是运行当前高亮；Ctrl+数字只写额外内容。
+#[test]
+fn i_mode_digits_run_the_selected_script_and_ctrl_shows_description() {
+    let dir = std::env::temp_dir().join("cloudime-key-tests-i-mode-digit");
+    i_mode_scripts(&dir);
+    let mut r = router(9);
+    r.scripts = cloudime_script::Runtime::load(&dir, &[]);
+    let normal = KeyModifiers::default();
+    let ctrl = KeyModifiers {
+        ctrl: true,
+        ..KeyModifiers::default()
+    };
+
+    key(&mut r, 0x49, Some('i'), normal);
+    key(&mut r, 0x31, Some('\u{1}'), ctrl);
+    let frame = r.self_drawn_frame();
+    assert_eq!(
+        frame.online.as_ref().map(|line| line.text.as_str()),
+        Some("甲的介绍")
+    );
+
+    let (outcome, commit, _) = key(&mut r, 0x32, Some('2'), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit.as_deref(), Some("运行乙"));
+}
+
+/// 没开中英混输：字母、退格、删除都吞掉，脚本列表保持。
+#[test]
+fn i_mode_without_mixture_swallows_letters_and_backspace() {
+    let dir = std::env::temp_dir().join("cloudime-key-tests-i-mode-swallow");
+    i_mode_scripts(&dir);
+    let mut r = router(9);
+    r.engine.set_mixture_input(false);
+    r.scripts = cloudime_script::Runtime::load(&dir, &[]);
+    let normal = KeyModifiers::default();
+
+    key(&mut r, 0x49, Some('i'), normal);
+    let (outcome, commit, frame) = key(&mut r, 0x41, Some('a'), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit, None);
+    assert_eq!(r.engine.composition().text(), "i");
+    assert_eq!(frame.candidates.items.len(), 2);
+    assert!(r.i_mode);
+
+    key(&mut r, 0x08, None, normal);
+    assert_eq!(r.engine.composition().text(), "i");
+    assert!(r.i_mode);
+    key(&mut r, 0x2E, None, normal);
+    assert_eq!(r.engine.composition().text(), "i");
+    assert!(r.i_mode);
+}
+
+/// 开了中英混输：i 后面继续打字母只出英文单词，不再列脚本。
+#[test]
+fn i_mode_with_mixture_matches_english_words_only() {
+    let dir = std::env::temp_dir().join("cloudime-key-tests-i-mode-english");
+    i_mode_scripts(&dir);
+    let engine = Engine::new(Dictionary::parse("你\tni\t100\n").unwrap())
+        .with_english(WordList::parse("if\tif\t100\nitem\titem\t90\n").unwrap());
+    let mut r = Router::new(
+        engine,
+        RouterConfig {
+            full_pinyin: true,
+            ..Default::default()
+        },
+    );
+    r.handle(ClientMessage::OpenSession {
+        session: SessionId(1),
+        app: None,
+        protocol: PROTOCOL_VERSION,
+    });
+    r.scripts = cloudime_script::Runtime::load(&dir, &[]);
+    let normal = KeyModifiers::default();
+
+    key(&mut r, 0x49, Some('i'), normal);
+    let (_, _, frame) = key(&mut r, 0x46, Some('f'), normal);
+    assert_eq!(r.engine.composition().text(), "if");
+    assert!(
+        frame
+            .candidates
+            .items
+            .iter()
+            .all(|candidate| candidate.kind == CandidateKind::English)
+    );
+    assert_eq!(
+        frame.candidates.items.first().map(|c| c.text.as_str()),
+        Some("if")
+    );
+}
+
+/// Shift+数字 在独立线程跑；产生的窗口请求经 mpsc 回到工人线程再交给 UI。
+#[test]
+fn i_mode_shift_digit_runs_in_background_and_forwards_windows() {
+    struct RequestSink(std::sync::mpsc::Sender<cloudime_script::WindowRequest>);
+    impl crate::dispatch::ScriptWindowSink for RequestSink {
+        fn script_window(&self, request: cloudime_script::WindowRequest) {
+            let _ = self.0.send(request);
+        }
+    }
+
+    let dir = std::env::temp_dir().join("cloudime-key-tests-i-mode-background");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join("bg.lua"),
+        "cloudime.script{ api = 2, trigger_condition = 'manual', name = '后台窗口', budget = 1000000, \
+         timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
+         cloudime.on('manual', function(event)\n\
+             local win = cloudime.window.create{ name = '后台窗口', width = 120, height = 60, interactive = true }\n\
+             win:show{}\n\
+         end)\n",
+    )
+    .unwrap();
+
+    let mut r = router(9);
+    r.config.scripts_dir = Some(dir.clone());
+    r.scripts = cloudime_script::Runtime::load(&dir, &[]);
+    let (sender, receiver) = std::sync::mpsc::channel();
+    r.set_script_window_sink(Box::new(RequestSink(sender)));
+    let normal = KeyModifiers::default();
+    let shift = KeyModifiers {
+        shift: true,
+        ..KeyModifiers::default()
+    };
+
+    key(&mut r, 0x49, Some('i'), normal);
+    key(&mut r, 0x31, Some('!'), shift);
+    let mut requests = Vec::new();
+    for _ in 0..100 {
+        r.tick();
+        requests.extend(receiver.try_iter());
+        if !requests.is_empty() {
+            break;
+        }
+        std::thread::sleep(std::time::Duration::from_millis(20));
+    }
+    assert!(
+        requests
+            .iter()
+            .any(|request| matches!(request, cloudime_script::WindowRequest::Create(_, _))),
+        "后台脚本的建窗请求应回到 UI：{requests:?}"
+    );
+}

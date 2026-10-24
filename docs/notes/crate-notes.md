@@ -807,7 +807,7 @@ Server 只按自己的语义处理 —— 谁先定义谁优先，脚本抢不�
 `combination_key`（`combination_modifiers` + `keys`，修饰键可以 `none` = 单键）、
 `time_range`（`{ from = "20:00", to = "06:00" }`，本地时间、左闭右开、跨夜也行，**每个时间段窗口每个脚本只触发一次**）、
 `candidate_context`（`candidate_pinyin`，比较前去掉 `'` / 空白并转小写）、
-`focus_app`（`apps` 必填）、`manual`（i 模式预留，永不自动派发）。
+`focus_app`（`apps` 必填）、`manual`（i 模式选中脚本时运行，事件只派给选中的那一个脚本）。
 `runtime.rs::parse_manifest` 解析（键名见 `parse_key_name`：`KEY_NAMES` 里的功能键 + 单个字母 / 数字 / 标点），
 `Manifest::accepts(event, key, pinyin)` 过滤：`startup` / `window` 谁都收；`key` 要 `(虚拟键码, 修饰键位图)`
 与清单**精确**对上（组句里 Server 会把所有按键派出去，运行时只转对得上的）；`candidates` 要规范化后的
@@ -1325,6 +1325,16 @@ u 模式复用同一件资产，但走 `CandidateSink::set_symbol_aux(Option<Key
 它每次 `show` 就把资产带上）。`hotkey` 那种方式下组句里按配置的那套组合键切（`Router::key_map_reference`，
 **精确匹配**修饰键位图 + 虚拟键码）；`Ctrl+Alt` / `Alt+Shift` 那两套平时 DLL 不往 Server 送，所以 Server 把当前这套
 随 `InputSettings::key_map_modifiers` / `key_map_key` 下发，DLL 在组句里专程送这一个键（见 `eats_key`）。
+
+**i 模式**（`server/src/dispatch/i_mode/`）：全拼空组句按 `i`、或 `Ctrl+Alt+I` 进；`Router::i_mode` 置位，
+`recompose_i_mode` 在缓冲区只有 `i` 时用 `Runtime::script_infos()` 按脚本文件名顺序生成候选（`text = 文件名`、
+`display = 清单 name`，`CandidateKind::Shortcut`，候选角标在 `candidate_badges` 里特判成空），超过一个字母且开了
+中英混输时改调 `Engine::query_english_words()` 只出英文词。按键在 `i_mode_key`：空格运行高亮脚本、Enter
+`take_raw()` 上屏 `i`、Esc 清组句，数字按页内下标直接运行；`Ctrl+数字` 把 `description` 写进候选窗的 `online`
+那一行，`Alt+数字` 用记事本打开 Lua 和源码里引用的 JSON，`Shift+数字` 起独立线程。运行走
+`Runtime::dispatch_to_script(file, "manual", …)`（`ScriptInfo` / `Manifest.file` 记住文件名）；后台线程用
+`Runtime::load_file` 建新 Lua 状态，窗口编号从 `0x4000_0000` 起，结果经 mpsc 回工人线程，由
+`poll_background_scripts` 在 `tick` 里落地。
 
 「更多候选项」（`Router::show_more`，组句里 `Tab` 切、只活在一次组句里，`recompose` 收组句时清）：展开后一页从
 `candidate_count`（5–9）变成**一整屏** `5 × candidate_count`（`Router::page_size`），`CandidateLayout::set_page_size`

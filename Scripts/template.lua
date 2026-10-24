@@ -26,7 +26,7 @@ cloudime.script{
     --    time_range        某个时间段里触发一次            → 还要写 time_range，收 time 事件（跨夜也行，每段一次）
     --    candidate_context 候选窗口出现、拼音串等于指定内容 → 还要写 candidate_pinyin，收 candidates 事件
     --    focus_app         编辑光标位于指定程序            → 还要写 apps，收 focus 事件
-    --    manual            手动触发（i 模式，预留：现在不会自动跑）
+    --    manual            手动触发：i 模式选中脚本时收 manual 事件
     trigger_condition     = "combination_key",
 
     -- ② 组合键（trigger_condition = "combination_key" 时必写）：

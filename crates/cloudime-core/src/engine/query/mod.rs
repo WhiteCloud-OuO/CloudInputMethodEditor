@@ -143,6 +143,15 @@ impl Engine {
         Ok(query)
     }
 
+    /// 只按英文词表的前缀匹配当前缓冲区（i 模式输入多个字母时用）。
+    ///
+    /// 与英文模式同一条匹配路径；不写入 `last_query`，因为它不是一次完整的拼音查询。
+    pub fn query_english_words(&self) -> Query {
+        let keys = self.composition.scope().to_owned();
+        let rest = self.marked_rest(self.composition.rest());
+        self.query_english(&keys, rest, Instant::now())
+    }
+
     pub(super) fn query_inner(&self) -> Result<Query, ParseError> {
         let start = Instant::now();
         let keys = self.composition.scope();

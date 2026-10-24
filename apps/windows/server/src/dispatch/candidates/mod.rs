@@ -165,6 +165,10 @@ impl Router {
         if self.u_mode.is_some() {
             return vec![None; frame.candidates.items.len()];
         }
+        // i 模式列脚本时不显示角标（脚本名不是词库候选）。
+        if self.i_mode && self.engine.composition().text() == "i" {
+            return vec![None; frame.candidates.items.len()];
+        }
         badges_of(frame, self.engine.learner())
     }
 
