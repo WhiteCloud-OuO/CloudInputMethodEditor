@@ -1,4 +1,4 @@
-<h1 align="center">云朵输入法 Cloud IME</h1>
+<h1 align="center">云朵输入法 ℂ𝕝𝕠𝕦𝕕 𝕀𝕄𝔼</h1>
 
 <p align="center">
   <img src="logo.png" alt="软件Logo" width="128">
