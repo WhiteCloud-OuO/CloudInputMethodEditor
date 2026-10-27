@@ -33,7 +33,7 @@ pub struct TextPainter {
     gamma_tables: HashMap<u32, Box<[u8; 256]>>,
 
     /// 某个字族本身能不能显示某个字符（按字族 + 字符缓存）。
-    supports: HashMap<(Option<String>, char), bool>,
+    supports: HashMap<(Option<String>, u16, char), bool>,
 }
 
 impl TextPainter {
@@ -151,7 +151,7 @@ impl TextPainter {
         if ch.is_whitespace() {
             return true;
         }
-        let key = (style.family.clone(), ch);
+        let key = (style.family.clone(), style.weight, ch);
         if let Some(supported) = self.supports.get(&key) {
             return *supported;
         }
@@ -160,9 +160,10 @@ impl TextPainter {
             .as_deref()
             .map(Family::Name)
             .unwrap_or(Family::SansSerif);
+        let weight = Weight(style.weight);
         let query = Query {
             families: std::slice::from_ref(&family),
-            weight: Weight::NORMAL,
+            weight,
             stretch: Stretch::Normal,
             style: if style.italic {
                 Style::Italic
@@ -174,7 +175,7 @@ impl TextPainter {
             .font_system
             .db()
             .query(&query)
-            .and_then(|id| self.font_system.get_font(id, Weight::NORMAL))
+            .and_then(|id| self.font_system.get_font(id, weight))
             .is_some_and(|font| font.as_swash().charmap().map(ch) != 0);
         self.supports.insert(key, supported);
         supported
@@ -205,6 +206,7 @@ impl TextPainter {
             Some(family) => Attrs::new().family(Family::Name(family)),
             None => Attrs::new().family(UI_FAMILY),
         };
+        let attrs = attrs.weight(Weight(style.weight));
         let attrs = if style.italic {
             attrs.style(Style::Italic)
         } else {
@@ -227,6 +229,7 @@ struct WidthKey {
     size: u32,
     line_height: u32,
     italic: bool,
+    weight: u16,
 }
 
 impl WidthKey {
@@ -237,6 +240,7 @@ impl WidthKey {
             size: style.size.to_bits(),
             line_height: style.line_height.to_bits(),
             italic: style.italic,
+            weight: style.weight,
         }
     }
 }

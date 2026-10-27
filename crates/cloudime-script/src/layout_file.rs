@@ -4,7 +4,7 @@
 //! 布局文件只描述控件，真正的默认值 / 几何 / 区域生成仍走 [`crate::window`] 的同一套解析器；
 //! 这样 JSON 与 Lua `set_content` 的元素字段完全一致，只多了顶层 `controls` 数组。
 //! 文件里的路径（`svg_path` / `img.path`）先按布局文件目录找，再逐级向上找；因此放在
-//! `Scripts/lib/` 里的布局可以直接引用安装根目录的 `Images/...`。
+//! `Scripts/layouts/` 里的布局可以直接引用安装根目录的 `Images/...`。
 //!
 //! **每个控件必须写 `name`**：它既是脚本认控件的标识符，也参与布局内唯一性校验。
 
@@ -290,7 +290,7 @@ pub(crate) fn to_lua(lua: &Lua, value: &Value, base: &Path) -> mlua::Result<LuaV
 }
 
 /// JSON 里的文件路径：绝对路径原样；相对路径先按布局文件目录找，再逐级向上找
-///（这样 `Scripts/lib/ui.json` 里的 `Images/...` 能落到安装根目录的图片）。
+///（这样 `Scripts/layouts/ui.json` 里的 `Images/...` 能落到安装根目录的图片）。
 pub(crate) fn resolve_path(base: &Path, value: &str) -> String {
     let path = Path::new(value);
     if path.is_absolute() {
@@ -458,7 +458,7 @@ mod tests {
     #[test]
     fn the_bundled_test_layout_parses() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../Scripts/lib/test-caret-window.json");
+            .join("../../Scripts/layouts/test-caret-window.json");
         let lua = Lua::new();
         let layout = super::read(&lua, &path, (None, None), &serde_json::Value::Null, None)
             .unwrap_or_else(|error| panic!("{}：{error}", path.display()));

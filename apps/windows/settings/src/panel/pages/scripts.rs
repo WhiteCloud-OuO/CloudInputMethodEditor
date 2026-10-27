@@ -285,6 +285,8 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             .into(),
         note(&format!(
             "脚本放 {}，一个文件一个脚本，文件最前面要声明清单（照 template.lua 改）。\
+             只有这里的 .lua 会在设置页显示并加载；共享 Lua 放 shared\\，JSON 布局放 layouts\\，\
+             动态链接库放 dlls\\，脚本数据用 cloudime.saved_path 放到 saved\\。\
              新建 / 删除 / 开关都写在这里或配置的 [script] disabled，重启输入法服务后生效\
              （右边那个按钮就是干这个的）。\
              写法（清单字段、事件、能返回的动作、cloudime 表的全部方法与例子）见安装目录下的 lua.md。",

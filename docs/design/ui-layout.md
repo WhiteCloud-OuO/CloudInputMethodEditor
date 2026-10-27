@@ -13,7 +13,7 @@
 - 一个窗口只有**一棵主 Page 树**；后续多页面 / Tab 用子页面嵌套与显隐表达。
 - 窗口内容是一棵树，不是平铺元素表：节点负责结构、布局、尺寸与数据，渲染器只拿
   布局后的绝对几何。
-- 布局是 `Page` / `Stem` / `Container` 的**属性**，不是独立节点。
+- 布局是 `Page` / `Stem` / `ControlsContainer` / `SubpageContainer` 的**属性**，不是独立节点。
 - JSON 是初始内容；运行时仍需支持按节点更新、增删和重新布局。
 - 不引入第二套控件字段：布局文件里的控件字段与 `set_content` 元素表保持一致。
 
@@ -25,24 +25,28 @@ Page（主页面，一窗口一棵）
    ├─ Stem（无外观，只分组 / 布局）
    │  └─ layout = linear（强制 row）
    │     ├─ Control
-   │     └─ Container（panel）
+   │     └─ ControlsContainer（panel）
    │        └─ layout = grid
    │           ├─ Control
-   │           └─ Subpage
-   └─ Subpage（可重复实例）
+   │           └─ SubpageContainer
+   │              └─ Subpage
+   └─ SubpageContainer
+      └─ Subpage（可重复实例）
 ```
 
 | 节点 | 职责 | 是否有外观 | 是否有 layout |
 |---|---|---|---|
 | `Page` | 主页面根，拥有窗口内容区 | 可有根背景 | 有，缺省 `flex` |
 | `Stem` | 抽象分组，只负责结构和布局 | **没有**，不绘制、不参与视觉样式 | 有，缺省 `flex` |
-| `Container` | 具体控件容器，例如 `panel` | 有背景 / 边框 / 圆角 / padding | 有，缺省 `flex` |
+| `ControlsContainer` | 控件容器，例如 `panel` | 有背景 / 边框 / 圆角 / padding | 有，缺省 `flex` |
+| `SubpageContainer` | 子页面容器（后续实现），只放 `subpage` | 无自己的视觉外观 | 有，缺省 `flex` |
 | `Control` | 叶子控件，例如 `label` / `flat_svg_button` / `text_edit` | 有 | 没有 |
 | `Subpage` | 引用另一份 Page 布局，可重复实例化 | 由子页面根决定 | 子页面内部有；父级只看到一个外框 |
 
+- `self_drawing_panel` **不是容器**，是带内部 draw list 的特殊控件；它的 `children` 是控件内部组合内容，不套用容器子节点矩阵。
 - `Stem` 可以被命名（供脚本寻址），但没有 `fill` / `border` / `radius` 等视觉字段。
-- `Container` 的 `children` 直接挂在它下面，不需要再套一层 `layout` 节点。
-- 一个网格单元格建议只放一个节点；需要多个节点时用 `Stem` 或 `Container` 包起来。
+- 容器的 `children` 直接挂在它下面，不需要再套一层 `layout` 节点。
+- 一个网格单元格建议只放一个节点；需要多个节点时用 `Stem` 或控件容器包起来。
 - 页面树节点的绘制顺序与命中顺序按树顺序；绝对定位节点仍在树里，按树顺序参与叠放。
 - 节点名称在同一个作用域内唯一；子页面实例有独立作用域，完整路径由实例路径拼接。
 
@@ -198,13 +202,13 @@ Page（主页面，一窗口一棵）
 
 | 字段 | 说明 |
 |---|---|
-| `type` | `stem` / `subpage` / 控件类型（`panel`、`label` 等） |
-| `name` | 控件 / 分组名；同一作用域唯一 |
-| `layout` | 仅 Page / Stem / Container；布局对象 |
+| `type` | `stem` / `subpage` / `subpage_container` / 控件类型（`panel`、`label` 等） |
+| `name` | 控件 / 分组 / 容器名；同一作用域唯一 |
+| `layout` | 仅 Page / Stem / ControlsContainer / SubpageContainer；布局对象 |
 | `padding` | 宿主内容区内边距 |
 | `position` | `absolute` 时脱离布局流 |
 | `w` / `h` | 尺寸；沿用现有 v1 字段名 |
-| `children` | Stem / Container 的子节点 |
+| `children` | Stem / ControlsContainer / SubpageContainer 的子节点 |
 | `visible` | `false` 时不占位（类似 `display: none`） |
 | `events` / `regions` | 沿用现有控件 / 区域语义 |
 
@@ -221,6 +225,7 @@ Page（主页面，一窗口一棵）
 }
 ```
 
+- `subpage` 必须放在 `SubpageContainer.children` 里；容器负责外框、排列和裁剪。
 - `src` 相对当前布局文件解析，再按现有布局路径搜索链查找。
 - `repeat` 指向数据上下文中的数组；省略时只创建一个实例。
 - `key` 是稳定标识；省略时用下标，但列表增删建议必须写。
@@ -261,11 +266,31 @@ Page（主页面，一窗口一棵）
 { "type": "static_image", "name": "icon", "img": { "path": "{{item.icon}}" } }
 ```
 
-- 支持简单的属性路径，不支持函数调用、算术、条件表达式。
+- 支持简单的属性路径，不支持函数调用、算术、条件表达式；状态选择用 6.2.1 的状态值表。
 - 不允许用 `{{...}}` 改 `type`、`layout`、`children`、`position` 等结构字段。
 - 不支持嵌套 `{{}}`。
 - 必填绑定值缺失：整份布局失效并记 `error`；可选字段缺失按空串并记 `warn`。
 - 路径字段（图片 / SVG）仍受现有路径搜索和安全限制。
+
+### 6.2.1 状态值 `state`
+
+展示字段的值可以写成状态表，由当前实例状态选择：
+
+```json
+"color": {
+  "state": {
+    "0": "#FF222222",
+    "1": "#FFFF0000",
+    "2": "#FF0000FF",
+    "default": "#FF222222"
+  }
+}
+```
+
+- 键是状态值（`0` / `1` / `2`），`default` 是找不到对应键时的兜底；两者都没有时为空。
+- `list_box` 行模板提供 `item_state`、`selected` / `focused`、`hovered`；其他实例缺省按 `0`。
+- 状态表只用于展示字段；展开后各状态共用同一份测量结果，不能靠它改变行高、行宽或结构。
+- 状态表可以嵌在数组 / 对象里，例如 `runs[].color` 或 `img` 的展示属性。
 
 ### 6.3 实例路径与事件
 
@@ -284,7 +309,8 @@ Page（主页面，一窗口一棵）
 - 窗口事件载荷已带上 `subpage` / `instance` / `item_index` / `item_key` / `control_path`；
   控件内部仍用实例前缀名（例如 `rows_0_title`）保证布局内唯一，但 `event.control` 给**局部名**
   （例如 `title`），完整路径用 `event.control_path`。
-- 一个窗口仍然只有一份 Lua 脚本；子页面不单独运行脚本，事件冒泡到窗口脚本。
+- 窗口本身仍由一个主 Lua 脚本控制；子页面可通过 `script` 使用 `Scripts/shared/` 下的实例脚本
+  （见 6.7），实例事件先派给子页面脚本，再交给主窗口脚本。
 - 已提供按路径寻址的 `win:set_visible(path, visible)`、`win:get_text_at` / `win:set_text_at` /
   `win:update_content_at`；旧的按控件名 API 保留给 v1 和非子页面控件。
 - 状态条与状态切换提示的几何已改为页面树 → `Document` → `render_document`；候选窗已改为
@@ -327,8 +353,34 @@ Page（主页面，一窗口一棵）
   `cloud-ui` 更新内容时按控件名复用同名编辑框宿主，焦点 / 选区 / 输入中的文本不重建。
 - `set_data` 数据完全相同时直接跳过；变化时重建当前可见窗口。自动触底加载仍需脚本在 `wheel`
   事件里判断后 `set_data`。
+- `list_box` 复用这套虚拟化：页树只挂可见行 + overscan，滚动时通过 `SetListWindow` 原地替换
+  `ListBox.rows`，不再重建整份 `Document`。固定行高直接算偏移；`auto` 行高用按行缓存的高度，
+  未测量行先按估算高度定位，滚动到附近时再测量并修正总高度。
 
-### 6.6 生命周期与限制
+### 6.6 子页面实例脚本
+
+子页面模板的 `page`（或调用方的 `subpage` 节点）可以写：
+
+```json
+{ "script": "list-row.lua" }
+```
+
+脚本固定在安装目录的 `Scripts/shared/` 下解析。文件返回一个表：
+
+```lua
+local page = {}
+function page.created(ctx) end          -- 每个实例创建时一次
+function page.event(ctx, event) end     -- 实例内控件事件
+function page.destroyed(ctx) end        -- 实例滚出窗口 / 数据删除
+return page
+```
+
+`ctx` 提供 `window`（窗口句柄，可用 `win:set_text_at` / `update_content_at` 等按路径 API）、
+`subpage`、`instance`、`index`、`key`、`item` 和 `path(name)`。同一窗口、同一实例只调用一次
+`created`；列表虚拟化滚出窗口的实例调用 `destroyed`。`event` 先于主窗口脚本执行，返回 `true`
+时吞掉该事件；返回其它值继续交给主窗口脚本。脚本出错只记日志，不中断窗口。
+
+### 6.7 生命周期与限制
 
 - 子页面模板按文件路径缓存；文件变化不自动监听，`load_layout` 整份重载。
 - 循环引用、总实例数、总节点数、最大深度都要有限制；沿用并扩展现有 4 MB / 512 元素 / 深度 8 的预算。
@@ -379,7 +431,7 @@ v2 实现之前，`layout_file.rs` 仍按这一节解析。
 - `width` / `height` 可省：`win:load_layout` 用句柄上的尺寸，`create{ layout = … }` 用创建参数；
   文件里写了就覆盖。
 - `regions` 与 `set_content` 的 `regions` 同义；`drag` 缺省 `true`。
-- 路径字段（`svg_path` / `img.path`）先按布局文件所在目录找，再逐级向上找；放在 `Scripts/lib/`
+- 路径字段（`svg_path` / `img.path`）先按布局文件所在目录找，再逐级向上找；放在 `Scripts/layouts/`
   的布局可以直接引用安装根目录的 `Images/...`。
 - 文件上限 4 MB；控件数量、文字长度、图片像素等沿用 `script.md` 的内容限额。
 - 动态控件（`flat_svg_button` / `text_edit` / `text_box` / `hscroll_bar` / `vscroll_bar`）和区域条目
@@ -388,8 +440,8 @@ v2 实现之前，`layout_file.rs` 仍按这一节解析。
 - 脚本入口：
 
   ```lua
-  local win = cloudime.window.create{ name = "面板", layout = "Scripts/lib/main.json" }
-  win:load_layout("Scripts/lib/main.json")
+  local win = cloudime.window.create{ name = "面板", layout = cloudime.layout_path("main.json") }
+  win:load_layout(cloudime.layout_path("main.json"))
   ```
 
 - `load_layout` 与 `set_content` 一样只排队一个请求；失败时本次调用报 Lua 错误，窗口保持原样。

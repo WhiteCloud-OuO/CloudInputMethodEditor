@@ -3,8 +3,11 @@
 //! 这一步只负责“把 v2 布局展开成现有控件表”，控件字段、图片路径和事件仍交给
 //! [`crate::window`] 的同一套解析器。子页面（可重复实例 / 数据绑定）留到后续步骤。
 
-use std::collections::{HashMap, HashSet};
+use std::cell::RefCell;
+use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::path::{Path, PathBuf};
+use std::rc::Rc;
+use std::sync::Arc;
 
 use cloud_ui_core::{
     Align, Axis, Constraints, Edges, GridTrack, Insets, Justify, LayoutSpec, Measure, Node, NodeId,
@@ -24,6 +27,13 @@ const VERSION: u64 = 2;
 const MAX_SUBPAGE_DEPTH: usize = 8;
 const MAX_SUBPAGE_INSTANCES: usize = 100;
 
+/// `list_box` 的逻辑项目上限。
+const MAX_LIST_BOX_ROWS: usize = 65_535;
+/// 一个 `list_box` 实际实例化的节点上限。
+const MAX_LIST_BOX_NODES: usize = 100_000;
+/// 单个行模板（不含 draw）的节点上限。
+const MAX_LIST_BOX_TEMPLATE_NODES: usize = 512;
+
 /// 一份保留下来的 v2 页面树。
 ///
 /// 与一次性的 [`load`] 不同，这个类型保留节点、数据上下文和“路径 → 节点”的索引，
@@ -34,11 +44,56 @@ struct PanelOverride {
     regions: Option<Value>,
 }
 
+struct ListMetrics {
+    heights: Vec<Option<f32>>,
+    estimated: f32,
+    measured_sum: f32,
+    measured_count: usize,
+    pins: BTreeSet<usize>,
+}
+
+impl Default for ListMetrics {
+    fn default() -> Self {
+        Self {
+            heights: Vec::new(),
+            estimated: 24.0,
+            measured_sum: 0.0,
+            measured_count: 0,
+            pins: BTreeSet::new(),
+        }
+    }
+}
+
+impl ListMetrics {
+    fn extent(&self, index: usize) -> f32 {
+        self.heights
+            .get(index)
+            .and_then(|height| *height)
+            .unwrap_or_else(|| self.estimated.max(1.0))
+    }
+
+    fn set(&mut self, index: usize, height: f32) {
+        if self.heights.get(index).and_then(|height| *height).is_none() {
+            self.measured_sum += height;
+            self.measured_count += 1;
+            self.estimated = self.measured_sum / self.measured_count as f32;
+        }
+        if self.heights.len() <= index {
+            self.heights.resize(index + 1, None);
+        }
+        self.heights[index] = Some(height);
+    }
+}
+
+type ListMetricsMap = Rc<RefCell<HashMap<String, ListMetrics>>>;
+
+#[derive(Clone)]
 pub(crate) struct PageLayout {
-    value: Value,
+    value: Arc<Value>,
     base: PathBuf,
     fallback: (Option<f32>, Option<f32>),
-    data: Value,
+    data: Arc<Value>,
+    metrics: ListMetricsMap,
     scrolls: HashMap<String, f32>,
     visibility: HashMap<String, bool>,
     overrides: HashMap<String, PanelOverride>,
@@ -46,7 +101,9 @@ pub(crate) struct PageLayout {
     tree: PageTree,
     payloads: Vec<Option<Value>>,
     instances: HashMap<String, InstanceInfo>,
-    paths: HashMap<String, NodeId>,
+    /// 实例路径 → 该实例的 item 数据（子页面脚本的 `ctx.item`）。
+    instance_items: HashMap<String, Value>,
+    paths: BTreeMap<String, NodeId>,
     regions: Option<Value>,
 }
 
@@ -60,6 +117,27 @@ impl PageLayout {
         scrolls: &HashMap<String, f32>,
         measure: Option<&LayoutMeasureHook>,
     ) -> mlua::Result<Self> {
+        Self::build_shared(
+            Arc::new(value.clone()),
+            Arc::new(data.clone()),
+            base,
+            fallback,
+            scrolls,
+            measure,
+            Rc::new(RefCell::new(HashMap::new())),
+        )
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn build_shared(
+        value: Arc<Value>,
+        data: Arc<Value>,
+        base: &Path,
+        fallback: (Option<f32>, Option<f32>),
+        scrolls: &HashMap<String, f32>,
+        measure: Option<&LayoutMeasureHook>,
+        metrics: ListMetricsMap,
+    ) -> mlua::Result<Self> {
         let root = value
             .as_object()
             .ok_or_else(|| runtime("v2 布局根必须是对象"))?;
@@ -72,18 +150,20 @@ impl PageLayout {
             .ok_or_else(|| runtime("v2 布局缺 page 对象"))?;
 
         let data = if data.is_null() {
-            page.get("data").cloned().unwrap_or(Value::Null)
+            Arc::new(page.get("data").cloned().unwrap_or(Value::Null))
         } else {
-            data.clone()
+            data
         };
         let mut tree = PageTree::new(Node::new(NodeKind::Page));
         apply_common(&mut tree.nodes[0], page, fallback)?;
         let mut payloads = vec![None];
         let mut names = HashSet::new();
         let mut instances = HashMap::new();
-        let mut paths = HashMap::new();
+        let mut instance_items = HashMap::new();
+        let mut paths = BTreeMap::new();
         let mut templates = HashMap::new();
         let mut visiting = Vec::new();
+        let context = BindContext::root(&data);
         let children = parse_children(
             &mut tree,
             page,
@@ -91,16 +171,18 @@ impl PageLayout {
             &mut payloads,
             &mut names,
             &mut instances,
+            &mut instance_items,
             &mut paths,
             scrolls,
             measure,
-            &data,
+            &context,
             "",
             "",
             None,
             &mut templates,
             &mut visiting,
             0,
+            &metrics,
         )?;
         tree.nodes[0].children = children;
 
@@ -109,6 +191,7 @@ impl PageLayout {
             base: base.to_path_buf(),
             fallback,
             data,
+            metrics,
             scrolls: scrolls.clone(),
             visibility: HashMap::new(),
             overrides: HashMap::new(),
@@ -116,6 +199,7 @@ impl PageLayout {
             tree,
             payloads,
             instances,
+            instance_items,
             paths,
             regions: page.get("regions").cloned(),
         })
@@ -123,13 +207,14 @@ impl PageLayout {
 
     /// 用新的数据上下文重建同一份页面树。
     pub(crate) fn with_data(&self, data: &Value) -> mlua::Result<Self> {
-        let mut next = Self::build(
-            &self.value,
+        let mut next = Self::build_shared(
+            Arc::clone(&self.value),
+            Arc::new(data.clone()),
             &self.base,
             self.fallback,
-            data,
             &self.scrolls,
             self.measure.as_ref(),
+            Rc::new(RefCell::new(HashMap::new())),
         )?;
         next.restore_visibility(&self.visibility);
         next.apply_overrides(&self.overrides);
@@ -140,13 +225,14 @@ impl PageLayout {
     pub(crate) fn with_scroll(&self, path: &str, offset: f32) -> mlua::Result<Self> {
         let mut scrolls = self.scrolls.clone();
         scrolls.insert(path.to_owned(), offset.max(0.0));
-        let mut next = Self::build(
-            &self.value,
+        let mut next = Self::build_shared(
+            Arc::clone(&self.value),
+            Arc::clone(&self.data),
             &self.base,
             self.fallback,
-            &self.data,
             &scrolls,
             self.measure.as_ref(),
+            Rc::clone(&self.metrics),
         )?;
         next.restore_visibility(&self.visibility);
         next.apply_overrides(&self.overrides);
@@ -335,6 +421,137 @@ impl PageLayout {
         })
     }
 
+    pub(crate) fn instances(&self) -> &HashMap<String, InstanceInfo> {
+        &self.instances
+    }
+
+    pub(crate) fn instance_item(&self, path: &str) -> Option<&Value> {
+        self.instance_items.get(path)
+    }
+
+    /// 返回列表盒路径与“从第 `first` 行开始”的滚动偏移；不是固定行高时返回 `None`。
+    pub(crate) fn list_box_window(&self, control: &str, first: usize) -> Option<(String, f32)> {
+        let (path, id) = self.paths.iter().find(|(_, id)| {
+            self.tree.nodes[**id].kind == NodeKind::ListBox
+                && self.payloads[**id]
+                    .as_ref()
+                    .and_then(Value::as_object)
+                    .and_then(|payload| payload.get("name"))
+                    .and_then(Value::as_str)
+                    == Some(control)
+        })?;
+        let payload = self.payloads[*id].as_ref()?.as_object()?;
+        if payload.get("virtualize").and_then(Value::as_bool) == Some(false) {
+            return None;
+        }
+        let gap = payload.get("gap").and_then(Value::as_f64).unwrap_or(0.0) as f32;
+        let offset = if let Some(height) = payload
+            .get("item_height")
+            .and_then(Value::as_f64)
+            .filter(|height| *height > 0.0)
+        {
+            first as f32 * (height as f32 + gap)
+        } else {
+            let metrics = self.metrics.borrow();
+            let metrics = metrics.get(path)?;
+            let mut offset = 0.0;
+            for index in 0..first {
+                offset += metrics.extent(index) + gap;
+            }
+            offset
+        };
+        Some((path.clone(), offset))
+    }
+
+    /// 把窗口外的行固定住；后续窗口重建会继续带上它。
+    pub(crate) fn pin_list_box_item(&self, name: &str, index: usize) -> bool {
+        let Some(count) = self.list_box_count(name) else {
+            return false;
+        };
+        if index >= count {
+            return false;
+        }
+        self.metrics
+            .borrow_mut()
+            .entry(name.to_owned())
+            .or_default()
+            .pins
+            .insert(index);
+        true
+    }
+
+    pub(crate) fn list_box_item_path(&self, name: &str, index: usize) -> Option<String> {
+        let count = self.list_box_count(name)?;
+        (index < count).then(|| format!("{name}.items[{index}]"))
+    }
+
+    pub(crate) fn list_box_scroll(&self, name: &str) -> f32 {
+        self.scrolls.get(name).copied().unwrap_or(0.0)
+    }
+
+    /// 把指定逻辑行滚到垂直居中位置所需的偏移；固定 / auto 行高都可用。
+    pub(crate) fn list_box_scroll_to(&self, name: &str, index: usize) -> Option<f32> {
+        let count = self.list_box_count(name)?;
+        if index >= count {
+            return None;
+        }
+        let id = *self.paths.get(name)?;
+        let payload = self.payloads[id].as_ref()?.as_object()?;
+        let gap = payload.get("gap").and_then(Value::as_f64).unwrap_or(0.0) as f32;
+        let height = payload
+            .get("item_height")
+            .and_then(Value::as_f64)
+            .filter(|height| *height > 0.0)
+            .map(|height| height as f32);
+        let (top, row_height, total) = if let Some(height) = height {
+            (
+                index as f32 * (height + gap),
+                height,
+                height * count as f32 + gap * count.saturating_sub(1) as f32,
+            )
+        } else {
+            let metrics = self.metrics.borrow();
+            let metrics = metrics.get(name)?;
+            let mut top = 0.0;
+            for row in 0..index {
+                top += metrics.extent(row) + gap;
+            }
+            let mut total = 0.0;
+            for row in 0..count {
+                total += metrics.extent(row);
+            }
+            total += gap * count.saturating_sub(1) as f32;
+            (top, metrics.extent(index), total)
+        };
+        let edge = payload
+            .get("edge_width")
+            .and_then(Value::as_f64)
+            .unwrap_or(1.0) as f32;
+        let content_gap = payload
+            .get("the_gap_between_border_and_content")
+            .and_then(Value::as_f64)
+            .unwrap_or(2.0) as f32;
+        let viewport = (payload.get("h").and_then(Value::as_f64).unwrap_or(0.0) as f32
+            - edge * 2.0
+            - content_gap * 2.0)
+            .max(0.0);
+        Some((top + row_height * 0.5 - viewport * 0.5).clamp(0.0, (total - viewport).max(0.0)))
+    }
+
+    /// 只重排目标列表的可见窗口，并返回该 `list_box` 的 Lua 表。
+    pub(crate) fn render_list_window(
+        &self,
+        lua: &Lua,
+        name: &str,
+        offset: f32,
+    ) -> mlua::Result<(Self, Table)> {
+        let next = self.with_scroll(name, offset)?;
+        let layout = next.render(lua)?;
+        let table = find_list_box_table(&layout.table, name, 0)?
+            .ok_or_else(|| runtime(format!("页面树里找不到 list_box：{name}")))?;
+        Ok((next, table))
+    }
+
     /// 按节点路径设置可见性；找不到路径返回 `false`。
     ///
     /// 路径同时接受实例下标与实例 key，例如 `rows[1].title` 和 `rows[abc].title`。
@@ -348,10 +565,48 @@ impl PageLayout {
     }
 
     /// 路径对应节点的实际控件名（内部带实例前缀）；分组节点返回 `None`。
+    /// `list_box` 某一项的数据 key；索引越界返回 `None`。
+    pub(crate) fn list_box_item_key(&self, name: &str, index: usize) -> Option<Option<String>> {
+        let id = *self.paths.get(name)?;
+        let payload = self.payloads.get(id)?.as_ref()?.as_object()?;
+        if payload.get("type").and_then(Value::as_str) != Some("list_box") {
+            return None;
+        }
+        let repeat = payload.get("repeat").and_then(Value::as_str)?;
+        let item = lookup_path(self.data.as_ref(), repeat)?
+            .as_array()?
+            .get(index)?;
+        let key = payload
+            .get("key")
+            .and_then(Value::as_str)
+            .and_then(|key| item.get(key))
+            .map(stringify)
+            .unwrap_or_else(|| index.to_string());
+        Some(Some(key))
+    }
+
+    /// `list_box` 的逻辑项目数；找不到控件或不是列表盒返回 `None`。
+    pub(crate) fn list_box_count(&self, name: &str) -> Option<usize> {
+        let id = *self.paths.get(name)?;
+        let payload = self.payloads.get(id)?.as_ref()?.as_object()?;
+        if payload.get("type").and_then(Value::as_str) != Some("list_box") {
+            return None;
+        }
+        let Some(repeat) = payload.get("repeat").and_then(Value::as_str) else {
+            return Some(0);
+        };
+        lookup_path(self.data.as_ref(), repeat)
+            .and_then(Value::as_array)
+            .map(Vec::len)
+    }
+
     pub(crate) fn control_name(&self, path: &str) -> Option<&str> {
         let id = *self.paths.get(path)?;
         match self.tree.nodes[id].kind {
-            NodeKind::Control | NodeKind::Container => self.tree.nodes[id].name.as_deref(),
+            NodeKind::Control
+            | NodeKind::Container
+            | NodeKind::ListBox
+            | NodeKind::SubpageContainer => self.tree.nodes[id].name.as_deref(),
             _ => None,
         }
     }
@@ -377,16 +632,18 @@ fn parse_children(
     payloads: &mut Vec<Option<Value>>,
     names: &mut HashSet<String>,
     instances: &mut HashMap<String, InstanceInfo>,
-    paths: &mut HashMap<String, NodeId>,
+    instance_items: &mut HashMap<String, Value>,
+    paths: &mut BTreeMap<String, NodeId>,
     scrolls: &HashMap<String, f32>,
     measure: Option<&LayoutMeasureHook>,
-    data: &Value,
+    context: &BindContext<'_>,
     prefix: &str,
     path_prefix: &str,
     instance: Option<&InstanceInfo>,
     templates: &mut HashMap<PathBuf, Value>,
     visiting: &mut Vec<PathBuf>,
     depth: usize,
+    metrics: &ListMetricsMap,
 ) -> mlua::Result<Vec<NodeId>> {
     let Some(children) = object.get("children") else {
         return Ok(Vec::new());
@@ -403,16 +660,18 @@ fn parse_children(
             payloads,
             names,
             instances,
+            instance_items,
             paths,
             scrolls,
             measure,
-            data,
+            context,
             prefix,
             path_prefix,
             instance,
             templates,
             visiting,
             depth,
+            metrics,
         )?);
     }
     Ok(ids)
@@ -426,16 +685,18 @@ fn parse_node(
     payloads: &mut Vec<Option<Value>>,
     names: &mut HashSet<String>,
     instances: &mut HashMap<String, InstanceInfo>,
-    paths: &mut HashMap<String, NodeId>,
+    instance_items: &mut HashMap<String, Value>,
+    paths: &mut BTreeMap<String, NodeId>,
     scrolls: &HashMap<String, f32>,
     measure: Option<&LayoutMeasureHook>,
-    data: &Value,
+    context: &BindContext<'_>,
     prefix: &str,
     path_prefix: &str,
     instance: Option<&InstanceInfo>,
     templates: &mut HashMap<PathBuf, Value>,
     visiting: &mut Vec<PathBuf>,
     depth: usize,
+    metrics: &ListMetricsMap,
 ) -> mlua::Result<NodeId> {
     let object = value
         .as_object()
@@ -452,20 +713,25 @@ fn parse_node(
             payloads,
             names,
             instances,
+            instance_items,
             paths,
             scrolls,
             measure,
-            data,
+            context,
+            None,
             prefix,
             path_prefix,
             templates,
             visiting,
             depth,
+            metrics,
         );
     }
     let kind = match kind_name {
         "stem" => NodeKind::Stem,
         "panel" | "self_drawing_panel" => NodeKind::Container,
+        "subpage_container" => NodeKind::SubpageContainer,
+        "list_box" => NodeKind::ListBox,
         _ => NodeKind::Control,
     };
 
@@ -477,24 +743,45 @@ fn parse_node(
         if !names.insert(name.clone()) {
             return Err(runtime(format!("控件名重复：{name}")));
         }
-    } else if matches!(kind, NodeKind::Control | NodeKind::Container) {
+    } else if matches!(
+        kind,
+        NodeKind::Control | NodeKind::Container | NodeKind::ListBox | NodeKind::SubpageContainer
+    ) {
         return Err(runtime("控件 / 容器缺 name"));
     }
 
     let mut node = Node::new(kind);
     apply_common(&mut node, object, (None, None))?;
+    if kind_name == "text_button" {
+        let (min_width, min_height) = text_button_min_size(object, measure);
+        node.min_width = node.min_width.max(min_width);
+        node.min_height = node.min_height.max(min_height);
+        if let SizeSpec::Fixed(width) = node.width
+            && width < min_width
+        {
+            node.width = SizeSpec::Fixed(min_width);
+        }
+        if let SizeSpec::Fixed(height) = node.height
+            && height < min_height
+        {
+            node.height = SizeSpec::Fixed(min_height);
+        }
+    }
     node.name = name;
     let id = tree.push(node);
     payloads.push(None);
     if let Some(node_path) = &node_path {
         paths.entry(node_path.clone()).or_insert(id);
     }
-    if matches!(kind, NodeKind::Control | NodeKind::Container) {
+    if matches!(
+        kind,
+        NodeKind::Control | NodeKind::Container | NodeKind::ListBox | NodeKind::SubpageContainer
+    ) {
         let mut payload = control_payload(object)?;
         if let (Some(name), Some(payload)) = (&tree.nodes[id].name, payload.as_object_mut()) {
             payload.insert("name".to_owned(), Value::String(name.clone()));
         }
-        payloads[id] = Some(bind_value(payload, data));
+        payloads[id] = Some(bind_value(payload, context));
         if let (Some(name), Some(instance), Some(local_name)) =
             (&tree.nodes[id].name, instance, local_name)
         {
@@ -503,26 +790,414 @@ fn parse_node(
             instances.insert(name.clone(), info);
         }
     }
-    let children = parse_children(
-        tree,
-        object,
+    let children = if kind == NodeKind::ListBox {
+        parse_list_box_children(
+            tree,
+            object,
+            base,
+            payloads,
+            names,
+            instances,
+            instance_items,
+            paths,
+            scrolls,
+            measure,
+            context,
+            prefix,
+            node_path.as_deref().unwrap_or(path_prefix),
+            templates,
+            visiting,
+            depth,
+            metrics,
+        )?
+    } else {
+        parse_children(
+            tree,
+            object,
+            base,
+            payloads,
+            names,
+            instances,
+            instance_items,
+            paths,
+            scrolls,
+            measure,
+            context,
+            prefix,
+            node_path.as_deref().unwrap_or(path_prefix),
+            instance,
+            templates,
+            visiting,
+            depth,
+            metrics,
+        )?
+    };
+    tree.nodes[id].children = children;
+    Ok(id)
+}
+
+#[allow(clippy::too_many_arguments)]
+fn parse_list_box_children(
+    tree: &mut PageTree,
+    object: &Map<String, Value>,
+    base: &Path,
+    payloads: &mut Vec<Option<Value>>,
+    names: &mut HashSet<String>,
+    instances: &mut HashMap<String, InstanceInfo>,
+    instance_items: &mut HashMap<String, Value>,
+    paths: &mut BTreeMap<String, NodeId>,
+    scrolls: &HashMap<String, f32>,
+    measure: Option<&LayoutMeasureHook>,
+    context: &BindContext<'_>,
+    prefix: &str,
+    path_prefix: &str,
+    templates: &mut HashMap<PathBuf, Value>,
+    visiting: &mut Vec<PathBuf>,
+    depth: usize,
+    metrics: &ListMetricsMap,
+) -> mlua::Result<Vec<NodeId>> {
+    let subpages = object
+        .get("subpage")
+        .and_then(Value::as_array)
+        .ok_or_else(|| runtime("list_box.subpage 必须是字符串数组"))?;
+    let Some(src) = subpages.first().and_then(Value::as_str) else {
+        return Err(runtime("list_box.subpage 不能为空"));
+    };
+    if subpages.len() > 1 {
+        tracing::warn!(
+            "list_box.subpage 只使用第一个模板，后面的 {} 个已忽略",
+            subpages.len() - 1
+        );
+    }
+    if let Some(path) = object.get("repeat").and_then(Value::as_str)
+        && let Some(Value::Array(items)) = context.lookup(path)
+        && items.len() > MAX_LIST_BOX_ROWS
+    {
+        return Err(runtime(format!(
+            "list_box 项目数 {} 超过上限 {MAX_LIST_BOX_ROWS}",
+            items.len()
+        )));
+    }
+    let mut subpage = object.clone();
+    subpage.insert("type".to_owned(), Value::String("subpage".to_owned()));
+    subpage.insert("src".to_owned(), Value::String(src.to_owned()));
+    subpage.insert("name".to_owned(), Value::String("items".to_owned()));
+    subpage.insert("list_box".to_owned(), Value::Bool(true));
+    subpage.insert(
+        "scroll_path".to_owned(),
+        Value::String(path_prefix.to_owned()),
+    );
+    if let Some(offset) = object.get("scroll_offset") {
+        subpage.insert("scroll_offset".to_owned(), offset.clone());
+    }
+    subpage.remove("children");
+    subpage.remove("subpage");
+    let gap = object
+        .get("gap")
+        .and_then(Value::as_f64)
+        .map(|gap| gap as f32)
+        .unwrap_or(0.0)
+        .max(0.0);
+    let fixed_height = object
+        .get("item_height")
+        .and_then(Value::as_f64)
+        .filter(|height| *height > 0.0);
+    let allow_virtual = object
+        .get("virtualize")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    if allow_virtual {
+        let edge_width = object
+            .get("edge_width")
+            .and_then(Value::as_f64)
+            .unwrap_or(1.0) as f32;
+        let content_gap = object
+            .get("the_gap_between_border_and_content")
+            .and_then(Value::as_f64)
+            .unwrap_or(2.0) as f32;
+        let viewport = (object.get("h").and_then(Value::as_f64).unwrap_or(0.0) as f32
+            - edge_width * 2.0
+            - content_gap * 2.0)
+            .max(1.0);
+        let mut virtualize = Map::new();
+        virtualize.insert("axis".to_owned(), Value::String("y".to_owned()));
+        virtualize.insert("viewport".to_owned(), Value::from(viewport));
+        if let Some(height) = fixed_height {
+            virtualize.insert("item_height".to_owned(), Value::from(height));
+        }
+        // 窗口按 8 行一块重建，块内首行最多再走 7 行；overscan 要能覆盖
+        // 这 7 行 + 可视区，滚动到块尾时底部才不会空。
+        virtualize.insert("overscan".to_owned(), Value::from(8u64));
+        virtualize.insert("gap".to_owned(), Value::from(gap));
+        subpage.insert("virtualize".to_owned(), Value::Object(virtualize));
+    }
+    let mut wrappers = Vec::with_capacity(3);
+    for state in 0..3u8 {
+        let state_value = list_box_state(state);
+        let wrapper = if state == 0 {
+            parse_subpage(
+                tree,
+                &subpage,
+                base,
+                payloads,
+                names,
+                instances,
+                instance_items,
+                paths,
+                scrolls,
+                measure,
+                context,
+                Some(&state_value),
+                prefix,
+                path_prefix,
+                templates,
+                visiting,
+                depth,
+                metrics,
+            )?
+        } else {
+            let mut variant_names = HashSet::new();
+            parse_subpage(
+                tree,
+                &subpage,
+                base,
+                payloads,
+                &mut variant_names,
+                instances,
+                instance_items,
+                paths,
+                scrolls,
+                measure,
+                context,
+                Some(&state_value),
+                prefix,
+                path_prefix,
+                templates,
+                visiting,
+                depth,
+                metrics,
+            )?
+        };
+        tree.nodes[wrapper].layout = LayoutSpec::Flex {
+            direction: Axis::Column,
+            wrap: false,
+            justify: Justify::Start,
+            align: Align::Start,
+            gap,
+        };
+        if state > 0 {
+            tree.nodes[wrapper].visible = false;
+        }
+        wrappers.push(wrapper);
+    }
+    let mut total = 0;
+    let mut max_row = 0;
+    for (index, wrapper) in wrappers.iter().enumerate() {
+        let (variant_total, variant_row) = list_box_tree_stats(tree, *wrapper)?;
+        if index == 0 {
+            // 状态变体是同一批逻辑行的绘制副本，节点上限按正常态统计。
+            total = variant_total;
+        }
+        max_row = max_row.max(variant_row);
+    }
+    if total > MAX_LIST_BOX_NODES {
+        return Err(runtime(format!(
+            "list_box 实例化节点数 {total} 超过上限 {MAX_LIST_BOX_NODES}"
+        )));
+    }
+    if max_row > MAX_LIST_BOX_TEMPLATE_NODES {
+        return Err(runtime(format!(
+            "list_box 行模板节点数 {max_row} 超过上限 {MAX_LIST_BOX_TEMPLATE_NODES}"
+        )));
+    }
+    Ok(wrappers)
+}
+
+fn list_box_state(state: u8) -> Value {
+    let mut fields = Map::new();
+    fields.insert("item_state".to_owned(), Value::from(state));
+    fields.insert("selected".to_owned(), Value::Bool(state == 1));
+    fields.insert("focused".to_owned(), Value::Bool(state == 1));
+    fields.insert("hovered".to_owned(), Value::Bool(state == 2));
+    Value::Object(fields)
+}
+
+fn copy_template_rects(
+    tree: &PageTree,
+    source: NodeId,
+    target: NodeId,
+    source_rects: &[Option<cloud_ui_core::Rect>],
+    target_rects: &mut [Option<cloud_ui_core::Rect>],
+) {
+    target_rects[target] = source_rects[source];
+    let source_children = &tree.nodes[source].children;
+    let target_children = &tree.nodes[target].children;
+    if source_children.len() != target_children.len() {
+        return;
+    }
+    for (source, target) in source_children.iter().zip(target_children) {
+        copy_template_rects(tree, *source, *target, source_rects, target_rects);
+    }
+}
+
+fn list_box_tree_stats(tree: &PageTree, wrapper: NodeId) -> mlua::Result<(usize, usize)> {
+    let mut total = 0;
+    let mut max_row = 0;
+    for instance in &tree.nodes[wrapper].children {
+        let mut stack = vec![*instance];
+        let mut row_nodes = 0;
+        while let Some(id) = stack.pop() {
+            let node = &tree.nodes[id];
+            if matches!(node.kind, NodeKind::Subpage | NodeKind::ListBox) {
+                return Err(runtime(
+                    "list_box 的子页面内部不能再出现 subpage 或 list_box",
+                ));
+            }
+            total += 1;
+            row_nodes += 1;
+            stack.extend(node.children.iter().copied());
+        }
+        max_row = max_row.max(row_nodes);
+    }
+    Ok((total, max_row))
+}
+
+#[allow(clippy::too_many_arguments)]
+fn virtual_window(
+    metrics: &ListMetrics,
+    count: usize,
+    offset: f32,
+    viewport: f32,
+    gap: f32,
+    overscan: usize,
+    include_partial: bool,
+    item_height: Option<f32>,
+) -> (usize, usize, f32, f32) {
+    let mut prefix = 0.0;
+    let mut first = None;
+    let mut visible_end = 0;
+    for index in 0..count {
+        let extent = item_height.unwrap_or_else(|| metrics.extent(index));
+        if first.is_none()
+            && ((include_partial && prefix + extent > offset)
+                || (!include_partial && prefix >= offset))
+        {
+            first = Some((index, prefix));
+        }
+        if prefix < offset + viewport {
+            visible_end = index + 1;
+        }
+        prefix += extent + gap;
+    }
+    let (visible_start, visible_prefix) = first.unwrap_or((count, prefix));
+    // 列表盒向上滚 / 拖滚动条时，UI 可能比 Server 先停在新位置。窗口带几行
+    // 上 overscan，避免当前偏移落在首行上方时顶部整块空白；普通虚拟子页面
+    // 仍按原逻辑只取可见往后。
+    let start = if include_partial {
+        visible_start.saturating_sub(overscan)
+    } else {
+        visible_start
+    };
+    let start_prefix = if start == visible_start {
+        visible_prefix
+    } else {
+        let mut prefix = visible_prefix;
+        for index in start..visible_start {
+            prefix -= item_height.unwrap_or_else(|| metrics.extent(index)) + gap;
+        }
+        prefix.max(0.0)
+    };
+    let end = if visible_start >= count {
+        count
+    } else {
+        (visible_end.max(visible_start + 1) + overscan).min(count)
+    };
+    let total = if count == 0 {
+        0.0
+    } else {
+        (prefix - gap).max(0.0)
+    };
+    (start, end, start_prefix, total)
+}
+
+fn virtual_top(metrics: &ListMetrics, item_height: Option<f32>, gap: f32, index: usize) -> f32 {
+    if let Some(height) = item_height {
+        index as f32 * (height + gap)
+    } else {
+        (0..index).map(|row| metrics.extent(row) + gap).sum()
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+fn measure_virtual_row(
+    page: &Map<String, Value>,
+    base: &Path,
+    context: &BindContext<'_>,
+    state: Option<&Value>,
+    item: &Value,
+    index: usize,
+    key_name: Option<&str>,
+    wrapper_path: &str,
+    local_name: &str,
+    scrolls: &HashMap<String, f32>,
+    measure: Option<&LayoutMeasureHook>,
+    templates: &mut HashMap<PathBuf, Value>,
+    visiting: &mut Vec<PathBuf>,
+    depth: usize,
+    axis: Axis,
+    metrics: &ListMetricsMap,
+) -> mlua::Result<f32> {
+    let key = key_name
+        .and_then(|key| item.get(key))
+        .cloned()
+        .unwrap_or_else(|| Value::from(index as u64));
+    let context = BindContext::row(context, item, index, key, state);
+    let instance_path = format!("{wrapper_path}[{index}]");
+    let info = InstanceInfo {
+        subpage: local_name.to_owned(),
+        instance: instance_path.clone(),
+        item_index: index,
+        item_key: None,
+        local_name: String::new(),
+        script: None,
+    };
+    measure_item_extent(
+        page,
         base,
-        payloads,
-        names,
-        instances,
-        paths,
+        &context,
+        &format!("measure_{index}_"),
+        &instance_path,
+        &info,
         scrolls,
         measure,
-        data,
-        prefix,
-        node_path.as_deref().unwrap_or(path_prefix),
-        instance,
         templates,
         visiting,
         depth,
-    )?;
-    tree.nodes[id].children = children;
-    Ok(id)
+        axis,
+        metrics,
+    )
+}
+
+/// 子页面脚本固定放在布局目录旁边的 `shared/`，不能借脚本路径越界。
+fn shared_script_path(base: &Path, name: &str) -> Option<String> {
+    let relative = Path::new(name);
+    if relative.is_absolute()
+        || relative
+            .components()
+            .any(|part| matches!(part, std::path::Component::ParentDir))
+    {
+        tracing::warn!(
+            script = name,
+            "子页面脚本路径必须是 Scripts/shared 下的相对路径"
+        );
+        return None;
+    }
+    let path = base.parent()?.join("shared").join(relative);
+    if !path.is_file() {
+        tracing::warn!(script = %path.display(), "子页面脚本不存在");
+        return None;
+    }
+    Some(path.to_string_lossy().into_owned())
 }
 
 #[allow(clippy::too_many_arguments)]
@@ -533,15 +1208,18 @@ fn parse_subpage(
     payloads: &mut Vec<Option<Value>>,
     names: &mut HashSet<String>,
     instance_map: &mut HashMap<String, InstanceInfo>,
-    paths: &mut HashMap<String, NodeId>,
+    instance_items: &mut HashMap<String, Value>,
+    paths: &mut BTreeMap<String, NodeId>,
     scrolls: &HashMap<String, f32>,
     measure: Option<&LayoutMeasureHook>,
-    data: &Value,
+    context: &BindContext<'_>,
+    state: Option<&Value>,
     prefix: &str,
     path_prefix: &str,
     templates: &mut HashMap<PathBuf, Value>,
     visiting: &mut Vec<PathBuf>,
     depth: usize,
+    metrics: &ListMetricsMap,
 ) -> mlua::Result<NodeId> {
     if depth >= MAX_SUBPAGE_DEPTH {
         return Err(runtime(format!("子页面嵌套超过 {MAX_SUBPAGE_DEPTH} 层")));
@@ -577,6 +1255,11 @@ fn parse_subpage(
         .and_then(|root| root.get("page"))
         .and_then(Value::as_object)
         .ok_or_else(|| runtime(format!("子页面缺 page：{}", path.display())))?;
+    let script = object
+        .get("script")
+        .or_else(|| page.get("script"))
+        .and_then(Value::as_str)
+        .and_then(|name| shared_script_path(base, name));
 
     let local_name = object
         .get("name")
@@ -585,24 +1268,34 @@ fn parse_subpage(
     let instance_prefix = format!("{}{}_", prefix, sanitize_prefix(local_name));
     let wrapper_path = join_path(path_prefix, local_name);
     let repeat = object.get("repeat").and_then(Value::as_str);
-    let items = match repeat {
+    let single;
+    let items: &[Value] = match repeat {
         Some(path) => {
-            let value = lookup_path(data, path)
+            let value = context
+                .lookup(path)
                 .ok_or_else(|| runtime(format!("subpage.repeat 找不到数据：{path}")))?;
             let Value::Array(items) = value else {
                 return Err(runtime(format!("subpage.repeat 必须是数组：{path}")));
             };
-            items.clone()
+            items
         }
-        None => vec![data.clone()],
+        None => {
+            single = vec![context.to_value()];
+            &single
+        }
     };
     let virtual_spec = parse_virtualize(object, page)?;
+    let instance_limit = if object.get("list_box").and_then(Value::as_bool) == Some(true) {
+        MAX_LIST_BOX_ROWS
+    } else {
+        MAX_SUBPAGE_INSTANCES
+    };
     let max_instances = object
         .get("max_instances")
         .and_then(Value::as_u64)
         .map(|value| value as usize)
-        .unwrap_or(MAX_SUBPAGE_INSTANCES)
-        .min(MAX_SUBPAGE_INSTANCES);
+        .unwrap_or(instance_limit)
+        .min(instance_limit);
     if virtual_spec.is_none() && items.len() > max_instances {
         return Err(runtime(format!(
             "子页面实例数 {} 超过上限 {max_instances}",
@@ -643,70 +1336,186 @@ fn parse_subpage(
         .unwrap_or_else(|| PathBuf::from("."));
     let key_name = object.get("key").and_then(Value::as_str);
     visiting.push(path);
-    let (start, end, spacer) = if let Some(spec) = &virtual_spec {
-        let offset = scrolls.get(&wrapper_path).copied().unwrap_or(0.0).max(0.0);
-        let mut prefix = 0.0;
-        let mut first = None;
-        let mut visible_end = 0;
-        for (index, item) in items.iter().enumerate() {
-            let extent = match spec.item_height {
-                Some(height) => height,
-                None => {
-                    let key = key_name
-                        .and_then(|key| item.get(key))
-                        .cloned()
-                        .unwrap_or_else(|| Value::from(index as u64));
-                    let context = make_context(data, item, index, key);
-                    let instance_path = format!("{wrapper_path}[{index}]");
-                    let info = InstanceInfo {
-                        subpage: local_name.to_owned(),
-                        instance: instance_path.clone(),
-                        item_index: index,
-                        item_key: None,
-                        local_name: String::new(),
+    let scroll_path = object
+        .get("scroll_path")
+        .and_then(Value::as_str)
+        .unwrap_or(&wrapper_path);
+    let scroll_offset = scrolls
+        .get(scroll_path)
+        .copied()
+        .or_else(|| {
+            object
+                .get("scroll_offset")
+                .and_then(Value::as_f64)
+                .map(|v| v as f32)
+        })
+        .unwrap_or(0.0)
+        .max(0.0);
+    let is_list_box = object.get("list_box").and_then(Value::as_bool) == Some(true);
+    let (start, end, spacer, start_prefix, total_height, pins) = if let Some(spec) = &virtual_spec {
+        let offset = scroll_offset;
+        let metrics_key = scroll_path.to_owned();
+        let (start, end, start_prefix, total_height) = if let Some(height) = spec.item_height {
+            virtual_window(
+                &ListMetrics::default(),
+                items.len(),
+                offset,
+                spec.viewport,
+                spec.gap,
+                spec.overscan,
+                is_list_box,
+                Some(height),
+            )
+        } else {
+            let window = {
+                let mut metrics = metrics.borrow_mut();
+                let metrics = metrics.entry(metrics_key.clone()).or_default();
+                if metrics.heights.len() < items.len() {
+                    metrics.heights.resize(items.len(), None);
+                }
+                virtual_window(
+                    metrics,
+                    items.len(),
+                    offset,
+                    spec.viewport,
+                    spec.gap,
+                    spec.overscan,
+                    is_list_box,
+                    None,
+                )
+            };
+            let mut window = window;
+            for _ in 0..3 {
+                for (index, item) in items.iter().enumerate().take(window.1).skip(window.0) {
+                    let needs_measure = {
+                        let metrics = metrics.borrow();
+                        metrics
+                            .get(&metrics_key)
+                            .and_then(|metrics| metrics.heights.get(index))
+                            .is_none_or(Option::is_none)
                     };
-                    measure_item_extent(
+                    if needs_measure {
+                        let extent = measure_virtual_row(
+                            page,
+                            &template_base,
+                            context,
+                            state,
+                            item,
+                            index,
+                            key_name,
+                            &wrapper_path,
+                            local_name,
+                            scrolls,
+                            measure,
+                            templates,
+                            visiting,
+                            depth + 1,
+                            spec.axis,
+                            metrics,
+                        )?;
+                        let mut metrics = metrics.borrow_mut();
+                        let metrics = metrics.entry(metrics_key.clone()).or_default();
+                        metrics.set(index, extent.max(1.0));
+                    }
+                }
+                let next = {
+                    let mut metrics = metrics.borrow_mut();
+                    let metrics = metrics.entry(metrics_key.clone()).or_default();
+                    virtual_window(
+                        metrics,
+                        items.len(),
+                        offset,
+                        spec.viewport,
+                        spec.gap,
+                        spec.overscan,
+                        is_list_box,
+                        None,
+                    )
+                };
+                window = next;
+            }
+            window
+        };
+        let pins = metrics
+            .borrow()
+            .get(&metrics_key)
+            .map(|metrics| metrics.pins.clone())
+            .unwrap_or_default();
+        if spec.item_height.is_none() {
+            for pin in pins.iter().copied() {
+                if pin >= items.len() || (start..end).contains(&pin) {
+                    continue;
+                }
+                let needs_measure = {
+                    let metrics = metrics.borrow();
+                    metrics
+                        .get(&metrics_key)
+                        .and_then(|metrics| metrics.heights.get(pin))
+                        .is_none_or(Option::is_none)
+                };
+                if needs_measure {
+                    let extent = measure_virtual_row(
                         page,
                         &template_base,
-                        &context,
-                        &format!("measure_{index}_"),
-                        &instance_path,
-                        &info,
+                        context,
+                        state,
+                        &items[pin],
+                        pin,
+                        key_name,
+                        &wrapper_path,
+                        local_name,
                         scrolls,
                         measure,
                         templates,
                         visiting,
                         depth + 1,
                         spec.axis,
-                    )?
+                        metrics,
+                    )?;
+                    let mut metrics = metrics.borrow_mut();
+                    let metrics = metrics.entry(metrics_key.clone()).or_default();
+                    metrics.set(pin, extent.max(1.0));
                 }
-            };
-            if first.is_none() && prefix >= offset {
-                first = Some((index, prefix));
             }
-            if prefix < offset + spec.viewport {
-                visible_end = index + 1;
-            }
-            prefix += extent;
         }
-        let (start, start_prefix) = first.unwrap_or((items.len(), prefix));
-        let end = if start >= items.len() {
-            items.len()
-        } else {
-            (visible_end.max(start + 1) + spec.overscan).min(items.len())
+        let total_height = {
+            let windows = metrics.borrow();
+            let default = ListMetrics::default();
+            let metrics = windows.get(&metrics_key).unwrap_or(&default);
+            virtual_window(
+                metrics,
+                items.len(),
+                offset,
+                spec.viewport,
+                spec.gap,
+                spec.overscan,
+                is_list_box,
+                spec.item_height,
+            )
+            .3
+            .max(total_height)
         };
-        let spacer = if start < items.len() {
+        let spacer = if is_list_box {
+            0.0
+        } else if start < items.len() {
             (start_prefix - offset).max(0.0)
         } else {
             0.0
         };
-        (start, end, spacer)
+        (start, end, spacer, start_prefix, total_height, pins)
     } else {
-        (0, items.len(), 0.0)
+        (0, items.len(), 0.0, 0.0, 0.0, BTreeSet::new())
     };
 
-    let mut instances = Vec::with_capacity(end.saturating_sub(start) + 1);
-    for (index, item) in items.iter().enumerate().take(end).skip(start) {
+    let mut indices: Vec<usize> = (start..end).collect();
+    for pin in pins.iter().copied() {
+        if pin < items.len() && !indices.contains(&pin) {
+            indices.push(pin);
+        }
+    }
+    let mut instances = Vec::with_capacity(indices.len());
+    for index in indices {
+        let item = &items[index];
         let key = key_name
             .and_then(|key| item.get(key))
             .cloned()
@@ -719,18 +1528,31 @@ fn parse_subpage(
         let instance_path = format!("{wrapper_path}[{index}]");
         let key_aliases = key_paths(&wrapper_path, &key);
         let prefix_key = key_prefix(&key).unwrap_or_else(|| index.to_string());
-        let context = make_context(data, item, index, key);
+        let context = BindContext::row(context, item, index, key, state);
         let instance_prefix = format!("{instance_prefix}{prefix_key}_");
         let info = InstanceInfo {
             subpage: local_name.to_owned(),
             instance: instance_path.clone(),
             item_index: index,
-            item_key,
+            item_key: item_key.clone(),
             local_name: String::new(),
+            script: script.clone(),
         };
+        instance_items.insert(instance_path.clone(), item.clone());
         let mut instance = Node::new(NodeKind::Stem);
         apply_common(&mut instance, page, (None, None))?;
         instance.name = Some(format!("{instance_prefix}page"));
+        instance.item_key = item_key.clone();
+        instance.item_index = Some(index);
+        if let Some(spec) = &virtual_spec {
+            let top = {
+                let metrics = metrics.borrow();
+                let default = ListMetrics::default();
+                let metrics = metrics.get(scroll_path).unwrap_or(&default);
+                virtual_top(metrics, spec.item_height, spec.gap, index)
+            };
+            instance.virtual_top = Some(top);
+        }
         instance.visible = object
             .get("visible")
             .and_then(Value::as_bool)
@@ -748,6 +1570,7 @@ fn parse_subpage(
             payloads,
             names,
             instance_map,
+            instance_items,
             paths,
             scrolls,
             measure,
@@ -758,6 +1581,7 @@ fn parse_subpage(
             templates,
             visiting,
             depth + 1,
+            metrics,
         )?;
         tree.nodes[id].children = children;
         for alias in &key_aliases {
@@ -804,6 +1628,13 @@ fn parse_subpage(
         .get("visible")
         .and_then(Value::as_bool)
         .unwrap_or(true);
+    wrapper.virtual_start = Some(start);
+    wrapper.virtual_count = Some(items.len());
+    wrapper.virtual_offset = Some(start_prefix);
+    wrapper.virtual_scroll = Some(scroll_offset);
+    if virtual_spec.is_some() {
+        wrapper.virtual_content_height = Some(total_height);
+    }
     wrapper.children = instances;
     let id = tree.push(wrapper);
     payloads.push(None);
@@ -883,7 +1714,7 @@ fn parse_virtualize(
 fn measure_item_extent(
     page: &Map<String, Value>,
     base: &Path,
-    context: &Value,
+    context: &BindContext<'_>,
     prefix: &str,
     instance_path: &str,
     info: &InstanceInfo,
@@ -893,13 +1724,15 @@ fn measure_item_extent(
     visiting: &mut Vec<PathBuf>,
     depth: usize,
     axis: Axis,
+    metrics: &ListMetricsMap,
 ) -> mlua::Result<f32> {
     let mut tree = PageTree::new(Node::new(NodeKind::Stem));
     apply_common(&mut tree.nodes[0], page, (None, None))?;
     let mut payloads = vec![None];
     let mut names = HashSet::new();
     let mut instances = HashMap::new();
-    let mut paths = HashMap::new();
+    let mut instance_items = HashMap::new();
+    let mut paths = BTreeMap::new();
     let children = parse_children(
         &mut tree,
         page,
@@ -907,6 +1740,7 @@ fn measure_item_extent(
         &mut payloads,
         &mut names,
         &mut instances,
+        &mut instance_items,
         &mut paths,
         scrolls,
         measure,
@@ -917,6 +1751,7 @@ fn measure_item_extent(
         templates,
         visiting,
         depth,
+        metrics,
     )?;
     tree.nodes[0].children = children;
     let constraints = Constraints {
@@ -936,18 +1771,128 @@ fn measure_item_extent(
     })
 }
 
-fn make_context(data: &Value, item: &Value, index: usize, key: Value) -> Value {
-    let mut context = Map::new();
-    context.insert("item".to_owned(), item.clone());
-    context.insert("index".to_owned(), Value::from(index as u64));
-    context.insert("key".to_owned(), key);
-    context.insert("data".to_owned(), data.clone());
-    if let Value::Object(fields) = data {
-        for (name, value) in fields {
-            context.entry(name.clone()).or_insert_with(|| value.clone());
+struct BindContext<'a> {
+    data: &'a Value,
+    parent: Option<&'a BindContext<'a>>,
+    item: Option<&'a Value>,
+    index: Value,
+    key: Option<Value>,
+    state: Option<&'a Value>,
+}
+
+impl<'a> BindContext<'a> {
+    fn root(data: &'a Value) -> Self {
+        Self {
+            data,
+            parent: None,
+            item: None,
+            index: Value::from(0),
+            key: None,
+            state: None,
         }
     }
-    Value::Object(context)
+
+    fn row(
+        parent: &'a BindContext<'a>,
+        item: &'a Value,
+        index: usize,
+        key: Value,
+        state: Option<&'a Value>,
+    ) -> Self {
+        Self {
+            data: parent.data,
+            parent: Some(parent),
+            item: Some(item),
+            index: Value::from(index as u64),
+            key: Some(key),
+            state,
+        }
+    }
+
+    /// 只在没有 `repeat` 的子页面里用一次；有重复项时不复制根数据。
+    fn to_value(&self) -> Value {
+        let mut fields = self.data.as_object().cloned().unwrap_or_default();
+        if let Some(parent) = self.parent
+            && let Value::Object(parent_fields) = parent.to_value()
+        {
+            for (name, value) in parent_fields {
+                fields.insert(name, value);
+            }
+        }
+        if let Some(item) = self.item {
+            fields.insert("item".to_owned(), item.clone());
+        }
+        fields.insert("index".to_owned(), self.index.clone());
+        if let Some(key) = &self.key {
+            fields.insert("key".to_owned(), key.clone());
+        }
+        if let Some(Value::Object(state)) = self.state {
+            for (name, value) in state {
+                fields.insert(name.clone(), value.clone());
+            }
+        }
+        Value::Object(fields)
+    }
+
+    fn lookup(&self, path: &str) -> Option<&Value> {
+        let (first, rest) = path
+            .split_once('.')
+            .map_or((path, ""), |(first, rest)| (first, rest));
+        match first {
+            "data" => {
+                if let Some(parent) = self.parent {
+                    if rest.is_empty() {
+                        Some(parent.data)
+                    } else {
+                        parent.lookup(rest)
+                    }
+                } else if rest.is_empty() {
+                    Some(self.data)
+                } else {
+                    lookup_path(self.data, rest)
+                }
+            }
+            "item" => {
+                let item = self.item?;
+                if rest.is_empty() {
+                    Some(item)
+                } else {
+                    lookup_path(item, rest)
+                }
+            }
+            "index" => {
+                if rest.is_empty() {
+                    Some(&self.index)
+                } else {
+                    None
+                }
+            }
+            "key" => {
+                let key = self.key.as_ref()?;
+                if rest.is_empty() { Some(key) } else { None }
+            }
+            _ => {
+                if let Some(state) = self.state
+                    && let Some(value) = state.as_object().and_then(|state| state.get(first))
+                {
+                    return if rest.is_empty() {
+                        Some(value)
+                    } else {
+                        lookup_path(value, rest)
+                    };
+                }
+                if let Some(parent) = self.parent {
+                    return parent.lookup(path);
+                }
+                let value = self.data.as_object()?.get(first)?;
+                if rest.is_empty() {
+                    Some(value)
+                } else {
+                    lookup_path(value, rest)
+                }
+            }
+        }
+    }
 }
 
 fn lookup_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
@@ -958,7 +1903,7 @@ fn lookup_path<'a>(value: &'a Value, path: &str) -> Option<&'a Value> {
     Some(current)
 }
 
-fn bind_value(value: Value, context: &Value) -> Value {
+fn bind_value(value: Value, context: &BindContext<'_>) -> Value {
     match value {
         Value::String(text) => Value::String(interpolate(&text, context)),
         Value::Array(items) => Value::Array(
@@ -968,6 +1913,18 @@ fn bind_value(value: Value, context: &Value) -> Value {
                 .collect(),
         ),
         Value::Object(mut fields) => {
+            if let Some(states) = fields.get("state").and_then(Value::as_object) {
+                let item_state = context
+                    .lookup("item_state")
+                    .map(stringify)
+                    .unwrap_or_else(|| "0".to_owned());
+                let selected = states
+                    .get(&item_state)
+                    .or_else(|| states.get("default"))
+                    .cloned()
+                    .unwrap_or(Value::Null);
+                return bind_value(selected, context);
+            }
             for (key, value) in &mut fields {
                 if matches!(key.as_str(), "name" | "type") {
                     continue;
@@ -980,7 +1937,7 @@ fn bind_value(value: Value, context: &Value) -> Value {
     }
 }
 
-fn interpolate(text: &str, context: &Value) -> String {
+fn interpolate(text: &str, context: &BindContext<'_>) -> String {
     let mut output = String::with_capacity(text.len());
     let mut rest = text;
     while let Some(start) = rest.find("{{") {
@@ -991,7 +1948,7 @@ fn interpolate(text: &str, context: &Value) -> String {
             return output;
         };
         let path = after[..end].trim();
-        if let Some(value) = lookup_path(context, path) {
+        if let Some(value) = context.lookup(path) {
             output.push_str(&stringify(value));
         }
         rest = &after[end + 2..];
@@ -1064,11 +2021,11 @@ fn key_paths(base: &str, key: &Value) -> Vec<String> {
 }
 
 /// 把 `base` 子树里已经登记的下标路径复制成 key 路径。
-fn alias_subtree(paths: &mut HashMap<String, NodeId>, base: &str, alias: &str) {
+fn alias_subtree(paths: &mut BTreeMap<String, NodeId>, base: &str, alias: &str) {
     let prefix = format!("{base}.");
     let entries: Vec<(String, NodeId)> = paths
-        .iter()
-        .filter(|(path, _)| path.as_str() == base || path.starts_with(&prefix))
+        .range(base.to_owned()..)
+        .take_while(|(path, _)| path.as_str() == base || path.starts_with(&prefix))
         .map(|(path, id)| (path.clone(), *id))
         .collect();
     for (path, id) in entries {
@@ -1376,6 +2333,31 @@ fn as_f32(value: &serde_json::Number, field: &str) -> mlua::Result<f32> {
         .ok_or_else(|| runtime(format!("{field} 必须是数字")))
 }
 
+fn find_list_box_table(table: &Table, name: &str, depth: usize) -> mlua::Result<Option<Table>> {
+    if depth > 16 {
+        return Ok(None);
+    }
+    if table.get::<Option<String>>("type")?.as_deref() == Some("list_box")
+        && table.get::<Option<String>>("name")?.as_deref() == Some(name)
+    {
+        return Ok(Some(table.clone()));
+    }
+    if let Some(children) = table.get::<Option<Table>>("children")?
+        && let Some(found) = find_list_box_table(&children, name, depth + 1)?
+    {
+        return Ok(Some(found));
+    }
+    for value in table.clone().sequence_values::<LuaValue>() {
+        let LuaValue::Table(child) = value? else {
+            continue;
+        };
+        if let Some(found) = find_list_box_table(&child, name, depth + 1)? {
+            return Ok(Some(found));
+        }
+    }
+    Ok(None)
+}
+
 fn root_constraints(node: &Node) -> Constraints {
     let width = match node.width {
         SizeSpec::Fixed(width) => width,
@@ -1413,6 +2395,21 @@ fn flatten(
     }
     if matches!(node.kind, NodeKind::Subpage) {
         return Err(runtime("subpage 要等子页面实例化步骤实现"));
+    }
+    if node.kind == NodeKind::ListBox {
+        return flatten_list_box(
+            tree,
+            id,
+            rects,
+            payloads,
+            lua,
+            base,
+            table,
+            output_index,
+            names,
+            origin,
+            path_prefix,
+        );
     }
     if matches!(node.kind, NodeKind::Control | NodeKind::Container)
         && let Some(payload) = payloads.get(id).and_then(Option::as_ref)
@@ -1490,6 +2487,213 @@ fn flatten(
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
+fn flatten_list_box(
+    tree: &PageTree,
+    id: NodeId,
+    rects: &[Option<cloud_ui_core::Rect>],
+    payloads: &[Option<Value>],
+    lua: &Lua,
+    base: &Path,
+    table: &Table,
+    output_index: &mut usize,
+    names: &mut Vec<ControlName>,
+    origin: (f32, f32),
+    path_prefix: &[usize],
+) -> mlua::Result<()> {
+    let node = &tree.nodes[id];
+    let rect = rects
+        .get(id)
+        .and_then(|rect| *rect)
+        .unwrap_or_else(|| cloud_ui_core::Rect::new(0.0, 0.0, 0.0, 0.0));
+    let payload = payloads
+        .get(id)
+        .and_then(Option::as_ref)
+        .ok_or_else(|| runtime("列表盒缺 payload"))?;
+    let mut object = payload
+        .as_object()
+        .cloned()
+        .ok_or_else(|| runtime("列表盒 payload 必须是对象"))?;
+    object.insert("x".to_owned(), Value::from(rect.x - origin.0));
+    object.insert("y".to_owned(), Value::from(rect.y - origin.1));
+    object.insert("w".to_owned(), Value::from(rect.width));
+    object.insert("h".to_owned(), Value::from(rect.height));
+    let name = object
+        .get("name")
+        .and_then(Value::as_str)
+        .ok_or_else(|| runtime("列表盒缺 name"))?;
+    let mut name_path = path_prefix.to_vec();
+    name_path.push(*output_index);
+    names.push(ControlName {
+        name: name.to_owned(),
+        path: name_path,
+    });
+
+    let lua_object = to_lua(lua, &Value::Object(object.clone()), base)?;
+    let LuaValue::Table(lua_object) = lua_object else {
+        return Err(runtime("列表盒 payload 不能转成 Lua 表"));
+    };
+    let rows = lua.create_table()?;
+    let fixed_height = object
+        .get("item_height")
+        .and_then(Value::as_f64)
+        .map(|height| height as f32)
+        .filter(|height| *height > 0.0);
+    let gap = object
+        .get("gap")
+        .and_then(Value::as_f64)
+        .unwrap_or(0.0)
+        .max(0.0) as f32;
+    let mut max_row_width = 0.0_f32;
+    let mut content_height = 0.0_f32;
+    let mut row_count = 0usize;
+    let mut total_count = 0usize;
+    let mut window_offset = 0.0f32;
+    if let Some(primary) = node.children.first() {
+        let wrapper_node = &tree.nodes[*primary];
+        let first_index = wrapper_node.virtual_start.unwrap_or(0);
+        total_count = wrapper_node.virtual_count.unwrap_or(0);
+        let row_offset = wrapper_node.virtual_offset.unwrap_or(0.0);
+        window_offset = wrapper_node.virtual_scroll.unwrap_or(0.0);
+        let content_top = rect.y;
+        // 状态变体的节点没有参与布局，逐行把正常态的子树矩形拷到这三份旁路数组里。
+        // 数组只在这里克隆一次；放进行循环会变成 O(行数 × 页树节点数)。
+        let mut variant_rects = vec![rects.to_vec(); 3];
+        let mut visible_index = 0;
+        for instance in &wrapper_node.children {
+            let instance_node = &tree.nodes[*instance];
+            if !instance_node.visible || instance_node.item_index.is_none() {
+                continue;
+            }
+            let logical_index = instance_node
+                .item_index
+                .unwrap_or(first_index + visible_index);
+            let instance_rect = rects
+                .get(*instance)
+                .and_then(|rect| *rect)
+                .unwrap_or_else(|| cloud_ui_core::Rect::new(0.0, 0.0, 0.0, 0.0));
+            let height = instance_rect.height.max(fixed_height.unwrap_or(0.0));
+            if height <= 0.0 {
+                continue;
+            }
+            max_row_width = max_row_width.max(instance_rect.width);
+            content_height += height;
+            let row = lua.create_table()?;
+            row.raw_set("index", logical_index)?;
+            row.raw_set(
+                "top",
+                instance_node
+                    .virtual_top
+                    .unwrap_or(instance_rect.y - content_top + row_offset),
+            )?;
+            row.raw_set("height", height)?;
+            row.raw_set("width", instance_rect.width)?;
+            if let Some(key) = &instance_node.item_key {
+                row.raw_set("key", key.clone())?;
+            }
+            let states = lua.create_table()?;
+            let mut normal = None;
+            for (state, wrapper) in node.children.iter().enumerate().take(3) {
+                let Some(variant_instance) = tree.nodes[*wrapper]
+                    .children
+                    .iter()
+                    .find(|id| tree.nodes[**id].item_index == Some(logical_index))
+                else {
+                    continue;
+                };
+                let elements = lua.create_table()?;
+                let mut element_index = 0;
+                let mut row_names = Vec::new();
+                let mut row_prefix = path_prefix.to_vec();
+                row_prefix.push(*output_index);
+                row_prefix.push(logical_index);
+                copy_template_rects(
+                    tree,
+                    *instance,
+                    *variant_instance,
+                    rects,
+                    &mut variant_rects[state],
+                );
+                for child in &tree.nodes[*variant_instance].children {
+                    flatten(
+                        tree,
+                        *child,
+                        &variant_rects[state],
+                        payloads,
+                        lua,
+                        base,
+                        &elements,
+                        &mut element_index,
+                        &mut row_names,
+                        (instance_rect.x, instance_rect.y),
+                        &mut row_prefix,
+                    )?;
+                }
+                if state == 0 {
+                    normal = Some(elements.clone());
+                }
+                states.raw_set(state as i64 + 1, elements)?;
+            }
+            if let Some(normal) = normal {
+                row.raw_set("elements", normal)?;
+            }
+            row.raw_set("states", states)?;
+            rows.raw_set(visible_index as i64 + 1, row)?;
+            visible_index += 1;
+        }
+        row_count = visible_index;
+        if row_count > 1 {
+            content_height += gap * (row_count - 1) as f32;
+        }
+        if let Some(height) = fixed_height {
+            let full = height * total_count as f32 + gap * total_count.saturating_sub(1) as f32;
+            content_height = content_height.max(full);
+        }
+        if let Some(full) = wrapper_node.virtual_content_height {
+            content_height = content_height.max(full);
+        }
+    }
+    if total_count == 0 {
+        total_count = row_count;
+    }
+    let self_adaption = object
+        .get("self_adaption")
+        .and_then(Value::as_bool)
+        .unwrap_or(true);
+    if self_adaption && max_row_width > 0.0 {
+        let edge_width = object
+            .get("edge_width")
+            .and_then(Value::as_f64)
+            .unwrap_or(1.0) as f32;
+        let content_gap = object
+            .get("the_gap_between_border_and_content")
+            .and_then(Value::as_f64)
+            .unwrap_or(2.0) as f32;
+        let viewport = (rect.height - edge_width * 2.0 - content_gap * 2.0).max(0.0);
+        let scrollbar = content_height > viewport + 0.01;
+        let width = max_row_width
+            + edge_width * 2.0
+            + content_gap * 2.0
+            + if scrollbar { 8.0 + 4.0 } else { 0.0 };
+        lua_object.raw_set("w", width)?;
+    }
+    let scroll_offset = if window_offset.abs() > 0.001 {
+        window_offset
+    } else {
+        object
+            .get("scroll_offset")
+            .and_then(Value::as_f64)
+            .unwrap_or(0.0) as f32
+    };
+    lua_object.raw_set("rows", rows)?;
+    lua_object.raw_set("row_count", total_count)?;
+    lua_object.raw_set("content_height", content_height)?;
+    lua_object.raw_set("scroll_offset", scroll_offset)?;
+    table.raw_set(*output_index as i64 + 1, lua_object)?;
+    *output_index += 1;
+    Ok(())
+}
+
 /// 文字 / 图片的粗略固有尺寸。精确字形度量仍由渲染器负责；这里先保证 v2 的 `auto`
 /// 文本不会塌成 0。
 struct PayloadMeasure<'a> {
@@ -1513,6 +2717,9 @@ impl Measure for PayloadMeasure<'_> {
                 width.min(constraints.max_width),
                 height.min(constraints.max_height),
             );
+        }
+        if object.get("type").and_then(Value::as_str) == Some("text_button") {
+            return self.text_button_extent(object, constraints);
         }
         let text = object
             .get("text")
@@ -1566,7 +2773,42 @@ impl Measure for PayloadMeasure<'_> {
     }
 }
 
+/// `text_button` 的最小尺寸：最宽一行 + 左右各 12、行数 × 行高 + 上下各 6。
+fn text_button_min_size(
+    object: &Map<String, Value>,
+    measure: Option<&LayoutMeasureHook>,
+) -> (f32, f32) {
+    let text = object.get("text").and_then(Value::as_str).unwrap_or("");
+    let size = object
+        .get("font")
+        .and_then(Value::as_object)
+        .and_then(|font| font.get("size"))
+        .and_then(Value::as_f64)
+        .map(|size| size as f32)
+        .unwrap_or(14.0);
+    let mut width = 0.0_f32;
+    let mut lines = 0.0_f32;
+    for line in text.split('\n') {
+        lines += 1.0;
+        let measured = measure
+            .and_then(|measure| measure(line, size, 0.0, MeasureFont::Candidate))
+            .map(|(width, _)| width)
+            .unwrap_or_else(|| line.chars().count() as f32 * size * 0.6);
+        width = width.max(measured);
+    }
+    (width + 24.0, lines.max(1.0) * size * 1.25 + 12.0)
+}
+
 impl PayloadMeasure<'_> {
+    /// `text_button` 的固有尺寸：最宽一行 + 水平内边距、行数 × 行高 + 垂直内边距。
+    fn text_button_extent(&self, object: &Map<String, Value>, constraints: Constraints) -> Size {
+        let (width, height) = text_button_min_size(object, self.measure);
+        Size::new(
+            width.min(constraints.max_width),
+            height.min(constraints.max_height),
+        )
+    }
+
     /// 自绘面板 `auto_size = "draw"` 的包围盒；坐标从面板左上角起。
     fn draw_bounds(&self, object: &Map<String, Value>) -> Option<(f32, f32)> {
         let draw = object.get("draw")?.as_array()?;

@@ -10,6 +10,16 @@ fn weight_orders_exact_longer_and_prefix_hits() {
 }
 
 #[test]
+fn dictionary_word_reorders_pinyin_segmentation() {
+    let dictionary = Dictionary::parse("山沟\tshan gou\t1009\n").unwrap();
+    let mut engine = Engine::new(dictionary);
+    engine.set_input("shangou");
+    let query = engine.query().unwrap();
+    assert_eq!(query.segmentations[0].joined("'"), "shan'gou");
+    assert_eq!(query.candidates.items[0].text, "山沟");
+}
+
+#[test]
 fn partial_last_syllable_expands() {
     // 末音节是没打完的 `f`，所有命中 full_last 都为假，按 `exact` 与权重排：开放(20000) > 开发(9000)
     // > 开饭(800)，更长的 开发者 覆盖同一段但 `exact` 为假，跟在其后；前缀词 开 最后

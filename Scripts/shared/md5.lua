@@ -6,10 +6,10 @@
 
     用法（脚本里第一行就能拿到它）：
 
-        local md5 = dofile("Scripts/lib/md5.lua").hex     -- 装机目录下（Server 的工作目录就是安装目录）
+        local md5 = dofile(cloudime.shared_path("md5.lua")).hex
         local auth = md5("apikey=xxx&appId=yyy&from=zh&…")
 
-    注意：这份文件在 `Scripts\lib\` 子目录里 —— 加载器**只认脚本目录根部**的 `*.lua`，
+    注意：这份文件在 `Scripts\shared\` 子目录里 —— 加载器**只认脚本目录根部**的 `*.lua`，
     子目录里的东西不会被当成脚本执行，所以放工具函数的东西是安全的。
 ]]
 

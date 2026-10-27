@@ -28,6 +28,9 @@ pub struct TextStyle {
     /// 斜体（翻译 Tip 的词性）。
     pub italic: bool,
 
+    /// 字重（100–900，400 为常规）。
+    pub weight: u16,
+
     /// 覆盖率 gamma，见 `Theme::text_gamma`。
     pub gamma: f32,
 }
@@ -44,6 +47,7 @@ impl TextStyle {
             strike: false,
             underline: false,
             italic: false,
+            weight: 400,
             gamma,
         }
     }
@@ -51,6 +55,12 @@ impl TextStyle {
     /// 指定字族。
     pub(crate) fn with_family(mut self, family: Option<&String>) -> Self {
         self.family = family.cloned();
+        self
+    }
+
+    /// 指定字重。
+    pub(crate) fn with_weight(mut self, weight: u16) -> Self {
+        self.weight = weight.clamp(100, 900);
         self
     }
 

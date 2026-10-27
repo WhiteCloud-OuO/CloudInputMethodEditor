@@ -116,7 +116,6 @@ impl CharReadings {
         let Some(entry) = self.entries.get(&ch) else {
             return Vec::new();
         };
-        let top = entry.pinlu.iter().map(|(_, n)| *n).max().unwrap_or(0);
         all.into_iter()
             .enumerate()
             .map(|(index, reading)| {
@@ -125,9 +124,10 @@ impl CharReadings {
                     .iter()
                     .find(|(r, _)| *r == reading)
                     .map(|(_, n)| f64::from(*n))
-                    .unwrap_or(if top > 0 {
-                        f64::from(top) * minor_share
-                    } else if index == 0 {
+                    .unwrap_or(if index == 0 {
+                        // 没有 kHanyuPinlu 时的首选仍按 1.0；后续读音只拿独立的小权重，
+                        // 不乘 top —— 否则“的”这种高频字的少见读音会借到常见读音的量级，
+                        // `di` 一上来就被“的”顶掉。
                         1.0
                     } else {
                         minor_share
@@ -182,6 +182,9 @@ U+884C\tkXHC1983\t0442.080:háng 0443.050:hàng 0460.010:héng 1290.030:xíng\nU
         let weighted = readings.weighted('行', 0.05);
         assert_eq!(weighted[0].0, "xing");
         assert!(weighted[0].1 > weighted[1].1);
+        // heng 没有 kHanyuPinlu 频次，不能按 top * share 借到常见读音的量级
+        assert_eq!(weighted[2].0, "heng");
+        assert!((weighted[2].1 - 0.05).abs() < 1e-9);
         // 长 没加载进来，整词校验不过
         assert!(!readings.accepts_word("行长", &["hang".to_owned(), "zhang".to_owned()]));
         assert!(readings.accepts_word("女", &["nv".to_owned()]));

@@ -37,7 +37,7 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 `candidate` / `ranking`（候选排序：结构键 + 权重，见下） / `shortcut` / `sentence` / `fuzzy` /
 `english`（英文候选：中文模式里的中英混输与前缀补全）/ `engine`（`query::EnglishTail`：句末英文词并入整句，`woxiangxuehaorust` → 我想学好rust，尾段也像拼音时按分数与拼音读法比）。
 
-表达式：`shortcut::candidates` 以固定前缀 `v`（`EXPRESSION_PREFIX`）认表达式模式，算四则运算与中文数字；`rq` / `sj` / `xq` 出日期 / 时间 / 星期，候选是 `CandidateKind::Shortcut`，上屏吃掉整段作用域。`Engine::expression_mode` 决定组句中数字与运算符进缓冲区还是选词。
+切分展示：解析器先按音节数 / 残缺数 / 长音节给出候选切分；`query_reading` 查完词库后再按“有没有正好覆盖整个切分的词”重排一次，词库能证明更像词的切分排到最前（`shangou` 的 `shan gou` / 山沟 压过 `shang ou`），拼音行和整句都用这份顺序。单字候选不乘按字累计的全局用户权重，只保留当前输入串的 `choice_weight`，避免常选 `de` 的「的」把罕见读音 `di` 一起抬高。表达式：`shortcut::candidates` 以固定前缀 `v`（`EXPRESSION_PREFIX`）认表达式模式，算四则运算与中文数字；`rq` / `sj` / `xq` 出日期 / 时间 / 星期，候选是 `CandidateKind::Shortcut`，上屏吃掉整段作用域。`Engine::expression_mode` 决定组句中数字与运算符进缓冲区还是选词。
 
 `shortcut::evaluator` 是**复数内核**（实部 + 虚部，`Complex`）：`+ - * / % ^ ! @`、括号、一元正负号，
 **不做隐式乘法**（`6i`、`2(3+4)`、`2x3` 都是语法错，`x` 也不当乘号）；函数见 `call`（三角函数收角度、
@@ -501,6 +501,51 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 `rebuild_text_edits` 按名字复用同名 RichEdit 宿主（keyed diff），数据没变时 `set_data` 直接跳过。
 `cloud-ui` 的窗口壳和 `cloudime-script` 的 JSON / Lua 绑定共用这里的页面树，避免 `cloud-ui` 与
 `cloudime-script` 互相依赖。
+子页面脚本由 JSON 的 `script` 字段声明，固定从 `Scripts/shared/` 加载。`PageLayout` 把
+`InstanceInfo.script` / `instance_items` 带出来，`window.rs` 在窗口创建、`set_data`、列表窗口
+更新后按实例路径建 `ctx` 并调用 `created`；滚出虚拟窗口的实例调用 `destroyed`。事件在
+`Runtime::dispatch` 里先找 `event.instance` 对应的子页面脚本，返回 `true` 会跳过主窗口脚本。
+`ctx.window` 是同一份窗口句柄，`ctx.path(name)` 只是拼完整实例路径，写控件仍走已有的 `*_at` API。
+窗口句柄、脚本模块和实例上下文分别存在 worker 线程的 `WINDOW_HANDLES` / `SUBPAGE_SCRIPTS` /
+`SUBPAGE_INSTANCES`，`forget_window` 一起清掉。
+v2 `list_box` 用 `NodeKind::ListBox` 包一个行模板；解析时按 `item_state` 0 / 1 / 2 各展开一份，
+布局只量正常态，另外两份复制正常态的子树矩形，渲染按「选中优先、否则悬停」切换。状态差异走
+`{ "state": { "0": ..., "1": ..., "default": ... } }`（`bind_value` 里的状态值表），
+三份共用同一套几何，不能靠状态改行高或结构；行内控件的 hover / pressed 会同时改三份。
+`item_height` 是固定数字时，list_box 内部 subpage 自动带 `virtualize`，页树只挂可见行 + overscan；
+`cloud-ui` 滚到新的首行时发 `scroll_changed`，`Runtime` 自动用 `PageLayout::render_list_window`
+重排窗口并回 `Request::SetListWindow`，UI 原地替换该 `ListBox.rows`，保留滚动 / 选中 / 行内
+RichEdit 宿主。自动窗口按 **8 行一块** 对齐（`auto_list_scroll` 的 `WINDOW_STRIDE`），块内首行变化
+不重建窗口；`overscan` 取 8，窗口上下各多挂几行，滚轮上滚或拖动滚动条时 UI 提前到目标位置也不会
+出现顶部 / 底部空白。`item_height = "auto"` 用 `ListMetrics` 逐行高度缓存和估算值定位窗口，只测量
+进入可见窗口的行，总高度随测量修正。`PageLayout` 的布局 JSON 与数据用 `Arc<Value>` 共享，
+`with_scroll` 不再整份克隆；65k 行固定行高滚动只重排窗口行。
+行命中（悬停 / 按下 / 滚轮）要用 **相对 list_box 左上角** 的 y：`list.row_at(y - list.y)`，
+不能直接拿文档坐标，否则列表盒下移多少行就整体错位多少。
+`auto_center_selected` 缺省 `false`：选中变化只保证目标行完整可见（`scroll_to_visible`）；
+为 `true` 且 `allow_select` 时才走 `scroll_to_row` 垂直居中。点击、方向键和 API 写入
+`selected_index` 共用这一条路径。改完选中项必须立刻 `repaint()` 一次：选中态不是滚动内容，
+不能等滚动动画定时器；目标行本来就在中间时动画不会启动，否则看起来像点击没生效。
+滚动条轨道上下也按 `the_gap_between_border_and_content` 内缩，`track_rect` 的高度直接取
+`viewport_height()`，与列表内容的上下沿对齐。点击轨道空白（滑块上方或下方）都按点击位置在
+`track_height - thumb_height` 中的比例直接定位滚动偏移，不翻页（仍走 140 ms 动画）。
+绘制 / 命中 / RichEdit 宿主统一用 `paint_scroll()`：中间位置吸附到行首，贴底时保留贴底偏移；
+`row_visible()` 只保留完整落在内容区里的行。`auto_item_gap_averaging` 缺省 `true`：需要滚动时
+`row_view_top()` 把内容区剩余高度平均分给当前可见行之间的间隙，按统一间隙铺满内容区；关闭时
+按 `gap` 定位，剩余空隙留背景。单行比视口还高时无法完整显示，才退化为部分可见。渲染器、
+`row_origin()`、`row_at()`、`hit_at()` 必须共用这一套位置判断，否则文字宿主、点击和画面会错位。
+直接跳远时 `ListBox.rows` 仍只覆盖旧窗口，`first_visible_row()` 要先找真正覆盖 offset 的行；
+找不到时用当前行高向目标方向估算，不能回退到 `row_count - 1`（会跳到底部），也不能把 offset
+小于窗口首行时误判成首行（会只挪到窗口边缘）。
+行内控件的路径行号是 `ListBox.rows` 的**向量下标**，`row_origin()` 却按**逻辑行号** `row.index`
+查；虚拟窗口从中间行开始时两者不同，`Document::text_edits()` / `text_boxes()` 必须用 `row.index`
+定位，否则整窗 RichEdit 宿主会消失或叠在同一行。
+`get_item(index)` 会把目标行 pin 进 `ListMetrics`；下一次窗口重建时页树继续实例化该行，
+`SetListWindow` 一并带回，滚动时不会被丢掉，`SetContent`（数据更新）时 pin 随 metrics 清空。
+返回的句柄带 `instance`、`control_path`、`get_text` / `set_text` / `focus`，路径指向
+`<list>.items[<index>].<control>`；完整控件对象仍由路径 API 统一寻址。
+窗口关闭时 `WindowAction::Closed` / `forget_window` 会清掉该窗口的 list_scroll handler、
+`LIST_SCROLL_LAST`、`LIST_BOX_STATES`、文本缓存和页面树，避免按窗口状态在工人线程累计。
 
 ## crates/cloud-ui
 
@@ -517,6 +562,12 @@ Windows 壳的公共层（2026-10-20 从 `apps/windows/server/src/ui/` 抽出）
 - **脚本窗口**：`script_window`（`ScriptWindows` / `ScriptWindow` / `ScriptAuxiliary`）以及 `text_host` / `text_store` / `tsf`
   （windowless RichEdit + TSF）。`ScriptWindows`、`ScriptWindowEvents` 是给 Server 的入口；请求 / 事件类型仍来自 `cloudime-script`。
   这条依赖由 `script` 特性控制（缺省开）；只要通用窗口的独立程序可以 `default-features = false`，不拖进 LuaJIT。
+- **RichEdit 宿主与 topmost**：脚本主窗口和每个 `text_edit` 宿主窗都是 topmost；点击主窗口后它可能浮到旧宿主上方，
+  表现为编辑框背景还在、文字被盖住。`sync_text_edits` 每次都要把可见宿主重新
+  `SetWindowPos(HWND_TOPMOST, SWP_NOMOVE | SWP_NOSIZE)`；位置 / 显隐刚变化时再 `InvalidateRect` + `UpdateWindow`
+  同步画一帧，避免大跨度滚动后新宿主先露出空背景、下一轮消息才画出文字。
+  列表行内宿主按当前 `ListBox.rows` 全窗口创建（不只完整可见行），用 `TextEditPlacement.visible` 控制显隐；
+  主窗口贴图前先同步宿主，避免滚动动画帧里标签已到新位置、编辑框文字还停在上一帧。
 - **平台约束**：除 `RenderSettings` 外，模块都只在 Windows 编译（`lib.rs` 按 `cfg(windows)` 导出）；窗口创建、窗口过程、
   `ScriptWindows::apply` 必须在同一个 UI 线程上，类型是 `Rc` / `RefCell` / `thread_local!`，不是 `Send`。
   字体枚举走 DirectWrite，i686 也能编；`SetProcessDpiAwarenessContext` 仍由 Server 在创建任何窗口之前调用。
@@ -546,8 +597,10 @@ LuaJIT 源码随 crate 编译进二进制，装机包不依赖机器上装的 Lu
 `cloudime` 表锁成**只读代理**（`__index` 指向本体、`__newindex` 报错），本体留在 `Runtime::host` 里
 给运行时自己写 `context`；`rawset` 能绕过这道锁，但只改到脚本自己看到的那份（运行时的函数本体不受影响）。
 `cloudime.on` 只在加载期允许（`loading` 标记）；`http_get` 的响应时间限制不能超过清单里的 `timeout`。
-`Runtime::load(dir, disabled)` 读**安装目录**的 `Scripts\`（Server 里 `RouterConfig::from(&config).with_bundled_scripts()`
-指过去）：按文件名排序执行，**跳过 `template.lua`**（新建脚本的模板）与 `[script] disabled` 里列到的文件（大小写不敏感）。
+`Runtime::load(dir, disabled)` 读**安装目录**的 `Scripts\` **根部**（Server 里 `RouterConfig::from(&config).with_bundled_scripts()`
+指过去）：按文件名排序执行，**跳过 `template.lua`**（新建脚本的模板）与 `[script] disabled` 里列到的文件（大小写不敏感）；
+`shared\` / `layouts\` / `dlls\` / `saved\` 子目录不参与启动加载；子页面 JSON 的 `script`
+例外，会按需从 `shared\` 加载为实例脚本。
 清单的 `description` 只是记下来进日志（设置页自己扫文件取它，见 `docs/design/script.md`）。
 `dispatch` 把处理函数**返回的表**按登记顺序递回调用方
 （返回 `nil` / 别的类型的跳过）—— 返回值是什么意思本 crate 不管，由派发方（Server）定；`has_handlers(事件名)`
@@ -565,7 +618,7 @@ LuaJIT 源码随 crate 编译进二进制，装机包不依赖机器上装的 Lu
 4096 字符 / 4096² 图 / 8–2048 点）在解析时查，违规当场报 Lua 错（这一次调用中止，窗口保持原样）。
 v2 布局另存 `PageLayout`（页面树 + 路径索引 + 滚动偏移），`set_visible` / `*_at` / `set_scroll`
 走路径而不是前缀控件名；`subpage.virtualize` 在解析阶段只挂可见窗口，变高行逐项调 `LayoutMeasureHook`。
-`self_drawing_panel`（2026-10-22）是独立容器：`draw` 只收 `rect` / `line` / `circle` / `text` / `svg` /
+`self_drawing_panel`（2026-10-22）是独立控件（不是容器）：`draw` 只收 `rect` / `line` / `circle` / `text` / `svg` /
 `img` / `path`，每项必须有大小写敏感的唯一 `name`；draw 坐标从面板左上角起，`clip` 缺省 true（离屏合成裁剪），
 先画 draw 再画 `children`。`auto_size = "draw"` 用 `LayoutMeasureHook` 量文字、按 draw 包围盒定尺寸，显式
 `w/h` 优先；v1 与 v2 都支持。局部 `regions` 展开到 `Document.regions` 时按面板原点平移。
@@ -640,8 +693,8 @@ v2 布局另存 `PageLayout`（页面树 + 路径索引 + 滚动偏移），`set
 只有主词库坏了才回落 `assets/sample/dict.tsv`，连样例都装不起来才 `exit(1)`。数据坏了只该掉效果：曾因为随包 `.qj` 还是改名前的魔数，
 Server 装配直接退出，表现成「装完打不出候选、按键没反应、状态条也不显示」。
 
-**用户脚本**（0.1.0 起，运行时见 `crates/cloudime-script`）：脚本放数据目录 `%APPDATA%\CloudIME\scripts\*.lua`，
-`RouterConfig::scripts_dir` 由 `main.rs` 的 `RouterConfig::from(&config).with_user_scripts()` 指过去
+**用户脚本**（0.1.0 起，运行时见 `crates/cloudime-script`）：脚本放安装目录 `Scripts\*.lua`（只认根部），
+`RouterConfig::scripts_dir` 由 `main.rs` 的 `RouterConfig::from(&config).with_bundled_scripts()` 指过去
 （`RouterConfig::default()` 不带它 —— 测试不该去读开发机上真实的脚本目录）。`Router::new` 里 `Runtime::load`
 加载，之后每次按键在 `handle_key` **最前面**派 `key`（脚本看到的是这一键**处理之前**的状态），
 `recompose()` 把引擎排好的候选交出去派 `candidates`，全部加载完再派一次 `startup`。
@@ -1077,7 +1130,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   得脚本 `aux:focus(true)` 走所有者指定。**窗口外观归脚本**：`create{ background = false }` 让
   `Renderer::render_document` 跳过面板底色 / 圆角的填充（`panel_canvas` 的 `background` 参数），
   内容区保持透明，脚本用一整块圆角 `rect` 等元素自己画背景；阴影按 `shadow` 走同一套通用阴影层
-  （也可以再关掉，连阴影都不画）。随包的 `Scripts/lib/test-caret-window.lua` 就是这么画的
+  （也可以再关掉，连阴影都不画）。随包的 `Scripts/test-caret-window.lua` 就是这么画的
   （`background = false` / `shadow = false`，关闭按钮的悬停换色也全在 Lua 里），
   对应的行为测试在 `crates/cloudime-script/tests/caret_window_script.rs`，`runtime.rs` 只留宿主 API。
 - **区域**（`region`，2026-10-17）：窗口内容里可以被鼠标**点击 / 拖拽**的范围，数据在
@@ -1101,6 +1154,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   插入点所在显示器 DPI 把像素换成**点**、连同工作区派 `caret` 事件（`dispatch/script.rs::caret_payload`）。
   这样脚本窗口的 `show{ x, y }` 与载荷同一单位，不用自己乘 DPI。`Runtime::load` 从脚本目录上一级
   取安装目录，Server 再用 `bundled_root()` 校正；`cloudime.install_dir()` / `install_path()` 给绝对路径，
+  `shared_path` / `layout_path` / `dll_path` 分别锁在 `Scripts\shared` / `Scripts\layouts` / `Scripts\dlls`，
+  `saved_path` 在 `Scripts\saved` 下自动建子目录（只收相对路径），
   `canonicalize` 后必须仍在安装目录内。`svg` 元素新增 `path`（读文件文本，最多 2 MB），配合
   `install_path` 就能直接画随包的 `Images\SVG\*.svg`，不用把 SVG 抄进 Lua。
 - **主题颜色**（2026-10-17）：`Runtime::set_theme_hook` 由 Server 装（`Router::new`），
@@ -1143,6 +1198,15 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   pressed 总是带修饰键；clicked / double 只在无修饰键且 `moved_since_press == false` 时派，
   双击用 `Instant` + `GetDoubleClickTime` + `SM_CXDOUBLECLK` / `SM_CYDOUBLECLK` 判，第二次
   先派 clicked 再派 double。
+- **文本按钮**（`text_button`，2026-10-24）：复用 `FlatSvgButton` 承载背景 / 区域 / 按下态，只把
+  `text: Some(ButtonText)`，并额外带 `ButtonShadow` 与 `Option<DefaultButton>`。`w` / `h` 是最小值，
+  解析时按“最宽一行 + 左右各 12、行数 × 1.25 字号 + 上下各 6”撑开；文本按实际换行符 `\n` 分行，
+  每行单独量宽后居中。绘制顺序是阴影（`show_shadow = true` 才画）→ 背景 → 文本；阴影沿用
+  `Shadow` 的模糊半径，偏移可配。四态颜色存在 `normal` / `hovered` / `pressed` / `disabled`
+  的 `ButtonColors` 里（背景 + 文本），`enabled = false` 时强制使用 disabled 并跳过鼠标 / 键盘处理。
+  `default_button` 在 `ScriptWindow::set_content` 整页收集，超过一个非空绑定就全部失效；`Enter` /
+  `Esc` 先于编辑框按键处理，命中后派 `clicked` 事件并在载荷里带虚拟键码；文本按钮的鼠标单击也派
+  `clicked`，扁平 SVG 按钮仍用 `mouse_clicked`。
 - **单行编辑框**（`text_edit`，2026-10-18）：`control::TextEdit` 负责背景胶囊 / 边框（缺省颜色
   `#FFC8C8C8`、1 物理像素且不随缩放；显式 `edge_width` 仍按点缩放）、可选 SVG（按背景高度缩放、`SvgAlign` 左右）和文本区几何
   （无 SVG：`w-h` 居中；有 SVG：`w-h-svg宽度-4`；高度向内缩 1 点边框）。实际的编辑控件是
@@ -1156,7 +1220,26 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   （`font` 槽位可换，`size` 缺省取主题字号）；`selection_background` / `selection_color` / `caret_color`
   不写时取主题 `highlight` / `highlight_text` / 正文色，`svg_color` 继续由渲染器给 SVG 染色。
   `sync_text_edits` 在显示 / 拖动 / DPI 重画时按内容区坐标
-  + scale 摆位；`focus_text_edit` 在点到胶囊边距时把焦点交给宿主。
+  + scale 摆位；列表盒行内的编辑框额外带内容区裁剪矩形，每帧按当前滚动重新取 placement，
+  宿主只显示裁剪后的交集（完全出界就隐藏），避免 RichEdit 独立顶层窗跑到列表盒外或滚动时停在原处。
+  列表滚动时宿主必须在主窗口 `UpdateLayeredWindow` **之前**按新内容摆位和改文本（`render_and_present`
+  先 `rebuild_text_edits` + `sync_text_edits`，再贴主窗口）；反过来会出现标签已到新位置、编辑框文字
+  还停在上一帧。窗口按 8 行一块更新，块内只移动宿主位置，不换文本；换窗时名字匹配不到则按路径
+  槽位复用未聚焦的宿主，避免整窗销毁重建造成闪烁。
+  单行 / 多行编辑框的宿主都加 `WS_EX_LAYERED`，用它的背景色做 `LWA_COLORKEY` 色键，这样列表行背景
+  和控件自己的半透明 `fill` 能从宿主空白处透出来；文字和选区仍由 RichEdit 正常绘制。多行
+  `text_box` 的 `scrollbar` 仍由主画布绘制，不在 RichEdit 宿主里。
+  色键透明像素同时会鼠标穿透，所以主窗口在 `WM_SETCURSOR` 命中 `text_edit` / `text_box` 时，
+  只有屏幕点落在宿主窗矩形内才设 I 型指针；`text_box` 的滚动条 / 内边距保持箭头。
+  `WM_LBUTTONDOWN` 若落在透明空白处，用 `TextHostWindow::click_from_owner` 把点击补发给 RichEdit，
+  多行空白处点击也能像记事本一样移动插入点。宿主按系统双击间隔/矩形统计连续点击，三击时单行
+  `EM_SETSEL(0, length)` 全选；多行用 `EM_CHARFROMPOS` 找最近字符，再用 RichEdit 自己的
+  `EM_LINEFROMCHAR` / `EM_LINEINDEX` / `EM_LINELENGTH` 取该行范围，并向两侧展开相邻的软换行，
+  直到遇到硬换行，选中完整逻辑行（不能用 `WM_GETTEXT` 的文本下标，CRLF 计数差会按行累计，
+  表现为第二行少首字、第三行少两字），随后向 owner 发
+  `WM_TEXT_TRIPLE_CLICK`，脚本窗派 `WindowAction::TripleClicked`（`triple_clicked`，布局别名
+  `on_triple_clicked`）。
+  `focus_text_edit` 在点到胶囊边距时把焦点交给宿主。
   `TextEdit` 仍是可交互元素（返回命中框），自动区域和按钮一样在解析时加进 `Document.regions`。
   **嵌套 / 滚动 / 读写**（2026-10-18）：`Document::text_edits()` 递归累加面板偏移，因此
   `panel.children` 里的 `text_edit` 也建宿主；嵌套控件补同名区域，`focus_text_edit` 先按区域名找宿主。
@@ -1170,7 +1253,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `get_text` 能读到新值；同一文本的重复通知用 `last_text` 去重。
   `select_all` / `replace` / `clear` 分别排 `SelectAll` / `ReplaceText` / `ClearText` 请求；
   `replace` 替换全部出现，缓存同步替换。属性：`read_only` → `EM_SETREADONLY`，`passkey` → 宿主显示
-  `*` 并实现 `TxGetPasswordChar`，`back_color` / `edge_color` / `edge_width` → 背景 / 边框，
+  `*` 并实现 `TxGetPasswordChar`，`deselect_on_blur`（缺省 true）→ 失焦 / 隐藏宿主时
+  用 `EM_SETSEL(end,end)` 收起选区并立即重绘，`back_color` / `edge_color` / `edge_width` → 背景 / 边框，
   `text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` → 宿主颜色，`fill_color` → SVG 染色，
   `font_name` / `font_size` / `font_flag` → `CreateFontW`（1 加粗 / 2 斜体 / 4 下划线 / 8 删除线）；
   旧的 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` /
@@ -1190,6 +1274,9 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   不写 `edge_width` / `border_width` 时按 1 物理像素画、不随缩放，显式宽度仍按点缩放。
   `ScriptWindow` 在 `rebuild_text_edits` 里同时收集 `text_edits()` 和 `text_boxes()`；滚动范围写回
   `Element::TextBox.h_scroll` / `v_scroll`，渲染器按可见性扣文本区并画 8 点厚、4 点间隙的滚动条。
+  `TextBox` 也读 `the_gap_between_border_and_content`（缺省 2）：文本区和滚动条轨道先让出
+  `border + content_gap`；垂直条顶部、底部都用这个边距，有水平条时垂直条底部再让出
+  `SCROLLBAR_THICKNESS + SCROLLBAR_GAP`。
   注意 `TxGetHScroll` / `TxGetVScroll` 的 `max` 是内容总高度 / 总宽度，不是可滚到的最大位置；
   `scroll_state` 统一减去 `page` 后才存进 `TextBoxScroll.max`，滑块比值和滑轨长度才按真正的
   可滚范围计算，拖到底时最后一行正好贴住文本区底边。`page < max - min` 的旧可见性判断也改成
@@ -1198,12 +1285,14 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `EM_SETSCROLLPOS`，点轨道翻页，滚轮在宿主里按页高 1/4 滚动；`WM_TEXT_SCROLL` 通知脚本窗刷新滑块。
   非拖拽改值（点轨道 / 滚轮，包括文本区内的滚轮）和独立滚动条一样用 140 ms ease-out 动画：
   `text_scroll_anims` 按 `(路径, 轴向)` 存，定时器逐帧回写 RichEdit 并更新滑块；拖动开始会取消对应动画。
-  文本 API / `text_changed` / `key_pressed` / `focused` / `unfocused` 与 `text_edit` 共用；
-  不支持 `passkey` 和 SVG，内部滚动条不派 `value_changed`。嵌套宿主能建、能编辑，但嵌套控件的
+  文本 API / `text_changed` / `key_pressed` / `focused` / `unfocused` 和 `deselect_on_blur`
+  与 `text_edit` 共用；不支持 `passkey` 和 SVG，内部滚动条不派 `value_changed`。嵌套宿主能建、能编辑，但嵌套控件的
   内部滚动条命中目前只按顶层元素路径处理。
   **闪烁修复**（2026-10-18）：`TxDraw` 改为先画到内存 DC 再 `BitBlt`；多行 `WM_MOUSEMOVE`
   不再额外 `InvalidateRect`（RichEdit 自己会失效选区）；`TextHostWindow::set_bounds` / `show`
   缓存上次边界和显隐，脚本窗口每帧重画时不再对所有宿主重复 `SetWindowPos` / `ShowWindow`。
+  宿主位置 / 显隐刚变化时仍要 `InvalidateRect` + `UpdateWindow` 同步补一帧；每次同步再把可见宿主
+  重新提到 topmost 顶部，避免主窗口浮上来盖住编辑框文字。
 - **TSF 桥**（`crates/cloud-ui/src/script_window/text_store.rs` / `tsf.rs`，2026-10-18）：windowless RichEdit 自己只提供
   IMM32 的 `ITextHost::TxImmGetContext`，不直接参与 TSF；要让 CloudIME 的中文输入作用到它，必须补
   客户端文本存储。`text_store.rs` 实现 `ITextStoreACP`，把 `GetText` / `SetText` / 选区 / 插入 /
@@ -1232,7 +1321,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   不复制元素解析逻辑，JSON 与 Lua 的字段 / 缺省值因此始终一致。支持顶层 `width` / `height` /
   `controls`（或 `elements`）/ `regions`，根也可以直接是控件数组；`null` 转成 Lua `nil`，
   数组转 1 起序列。单文件上限 4 MB；`svg_path` / `img.path` 先按布局文件目录、再逐级向上找，
-  因此 `Scripts/lib` 里的布局能引用安装根目录的 `Images/...`。
+  因此 `Scripts/layouts` 里的布局能引用安装根目录的 `Images/...`。
   **每个控件必须有 `name`**（英文字母开头、只含字母 / 数字 / 下划线、最长 255、布局内大小写敏感
   唯一、不能是 Rust 关键字）；名字收集进 `Document.control_names`，窗口事件载荷新增 `control`
   （`ScriptWindowEvent.control`），独立窗口和辅助窗口都按命中根元素查它。
@@ -1417,7 +1506,7 @@ TSF 那边 `key_sink::would_eat` / `eats_key` 在**组句里**（候选窗显示
 （AltGr = Ctrl+Alt、Win 是系统键，都在外壳那一层）。
 小牛翻译的两份实际脚本（候选版 / 独立窗口版）与其 `md5.lua` 已迁到脚本仓库
 `https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse` 的 `src\` 下；安装包只装
-`Scripts\template.lua`，源码仓库 `Scripts\lib` 里的示例与共享工具都不随包。脚本拿到译文后会按
+`Scripts\template.lua`，源码仓库 `Scripts\shared` 里的示例与共享工具都不随包。脚本拿到译文后会按
 `cloudime.candidate.width()`（候选窗内容区宽度，点）折行（最多 5 行、超出的补「…」），
 不再改窗口宽度 —— 窗口宽度只由候选决定。
 
@@ -1455,7 +1544,7 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
 > 也就是说 `lexicon` / `mine` / `phrases` 现在没有输入可跑；`english`、以及 `bigram` 的英文 / 品牌 / 混杂部分仍有效。
 
 - `lexicon`：从 `assets/lexicon/`（自建词库源：规范字 + 常用词 + THUOCL 领域词）加 Unihan 读音（`data/unihan/Unihan_Readings.txt`）、多音字词标注（`--pinyin` 读 JSONL）、语料词频（`lm-unigram.tsv`）建基础词库 `dict.tsv`（8.7 万条），并把 THUOCL 领域词按语料次数 < 50 拆成
-  `dicts/<领域>.tsv` + `.db`（11 本、13 万条，`--domain-keep-min`），流程见 `assets/lexicon/CLOUDIME.md`；`--extra-words` 并入人工挑的领域词 `assets/lexicon/domain_words.tsv`。
+  `dicts/<领域>.tsv` + `.db`（11 本、13 万条，`--domain-keep-min`），流程见 `assets/lexicon/CLOUDIME.md`；`--extra-words` 并入人工挑的领域词 `assets/lexicon/domain_words.tsv`。单字 `kHanyuPinlu` 没列出的次要读音只用独立的 `MINOR_READING_SHARE` 权重，不乘常见读音的 top 频次，避免少见读音借到常见读音的量级。
 - `english`：转 `assets/lexicon/05_english/00_all_words.tsv`；同编码优先保留含大写的专名写法（Windows ≠ windows），
   展示写法补充表 `07_display_forms.tsv` 后置读入。中英混杂词源在 `assets/lexicon/mixed_words.tsv`（`lexicon --extra-words`）。
 - `bigram`：统计语料；`--phrases` 给短语层、`--brand` 给品牌词（`assets/lexicon/brand.tsv`，云朵输入法 210）与中英混杂词（`mixed_words.tsv`，C盘 / B站：合成计数要成分词在语料里，C 不是 token，只能直接给一元，次数对着真词与整句候选定），领域词也走合成计数（语料里只有几十次的词当 token 统计会吸走成分词的二元证据）。

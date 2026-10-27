@@ -252,6 +252,7 @@ pub enum ButtonState {
     Normal,
     Hovered,
     Pressed,
+    Disabled,
 }
 
 /// 按钮某一状态的两种颜色。
@@ -259,6 +260,35 @@ pub enum ButtonState {
 pub struct ButtonColors {
     pub background: Color,
     pub svg: Color,
+}
+
+/// 文本按钮里的一段文本样式。
+#[derive(Debug, Clone)]
+pub struct ButtonText {
+    pub text: String,
+    pub color: Color,
+    /// `None` = 主题正文 / 候选字体。
+    pub family: Option<String>,
+    /// 字号（点）。
+    pub size: f32,
+    /// 字重（100–900）。
+    pub weight: u16,
+    pub italic: bool,
+}
+
+/// 文本按钮自己的阴影；模糊半径沿用浮层阴影。
+#[derive(Debug, Clone, Copy)]
+pub struct ButtonShadow {
+    pub color: Color,
+    pub offset_x: f32,
+    pub offset_y: f32,
+}
+
+/// 页面默认键绑定。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DefaultButton {
+    Escape,
+    Enter,
 }
 
 /// 按钮的背景形状（也是区域的形状）。
@@ -424,17 +454,33 @@ pub struct FlatSvgButton {
     pub normal: ButtonColors,
     pub hovered: ButtonColors,
     pub pressed: ButtonColors,
+    /// 禁用状态的背景 / 文本颜色。
+    pub disabled: ButtonColors,
     pub state: ButtonState,
+    /// 是否可用；`false` 时不响应鼠标 / 键盘，绘制 disabled 颜色。
+    pub enabled: bool,
+    /// 文本按钮的内容；`None` = 普通扁平 SVG 按钮。
+    pub text: Option<ButtonText>,
+    /// 文本按钮自己的阴影；`None` = 无阴影。
+    pub shadow: Option<ButtonShadow>,
+    /// 只在为 `true` 时绘制阴影；缺省 `false`。
+    pub show_shadow: bool,
+    /// 页面默认键（同一个页面最多一个按钮绑定）。
+    pub default_button: Option<DefaultButton>,
     /// 自动区域的名字（同一份内容里唯一）。
     pub region_name: String,
 }
 
 impl FlatSvgButton {
     pub(crate) fn colors(&self) -> ButtonColors {
+        if !self.enabled {
+            return self.disabled;
+        }
         match self.state {
             ButtonState::Normal => self.normal,
             ButtonState::Hovered => self.hovered,
             ButtonState::Pressed => self.pressed,
+            ButtonState::Disabled => self.disabled,
         }
     }
 
@@ -471,6 +517,7 @@ impl FlatSvgButton {
     pub(crate) fn draw<R: ControlRender>(
         &self,
         render: &mut R,
+        theme: &Theme,
         scale: f32,
         origin: (f32, f32),
         margin: f32,
@@ -479,6 +526,19 @@ impl FlatSvgButton {
         let x = |value: f32| margin + (origin.0 + value) * scale;
         let y = |value: f32| margin + (origin.1 + value) * scale;
         let len = |value: f32| value * scale;
+        if self.show_shadow
+            && let Some(shadow) = &self.shadow
+            && let Some(content) =
+                tiny_skia::Rect::from_xywh(x(self.x), y(self.y), len(self.width), len(self.height))
+        {
+            let shadow = crate::Shadow {
+                blur: 12.0,
+                offset_x: shadow.offset_x,
+                offset_y: shadow.offset_y,
+                color: shadow.color,
+            };
+            render.shadow(&shadow, content, len(self.shadow_radius()), scale);
+        }
         match &self.shape {
             ButtonShape::Rect => render.rect(
                 x(self.x),
@@ -509,12 +569,453 @@ impl FlatSvgButton {
                 }
             }
         }
-        let size = self.width.min(self.height);
-        if size > 0.0 {
-            let icon_x = x(self.x + (self.width - size) * 0.5);
-            let icon_y = y(self.y + (self.height - size) * 0.5);
-            let _ = render.svg(&self.svg, icon_x, icon_y, len(size), Some(colors.svg));
+        if self.text.is_some() {
+            let layout = ButtonTextBox {
+                x: x(self.x),
+                y: y(self.y),
+                width: len(self.width),
+                height: len(self.height),
+                scale,
+            };
+            self.draw_text(render, theme, colors.svg, layout);
+        } else {
+            let size = self.width.min(self.height);
+            if !self.svg.is_empty() && size > 0.0 {
+                let icon_x = x(self.x + (self.width - size) * 0.5);
+                let icon_y = y(self.y + (self.height - size) * 0.5);
+                let _ = render.svg(&self.svg, icon_x, icon_y, len(size), Some(colors.svg));
+            }
         }
+    }
+
+    fn shadow_radius(&self) -> f32 {
+        match &self.shape {
+            ButtonShape::Rect => 0.0,
+            ButtonShape::RoundRect { radius } => *radius,
+            ButtonShape::Circle { radius } => *radius,
+            ButtonShape::Path { .. } => 0.0,
+        }
+    }
+
+    fn draw_text<R: ControlRender>(
+        &self,
+        render: &mut R,
+        theme: &Theme,
+        color: Color,
+        layout: ButtonTextBox,
+    ) {
+        let Some(text) = &self.text else {
+            return;
+        };
+        let style = button_text_style(theme, text, color, layout.scale);
+        let line_height = FontSpec::with_size(text.size).line_height * layout.scale;
+        let lines: Vec<&str> = text.text.split('\n').collect();
+        let block_height = line_height * lines.len() as f32;
+        let mut line_y = layout.y + (layout.height - block_height) * 0.5;
+        for line in lines {
+            let width = render.measure(line, &style).width;
+            render.text(
+                line,
+                &style,
+                layout.x + (layout.width - width) * 0.5,
+                line_y,
+            );
+            line_y += line_height;
+        }
+    }
+}
+
+/// 文本按钮在画布里的像素矩形 + 当前缩放。
+#[derive(Clone, Copy)]
+struct ButtonTextBox {
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    scale: f32,
+}
+
+/// 列表盒的一行内容。元素坐标相对行左上角。
+#[derive(Clone, Debug)]
+pub struct ListBoxRow {
+    /// 逻辑行号（0 起）；虚拟化时不一定等于 `rows` 的下标。
+    pub index: usize,
+    /// 相对内容区顶部的偏移（点）。
+    pub top: f32,
+    pub height: f32,
+    /// 行内容自然宽度；`0` 表示铺满内容区。
+    pub width: f32,
+    /// 稳定 key（数据 `key` 字段）；没有 key 时由页面树给实例名。
+    pub key: Option<String>,
+    pub elements: Vec<crate::document::Element>,
+    /// 选中态模板展开结果；空时回退到 `elements`。
+    pub selected_elements: Vec<crate::document::Element>,
+    /// 悬停态模板展开结果；空时回退到 `elements`。
+    pub hovered_elements: Vec<crate::document::Element>,
+    /// 行内可交互控件的矩形与事件处理器。
+    pub hits: Vec<ListBoxHit>,
+}
+
+/// 虚拟化列表的一次可见窗口。
+#[derive(Clone, Debug)]
+pub struct ListBoxWindow {
+    pub rows: Vec<ListBoxRow>,
+    pub row_count: usize,
+    pub content_height: f32,
+    pub scroll_offset: f32,
+}
+
+impl ListBoxRow {
+    pub fn active_elements(&self, selected: bool, hovered: bool) -> &[crate::document::Element] {
+        if selected && !self.selected_elements.is_empty() {
+            &self.selected_elements
+        } else if hovered && !self.hovered_elements.is_empty() {
+            &self.hovered_elements
+        } else {
+            &self.elements
+        }
+    }
+}
+
+/// 列表盒行内的一个可交互控件。
+#[derive(Clone, Debug)]
+pub struct ListBoxHit {
+    pub shape: HitShape,
+    pub control: String,
+    pub handlers: Vec<(String, String)>,
+    /// 在 `ListBoxRow::elements` 里的下标；按钮状态切换要用。
+    pub element: usize,
+}
+
+/// `list_box` 行宽小于内容区时的水平对齐。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub enum ListBoxAlign {
+    Left,
+    #[default]
+    Center,
+    Right,
+}
+
+/// **单列列表盒**：背景 + 内部行内容 + 内部垂直滚动条。
+///
+/// 行的布局、子页面实例和选择状态由上层页面树负责；这里只保存已经展开的行和滚动参数。
+#[derive(Clone)]
+pub struct ListBox {
+    pub x: f32,
+    pub y: f32,
+    pub width: f32,
+    pub height: f32,
+    pub radius: f32,
+    pub fill: Option<Color>,
+    pub edge_color: Color,
+    pub edge_width: f32,
+    /// 边框内侧到内容区的间隙（点）。
+    pub content_gap: f32,
+    pub gap: f32,
+    /// 绘制时把内容区剩余高度平均到可见项间隙里，缺省 `true`。
+    pub auto_item_gap_averaging: bool,
+    pub align: ListBoxAlign,
+    pub rows: Vec<ListBoxRow>,
+    /// 逻辑行总数；虚拟化时可能大于 `rows.len()`。
+    pub row_count: usize,
+    /// 滚动偏移（点）。
+    pub scroll_offset: f32,
+    /// 逻辑内容总高度（点）。
+    pub content_height: f32,
+    pub allow_select: bool,
+    pub selected_index: i32,
+    /// 选中项变化时把它垂直居中；缺省 `false`（只保证滚进可见区）。
+    pub auto_center_selected: bool,
+    /// 当前悬停行（0 起）；没有悬停为 `None`。
+    pub hovered_index: Option<i32>,
+    /// 自动区域名（同一份内容里唯一）。
+    pub region_name: String,
+}
+
+impl ListBox {
+    pub fn viewport_height(&self) -> f32 {
+        (self.height - self.edge_width * 2.0 - self.content_gap * 2.0).max(0.0)
+    }
+
+    pub fn content_width(&self, scrollbar: bool) -> f32 {
+        (self.width
+            - self.edge_width * 2.0
+            - self.content_gap * 2.0
+            - if scrollbar { 8.0 + 4.0 } else { 0.0 })
+        .max(0.0)
+    }
+
+    pub fn scrollbar_visible(&self) -> bool {
+        self.content_height > self.viewport_height() + 0.01
+    }
+
+    /// 滚动条轨道（相对控件左上角）：右侧内缩 2、宽 8、上下贴边框内沿。
+    pub fn track_rect(&self) -> (f32, f32, f32, f32) {
+        // 轨道和内容区使用同一对上下内缩；否则滑块会顶到圆角边框，
+        // 和列表内容之间看起来多出一截。
+        let top = self.edge_width + self.content_gap;
+        (
+            self.width - self.edge_width - 2.0 - 8.0,
+            top,
+            8.0,
+            self.viewport_height().max(1.0),
+        )
+    }
+
+    pub fn thumb_rect(&self) -> (f32, f32, f32, f32) {
+        let (tx, ty, tw, th) = self.track_rect();
+        let content = self.content_height;
+        let view = self.viewport_height();
+        if content <= view || content <= 0.0 {
+            return (tx, ty, tw, 0.0);
+        }
+        let length = (th * view / content).max(1.0).min(th);
+        let travel = (th - length).max(0.0);
+        let max_scroll = (content - view).max(0.0);
+        let offset = self.scroll_offset.clamp(0.0, max_scroll);
+        let ratio = if max_scroll <= 0.0 {
+            0.0
+        } else {
+            offset / max_scroll
+        };
+        (tx, ty + travel * ratio, tw, length)
+    }
+
+    pub fn hit_shape(&self, origin: (f32, f32)) -> HitShape {
+        HitShape::RoundRect {
+            x: origin.0 + self.x,
+            y: origin.1 + self.y,
+            width: self.width,
+            height: self.height,
+            radius: self.radius,
+        }
+    }
+
+    pub fn max_scroll_px(&self) -> f32 {
+        (self.content_height - self.viewport_height()).max(0.0)
+    }
+
+    pub fn clamp_scroll(&self) -> f32 {
+        self.scroll_offset.clamp(0.0, self.max_scroll_px())
+    }
+
+    /// 绘制和命中使用的滚动偏移：中间位置吸附到行首，尽量让上下边缘都落在整行上。
+    ///
+    /// 贴底时保留原始偏移，让最后一行完整贴在内容区下沿；此时顶部可能有一行被裁掉，
+    /// 由 [`Self::row_visible`] 过滤。当前窗口还没覆盖目标偏移时也先返回原值，
+    /// 等 Server 的下一窗到达后再吸附。
+    pub fn paint_scroll(&self) -> f32 {
+        let offset = self.clamp_scroll();
+        let view = self.viewport_height();
+        if view <= 0.0 || offset + view >= self.content_height - 0.5 {
+            return offset;
+        }
+        let (Some(first), Some(last)) = (self.rows.first(), self.rows.last()) else {
+            return offset;
+        };
+        let end = last.top + last.height;
+        if offset < first.top - 0.5 || offset > end + 0.5 {
+            return offset;
+        }
+        self.rows
+            .iter()
+            .filter(|row| row.top <= offset + 0.5)
+            .max_by(|a, b| a.top.total_cmp(&b.top))
+            .map(|row| row.top)
+            .unwrap_or(offset)
+    }
+
+    /// 这一行是否应该完整画出来。单行比视口还高时无法完整显示，退化为部分可见。
+    pub fn row_visible(&self, row: &ListBoxRow) -> bool {
+        let view = self.viewport_height();
+        if view <= 0.0 {
+            return false;
+        }
+        let top = row.top - self.paint_scroll();
+        let bottom = top + row.height;
+        if row.height > view + 0.5 {
+            top < view - 0.5 && bottom > 0.5
+        } else {
+            top >= -0.5 && bottom <= view + 0.5
+        }
+    }
+
+    /// 行在内容区里的绘制顶部。开启 `auto_item_gap_averaging` 且列表需要滚动时，
+    /// 把剩余高度平均分给当前可见行之间的间隙；否则沿用 `gap` 的原始位置。
+    pub fn row_view_top(&self, row: &ListBoxRow) -> Option<f32> {
+        if !self.row_visible(row) {
+            return None;
+        }
+        let base = row.top - self.paint_scroll();
+        if !self.auto_item_gap_averaging || !self.scrollbar_visible() {
+            return Some(base);
+        }
+        let visible: Vec<&ListBoxRow> = self
+            .rows
+            .iter()
+            .filter(|candidate| self.row_visible(candidate))
+            .collect();
+        if visible.len() < 2 {
+            return Some(base);
+        }
+        let total_height = visible
+            .iter()
+            .map(|candidate| candidate.height)
+            .sum::<f32>();
+        let view = self.viewport_height();
+        if total_height >= view - 0.5 {
+            return Some(base);
+        }
+        let averaged_gap = (view - total_height) / (visible.len() - 1) as f32;
+        let mut top = 0.0;
+        for candidate in visible {
+            if candidate.index == row.index {
+                return Some(top);
+            }
+            top += candidate.height + averaged_gap;
+        }
+        Some(base)
+    }
+
+    pub fn row(&self, index: usize) -> Option<&ListBoxRow> {
+        self.rows.iter().find(|row| row.index == index)
+    }
+
+    pub fn row_mut(&mut self, index: usize) -> Option<&mut ListBoxRow> {
+        self.rows.iter_mut().find(|row| row.index == index)
+    }
+
+    /// 命中哪一行（`y` 是相对 list_box 左上角的点坐标），空白返回 `None`。
+    pub fn row_at(&self, y: f32) -> Option<usize> {
+        let local = y - self.edge_width - self.content_gap;
+        if local < 0.0 {
+            return None;
+        }
+        self.rows.iter().find_map(|row| {
+            let top = self.row_view_top(row)?;
+            (local >= top && local < top + row.height).then_some(row.index)
+        })
+    }
+
+    pub fn row_origin(&self, row: usize) -> Option<(f32, f32)> {
+        let row_ref = self.row(row)?;
+        // 隐藏行也返回原始位置：文本宿主先建好并隐藏，滚到它时直接显示，
+        // 不再等下一次 SetListWindow 才补建窗口（否则底部新露出的行会空白）。
+        let top = self
+            .row_view_top(row_ref)
+            .unwrap_or_else(|| row_ref.top - self.paint_scroll());
+        let available = self.content_width(self.scrollbar_visible());
+        let row_width = if row_ref.width > 0.0 {
+            row_ref.width
+        } else {
+            available
+        };
+        let x = match self.align {
+            ListBoxAlign::Left => 0.0,
+            ListBoxAlign::Center => (available - row_width).max(0.0) * 0.5,
+            ListBoxAlign::Right => (available - row_width).max(0.0),
+        };
+        Some((
+            self.edge_width + self.content_gap + x,
+            self.edge_width + self.content_gap + top,
+        ))
+    }
+
+    pub fn hit_at(&self, row: usize, x: f32, y: f32) -> Option<usize> {
+        let row_ref = self.row(row)?;
+        let available = self.content_width(self.scrollbar_visible());
+        let row_width = if row_ref.width > 0.0 {
+            row_ref.width
+        } else {
+            available
+        };
+        let row_x = match self.align {
+            ListBoxAlign::Left => 0.0,
+            ListBoxAlign::Center => (available - row_width).max(0.0) * 0.5,
+            ListBoxAlign::Right => (available - row_width).max(0.0),
+        };
+        let local_x = x - self.edge_width - self.content_gap - row_x;
+        let local_y = y - self.edge_width - self.content_gap - self.row_view_top(row_ref)?;
+        row_ref
+            .hits
+            .iter()
+            .position(|hit| hit.shape.contains(local_x, local_y))
+    }
+
+    pub fn first_visible_row(&self) -> usize {
+        let offset = self.clamp_scroll();
+        if let Some(row) = self.rows.iter().find(|row| self.row_visible(row)) {
+            return row.index;
+        }
+        // 点击轨道会直接跳到当前窗口之外的偏移；这时不能回退到“最后一行”，
+        // 也不能拿当前窗口第一行凑数，否则 Server 会按错误行重建窗口：
+        // 往下跳表现为跳到底部，往上跳表现为只挪到窗口边缘。
+        let Some(first) = self.rows.first() else {
+            return self.row_count.saturating_sub(1);
+        };
+        let average = self
+            .rows
+            .iter()
+            .map(|row| row.height + self.gap)
+            .sum::<f32>()
+            / self.rows.len() as f32;
+        if average <= 0.0 {
+            return first.index;
+        }
+        let estimated = if offset < first.top {
+            first.index as f32 - ((first.top - offset) / average).ceil()
+        } else if let Some(last) = self.rows.last() {
+            let end = last.top + last.height;
+            if offset >= end {
+                last.index as f32 + ((offset - end) / average).floor() + 1.0
+            } else {
+                first.index as f32 + ((offset - first.top) / average).floor()
+            }
+        } else {
+            first.index as f32 + ((offset - first.top) / average).floor()
+        };
+        estimated
+            .max(0.0)
+            .min(self.row_count.saturating_sub(1) as f32) as usize
+    }
+
+    pub fn row_top(&self, index: usize) -> f32 {
+        if let Some(row) = self.row(index) {
+            return row.top;
+        }
+        // 只有虚拟化目标行不在当前窗口时才会走到这里；固定行高可直接估算。
+        self.rows
+            .first()
+            .map(|row| index as f32 * (row.height + self.gap))
+            .unwrap_or(0.0)
+    }
+
+    pub fn scroll_to_row(&self, index: usize) -> f32 {
+        let height = self
+            .row(index)
+            .map(|row| row.height)
+            .unwrap_or_else(|| self.rows.first().map(|row| row.height).unwrap_or(0.0));
+        (self.row_top(index) + height * 0.5 - self.viewport_height() * 0.5)
+            .clamp(0.0, self.max_scroll_px())
+    }
+
+    /// 只保证目标行完整可见；已经完整可见时不改变滚动位置。
+    pub fn scroll_to_visible(&self, index: usize) -> f32 {
+        let height = self
+            .row(index)
+            .map(|row| row.height)
+            .unwrap_or_else(|| self.rows.first().map(|row| row.height).unwrap_or(0.0));
+        let top = self.row_top(index);
+        let current = self.clamp_scroll();
+        let viewport = self.viewport_height();
+        if top < current {
+            top
+        } else if top + height > current + viewport {
+            (top + height - viewport).max(0.0)
+        } else {
+            current
+        }
+        .clamp(0.0, self.max_scroll_px())
     }
 }
 
@@ -590,11 +1091,15 @@ pub struct TextBox {
     pub border_width: f32,
     /// 缺省边框按 1 物理像素画，不随缩放；显式 `edge_width` 仍按点缩放。
     pub border_width_fixed: bool,
+    /// 边框内侧到内容 / 滚动条区域的间隙（点）。
+    pub content_gap: f32,
     pub selection_background: Option<Color>,
     pub selection_color: Option<Color>,
     pub caret_color: Option<Color>,
     pub text_color: Option<Color>,
     pub read_only: bool,
+    /// 失焦时取消文本选区，缺省 `true`。
+    pub deselect_on_blur: bool,
     /// 自动换行；启用时没有水平滚动条。
     pub auto_line_wrap: bool,
     /// 行距（像素）。
@@ -617,7 +1122,7 @@ impl TextBox {
 
     /// 文本区（相对控件左上角）；滚动条出现时自动让出右侧 / 底部。
     pub fn edit_rect(&self) -> (f32, f32, f32, f32) {
-        let inset = self.border_width.max(0.0);
+        let inset = self.border_width.max(0.0) + self.content_gap.max(0.0);
         let padding = 4.0;
         let right = self.width
             - inset
@@ -645,7 +1150,9 @@ impl TextBox {
 
     /// 滚动条在本控件内的矩形。
     pub fn bar_rect(&self, axis: ScrollAxis) -> (f32, f32, f32, f32) {
-        let inset = self.border_width.max(0.0) + 2.0;
+        // 滚动条也贴内容区：上下左右先让出边框 + content_gap；两条滚动条之间
+        // 再留 SCROLLBAR_GAP，避免交叉处互相盖住。
+        let inset = self.border_width.max(0.0) + self.content_gap.max(0.0);
         match axis {
             ScrollAxis::Vertical => {
                 let x = self.width - inset - Self::SCROLLBAR_THICKNESS;
@@ -654,7 +1161,7 @@ impl TextBox {
                 } else {
                     0.0
                 };
-                let y = inset + Self::SCROLLBAR_GAP;
+                let y = inset;
                 (
                     x,
                     y,
@@ -669,7 +1176,7 @@ impl TextBox {
                 } else {
                     0.0
                 };
-                let x = inset + Self::SCROLLBAR_GAP;
+                let x = inset;
                 (
                     x,
                     y,
@@ -814,6 +1321,8 @@ pub struct TextEdit {
     pub text_color: Option<Color>,
     /// 只读。
     pub read_only: bool,
+    /// 失焦时取消文本选区，缺省 `true`。
+    pub deselect_on_blur: bool,
     /// 密码输入：文字按 `*` 显示，真实文本仍由 API 读写。
     pub passkey: bool,
     /// 字体族覆盖；`None` = 字体槽位的主题字体。
@@ -923,6 +1432,19 @@ fn text_style(theme: &Theme, slot: FontSlot, size: f32, color: Color, scale: f32
     TextStyle::new(font, size, color, theme.text_gamma).with_family(family_for(theme, slot))
 }
 
+/// 文本按钮自己的字体：字族可直接给，缺省用候选字体。
+fn button_text_style(theme: &Theme, text: &ButtonText, color: Color, scale: f32) -> TextStyle {
+    let font = FontSpec::with_size(text.size).scaled(scale);
+    let family = text
+        .family
+        .clone()
+        .or_else(|| family_for(theme, FontSlot::Candidate).cloned());
+    let style = TextStyle::new(font, text.size, color, theme.text_gamma)
+        .with_family(family.as_ref())
+        .with_weight(text.weight);
+    if text.italic { style.italic() } else { style }
+}
+
 /// 控件的路径命令 → tiny-skia 路径（控件自己的原点是 `origin`，单位点）。
 fn build_path(commands: &[PathCommand], scale: f32, origin: (f32, f32)) -> Option<Path> {
     let ox = origin.0 * scale;
@@ -962,5 +1484,87 @@ mod tests {
         assert_eq!(DEFAULT_SCROLLBAR_BACKGROUND, Color::rgb(0xC8, 0xC8, 0xC8));
         assert_eq!(DEFAULT_SCROLLBAR_THUMB, Color::rgb(0x88, 0x88, 0x88));
         assert_eq!(DEFAULT_EDIT_BORDER, Color::rgb(0xC8, 0xC8, 0xC8));
+    }
+
+    fn test_row(index: usize, top: f32, height: f32) -> ListBoxRow {
+        ListBoxRow {
+            index,
+            top,
+            height,
+            width: 40.0,
+            key: None,
+            hits: Vec::new(),
+            selected_elements: Vec::new(),
+            hovered_elements: Vec::new(),
+            elements: Vec::new(),
+        }
+    }
+
+    fn test_list(scroll_offset: f32) -> ListBox {
+        ListBox {
+            x: 0.0,
+            y: 0.0,
+            width: 100.0,
+            height: 60.0,
+            radius: 0.0,
+            fill: None,
+            edge_color: Color::rgb(0, 0, 0),
+            edge_width: 1.0,
+            content_gap: 2.0,
+            gap: 0.0,
+            auto_item_gap_averaging: true,
+            align: ListBoxAlign::Left,
+            rows: vec![test_row(0, 0.0, 40.0), test_row(1, 40.0, 40.0)],
+            row_count: 2,
+            scroll_offset,
+            content_height: 80.0,
+            allow_select: false,
+            selected_index: -1,
+            auto_center_selected: false,
+            hovered_index: None,
+            region_name: "list".to_owned(),
+        }
+    }
+
+    /// 绘制时只留下完整落在内容区里的行；贴底时优先保证最后一行完整。
+    #[test]
+    fn list_box_only_draws_complete_rows() {
+        let mut list = test_list(10.0);
+        assert_eq!(list.paint_scroll(), 0.0);
+        assert!(list.row_visible(&list.rows[0]));
+        assert!(!list.row_visible(&list.rows[1]));
+        assert_eq!(list.first_visible_row(), 0);
+
+        list.scroll_offset = 26.0;
+        assert_eq!(list.paint_scroll(), 26.0);
+        assert!(!list.row_visible(&list.rows[0]));
+        assert!(list.row_visible(&list.rows[1]));
+        assert_eq!(list.first_visible_row(), 1);
+        assert_eq!(list.row_at(20.0), Some(1));
+        assert_eq!(list.row_at(5.0), None);
+    }
+
+    /// 默认把剩余高度平均分到可见行之间，填满内容区；关闭后保留原来的 gap。
+    #[test]
+    fn list_box_averages_visible_item_gaps() {
+        let mut list = test_list(0.0);
+        list.rows = vec![
+            test_row(0, 0.0, 20.0),
+            test_row(1, 20.0, 20.0),
+            test_row(2, 40.0, 20.0),
+        ];
+        list.row_count = 3;
+        list.content_height = 60.0;
+
+        assert_eq!(list.row_view_top(&list.rows[0]), Some(0.0));
+        assert_eq!(list.row_view_top(&list.rows[1]), Some(34.0));
+        assert_eq!(list.row_view_top(&list.rows[2]), None);
+        assert_eq!(list.row_origin(1), Some((3.0, 37.0)));
+        assert_eq!(list.row_at(30.0), None);
+        assert_eq!(list.row_at(37.0), Some(1));
+
+        list.auto_item_gap_averaging = false;
+        assert_eq!(list.row_view_top(&list.rows[1]), Some(20.0));
+        assert_eq!(list.row_origin(1), Some((3.0, 23.0)));
     }
 }

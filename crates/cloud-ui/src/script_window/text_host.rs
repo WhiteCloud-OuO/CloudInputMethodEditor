@@ -12,16 +12,17 @@ use std::ffi::c_void;
 use std::mem::size_of;
 use std::rc::Rc;
 use std::sync::OnceLock;
+use std::time::Instant;
 
 use windows::Win32::Foundation::{
     COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, RECTL, SIZE, WPARAM,
 };
 use windows::Win32::Graphics::Gdi::{
     BeginPaint, BitBlt, COLOR_HIGHLIGHT, COLOR_HIGHLIGHTTEXT, COLOR_WINDOW, COLOR_WINDOWTEXT,
-    CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC, DeleteObject, EndPaint,
-    FillRect, GetDC, GetTextExtentPoint32W, GetTextMetricsW, HBRUSH, HDC, HGDIOBJ, InvalidateRect,
-    PAINTSTRUCT, ReleaseDC, SRCCOPY, SYS_COLOR_INDEX, SelectObject, SetBkMode, SetTextColor,
-    TEXTMETRICW, TRANSPARENT, TextOutW, UpdateWindow,
+    ClientToScreen, CreateCompatibleBitmap, CreateCompatibleDC, CreateSolidBrush, DeleteDC,
+    DeleteObject, EndPaint, FillRect, GetDC, GetTextExtentPoint32W, GetTextMetricsW, HBRUSH, HDC,
+    HGDIOBJ, InvalidateRect, PAINTSTRUCT, ReleaseDC, SRCCOPY, SYS_COLOR_INDEX, SelectObject,
+    SetBkMode, SetTextColor, TEXTMETRICW, TRANSPARENT, TextOutW, UpdateWindow,
 };
 use windows::Win32::System::Com::DVASPECT_CONTENT;
 use windows::Win32::System::LibraryLoader::{GetProcAddress, LoadLibraryW};
@@ -32,25 +33,30 @@ use windows::Win32::UI::Controls::RichEdit::{
     PARAFORMAT2, PFM_LINESPACING, SCF_ALL, TXTBACK_TRANSPARENT, TXTBACKSTYLE, TXTBIT_MULTILINE,
     TXTBIT_RICHTEXT, TXTBIT_SAVESELECTION, TXTBIT_VIEWINSETCHANGE, TXTBIT_WORDWRAP,
 };
-use windows::Win32::UI::Controls::{EM_GETSEL, EM_SETREADONLY, EM_SETSEL};
+use windows::Win32::UI::Controls::{
+    EM_CHARFROMPOS, EM_GETLINECOUNT, EM_GETSEL, EM_LINEFROMCHAR, EM_LINEINDEX, EM_LINELENGTH,
+    EM_SETREADONLY, EM_SETSEL,
+};
 
 use windows::Win32::UI::Input::Ime::{HIMC, ImmGetContext, ImmReleaseContext};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL, VK_LWIN, VK_MENU, VK_RWIN,
-    VK_SHIFT,
+    GetDoubleClickTime, GetFocus, GetKeyState, ReleaseCapture, SetCapture, SetFocus, VK_CONTROL,
+    VK_LWIN, VK_MENU, VK_RWIN, VK_SHIFT,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CS_DBLCLKS, CreateCaret, CreateWindowExW, DefWindowProcW, DestroyWindow, EN_CHANGE,
-    GetCaretBlinkTime, GetClientRect, HideCaret, IDC_IBEAM, KillTimer, LoadCursorW, PostMessageW,
-    SCROLL_WINDOW_FLAGS, SCROLLBAR_CONSTANTS, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SendMessageW,
-    SetCaretPos, SetCursor, SetTimer, SetWindowPos, ShowCaret, ShowWindow, WM_APP, WM_CHAR,
-    WM_GETTEXT, WM_GETTEXTLENGTH, WM_IME_CHAR, WM_IME_COMPOSITION, WM_IME_COMPOSITIONFULL,
-    WM_IME_CONTROL, WM_IME_ENDCOMPOSITION, WM_IME_KEYDOWN, WM_IME_KEYUP, WM_IME_NOTIFY,
-    WM_IME_REQUEST, WM_IME_SELECT, WM_IME_SETCONTEXT, WM_IME_STARTCOMPOSITION, WM_INPUTLANGCHANGE,
-    WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_SYSCHAR,
-    WM_SYSKEYDOWN, WM_SYSKEYUP, WM_TIMER, WNDCLASSEXW, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_HSCROLL,
-    WS_POPUP, WS_VSCROLL,
+    GetCaretBlinkTime, GetClientRect, GetSystemMetrics, HTCLIENT, HideCaret, IDC_IBEAM, KillTimer,
+    LWA_COLORKEY, LoadCursorW, PostMessageW, SCROLL_WINDOW_FLAGS, SCROLLBAR_CONSTANTS,
+    SM_CXDOUBLECLK, SM_CYDOUBLECLK, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE,
+    SendMessageW, SetCaretPos, SetCursor, SetLayeredWindowAttributes, SetTimer, SetWindowPos,
+    ShowCaret, ShowWindow, WM_APP, WM_CHAR, WM_GETTEXT, WM_GETTEXTLENGTH, WM_IME_CHAR,
+    WM_IME_COMPOSITION, WM_IME_COMPOSITIONFULL, WM_IME_CONTROL, WM_IME_ENDCOMPOSITION,
+    WM_IME_KEYDOWN, WM_IME_KEYUP, WM_IME_NOTIFY, WM_IME_REQUEST, WM_IME_SELECT, WM_IME_SETCONTEXT,
+    WM_IME_STARTCOMPOSITION, WM_INPUTLANGCHANGE, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_PAINT,
+    WM_SETCURSOR, WM_SETFOCUS, WM_SETFONT, WM_SIZE, WM_SYSCHAR, WM_SYSKEYDOWN, WM_SYSKEYUP,
+    WM_TIMER, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_HSCROLL, WS_POPUP,
+    WS_VSCROLL,
 };
 use windows::core::{
     BOOL, Error, GUID, HSTRING, IUnknown_Vtbl, Interface, PCWSTR, Result, implement, w,
@@ -84,6 +90,9 @@ pub(super) const WM_TEXT_SCROLL: u32 = WM_APP + 0x4D;
 
 /// 宿主 → 脚本窗口：多行编辑框收到滚轮（`lparam` 为带符号的 delta）。
 pub(super) const WM_TEXT_WHEEL: u32 = WM_APP + 0x4E;
+
+/// 宿主 → 脚本窗口：编辑框三击完成（选区已改好）。
+pub(super) const WM_TEXT_TRIPLE_CLICK: u32 = WM_APP + 0x4F;
 
 /// 多行编辑框的滚动范围（像素）。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -140,6 +149,12 @@ pub(super) struct TextHostWindow {
     multiline: bool,
     /// 密码输入：只影响显示，真实文本仍交给 API。
     passkey: bool,
+    /// 失焦时取消文本选区。
+    deselect_on_blur: bool,
+    /// 最近一次左键点击的时间、客户区坐标和连续次数（用于三击选行）。
+    last_click: Cell<Option<(Instant, i32, i32, u8)>>,
+    /// 三击选行后吞掉随后的左键抬起，避免 RichEdit 从旧锚点继续扩展选区。
+    suppress_mouse_up: Cell<bool>,
 }
 
 impl TextHostWindow {
@@ -157,17 +172,26 @@ impl TextHostWindow {
         caret_color: COLORREF,
         font_flag: u8,
         read_only: bool,
+        deselect_on_blur: bool,
         passkey: bool,
         multiline: bool,
+        transparent_background: bool,
         auto_wrap: bool,
         line_spacing: u16,
         dpi: u32,
     ) -> Result<Rc<Self>> {
         ensure_class()?;
         let style = WS_POPUP;
+        let ex_style = WS_EX_TOOLWINDOW
+            | WS_EX_TOPMOST
+            | if transparent_background {
+                WS_EX_LAYERED
+            } else {
+                Default::default()
+            };
         let hwnd = unsafe {
             CreateWindowExW(
-                WS_EX_TOOLWINDOW | WS_EX_TOPMOST,
+                ex_style,
                 CLASS_NAME,
                 w!(""),
                 style,
@@ -181,6 +205,13 @@ impl TextHostWindow {
                 None,
             )
         }?;
+        if transparent_background {
+            // RichEdit 是独立顶层窗，不能直接让父窗口的行背景透出来。用背景色做
+            // 色键：宿主仍正常绘制文字 / 选区，但空白像素显示下面的列表行。
+            unsafe {
+                let _ = SetLayeredWindowAttributes(hwnd, background, 0, LWA_COLORKEY);
+            }
+        }
         let font = create_font(family, size, dpi, font_flag);
         let ellipsis_font = create_font(Some("Segoe UI"), size, dpi, font_flag);
         let brush = unsafe { CreateSolidBrush(background) };
@@ -274,6 +305,9 @@ impl TextHostWindow {
             shown: Cell::new(false),
             multiline,
             passkey,
+            deselect_on_blur,
+            last_click: Cell::new(None),
+            suppress_mouse_up: Cell::new(false),
         });
         HOSTS.with(|map| map.borrow_mut().insert(hwnd.0 as isize, window.clone()));
         unsafe {
@@ -354,7 +388,7 @@ impl TextHostWindow {
         Ok(window)
     }
 
-    pub(super) fn set_bounds(&self, x: i32, y: i32, width: i32, height: i32) {
+    pub(super) fn set_bounds(&self, x: i32, y: i32, width: i32, height: i32) -> bool {
         // 单行 RichEdit 默认贴顶；宿主窗本身只留一行高并垂直居中，避免依赖
         // `TxGetViewInset` 在不同 RichEdit 版本里的差异。多行编辑框要用完整文本区。
         let host_height = if self.multiline {
@@ -369,7 +403,7 @@ impl TextHostWindow {
         };
         let bounds = (x, y, width.max(1), host_height);
         if self.bounds.get() == Some(bounds) {
-            return;
+            return false;
         }
         unsafe {
             let _ = SetWindowPos(
@@ -391,11 +425,26 @@ impl TextHostWindow {
                 .services
                 .OnTxPropertyBitsChange(TXTBIT_VIEWINSETCHANGE, TXTBIT_VIEWINSETCHANGE);
         }
+        true
     }
 
-    pub(super) fn show(&self, show: bool) {
+    pub(super) fn is_focused(&self) -> bool {
+        unsafe { GetFocus() == self.hwnd }
+    }
+
+    pub(super) fn contains_screen_point(&self, point: POINT) -> bool {
+        if !self.shown.get() {
+            return false;
+        }
+        let Some((left, top, width, height)) = self.bounds.get() else {
+            return false;
+        };
+        point.x >= left && point.x < left + width && point.y >= top && point.y < top + height
+    }
+
+    pub(super) fn show(&self, show: bool) -> bool {
         if self.shown.get() == show {
-            return;
+            return false;
         }
         self.shown.set(show);
         unsafe {
@@ -403,6 +452,38 @@ impl TextHostWindow {
         }
         if !show {
             self.deactivate_in_place();
+        }
+        true
+    }
+
+    /// 位置 / 显隐刚变过时同步画一帧。只靠窗口消息队列重画时，大跨度滚动后
+    /// 新出现的编辑框可能先露出背景框、下一轮消息才画出文字。
+    pub(super) fn refresh(&self) {
+        if !self.shown.get() {
+            return;
+        }
+        unsafe {
+            let _ = InvalidateRect(Some(self.hwnd), None, true);
+            let _ = UpdateWindow(self.hwnd);
+        }
+    }
+
+    /// 脚本主窗口也是 topmost；点击主窗口后它可能浮到旧宿主上面。
+    /// 每次同步都把可见宿主重新提到 topmost 顶部，避免编辑框背景还在、文字被主窗口盖住。
+    pub(super) fn raise(&self) {
+        if !self.shown.get() {
+            return;
+        }
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                Some(windows::Win32::UI::WindowsAndMessaging::HWND_TOPMOST),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
         }
     }
 
@@ -414,6 +495,32 @@ impl TextHostWindow {
         if let Some(tsf) = &self.tsf {
             tsf.focus();
         }
+    }
+
+    /// 主窗口收到落在色键透明区的点击时，把同一坐标转给宿主 RichEdit。
+    /// 色键窗口的透明像素会被系统当成穿透，空白处点击本来到不了这里。
+    pub(super) fn click_from_owner(&self, owner: HWND, client_x: i32, client_y: i32) {
+        let Some((left, top, _, _)) = self.bounds.get() else {
+            return;
+        };
+        let mut point = POINT {
+            x: client_x,
+            y: client_y,
+        };
+        unsafe {
+            let _ = ClientToScreen(owner, &mut point);
+        }
+        let x = (point.x - left).clamp(i16::MIN as i32, i16::MAX as i32) as i16 as u16;
+        let y = (point.y - top).clamp(i16::MIN as i32, i16::MAX as i32) as i16 as u16;
+        let lparam = LPARAM(((y as isize) << 16) | x as isize);
+        self.focus();
+        // 走宿主自己的 wndproc，而不是直接 TxSendMessage：这样点击计数、三击选行、
+        // 焦点和选区通知都和鼠标直接落在宿主文字上时一致。
+        unsafe {
+            let _ = SendMessageW(self.hwnd, WM_LBUTTONDOWN, Some(WPARAM(1)), Some(lparam));
+            let _ = SendMessageW(self.hwnd, WM_LBUTTONUP, Some(WPARAM(0)), Some(lparam));
+        }
+        self.refresh();
     }
 
     /// 改选区背景色（脚本跟随候选高亮色用）；同时重画当前选中文本。
@@ -499,6 +606,30 @@ impl TextHostWindow {
                 .services
                 .TxSendMessage(WM_KILLFOCUS, WPARAM(0), LPARAM(0), &mut result);
         }
+        if self.deselect_on_blur && self.collapse_selection() {
+            // 失焦后宿主仍然可见，要立刻重画一遍，否则选区高亮会留在屏幕上。
+            self.refresh();
+        }
+    }
+
+    /// 把选区收成插入点；没有选区时返回 `false`。
+    fn collapse_selection(&self) -> bool {
+        // 只问长度，不复制整份文本；多行大文本失焦时也别做无谓的全量拷贝。
+        let length = self.send(WM_GETTEXTLENGTH, WPARAM(0), LPARAM(0)).0.max(0) as usize;
+        let (start, end) = self.selection(length);
+        if start == end {
+            return false;
+        }
+        let mut result = LRESULT(0);
+        unsafe {
+            let _ = self.services.TxSendMessage(
+                EM_SETSEL,
+                WPARAM(end),
+                LPARAM(end as isize),
+                &mut result,
+            );
+        }
+        true
     }
 
     fn deactivate_in_place(&self) {
@@ -876,6 +1007,104 @@ impl TextHostWindow {
         LPARAM((y << 16) | x)
     }
 
+    /// 统计左键连续点击次数；使用系统双击间隔和双击矩形范围。
+    fn next_click_count(&self, x: i32, y: i32) -> u8 {
+        let interval = unsafe { GetDoubleClickTime() }.max(1) as u128;
+        let dx = (unsafe { GetSystemMetrics(SM_CXDOUBLECLK) } / 2).max(1);
+        let dy = (unsafe { GetSystemMetrics(SM_CYDOUBLECLK) } / 2).max(1);
+        let now = Instant::now();
+        let count = match self.last_click.get() {
+            Some((last, last_x, last_y, count))
+                if now.duration_since(last).as_millis() < interval
+                    && (x - last_x).abs() <= dx
+                    && (y - last_y).abs() <= dy =>
+            {
+                (count + 1).min(3)
+            }
+            _ => 1,
+        };
+        self.last_click.set(Some((now, x, y, count)));
+        count
+    }
+
+    /// 三击：单行全选；多行选中点击位置所在的一整行（不含换行符）。
+    fn triple_click(&self, x: i32, y: i32) -> bool {
+        if !self.multiline {
+            let length = self.send(WM_GETTEXTLENGTH, WPARAM(0), LPARAM(0)).0.max(0);
+            let mut result = LRESULT(0);
+            unsafe {
+                let _ =
+                    self.services
+                        .TxSendMessage(EM_SETSEL, WPARAM(0), LPARAM(length), &mut result);
+            }
+        } else {
+            let mut point = POINT { x, y };
+            let index = self
+                .send(
+                    EM_CHARFROMPOS,
+                    WPARAM(0),
+                    LPARAM(&mut point as *mut _ as isize),
+                )
+                .0;
+            let line_count = self.send(EM_GETLINECOUNT, WPARAM(0), LPARAM(0)).0.max(1);
+            let line = if index < 0 {
+                line_count - 1
+            } else {
+                self.send(EM_LINEFROMCHAR, WPARAM(index as usize), LPARAM(0))
+                    .0
+                    .clamp(0, line_count - 1)
+            };
+            // 用 RichEdit 自己的行索引取选区。不能用 WM_GETTEXT 的文本长度来算：
+            // RichEdit 的字符位置把 CRLF 计成一个换行单位，和返回文本可能差一个偏移，
+            // 每多一行就会累计错一位，正好表现为“第二行少第一个字、第三行少两个字”。
+            // 同时向两侧吃掉软换行：EM_LINEINDEX 的下一行紧接当前行末尾（没有换行符）
+            // 说明是自动换行，继续扩展到同一个逻辑行；遇到硬换行才停。
+            let mut first = line;
+            let mut last = line;
+            while first > 0 {
+                let current_start = self.line_start(first);
+                let previous_start = self.line_start(first - 1);
+                if previous_start + self.line_length(previous_start) == current_start {
+                    first -= 1;
+                } else {
+                    break;
+                }
+            }
+            while last + 1 < line_count {
+                let current_start = self.line_start(last);
+                let next_start = self.line_start(last + 1);
+                if current_start + self.line_length(current_start) == next_start {
+                    last += 1;
+                } else {
+                    break;
+                }
+            }
+            let start = self.line_start(first);
+            let end = self.line_start(last) + self.line_length(self.line_start(last));
+            let mut result = LRESULT(0);
+            unsafe {
+                let _ = self.services.TxSendMessage(
+                    EM_SETSEL,
+                    WPARAM(start as usize),
+                    LPARAM(end),
+                    &mut result,
+                );
+            }
+        }
+        self.suppress_mouse_up.set(true);
+        self.notify_selection();
+        self.refresh();
+        unsafe {
+            let _ = PostMessageW(
+                Some(self.owner),
+                WM_TEXT_TRIPLE_CLICK,
+                WPARAM(self.hwnd.0 as usize),
+                LPARAM(0),
+            );
+        }
+        true
+    }
+
     fn ensure_visible(&self, hdc: HDC, text: &[u16], client: &RECT) -> i32 {
         if !self.active.get() {
             return self.scroll_x.get();
@@ -1043,6 +1272,18 @@ impl TextHostWindow {
         }
         result
     }
+
+    fn line_start(&self, line: isize) -> isize {
+        self.send(EM_LINEINDEX, WPARAM(line.max(0) as usize), LPARAM(0))
+            .0
+            .max(0)
+    }
+
+    fn line_length(&self, start: isize) -> isize {
+        self.send(EM_LINELENGTH, WPARAM(start.max(0) as usize), LPARAM(0))
+            .0
+            .max(0)
+    }
 }
 
 impl Drop for TextHostWindow {
@@ -1205,10 +1446,10 @@ impl ITextHost_Impl for TextHost_Impl {
         }
     }
 
-    fn TxSetCursor(&self, hcur: windows::Win32::UI::WindowsAndMessaging::HCURSOR, _ftext: BOOL) {
-        unsafe {
-            SetCursor(Some(hcur));
-        }
+    fn TxSetCursor(&self, _hcur: windows::Win32::UI::WindowsAndMessaging::HCURSOR, _ftext: BOOL) {
+        // RichEdit 会根据命中的是文字还是空白给 I 型 / 箭头；脚本编辑框一律保持
+        // 文本选择指针（和记事本一致），空白处也应该是 I 型。
+        set_ibeam_cursor();
     }
 
     fn TxScreenToClient(&self, lppt: *mut POINT) -> BOOL {
@@ -1392,6 +1633,14 @@ impl ITextHost_Impl for TextHost_Impl {
     }
 }
 
+fn set_ibeam_cursor() {
+    if let Ok(cursor) = unsafe { LoadCursorW(None, IDC_IBEAM) } {
+        unsafe {
+            let _ = SetCursor(Some(cursor));
+        }
+    }
+}
+
 fn ensure_class() -> Result<()> {
     CLASS.ensure(|| WNDCLASSEXW {
         style: CS_DBLCLKS,
@@ -1543,6 +1792,22 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         with_host(hwnd, |host| host.notify_wheel(delta));
         return LRESULT(0);
     }
+    if msg == WM_SETCURSOR && (lparam.0 & 0xFFFF) as u32 == HTCLIENT {
+        set_ibeam_cursor();
+        return LRESULT(1);
+    }
+    if msg == WM_LBUTTONUP
+        && with_host(hwnd, |host| host.suppress_mouse_up.replace(false)).unwrap_or(false)
+    {
+        return LRESULT(0);
+    }
+    if msg == WM_LBUTTONDOWN {
+        // 点空白处也要像记事本一样把焦点和插入点落到这里；不要依赖 RichEdit
+        // 是否把这次点击当成“命中文字”。
+        unsafe {
+            let _ = SetFocus(Some(hwnd));
+        }
+    }
     if msg == WM_MOUSEMOVE && (wparam.0 as u32 & 0x0001) == 0 {
         return LRESULT(0);
     }
@@ -1568,6 +1833,14 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     } else {
         lparam
     };
+    if matches!(msg, WM_LBUTTONDOWN | WM_LBUTTONDBLCLK) {
+        let x = (lparam.0 & 0xFFFF) as i16 as i32;
+        let y = ((lparam.0 >> 16) & 0xFFFF) as i16 as i32;
+        let count = with_host(hwnd, |host| host.next_click_count(x, y)).unwrap_or(0);
+        if count >= 3 && with_host(hwnd, |host| host.triple_click(x, y)).unwrap_or(false) {
+            return LRESULT(0);
+        }
+    }
     if matches!(
         msg,
         WM_KEYDOWN

@@ -1,0 +1,57 @@
+{
+  "version": 2,
+  "page": {
+    "w": 280,
+    "h": 32,
+    "script": "test-list-box-row.lua",
+    "children": [
+      {
+        "name": "row_background",
+        "type": "rect",
+        "w": 280,
+        "h": 32,
+        "radius": 0,
+        "position": "absolute",
+        "inset": { "left": 0, "top": 0 },
+        "color": {
+          "state": {
+            "0": "#FFFFFFFF",
+            "1": "#FFE8F1FE",
+            "2": "#FFF5F5F5",
+            "default": "#FFFFFFFF"
+          }
+        }
+      },
+      {
+        "name": "title",
+        "type": "label",
+        "position": "absolute",
+        "inset": { "left": 8, "top": 8 },
+        "runs": [
+          {
+            "text": "{{item.label}}",
+            "color": {
+              "state": {
+                "0": "#FF222222",
+                "1": "#FF14549A",
+                "2": "#FF444444",
+                "default": "#FF222222"
+              }
+            }
+          }
+        ],
+        "size": 14
+      },
+      {
+        "name": "edit",
+        "type": "text_edit",
+        "position": "absolute",
+        "inset": { "left": 148, "top": 4 },
+        "w": 124,
+        "h": 24,
+        "text": "{{item.value}}",
+        "font_size": 14
+      }
+    ]
+  }
+}

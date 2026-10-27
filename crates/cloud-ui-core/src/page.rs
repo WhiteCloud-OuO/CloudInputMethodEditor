@@ -21,6 +21,12 @@ pub enum NodeKind {
     /// 有外观的容器控件（例如 `panel`）。
     Container,
 
+    /// 子页面容器（通用类型）。
+    SubpageContainer,
+
+    /// 单列列表盒；具体的子页面容器控件。
+    ListBox,
+
     /// 叶子控件。
     Control,
 
@@ -158,6 +164,21 @@ pub struct Node {
     pub position: Position,
     pub insets: Insets,
     pub visible: bool,
+
+    /// 子页面实例的数据 key；普通节点为 `None`。
+    pub item_key: Option<String>,
+
+    /// 子页面实例的逻辑下标；普通节点 / 虚拟化占位节点为 `None`。
+    pub item_index: Option<usize>,
+    /// 虚拟化行在内容区内的绝对顶部偏移。
+    pub virtual_top: Option<f32>,
+
+    /// 虚拟化窗口的起始逻辑下标与总项目数；非虚拟化实例为 `None`。
+    pub virtual_start: Option<usize>,
+    pub virtual_count: Option<usize>,
+    pub virtual_offset: Option<f32>,
+    pub virtual_scroll: Option<f32>,
+    pub virtual_content_height: Option<f32>,
     pub grid_column: Option<usize>,
     pub grid_row: Option<usize>,
     pub column_span: usize,
@@ -185,6 +206,14 @@ impl Node {
             position: Position::Flow,
             insets: Insets::default(),
             visible: true,
+            item_key: None,
+            item_index: None,
+            virtual_top: None,
+            virtual_start: None,
+            virtual_count: None,
+            virtual_offset: None,
+            virtual_scroll: None,
+            virtual_content_height: None,
             grid_column: None,
             grid_row: None,
             column_span: 1,
@@ -196,7 +225,11 @@ impl Node {
     pub fn is_layout_host(&self) -> bool {
         matches!(
             self.kind,
-            NodeKind::Page | NodeKind::Stem | NodeKind::Container
+            NodeKind::Page
+                | NodeKind::Stem
+                | NodeKind::Container
+                | NodeKind::SubpageContainer
+                | NodeKind::ListBox
         )
     }
 

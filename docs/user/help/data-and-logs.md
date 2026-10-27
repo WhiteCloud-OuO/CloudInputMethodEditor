@@ -34,6 +34,8 @@ description: 云朵输入法在本机保存的文件及其内容、输入日志�
 
 用户导入的词库、用户自造词库与用户短语不在这个目录：词库和随包词库一起放在程序目录的 `WordBank\` 下（自造词库 `UserWordBank.db` 的位置由配置文件的 `[word_bank] user_file` 决定，缺省也在那里），用户短语单独存在程序目录的 `Phrases\Phrase.db`（内容 · 输入码 · 候选位置，见 [短语](../settings/preferences.md)）；「设置 → 词库」页管理导入的词库，「设置 → 短语」页管理用户短语。
 
+脚本自己的数据在程序目录的 `Scripts\saved\`（脚本用 `cloudime.saved_path` 写入，可再建子目录）；脚本本体在 `Scripts\` 根部，共享 Lua / JSON 布局 / DLL 分别在 `shared\` / `layouts\` / `dlls\` 下。
+
 主题文件分两处：随包的两份内置主题（`Default` / `Panic`）在**程序目录**的 `Themes\`（只读，卸载会一起删），自己新建 / 编辑 / 导入的主题在数据目录的 `Themes\`（可写），同名的以自己的为准；「设置 → 主题」页管理，见 [主题](../settings/preferences.md#主题)。
 
 这些文件每次整体替换，即使输入法中途崩溃也不会留下写到一半的文件。

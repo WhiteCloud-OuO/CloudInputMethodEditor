@@ -25,9 +25,10 @@ C:\Program Files\CloudIME\
                               随仓库带一份成品，升级不覆盖用户短语）
     data\phrase-default.db    内置短语的同步源（与上面同一份文件换个名字，每次升级都覆盖；Server 启动时把它的
                               cloudime_default 同步进 Phrases\Phrase.db，用户短语不受影响）
-    Scripts\                  用户 Lua 脚本（一个 .lua 一个脚本；本目录对普通用户可写，「设置 → 脚本」页走它）+
+    Scripts\                  用户 Lua 脚本（根部一个 .lua 一个脚本；本目录对普通用户可写，「设置 → 脚本」页走它）+
                               template.lua（「新建脚本」的模板，加载器按文件名跳过、不执行；升级会覆盖它，用户脚本不动）。
-                              安装包只装这一个模板；示例、共享模块和实际脚本都不随包，实际脚本在
+                              shared\ 放共享 Lua，layouts\ 放 JSON 布局，dlls\ 放动态链接库，saved\ 放脚本数据。
+                              安装包只装模板并建好这四个子目录；示例、共享模块和实际脚本都不随包，实际脚本在
                               https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse
     data\icons-arrangement.cfg 悬浮状态条的按钮排布（哪个按钮、位置、图标）
     data\icons\*.svg          那些按钮的图标（20×20）
@@ -85,7 +86,7 @@ Server 与设置程序按 **exe 相对**定位随包资源（`cloudime_platform:
 卸载反向：杀 Server / 设置程序 → 反注册当前版本 DLL（DLL 自己删掉 `%ProgramData%\CloudIME\cloudime.ico`）→ 删文件。
 输入法 DLL 被加载在**每个用过输入法的进程**里（连 explorer.exe 都在内），文件锁着删不掉：卸载器对删不掉的
 `cloudime_tsf*.dll` 调用 `RestartReplace`（`MoveFileEx` 的 `DELAY_UNTIL_REBOOT`）登记到重启后由系统删除，并在结束前提示重启；
-`[UninstallDelete]` 清掉整个安装目录（含用户导入的词库、`Phrases\Phrase.db` 里的用户短语与 `Scripts\` 下的用户脚本）与用户数据（`%APPDATA%\CloudIME`、`%LOCALAPPDATA%\CloudIME`、`%ProgramData%\CloudIME`）。
+`[UninstallDelete]` 清掉整个安装目录（含用户导入的词库、`Phrases\Phrase.db` 里的用户短语、`Scripts\` 下的用户脚本与 `Scripts\saved\` 数据）与用户数据（`%APPDATA%\CloudIME`、`%LOCALAPPDATA%\CloudIME`、`%ProgramData%\CloudIME`）。
 
 ## 升级：DLL 被占用怎么办
 

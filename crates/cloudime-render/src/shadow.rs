@@ -12,6 +12,9 @@ pub struct Shadow {
     /// 模糊半径（点）。
     pub blur: f32,
 
+    /// 向右偏移（点）。
+    pub offset_x: f32,
+
     /// 向下偏移（点）。
     pub offset_y: f32,
 
@@ -24,6 +27,7 @@ impl Shadow {
     pub const fn panel() -> Self {
         Self {
             blur: 12.0,
+            offset_x: 0.0,
             offset_y: 6.0,
             color: Color::gray(0, 90),
         }
@@ -31,7 +35,7 @@ impl Shadow {
 
     /// 阴影在内容四周要留多宽的边（点）。
     pub(crate) fn margin(&self) -> f32 {
-        self.blur * 2.0 + self.offset_y
+        self.blur * 2.0 + self.offset_x.abs().max(self.offset_y.abs())
     }
 
     /// 只算**阴影那一层**（`width`×`height` 的整块位图，内容区那块也在里面，会被面板盖住）。
@@ -47,9 +51,10 @@ impl Shadow {
     ) -> Option<Pixmap> {
         let (w, h) = (width, height);
         let mut mask_canvas = Canvas::new(w, h).ok()?;
+        let dx = self.offset_x * scale;
         let dy = self.offset_y * scale;
         mask_canvas.fill_round_rect(
-            content.x(),
+            content.x() + dx,
             content.y() + dy,
             content.width(),
             content.height(),

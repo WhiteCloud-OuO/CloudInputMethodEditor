@@ -44,11 +44,28 @@
             }
           },
           {
+            "name": "list_demo",
+            "type": "text_button",
+            "w": 90,
+            "h": 30,
+            "text": "列表盒",
+            "text_color": "#FF1F2329",
+            "font": { "size": 13, "weight": 400 },
+            "background": { "shape": "round_rect", "radius": 3, "color": "#FFF2F4F7" },
+            "normal": { "background": "#FFF2F4F7", "text": "#FF1F2329" },
+            "hovered": { "background": "#FFE3E8EF", "text": "#FF1F2329" },
+            "pressed": { "background": "#FFD2D8E0", "text": "#FF1F2329" },
+            "enabled": true,
+            "events": { "clicked": "open_list" },
+            "position": "absolute",
+            "inset": { "left": 632, "top": 16 }
+          },
+          {
             "name": "subtitle",
             "type": "text_block",
             "size": 14,
             "line_spacing": 5,
-            "text": "760 × 640\ni 模式运行，只创建",
+            "text": "760 × 640\ni 模式运行，文本按钮四态 / 阴影 / 默认键",
             "color": "#FF888888",
             "position": "absolute",
             "inset": {
@@ -187,6 +204,143 @@
         "inset": {
           "left": 24,
           "top": 254
+        }
+      },
+      {
+        "type": "text_button",
+        "name": "ok",
+        "w": 120,
+        "h": 40,
+        "text": "确定\n(Enter)",
+        "text_color": "#FFFFFFFF",
+        "font": {
+          "size": 14,
+          "weight": 600,
+          "italic": false
+        },
+        "background": {
+          "shape": "round_rect",
+          "radius": 3,
+          "color": "#FF4A90E2"
+        },
+        "normal": {
+          "background": "#FF4A90E2",
+          "text": "#FFFFFFFF"
+        },
+        "hovered": {
+          "background": "#FF63A7F0",
+          "text": "#FFFFFFFF"
+        },
+        "pressed": {
+          "background": "#FF3676BC",
+          "text": "#FFFFFFFF"
+        },
+        "disabled": {
+          "background": "#FFD0D0D0",
+          "text": "#FF888888"
+        },
+        "shadow": {
+          "color": "#5A000000",
+          "offset": {
+            "x": 2,
+            "y": 6
+          }
+        },
+        "show_shadow": true,
+        "enabled": true,
+        "default_button": "enter",
+        "events": {
+          "clicked": "confirm"
+        },
+        "position": "absolute",
+        "inset": {
+          "left": 360,
+          "top": 210
+        }
+      },
+      {
+        "type": "text_button",
+        "name": "cancel",
+        "w": 90,
+        "h": 40,
+        "text": "取消",
+        "text_color": "#FF1F2329",
+        "font": {
+          "size": 14,
+          "weight": 400
+        },
+        "background": {
+          "shape": "round_rect",
+          "radius": 3,
+          "color": "#FFF2F4F7"
+        },
+        "normal": {
+          "background": "#FFF2F4F7",
+          "text": "#FF1F2329"
+        },
+        "hovered": {
+          "background": "#FFE3E8EF",
+          "text": "#FF1F2329"
+        },
+        "pressed": {
+          "background": "#FFD2D8E0",
+          "text": "#FF1F2329"
+        },
+        "disabled": {
+          "background": "#FFE8E8E8",
+          "text": "#FFAAAAAA"
+        },
+        "shadow": {
+          "color": "#3A000000",
+          "offset": {
+            "x": 2,
+            "y": 6
+          }
+        },
+        "show_shadow": true,
+        "enabled": true,
+        "events": {
+          "clicked": "close"
+        },
+        "position": "absolute",
+        "inset": {
+          "left": 496,
+          "top": 210
+        }
+      },
+      {
+        "type": "text_button",
+        "name": "disabled_demo",
+        "w": 90,
+        "h": 40,
+        "text": "禁用",
+        "text_color": "#FFAAAAAA",
+        "font": {
+          "size": 14,
+          "weight": 400
+        },
+        "background": {
+          "shape": "round_rect",
+          "radius": 3,
+          "color": "#FFE8E8E8"
+        },
+        "normal": {
+          "background": "#FFE8E8E8",
+          "text": "#FFAAAAAA"
+        },
+        "disabled": {
+          "background": "#FFE8E8E8",
+          "text": "#FFAAAAAA"
+        },
+        "show_shadow": false,
+        "enabled": false,
+        "events": {
+          "clicked": "disabled_click"
+        },
+        "position": "absolute",
+        "inset": {
+          "left": 600,
+          "top": 210
         }
       },
       {

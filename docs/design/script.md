@@ -64,8 +64,8 @@ cloudime.script{
 - **一个文件一个脚本、UTF-8 编码**，清单必须在最前面（在清单之前调 `cloudime.on` 也算无效）。
 - **不许改 `cloudime` 表**（及其上的宿主函数）：运行时把它锁成**只读代理**（`__index` 指向本体、`__newindex` 报错）。
   `rawset` 能绕过这道锁，但那只**改到脚本自己看到的那一份** —— 运行时手里握着函数本体，脚本怎么改都影响不到它。
-- **持久状态写数据目录**（`%APPDATA%\CloudIME` 下，比如 `scripts\<脚本名>.data`），
-  **别写安装目录**：普通用户写不进去，升级 / 卸载还会删。
+- **持久状态写 `Scripts\saved\`**（用 `cloudime.saved_path` 拿路径，自动建子目录）；
+  **别写安装目录其它位置**：卸载会删整棵目录。
 - **不许长时间占住工人线程**：允许的「等」只有两个**异步** API —— `cloudime.http_get` 与
   `cloudime.http_post`（都在自己的线程上跑、时限必给）；同步处理函数里自己等 = 卡住所有应用。
 - 加载期违规只进日志（「哪个脚本无效、为什么」）—— 以后设置页的「脚本」页要把它显示出来。
@@ -191,7 +191,9 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
   work_bottom, scale }`。在 `key` 处理函数里调用时量的是这一键处理完之后的位置。
 - **安装目录**：`cloudime.install_dir()` → 安装目录绝对路径；`cloudime.install_path("Images/SVG/…")`
   → 目录里文件的绝对路径（`canonicalize` 后必须仍在安装目录内，越界报错、不存在给 `nil`）。
-  `svg` 元素因此可以写 `path` 直接读文件（见元素表），不必让脚本把 SVG 文本抄进 Lua。
+  `cloudime.shared_path` / `layout_path` / `dll_path` 分别只解析 `Scripts\shared` /
+  `Scripts\layouts` / `Scripts\dlls`；`cloudime.saved_path` 在 `Scripts\saved` 下建可写子目录，
+  供脚本持久化。`svg` 元素因此可以写 `path` 直接读文件（见元素表），不必让脚本把 SVG 文本抄进 Lua。
   `Runtime::load` 从脚本目录的上一级取安装目录，加载期就能用；Server 建 Router 时再用
   `bundled_root()` 校正一次。
 - **主题颜色**：`cloudime.get_theme()` 每次现读当前生效的主题（`script_theme` 优先，否则 `curr_theme`；
@@ -263,7 +265,7 @@ local win = cloudime.window.create{
     width = 240,          -- 内容区宽（点，8–2048；缺省 240）
     height = 120,         -- 内容区高（点，8–2048；缺省 120）
     interactive = true,   -- 接不接鼠标（缺省 false = 鼠标穿透，纯展示）
-    layout = "Scripts/lib/main.json", -- 推荐：控件布局放 JSON；尺寸以布局文件为准
+    layout = cloudime.layout_path("main.json"), -- 布局放 Scripts\layouts；尺寸以布局文件为准
     shadow = true,        -- 要不要与候选窗同源的那层阴影（缺省 true）
     background = true,    -- 要不要输入法画的面板底色 / 圆角（缺省 true）；false = 全由元素表自己画
 }
@@ -324,7 +326,7 @@ win:set_content{
       thickness = 1, color = "#22000000" },
     { type = "circle", cx = 220, cy = 16, radius = 8, color = "#FF66AAFF" },
     { type = "svg",    x = 8, y = 8, size = 20, path = cloudime.install_path("Images/SVG/打叉.svg"), tint = "#FF888888" },
-    { type = "img",    x = 0, y = 0, w = 64, h = 64, path = "Scripts/lib/icon.png" },
+    { type = "img",    x = 0, y = 0, w = 64, h = 64, path = "Scripts/layouts/icon.png" },
     { type = "path",   color = "#FF0000FF",
       commands = { { "M", 0, 0 }, { "L", 10, 0 }, { "C", 12, 0, 12, 10, 0, 10 }, { "Z" } } },
 }
@@ -345,8 +347,8 @@ win:set_content{
 | `static_image` | `x` / `y` / `w` / `h`（可省）+ `image`（`cloudime.image.load` 句柄）或 `path`（PNG / BMP / JPG） |
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（边缘，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1 点，100% 缩放下 1 像素）/ `fill`（可选）/ `children`（相对坐标） |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省 SVG 画板）；`svg` / `svg_path`；`shape` + `radius`；`name`；`normal` / `hovered` / `pressed = { background, svg }`；`events = { 动作名 = "处理器名" }` |
-| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`read_only` / `passkey`；`back_color` / `edge_color`（缺省 `#FFC8C8C8`）/ `edge_width`（缺省 1 物理像素且不缩放；显式数值按点缩放）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align`；`font_name` / `font_size` / `font_flag`；`text` / `font` / `name` / `events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
-| `text_box` | `x` / `y` / `w` / `h`；`radius`（缺省 6）；`read_only`；`back_color` / `edge_color`（缺省 `#FFC8C8C8`）/ `edge_width`（缺省 1 物理像素且不缩放；显式数值按点缩放）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color`；`font_name` / `font_size` / `font_flag`；`auto_line_wrap`（缺省 true）/ `line_spacing`（u16，缺省 8）；`text` / `font` / `name` / `events`；没有 `passkey` / SVG 属性，旧名兼容同 `text_edit` |
+| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 h/2）；`read_only` / `passkey` / `deselect_on_blur`（缺省 true）；`back_color` / `edge_color`（缺省 `#FFC8C8C8`）/ `edge_width`（缺省 1 物理像素且不缩放；显式数值按点缩放）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align`；`font_name` / `font_size` / `font_flag`；`text` / `font` / `name` / `events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
+| `text_box` | `x` / `y` / `w` / `h`；`radius`（缺省 6）；`read_only` / `deselect_on_blur`（缺省 true）；`back_color` / `edge_color`（缺省 `#FFC8C8C8`）/ `edge_width`（缺省 1 物理像素且不缩放；显式数值按点缩放）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color`；`font_name` / `font_size` / `font_flag`；`auto_line_wrap`（缺省 true）/ `line_spacing`（u16，缺省 8）；`text` / `font` / `name` / `events`；没有 `passkey` / SVG 属性，旧名兼容同 `text_edit` |
 | `hscroll_bar` | `x` / `y`；`w` / `h` 缺省都是 8；`value` / `min_value` / `max_value`（u64，缺省 0 / 0 / 100）/ `step`（u64，缺省 1，不能为 0）；`background_color`（缺省 `#FFC8C8C8`）/ `thumb_color`（缺省 `#FF888888`）；`name` / `events`；背景与滑块都是胶囊纯填充 |
 | `vscroll_bar` | 同 `hscroll_bar`，`w` / `h` 缺省都是 8；`vhscroll_bar` / `vhsroll_bar` 是兼容拼写 |
 
@@ -395,7 +397,7 @@ win:set_content{
 
   没声明 `events` 时仍按 `event.region` / `event.element` + `event.action` 分发，完全兼容旧脚本。
 - **路径**：JSON 里的 `svg_path` / `img.path` 先按布局文件所在目录找，再逐级向上找；放在
-  `Scripts/lib/` 的布局可以直接引用安装根目录的 `Images/...`，也可以把素材放在布局旁边。
+  `Scripts/layouts/` 的布局可以直接引用安装根目录的 `Images/...`，也可以把素材放在布局旁边。
 - **限额**：布局文件最大 **4 MB**；控件沿用内容限额（512 个元素、文字 4096 字符等）。
   改文件后要再 `load_layout` 或重启 Server，不监听文件变化。
 
@@ -429,6 +431,9 @@ win:set_content{
   里面用 `Msftedit.dll` 的 `CreateTextServices` / `ITextServices` 承载编辑（不是 `EDIT` 控件），
   键盘、鼠标、IME、剪贴板和选区都交给 RichEdit。文本区几何：无 SVG 时 `w - h` 居中；有 SVG 时宽
   `w - h - svg宽度 - 4`、放在图标旁；高度向内缩 1 点，避免盖住缺省 1 像素边框 / 溢出胶囊。SVG 按背景高度缩放。
+  文本区整个矩形使用 I 型鼠标指针；色键透明背景的空白处由主窗口转发点击给宿主，不会出现
+  “文字处能点、空白处没反应”的差异。三击时单行编辑框全选；只有真正落在文本区宿主矩形内的
+  指针才是 I 型，滚动条和边框内边距保持普通箭头。
   RichEdit 字体缺省用候选词字体（`font` 可换槽位），字号缺省取主题里该槽位的字号（`size` 可覆盖）；
   宿主窗底色 / 文字色跟随候选窗主题；`selection_background` / `selection_color` / `caret_color` /
   `svg_color` 不写时分别跟主题高亮背景 / 高亮文字 / 正文颜色 / SVG 原色。自动区域与按钮同一套（`drag = false`）。
@@ -455,8 +460,9 @@ win:set_content{
   `font_flag` 控制 GDI 字体（1 加粗 / 2 斜体 / 4 下划线 / 8 删除线）。旧字段名仍兼容。
   **编辑事件**：宿主在 `WM_KEYDOWN` / `WM_SYSKEYDOWN` 时把虚拟键码和修饰键位（1 shift / 2 ctrl /
   4 alt / 8 win）发给脚本窗，派 `key_pressed`；`WM_SETFOCUS` / `WM_KILLFOCUS` 派 `focused` /
-  `unfocused`。布局里的 `events` 可用 `on_key_pressed` / `onKeyPressed`、`on_focused` / `onFocused`、
-  `on_unfocused` / `onUnfocused` 别名，解析时归一成 `key_pressed` / `focused` / `unfocused`。
+  `unfocused`。单行 / 多行编辑框三击还会派 `triple_clicked`；布局里的 `events` 可用
+  `on_key_pressed` / `onKeyPressed`、`on_focused` / `onFocused`、`on_unfocused` / `onUnfocused`、
+  `on_triple_clicked` 别名，解析时归一成 `key_pressed` / `focused` / `unfocused` / `triple_clicked`。
 - **多行编辑框**（`text_box`）：背景圆角矩形 + 文本区 + 内部水平 / 垂直滚动条。文本区由
   同一个 windowless RichEdit 宿主承载，多行模式打开 `TXTBIT_MULTILINE`；`auto_line_wrap = true`
   时再打开 `TXTBIT_WORDWRAP` 并隐藏水平滚动条。`line_spacing` 是 u16（缺省 8），通过
@@ -464,6 +470,9 @@ win:set_content{
   宿主建好后做一次 `OnTxInPlaceActivate` 强制排版，再读 `TxGetHScroll` / `TxGetVScroll`；
   文本超出可视区时把滚动条的 `visible` / 范围写回 `TextBox` 运行时状态。文本区几何会扣掉
   出现的滚动条（8 点厚 + 4 点间隙），滚动条由渲染器画在控件内部，不进入 `regions`。
+  文本区整个矩形使用 I 型鼠标指针；空白处单击也会把插入点移到最近文本位置（和记事本一致）。
+  三击文本区（包括空白处）选中点击位置所在逻辑行，自动换行的软换行一并选中，行界按
+  `\n` / `\r\n` 计算，不选中换行符；滚动条和内边距上的指针保持普通箭头。
   拖动滑块用 `EM_SETSCROLLPOS` 回写 RichEdit，点轨道翻一页，滚轮由宿主按页高 1/4 滚动；
   滚动位置变化通过 `WM_TEXT_SCROLL` 通知脚本窗重画滑块。文本 / 按键 / 焦点事件和文本 API
   与 `text_edit` 共用一套；内部滚动条不派 `value_changed`。不支持 `passkey` 和 SVG。
@@ -498,7 +507,7 @@ win:set_content{
 cloudime.on("window", function(event)
     -- event.window   建窗口时给的名字
     -- event.id       窗口编号
-    -- event.action   "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur" / "text_changed" / "key_pressed" / "focused" / "unfocused" / "value_changed"
+    -- event.action   "click" / "right_click" / "hover" / "leave" / "wheel" / "focus" / "blur" / "text_changed" / "key_pressed" / "focused" / "unfocused" / "triple_clicked" / "value_changed"
     -- event.x, event.y   内容区坐标（点）
     -- event.element  命中的元素（内容是 1 起的数组，这里也是 1 起；没命中是 nil）
     -- event.region   命中的区域名（内容里的 regions；没命中是 nil）

@@ -361,6 +361,17 @@ impl Engine {
         self.query_reading(keys, None, rest, start, allow_extras, self.mixture_input)
     }
 
+    /// 单字的全局用户权重是按“字”累计的，多音字的不同读音会互相串味：
+    /// 常选 `de` 的“的”会把 `di` 也抬高。单字只保留输入串相关的 `choice_weight`
+    /// （排序闭包里另算），这里不再乘全局字权重；多字词仍按整词权重。
+    fn learned_weight(&self, text: &str) -> f64 {
+        if text.chars().count() <= 1 {
+            1.0
+        } else {
+            self.learner.rank_weight(text)
+        }
+    }
+
     /// 同 [`Self::query_phonetic`]，但 `reading` 给定时**不再自己切**：它就是这一段读音的切分
     /// （双键拼音把方案解出的音节直接交进来）。同一段按键的几种切法放在一起按**并集**查
     /// （尾巴上那半个音节的几种可能各算一份切分）。
@@ -401,7 +412,7 @@ impl Engine {
             },
         };
         // 连第一个字母都切不动（`impor`）：拼音这边没戏，但英文词 / 补全、快捷候选还可以有
-        let (segmentations, tail) = match parsed {
+        let (mut segmentations, tail) = match parsed {
             Ok(parsed) => parsed,
             Err(error) => {
                 if !english {
@@ -427,7 +438,9 @@ impl Engine {
         // 原样输入本身能否整段对一个词（决定纠错读法要不要回补折扣）
         let scope_letters: usize = scope.chars().filter(|c| *c != '\'').count();
         let mut original_exact = false;
-        for segmentation in &segmentations {
+        // 每种切分里最强的“正好覆盖整个切分”的词；用来决定拼音行显示哪一种切分。
+        let mut segmentation_quality: Vec<Option<(u32, usize)>> = vec![None; segmentations.len()];
+        for (segmentation_index, segmentation) in segmentations.iter().enumerate() {
             let mut patterns = segmentation.patterns();
             let count = patterns.len();
             let last = &segmentation.syllables[count - 1];
@@ -452,6 +465,14 @@ impl Engine {
                 if hit.exact && segmentation.letters() == scope_letters {
                     original_exact = true;
                 }
+                if hit.exact {
+                    let quality = segmentation_quality[segmentation_index].get_or_insert((0, 0));
+                    if hit.frequency > quality.0
+                        || (hit.frequency == quality.0 && hit.text.len() > quality.1)
+                    {
+                        *quality = (hit.frequency, hit.text.len());
+                    }
+                }
                 let penalty = expanded.penalty(hit.syllables());
                 scored.push(Scored {
                     coverage,
@@ -461,7 +482,7 @@ impl Engine {
                     reading_syllables: count,
                     tier: u8::from(penalty > 0.0),
                     correction: (-penalty).exp(),
-                    weight: self.learner.rank_weight(hit.text),
+                    weight: self.learned_weight(hit.text),
                     hit,
                 });
             }
@@ -498,10 +519,30 @@ impl Engine {
                         reading_syllables: prefix_len,
                         tier: u8::from(penalty > 0.0),
                         correction: (-penalty).exp(),
-                        weight: self.learner.rank_weight(hit.text),
+                        weight: self.learned_weight(hit.text),
                     });
                 }
             }
+        }
+        // 词库能证明某种切分更像一个词时，把它挪到最前：`shangou` 的 `shan gou`（山沟）
+        // 要压过解析器按“最长音节”先给出的 `shang ou`。没有精确命中的切分保持原顺序。
+        if !strict {
+            let mut order: Vec<usize> = (0..segmentations.len()).collect();
+            order.sort_by(|&a, &b| {
+                let qa = segmentation_quality[a].unwrap_or((0, 0));
+                let qb = segmentation_quality[b].unwrap_or((0, 0));
+                qb.0.cmp(&qa.0)
+                    .then_with(|| qb.1.cmp(&qa.1))
+                    .then_with(|| a.cmp(&b))
+            });
+            let mut slots: Vec<Option<Segmentation>> = std::mem::take(&mut segmentations)
+                .into_iter()
+                .map(Some)
+                .collect();
+            segmentations = order
+                .into_iter()
+                .map(|index| slots[index].take().expect("切分索引有效"))
+                .collect();
         }
         // 原样能整段对上（有音节数正好拼满整段的精确命中，或自定义短语的输入码正好是整段）
         let original_matches =
@@ -528,7 +569,7 @@ impl Engine {
                         reading_syllables: count,
                         tier: 2,
                         correction: factor,
-                        weight: self.learner.rank_weight(hit.text),
+                        weight: self.learned_weight(hit.text),
                         hit,
                     });
                 }

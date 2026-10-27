@@ -975,7 +975,13 @@ impl Router {
             }
             _ => {}
         }
-        if !self.scripts.has_handlers("window") {
+        if matches!(event.action, cloudime_script::WindowAction::Closed) {
+            self.scripts.forget_window(event.window);
+        }
+        // `scroll_changed` 还要驱动 list_box 的虚拟窗口；即使脚本没注册 `window` 处理器，
+        // 也得让 Runtime 的自动窗口回调跑一次。
+        let list_scroll = matches!(event.action, cloudime_script::WindowAction::ScrollChanged);
+        if !self.scripts.has_handlers("window") && !list_scroll {
             return;
         }
         let payload = match cloudime_script::window_event_payload(self.scripts.lua(), &event) {

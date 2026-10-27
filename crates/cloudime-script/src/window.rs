@@ -15,17 +15,350 @@ use std::sync::Arc;
 use std::time::SystemTime;
 
 use cloudime_render::{
-    ButtonColors, ButtonShape, ButtonState, Color, Document, Element, FlatSvgButton, FontSlot,
-    HitRect, HitShape, InstanceInfo, Label, LabelRun, Panel, PathCommand, Pixmap, Region,
-    ScrollAxis, ScrollBar, SelfDrawingPanel, StaticImage, StaticShape, StaticTextContent, SvgAlign,
-    TextBlock, TextBox, TextBoxScroll, TextEdit, flip_image, gray_image, load_image, mask_image,
-    rotate_image, scale_image, svg_size,
+    ButtonColors, ButtonShadow, ButtonShape, ButtonState, ButtonText, Color, DefaultButton,
+    Document, Element, FlatSvgButton, FontSlot, HitRect, HitShape, InstanceInfo, Label, LabelRun,
+    ListBox, ListBoxAlign, ListBoxHit, ListBoxRow, ListBoxWindow, Panel, PathCommand, Pixmap,
+    Region, ScrollAxis, ScrollBar, SelfDrawingPanel, StaticImage, StaticShape, StaticTextContent,
+    SvgAlign, TextBlock, TextBox, TextBoxScroll, TextEdit, flip_image, gray_image, load_image,
+    mask_image, rotate_image, scale_image, svg_size,
 };
 
 use crate::mlua;
 
 /// 窗口编号：脚本那一侧只当句柄的一部分，UI 线程按它认窗口。
 pub type WindowId = u32;
+
+#[derive(Clone, Copy, Default)]
+struct CachedListBoxState {
+    selected: Option<i32>,
+    scroll: usize,
+}
+
+type ListScrollHandler = Rc<dyn Fn(&mlua::Lua, &str, usize) -> mlua::Result<()>>;
+
+/// 一个子页面实例的脚本上下文。
+struct SubpageInstance {
+    script: String,
+    ctx: mlua::Table,
+}
+
+thread_local! {
+    /// UI 线程派回来的列表盒状态镜像；查询接口读它，避免为读一个整数再走一次同步回环。
+    static LIST_BOX_STATES: RefCell<HashMap<(WindowId, String), CachedListBoxState>> =
+        RefCell::new(HashMap::new());
+
+    /// 窗口句柄的 Lua 侧副本：子页面脚本的 `ctx.window` 用它。
+    static WINDOW_HANDLES: RefCell<HashMap<WindowId, mlua::Table>> =
+        RefCell::new(HashMap::new());
+
+    /// 同一窗口里按脚本绝对路径缓存已加载的子页面模块。
+    static SUBPAGE_SCRIPTS: RefCell<HashMap<(WindowId, String), mlua::Table>> =
+        RefCell::new(HashMap::new());
+
+    /// 已创建的子页面实例（实例路径 → 脚本 / 上下文）。
+    static SUBPAGE_INSTANCES: RefCell<HashMap<(WindowId, String), SubpageInstance>> =
+        RefCell::new(HashMap::new());
+
+    static LIST_SCROLL_HANDLERS: RefCell<HashMap<WindowId, ListScrollHandler>> =
+        RefCell::new(HashMap::new());
+
+    /// 上一次已经请求过的首个可见行；动画每帧都会上报，窗口没跨行时不必重建。
+    static LIST_SCROLL_LAST: RefCell<HashMap<(WindowId, String), usize>> =
+        RefCell::new(HashMap::new());
+
+    /// 关闭窗口时即使 Lua 还持有句柄，也要把页面树状态放掉。
+    static WINDOW_PAGES: RefCell<HashMap<WindowId, Rc<RefCell<Option<crate::page_layout::PageLayout>>>>> =
+        RefCell::new(HashMap::new());
+}
+
+pub(crate) fn register_window_page(
+    id: WindowId,
+    page: Rc<RefCell<Option<crate::page_layout::PageLayout>>>,
+) {
+    WINDOW_PAGES.with(|pages| {
+        pages.borrow_mut().insert(id, page);
+    });
+}
+
+pub(crate) fn register_list_scroll(id: WindowId, handler: ListScrollHandler) {
+    LIST_SCROLL_HANDLERS.with(|handlers| {
+        handlers.borrow_mut().insert(id, handler);
+    });
+}
+
+pub(crate) fn register_window_handle(id: WindowId, handle: mlua::Table) {
+    WINDOW_HANDLES.with(|handles| {
+        handles.borrow_mut().insert(id, handle);
+    });
+}
+
+pub(crate) fn forget_window(id: WindowId) {
+    WINDOW_HANDLES.with(|handles| {
+        handles.borrow_mut().remove(&id);
+    });
+    SUBPAGE_SCRIPTS.with(|scripts| {
+        scripts.borrow_mut().retain(|(window, _), _| *window != id);
+    });
+    SUBPAGE_INSTANCES.with(|instances| {
+        instances
+            .borrow_mut()
+            .retain(|(window, _), _| *window != id);
+    });
+    LIST_SCROLL_HANDLERS.with(|handlers| {
+        handlers.borrow_mut().remove(&id);
+    });
+    LIST_SCROLL_LAST.with(|last| {
+        last.borrow_mut().retain(|(window, _), _| *window != id);
+    });
+    LIST_BOX_STATES.with(|states| {
+        states.borrow_mut().retain(|(window, _), _| *window != id);
+    });
+    if let Some(page) = WINDOW_PAGES.with(|pages| pages.borrow_mut().remove(&id)) {
+        *page.borrow_mut() = None;
+    }
+}
+
+fn load_subpage_script(lua: &mlua::Lua, id: WindowId, path: &str) -> mlua::Result<mlua::Table> {
+    let key = (id, path.to_owned());
+    if let Some(script) = SUBPAGE_SCRIPTS.with(|scripts| scripts.borrow().get(&key).cloned()) {
+        return Ok(script);
+    }
+    let source = std::fs::read_to_string(path).map_err(|error| {
+        mlua::Error::RuntimeError(format!("读取子页面脚本失败 {path}：{error}"))
+    })?;
+    let script = lua
+        .load(&source)
+        .set_name(path)
+        .eval::<mlua::Table>()
+        .map_err(|error| {
+            mlua::Error::RuntimeError(format!("子页面脚本必须 return 一个表 {path}：{error}"))
+        })?;
+    SUBPAGE_SCRIPTS.with(|scripts| {
+        scripts.borrow_mut().insert(key, script.clone());
+    });
+    Ok(script)
+}
+
+fn call_subpage_hook(script: &mlua::Table, ctx: &mlua::Table, name: &str) -> mlua::Result<()> {
+    let Some(hook) = script.get::<Option<mlua::Function>>(name)? else {
+        return Ok(());
+    };
+    hook.call::<mlua::Value>((ctx.clone(),))?;
+    Ok(())
+}
+
+/// 内容/窗口变化后，为当前页树里的子页面实例建好脚本上下文并调用 `created`。
+///
+/// 同一窗口、同一实例只调用一次；列表虚拟化滚出窗口的实例调用 `destroyed` 后回收。
+pub(crate) fn ensure_subpage_instances(
+    lua: &mlua::Lua,
+    id: WindowId,
+    page: &crate::page_layout::PageLayout,
+) -> mlua::Result<()> {
+    let Some(handle) = WINDOW_HANDLES.with(|handles| handles.borrow().get(&id).cloned()) else {
+        return Ok(());
+    };
+    let mut wanted = HashMap::new();
+    for info in page.instances().values() {
+        if info.script.is_none() {
+            continue;
+        }
+        wanted.entry(info.instance.clone()).or_insert(info);
+    }
+
+    for (instance_path, info) in &wanted {
+        let script_path = info.script.clone().unwrap_or_default();
+        let existing = SUBPAGE_INSTANCES.with(|instances| {
+            instances
+                .borrow()
+                .get(&(id, instance_path.clone()))
+                .map(|state| state.script.clone())
+        });
+        if existing.as_deref() == Some(script_path.as_str()) {
+            // 同一条实例只换了 item 数据：更新上下文里的 item，不重复 created。
+            if let Some(item) = page.instance_item(instance_path)
+                && let Ok(value) = crate::layout_file::to_lua(lua, item, Path::new("."))
+            {
+                SUBPAGE_INSTANCES.with(|instances| {
+                    if let Some(state) = instances.borrow().get(&(id, instance_path.clone())) {
+                        let _ = state.ctx.set("item", value.clone());
+                    }
+                });
+            }
+            continue;
+        }
+        if let Some(old) = SUBPAGE_INSTANCES
+            .with(|instances| instances.borrow_mut().remove(&(id, instance_path.clone())))
+            && let Ok(script) = load_subpage_script(lua, id, &old.script)
+        {
+            let _ = call_subpage_hook(&script, &old.ctx, "destroyed");
+        }
+        let Ok(script) = load_subpage_script(lua, id, &script_path) else {
+            continue;
+        };
+        let ctx = lua.create_table()?;
+        ctx.set("window", handle.clone())?;
+        ctx.set("subpage", info.subpage.clone())?;
+        ctx.set("instance", info.instance.clone())?;
+        ctx.set("index", info.item_index)?;
+        ctx.set("key", info.item_key.clone())?;
+        ctx.set("script", script_path.clone())?;
+        if let Some(item) = page.instance_item(instance_path)
+            && let Ok(value) = crate::layout_file::to_lua(lua, item, Path::new("."))
+        {
+            ctx.set("item", value)?;
+        }
+        let path_instance = info.instance.clone();
+        ctx.set(
+            "path",
+            lua.create_function(move |_, name: String| Ok(format!("{path_instance}.{name}")))?,
+        )?;
+        if let Err(error) = call_subpage_hook(&script, &ctx, "created") {
+            tracing::warn!(%error, script = %script_path, "子页面脚本 created 失败");
+        }
+        SUBPAGE_INSTANCES.with(|instances| {
+            instances.borrow_mut().insert(
+                (id, instance_path.clone()),
+                SubpageInstance {
+                    script: script_path,
+                    ctx,
+                },
+            );
+        });
+    }
+
+    // 不在当前页树里的旧实例：滚出虚拟窗口 / 数据删除。
+    let stale: Vec<(WindowId, String)> = SUBPAGE_INSTANCES.with(|instances| {
+        instances
+            .borrow()
+            .keys()
+            .filter(|(window, instance)| *window == id && !wanted.contains_key(instance))
+            .cloned()
+            .collect()
+    });
+    for key in stale {
+        let old = SUBPAGE_INSTANCES.with(|instances| instances.borrow_mut().remove(&key));
+        if let Some(old) = old
+            && let Ok(script) = load_subpage_script(lua, id, &old.script)
+        {
+            let _ = call_subpage_hook(&script, &old.ctx, "destroyed");
+        }
+    }
+    Ok(())
+}
+
+/// 把一个窗口事件派给所属子页面脚本；返回 `true` 表示脚本要求吞掉父窗口处理。
+pub(crate) fn dispatch_subpage_event(lua: &mlua::Lua, payload: &mlua::Table) -> mlua::Result<bool> {
+    let Ok(id) = payload.get::<WindowId>("id") else {
+        return Ok(false);
+    };
+    let Ok(instance) = payload.get::<String>("instance") else {
+        return Ok(false);
+    };
+    let state = SUBPAGE_INSTANCES.with(|instances| {
+        instances
+            .borrow()
+            .get(&(id, instance))
+            .map(|state| (state.script.clone(), state.ctx.clone()))
+    });
+    let Some((script_path, ctx)) = state else {
+        return Ok(false);
+    };
+    let script = load_subpage_script(lua, id, &script_path)?;
+    let Some(handler) = script.get::<Option<mlua::Function>>("event")? else {
+        return Ok(false);
+    };
+    let result = handler.call::<mlua::Value>((ctx, payload.clone()))?;
+    Ok(matches!(result, mlua::Value::Boolean(true)))
+}
+
+pub(crate) fn auto_list_scroll(
+    lua: &mlua::Lua,
+    id: WindowId,
+    control: &str,
+    first: usize,
+) -> mlua::Result<bool> {
+    // 列表窗口按固定块对齐，块内滚动只移动已有行，不改 RichEdit 宿主的行内容。
+    // 每帧都按首行重建窗口会让文字宿主频繁换行/重建，滚动时肉眼看到闪烁和串行。
+    const WINDOW_STRIDE: usize = 8;
+    let window_first = first - first % WINDOW_STRIDE;
+    let key = (id, control.to_owned());
+    let changed = LIST_SCROLL_LAST.with(|last| {
+        let mut last = last.borrow_mut();
+        if last.get(&key).copied() == Some(window_first) {
+            false
+        } else {
+            last.insert(key, window_first);
+            true
+        }
+    });
+    if !changed {
+        return Ok(false);
+    }
+    let handler = LIST_SCROLL_HANDLERS.with(|handlers| handlers.borrow().get(&id).cloned());
+    let Some(handler) = handler else {
+        return Ok(false);
+    };
+    handler(lua, control, window_first)?;
+    Ok(true)
+}
+
+pub(crate) fn cache_list_box_selected(id: WindowId, name: &str, index: i32) {
+    LIST_BOX_STATES.with(|states| {
+        states
+            .borrow_mut()
+            .entry((id, name.to_owned()))
+            .or_default()
+            .selected = Some(index);
+    });
+}
+
+pub(crate) fn cached_list_box_selected(id: WindowId, name: &str) -> Option<i32> {
+    LIST_BOX_STATES.with(|states| {
+        states
+            .borrow()
+            .get(&(id, name.to_owned()))
+            .and_then(|state| state.selected)
+    })
+}
+
+pub(crate) fn cached_list_box_scroll(id: WindowId, name: &str) -> usize {
+    LIST_BOX_STATES.with(|states| {
+        states
+            .borrow()
+            .get(&(id, name.to_owned()))
+            .map(|state| state.scroll)
+            .unwrap_or(0)
+    })
+}
+
+/// 从派给脚本的 `window` 事件里同步列表盒状态镜像。
+pub(crate) fn observe_list_box_event(payload: &mlua::Table) {
+    let Ok(id) = payload.get::<WindowId>("id") else {
+        return;
+    };
+    let Ok(control) = payload.get::<String>("control") else {
+        return;
+    };
+    let Ok(action) = payload.get::<String>("action") else {
+        return;
+    };
+    if action == "selected_index_changed" {
+        if let Ok(Some(index)) = payload.get::<Option<i32>>("index") {
+            cache_list_box_selected(id, &control, index);
+        }
+    } else if action == "scroll_changed"
+        && let Ok(Some(value)) = payload.get::<Option<u64>>("value")
+    {
+        LIST_BOX_STATES.with(|states| {
+            states
+                .borrow_mut()
+                .entry((id, control.clone()))
+                .or_default()
+                .scroll = value.min(usize::MAX as u64) as usize;
+        });
+    }
+}
 
 /// 脚本侧看到的编辑框文本缓存：`(窗口编号, 控件名) → 最近一次文本`。
 /// UI 线程通过 `text_changed` 事件刷新，`get_text` 直接读它（不阻塞工人线程）。
@@ -314,6 +647,13 @@ pub enum Request {
     /// 换一整份内容（尺寸可以跟着变）。
     SetContent(WindowId, Document),
 
+    /// 列表盒虚拟化：只替换一个 `list_box` 的可见行窗口。
+    SetListWindow {
+        id: WindowId,
+        name: String,
+        window: ListBoxWindow,
+    },
+
     /// 显示；`position` 是内容区左上角的屏幕坐标（点），`None` = 上次的位置 / 光标旁。
     Show(WindowId, Option<(f32, f32)>),
 
@@ -383,6 +723,23 @@ pub enum Request {
 
     /// 清空文本。
     ClearText { id: WindowId, name: String },
+
+    /// 把 `list_box` 的指定行滚到可视区域。
+    ListBoxScrollTo {
+        id: WindowId,
+        name: String,
+        index: usize,
+        /// 页面树已算好的目标偏移；旧调用没有时由 UI 估算。
+        offset: Option<f32>,
+    },
+
+    /// 设置 `list_box` 的选中项；`-1` 表示取消选择。
+    ListBoxSelect {
+        id: WindowId,
+        name: String,
+        index: i32,
+        offset: Option<f32>,
+    },
 }
 
 /// 窗口句柄是「独立窗口」还是「辅助窗口」（同一套方法，落点不同）。
@@ -707,6 +1064,12 @@ pub(crate) fn handle(
                 *current_path.borrow_mut() = Some(PathBuf::from(path));
                 *current_data.borrow_mut() = data;
                 *current_page.borrow_mut() = loaded.page;
+                let script_page = current_page.borrow().clone();
+                if let Some(page) = script_page.as_ref()
+                    && let Err(error) = ensure_subpage_instances(lua, id, page)
+                {
+                    tracing::warn!(%error, "子页面脚本初始化失败");
+                }
                 layout_requests
                     .borrow_mut()
                     .push(Request::SetContent(id, document));
@@ -767,6 +1130,12 @@ pub(crate) fn handle(
             this.set("height", document.height)?;
             *data_regions.borrow_mut() = document.regions.clone();
             *data_page.borrow_mut() = loaded.page;
+            let script_page = data_page.borrow().clone();
+            if let Some(page) = script_page.as_ref()
+                && let Err(error) = ensure_subpage_instances(lua, id, page)
+            {
+                tracing::warn!(%error, "子页面脚本更新失败");
+            }
             data_requests
                 .borrow_mut()
                 .push(Request::SetContent(id, document));
@@ -860,13 +1229,454 @@ pub(crate) fn handle(
                 this.set("width", document.width)?;
                 this.set("height", document.height)?;
                 *scroll_regions.borrow_mut() = document.regions.clone();
+                let script_page = next.clone();
                 *scroll_page.borrow_mut() = Some(next);
+                if let Err(error) = ensure_subpage_instances(lua, id, &script_page) {
+                    tracing::warn!(%error, "子页面脚本更新失败");
+                }
                 scroll_requests
                     .borrow_mut()
                     .push(Request::SetContent(id, document));
                 Ok(())
             },
         )?,
+    )?;
+
+    let list_scroll_page = layout_page.clone();
+    let list_scroll_requests = requests.clone();
+    let list_scroll_images = images.clone();
+    register_list_scroll(
+        id,
+        Rc::new(move |lua, control, first| {
+            let Some(page) = list_scroll_page.borrow_mut().take() else {
+                return Err(mlua::Error::RuntimeError(
+                    "list_box 自动滚动只支持 v2 页面树布局".to_owned(),
+                ));
+            };
+            let Some((path, offset)) = page.list_box_window(control, first) else {
+                *list_scroll_page.borrow_mut() = Some(page);
+                return Ok(());
+            };
+            let (next, table) = match page.render_list_window(lua, &path, offset) {
+                Ok(result) => result,
+                Err(error) => {
+                    *list_scroll_page.borrow_mut() = Some(page);
+                    return Err(error);
+                }
+            };
+            let window = match parse_list_box_window(
+                &table,
+                &mut list_scroll_images.borrow_mut(),
+                0,
+                None,
+            ) {
+                Ok(window) => window,
+                Err(error) => {
+                    *list_scroll_page.borrow_mut() = Some(page);
+                    return Err(error);
+                }
+            };
+            let name = table
+                .get::<Option<String>>("name")?
+                .unwrap_or_else(|| control.to_owned());
+            let script_page = next.clone();
+            *list_scroll_page.borrow_mut() = Some(next);
+            if let Err(error) = ensure_subpage_instances(lua, id, &script_page) {
+                tracing::warn!(%error, "列表子页面脚本更新失败");
+            }
+            list_scroll_requests
+                .borrow_mut()
+                .push(Request::SetListWindow { id, name, window });
+            Ok(())
+        }),
+    );
+
+    handle.set(
+        "get_selected_index",
+        lua.create_function(move |_, (_this, name): (mlua::Table, String)| {
+            Ok(cached_list_box_selected(id, &name))
+        })?,
+    )?;
+
+    handle.set(
+        "get_scroll_offset",
+        lua.create_function(move |_, (_this, name): (mlua::Table, String)| {
+            Ok(cached_list_box_scroll(id, &name))
+        })?,
+    )?;
+
+    let list_box_count_page = layout_page.clone();
+    handle.set(
+        "get_item_count",
+        lua.create_function(move |_, (_this, name): (mlua::Table, String)| {
+            Ok(list_box_count_page
+                .borrow()
+                .as_ref()
+                .and_then(|page| page.list_box_count(&name))
+                .unwrap_or(0))
+        })?,
+    )?;
+
+    let list_box_handle_page = layout_page.clone();
+    let list_box_handle_requests = requests.clone();
+    let list_box_handle_images = images.clone();
+    let list_box_handle_texts = texts.clone();
+    handle.set(
+        "list_box",
+        lua.create_function(move |lua, (_this, name): (mlua::Table, String)| {
+            let handle = lua.create_table()?;
+
+            let scroll_requests = list_box_handle_requests.clone();
+            let scroll_page = list_box_handle_page.clone();
+            let scroll_name = name.clone();
+            handle.set(
+                "scroll_to",
+                lua.create_function(move |_, (_this, index): (mlua::Table, usize)| {
+                    let offset = scroll_page
+                        .borrow()
+                        .as_ref()
+                        .and_then(|page| page.list_box_scroll_to(&scroll_name, index));
+                    scroll_requests.borrow_mut().push(Request::ListBoxScrollTo {
+                        id,
+                        name: scroll_name.clone(),
+                        index,
+                        offset,
+                    });
+                    Ok(())
+                })?,
+            )?;
+
+            let select_requests = list_box_handle_requests.clone();
+            let select_page = list_box_handle_page.clone();
+            let select_name = name.clone();
+            handle.set(
+                "set_selected_index",
+                lua.create_function(move |_, (_this, index): (mlua::Table, i32)| {
+                    cache_list_box_selected(id, &select_name, index);
+                    let offset = (index >= 0)
+                        .then(|| {
+                            select_page.borrow().as_ref().and_then(|page| {
+                                page.list_box_scroll_to(&select_name, index as usize)
+                            })
+                        })
+                        .flatten();
+                    select_requests.borrow_mut().push(Request::ListBoxSelect {
+                        id,
+                        name: select_name.clone(),
+                        index,
+                        offset,
+                    });
+                    Ok(())
+                })?,
+            )?;
+
+            let count_page = list_box_handle_page.clone();
+            let count_name = name.clone();
+            handle.set(
+                "get_item_count",
+                lua.create_function(move |_, _this: mlua::Table| {
+                    Ok(count_page
+                        .borrow()
+                        .as_ref()
+                        .and_then(|page| page.list_box_count(&count_name))
+                        .unwrap_or(0))
+                })?,
+            )?;
+
+            let item_page = list_box_handle_page.clone();
+            let item_requests = list_box_handle_requests.clone();
+            let item_images = list_box_handle_images.clone();
+            let item_texts = list_box_handle_texts.clone();
+            let item_name = name.clone();
+            handle.set(
+                "get_item",
+                lua.create_function(move |lua, (_this, index): (mlua::Table, usize)| {
+                    let count = item_page
+                        .borrow()
+                        .as_ref()
+                        .and_then(|page| page.list_box_count(&item_name))
+                        .unwrap_or(0);
+                    if index >= count {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "list_box.get_item 索引 {index} 越界（共 {count} 项）"
+                        )));
+                    }
+                    let key = item_page
+                        .borrow()
+                        .as_ref()
+                        .and_then(|page| page.list_box_item_key(&item_name, index))
+                        .flatten();
+                    let mut guard = item_page.borrow_mut();
+                    let Some(page) = guard.take() else {
+                        return Err(mlua::Error::RuntimeError(
+                            "list_box.get_item 只支持 v2 页面树布局".to_owned(),
+                        ));
+                    };
+                    let instance = page
+                        .list_box_item_path(&item_name, index)
+                        .unwrap_or_else(|| format!("items[{index}]"));
+                    if !page.pin_list_box_item(&item_name, index) {
+                        *guard = Some(page);
+                        return Err(mlua::Error::RuntimeError(
+                            "list_box.get_item 找不到目标行".to_owned(),
+                        ));
+                    }
+                    let offset = page.list_box_scroll(&item_name);
+                    let (next, table) = match page.render_list_window(lua, &item_name, offset) {
+                        Ok(result) => result,
+                        Err(error) => {
+                            *guard = Some(page);
+                            return Err(error);
+                        }
+                    };
+                    let window =
+                        match parse_list_box_window(&table, &mut item_images.borrow_mut(), 0, None)
+                        {
+                            Ok(window) => window,
+                            Err(error) => {
+                                *guard = Some(page);
+                                return Err(error);
+                            }
+                        };
+                    {
+                        let mut texts = item_texts.borrow_mut();
+                        for row in &window.rows {
+                            for element in &row.elements {
+                                let (region, text) = match element {
+                                    Element::TextEdit(edit) => (&edit.region_name, &edit.text),
+                                    Element::TextBox(edit) => (&edit.region_name, &edit.text),
+                                    _ => continue,
+                                };
+                                if !region.is_empty() {
+                                    texts.insert((id, region.clone()), text.clone());
+                                }
+                            }
+                        }
+                    }
+                    let name = table
+                        .get::<Option<String>>("name")?
+                        .unwrap_or_else(|| item_name.clone());
+                    *guard = Some(next);
+                    item_requests
+                        .borrow_mut()
+                        .push(Request::SetListWindow { id, name, window });
+                    let item = lua.create_table()?;
+                    item.set("index", index)?;
+                    item.set("key", key)?;
+                    item.set("subpage", "items")?;
+                    item.set("instance", instance.clone())?;
+
+                    let get_page = item_page.clone();
+                    let get_texts = item_texts.clone();
+                    let get_instance = instance.clone();
+                    item.set(
+                        "get_text",
+                        lua.create_function(move |_, (_this, name): (mlua::Table, String)| {
+                            let path = format!("{get_instance}.{name}");
+                            let control = get_page
+                                .borrow()
+                                .as_ref()
+                                .and_then(|page| page.control_name(&path).map(str::to_owned));
+                            Ok(control.and_then(|control| {
+                                get_texts.borrow().get(&(id, control)).cloned()
+                            }))
+                        })?,
+                    )?;
+
+                    let set_page = item_page.clone();
+                    let set_requests = item_requests.clone();
+                    let set_texts = item_texts.clone();
+                    let set_instance = instance.clone();
+                    item.set(
+                        "set_text",
+                        lua.create_function(
+                            move |_, (_this, name, text): (mlua::Table, String, String)| {
+                                let path = format!("{set_instance}.{name}");
+                                let control = set_page
+                                    .borrow()
+                                    .as_ref()
+                                    .and_then(|page| page.control_name(&path).map(str::to_owned))
+                                    .ok_or_else(|| {
+                                        mlua::Error::RuntimeError(format!(
+                                            "list_box 行里找不到控件：{path}"
+                                        ))
+                                    })?;
+                                set_texts
+                                    .borrow_mut()
+                                    .insert((id, control.clone()), text.clone());
+                                set_requests.borrow_mut().push(Request::SetText {
+                                    id,
+                                    name: control,
+                                    text,
+                                });
+                                Ok(())
+                            },
+                        )?,
+                    )?;
+
+                    let focus_requests = item_requests.clone();
+                    let focus_page = item_page.clone();
+                    let focus_instance = instance.clone();
+                    item.set(
+                        "focus",
+                        lua.create_function(move |_, (_this, name): (mlua::Table, String)| {
+                            let path = format!("{focus_instance}.{name}");
+                            let control = focus_page
+                                .borrow()
+                                .as_ref()
+                                .and_then(|page| page.control_name(&path).map(str::to_owned))
+                                .ok_or_else(|| {
+                                    mlua::Error::RuntimeError(format!(
+                                        "list_box 行里找不到控件：{path}"
+                                    ))
+                                })?;
+                            focus_requests
+                                .borrow_mut()
+                                .push(Request::FocusText { id, name: control });
+                            Ok(())
+                        })?,
+                    )?;
+
+                    let path_instance = instance.clone();
+                    item.set(
+                        "control_path",
+                        lua.create_function(move |_, (_this, name): (mlua::Table, String)| {
+                            Ok(format!("{path_instance}.{name}"))
+                        })?,
+                    )?;
+                    Ok(item)
+                })?,
+            )?;
+
+            let selected_name = name.clone();
+            handle.set(
+                "get_selected_index",
+                lua.create_function(move |_, _this: mlua::Table| {
+                    Ok(cached_list_box_selected(id, &selected_name))
+                })?,
+            )?;
+
+            let offset_name = name.clone();
+            handle.set(
+                "get_scroll_offset",
+                lua.create_function(move |_, _this: mlua::Table| {
+                    Ok(cached_list_box_scroll(id, &offset_name))
+                })?,
+            )?;
+
+            let properties_page = list_box_handle_page.clone();
+            let properties_name = name.clone();
+            let properties = lua.create_table()?;
+            properties.set(
+                "__index",
+                lua.create_function(move |_, (this, key): (mlua::Table, String)| {
+                    match key.as_str() {
+                        "item_count" => Ok(mlua::Value::Integer(
+                            properties_page
+                                .borrow()
+                                .as_ref()
+                                .and_then(|page| page.list_box_count(&properties_name))
+                                .unwrap_or(0) as i64,
+                        )),
+                        "selected_index" => Ok(cached_list_box_selected(id, &properties_name)
+                            .map(|index| mlua::Value::Integer(index as i64))
+                            .unwrap_or(mlua::Value::Nil)),
+                        "scroll_offset" => {
+                            Ok(mlua::Value::Integer(
+                                cached_list_box_scroll(id, &properties_name) as i64,
+                            ))
+                        }
+                        _ => this.raw_get(key),
+                    }
+                })?,
+            )?;
+
+            let newindex_requests = list_box_handle_requests.clone();
+            let newindex_page = list_box_handle_page.clone();
+            let newindex_name = name.clone();
+            properties.set(
+                "__newindex",
+                lua.create_function(
+                    move |_, (this, key, value): (mlua::Table, String, mlua::Value)| {
+                        if key == "selected_index" {
+                            let index = value.as_i64().ok_or_else(|| {
+                                mlua::Error::RuntimeError(
+                                    "list_box.selected_index 需要整数".to_owned(),
+                                )
+                            })? as i32;
+                            cache_list_box_selected(id, &newindex_name, index);
+                            let offset = (index >= 0)
+                                .then(|| {
+                                    newindex_page.borrow().as_ref().and_then(|page| {
+                                        page.list_box_scroll_to(&newindex_name, index as usize)
+                                    })
+                                })
+                                .flatten();
+                            newindex_requests.borrow_mut().push(Request::ListBoxSelect {
+                                id,
+                                name: newindex_name.clone(),
+                                index,
+                                offset,
+                            });
+                        } else {
+                            this.raw_set(key, value)?;
+                        }
+                        Ok(())
+                    },
+                )?,
+            )?;
+            handle.set_metatable(Some(properties))?;
+            Ok(handle)
+        })?,
+    )?;
+
+    let list_box_scroll_requests = requests.clone();
+    let list_box_scroll_page = layout_page.clone();
+    handle.set(
+        "scroll_to",
+        lua.create_function(
+            move |_, (_this, name, index): (mlua::Table, String, usize)| {
+                let offset = list_box_scroll_page
+                    .borrow()
+                    .as_ref()
+                    .and_then(|page| page.list_box_scroll_to(&name, index));
+                list_box_scroll_requests
+                    .borrow_mut()
+                    .push(Request::ListBoxScrollTo {
+                        id,
+                        name,
+                        index,
+                        offset,
+                    });
+                Ok(())
+            },
+        )?,
+    )?;
+
+    let list_box_select_requests = requests.clone();
+    let list_box_select_page = layout_page.clone();
+    handle.set(
+        "set_selected_index",
+        lua.create_function(move |_, (_this, name, index): (mlua::Table, String, i32)| {
+            cache_list_box_selected(id, &name, index);
+            let offset = (index >= 0)
+                .then(|| {
+                    list_box_select_page
+                        .borrow()
+                        .as_ref()
+                        .and_then(|page| page.list_box_scroll_to(&name, index as usize))
+                })
+                .flatten();
+            list_box_select_requests
+                .borrow_mut()
+                .push(Request::ListBoxSelect {
+                    id,
+                    name,
+                    index,
+                    offset,
+                });
+            Ok(())
+        })?,
     )?;
 
     let draw_requests = requests.clone();
@@ -1056,10 +1866,17 @@ pub(crate) fn handle(
 
     let close_requests = requests.clone();
     let close_regions = regions.clone();
+    let close_page = layout_page.clone();
+    let close_texts = texts.clone();
     handle.set(
         "close",
         lua.create_function(move |_, _this: mlua::Table| {
+            forget_window(id);
             close_regions.borrow_mut().clear();
+            *close_page.borrow_mut() = None;
+            close_texts
+                .borrow_mut()
+                .retain(|(window, _), _| *window != id);
             close_requests.borrow_mut().push(Request::Close(id));
             Ok(())
         })?,
@@ -1179,6 +1996,14 @@ pub(crate) fn handle(
             Ok(())
         })?,
     )?;
+    let script_page = layout_page.clone();
+    register_window_page(id, layout_page);
+    register_window_handle(id, handle.clone());
+    if let Some(page) = script_page.borrow().as_ref()
+        && let Err(error) = ensure_subpage_instances(lua, id, page)
+    {
+        tracing::warn!(%error, "子页面脚本初始化失败");
+    }
     Ok(handle)
 }
 
@@ -1419,6 +2244,7 @@ fn parse_document(
             && !matches!(
                 &element,
                 Element::FlatSvgButton(_)
+                    | Element::ListBox(_)
                     | Element::TextEdit(_)
                     | Element::TextBox(_)
                     | Element::ScrollBar(_)
@@ -1426,13 +2252,18 @@ fn parse_document(
             )
         {
             return Err(mlua::Error::RuntimeError(
-                "events 只能写在 flat_svg_button / text_edit / text_box / scroll_bar 这类动态控件上；普通元素请用 regions"
+                "events 只能写在 flat_svg_button / text_button / list_box / text_edit / text_box / scroll_bar 这类动态控件上；普通元素请用 regions"
                     .to_owned(),
             ));
         }
         if let Element::FlatSvgButton(button) = &mut element {
+            let kind = if button.text.is_some() {
+                "text_button"
+            } else {
+                "flat_svg_button"
+            };
             if button.region_name.trim().is_empty() {
-                button.region_name = format!("flat_svg_button_{}", elements.len() + 1);
+                button.region_name = format!("{kind}_{}", elements.len() + 1);
             }
             if regions
                 .iter()
@@ -1440,7 +2271,7 @@ fn parse_document(
                 .any(|region: &Region| region.name == button.region_name)
             {
                 return Err(mlua::Error::RuntimeError(format!(
-                    "扁平按钮的区域名重复：{}",
+                    "{kind} 的区域名重复：{}",
                     button.region_name
                 )));
             }
@@ -1505,6 +2336,25 @@ fn parse_document(
                 )));
             }
             let mut region = Region::new(bar.region_name.clone(), bar.hit_shape((0.0, 0.0)), false);
+            region.handlers = handlers.clone();
+            button_regions.push(region);
+        }
+        if let Element::ListBox(list) = &mut element {
+            if list.region_name.trim().is_empty() {
+                list.region_name = format!("list_box_{}", elements.len() + 1);
+            }
+            if regions
+                .iter()
+                .chain(button_regions.iter())
+                .any(|region: &Region| region.name == list.region_name)
+            {
+                return Err(mlua::Error::RuntimeError(format!(
+                    "列表盒的区域名重复：{}",
+                    list.region_name
+                )));
+            }
+            let mut region =
+                Region::new(list.region_name.clone(), list.hit_shape((0.0, 0.0)), false);
             region.handlers = handlers;
             button_regions.push(region);
         }
@@ -1722,7 +2572,8 @@ fn parse_handlers(table: &mlua::Table) -> mlua::Result<Vec<(String, String)>> {
             return Err(mlua::Error::RuntimeError(format!(
                 "events 的事件名不认识：{action}（可用：click / right_click / hover / leave / wheel / \
                  focus / blur / mouse_enter / mouse_leave / mouse_pressed / mouse_released / \
-                 mouse_clicked / mouse_double_clicked / text_changed / key_pressed / focused / unfocused）"
+                 mouse_clicked / clicked / mouse_double_clicked / text_changed / key_pressed / \
+                 focused / unfocused）"
             )));
         };
         let action = action.as_str();
@@ -2159,6 +3010,8 @@ fn parse_element(
         "panel" => parse_panel(table, images, depth),
         "self_drawing_panel" => parse_self_drawing_panel(table, images, depth),
         "flat_svg_button" => parse_flat_svg_button(table),
+        "text_button" => parse_text_button(table),
+        "list_box" => parse_list_box(table, images, depth),
         "text_edit" => parse_text_edit(table),
         "text_box" => parse_text_box(table),
         "hscroll_bar" | "hscrollbar" => parse_scroll_bar(table, ScrollAxis::Horizontal),
@@ -2168,7 +3021,7 @@ fn parse_element(
         other => Err(mlua::Error::RuntimeError(format!(
             "元素 type 不认识：{other}（可用：rect / circle / line / text / svg / img / path / \
              label / text_block / static_shape / static_image / panel / self_drawing_panel / \
-             flat_svg_button / text_edit / hscroll_bar / vscroll_bar）"
+             flat_svg_button / text_button / list_box / text_edit / hscroll_bar / vscroll_bar）"
         ))),
     }
 }
@@ -2249,9 +3102,422 @@ fn parse_flat_svg_button(table: &mlua::Table) -> mlua::Result<Element> {
             Color::rgba(0, 0, 0, 0x33),
             Color::rgb(0, 0, 0),
         )?,
+        disabled: button_colors(
+            table,
+            "disabled",
+            Color::rgba(0, 0, 0, 0),
+            Color::rgb(0, 0, 0),
+        )?,
         state: ButtonState::Normal,
+        enabled: table.get::<Option<bool>>("enabled")?.unwrap_or(true),
+        text: None,
+        shadow: None,
+        show_shadow: false,
+        default_button: None,
         region_name: table.get::<Option<String>>("name")?.unwrap_or_default(),
     }))
+}
+
+/// `text_button`：背景形状 + 文本 + 自动区域；文本按钮也复用扁平按钮的按下 / 悬停状态。
+fn parse_text_button(table: &mlua::Table) -> mlua::Result<Element> {
+    let text: String = table.get::<Option<String>>("text")?.unwrap_or_default();
+    if text.chars().count() > MAX_TEXT {
+        return Err(mlua::Error::RuntimeError(format!(
+            "text_button 的文本最多 {MAX_TEXT} 个字符"
+        )));
+    }
+    let font = table.get::<Option<mlua::Table>>("font")?;
+    let size = font
+        .as_ref()
+        .and_then(|font| font.get::<Option<f32>>("size").ok().flatten())
+        .unwrap_or(14.0)
+        .clamp(1.0, 256.0);
+    let family = font
+        .as_ref()
+        .and_then(|font| font.get::<Option<String>>("family").ok().flatten())
+        .map(|family| family.trim().to_owned())
+        .filter(|family| !family.is_empty());
+    let weight = font
+        .as_ref()
+        .and_then(|font| font.get::<Option<u16>>("weight").ok().flatten())
+        .unwrap_or(400);
+    if !(100..=900).contains(&weight) {
+        return Err(mlua::Error::RuntimeError(format!(
+            "text_button 的 font.weight 要在 100–900，现在是 {weight}"
+        )));
+    }
+    let italic = font
+        .as_ref()
+        .and_then(|font| font.get::<Option<bool>>("italic").ok().flatten())
+        .unwrap_or(false);
+
+    let background = table.get::<Option<mlua::Table>>("background")?;
+    let shape_name = background
+        .as_ref()
+        .and_then(|background| background.get::<Option<String>>("shape").ok().flatten())
+        .unwrap_or_else(|| "round_rect".to_owned());
+    let background_color = background
+        .as_ref()
+        .map(|background| color(background, "color", false))
+        .transpose()?
+        .flatten()
+        .unwrap_or(Color::rgb(0xFF, 0xFF, 0xFF));
+    let radius = background
+        .as_ref()
+        .and_then(|background| background.get::<Option<f32>>("radius").ok().flatten())
+        .unwrap_or(3.0)
+        .max(0.0);
+
+    let (text_width, text_height) = text_button_extent(&text, size);
+    let padding_x = 12.0;
+    let padding_y = 6.0;
+    let min_width = text_width + padding_x * 2.0;
+    let min_height = text_height + padding_y * 2.0;
+    let mut width = optional_positive(table, "w")?
+        .unwrap_or(min_width)
+        .max(min_width);
+    let mut height = optional_positive(table, "h")?
+        .unwrap_or(min_height)
+        .max(min_height);
+    if shape_name == "circle" {
+        let diameter = width.max(height).max(min_width.hypot(min_height));
+        width = diameter;
+        height = diameter;
+    }
+    let shape = match shape_name.as_str() {
+        "rect" => ButtonShape::Rect,
+        "round_rect" => ButtonShape::RoundRect { radius },
+        "circle" => ButtonShape::Circle {
+            radius: width.min(height) * 0.5,
+        },
+        "path" => ButtonShape::Path {
+            commands: parse_path(table)?,
+        },
+        other => {
+            return Err(mlua::Error::RuntimeError(format!(
+                "text_button 的 background.shape 不认识：{other}（可用：rect / round_rect / circle / path）"
+            )));
+        }
+    };
+
+    let shadow = table.get::<Option<mlua::Table>>("shadow")?;
+    let shadow_color = shadow
+        .as_ref()
+        .map(|shadow| color(shadow, "color", false))
+        .transpose()?
+        .flatten()
+        .unwrap_or(Color::rgba(0, 0, 0, 0x5A));
+    let offset = shadow
+        .as_ref()
+        .and_then(|shadow| shadow.get::<Option<mlua::Table>>("offset").ok().flatten());
+    let offset_x = offset
+        .as_ref()
+        .and_then(|offset| offset.get::<Option<f32>>("x").ok().flatten())
+        .unwrap_or(2.0);
+    let offset_y = offset
+        .as_ref()
+        .and_then(|offset| offset.get::<Option<f32>>("y").ok().flatten())
+        .unwrap_or(6.0);
+
+    let text_color = color(table, "text_color", false)?.unwrap_or(Color::rgb(0x1F, 0x23, 0x29));
+    let normal = text_button_colors(table, "normal", background_color, text_color)?;
+    let hovered = text_button_colors(table, "hovered", normal.background, normal.svg)?;
+    let pressed = text_button_colors(table, "pressed", normal.background, normal.svg)?;
+    let disabled = text_button_colors(table, "disabled", normal.background, normal.svg)?;
+    let enabled = table.get::<Option<bool>>("enabled")?.unwrap_or(true);
+    let show_shadow = table.get::<Option<bool>>("show_shadow")?.unwrap_or(false);
+    let default_button = match table.get::<Option<String>>("default_button")?.as_deref() {
+        None | Some("null") => None,
+        Some("escape") => Some(DefaultButton::Escape),
+        Some("enter") => Some(DefaultButton::Enter),
+        Some(other) => {
+            return Err(mlua::Error::RuntimeError(format!(
+                "text_button 的 default_button 只能是 null / escape / enter，现在是 {other}"
+            )));
+        }
+    };
+    let text = ButtonText {
+        text,
+        color: normal.svg,
+        family,
+        size,
+        weight,
+        italic,
+    };
+    Ok(Element::FlatSvgButton(FlatSvgButton {
+        x: number(table, "x", 0.0)?,
+        y: number(table, "y", 0.0)?,
+        width,
+        height,
+        shape,
+        svg: String::new(),
+        svg_size: (width, height),
+        normal,
+        hovered,
+        pressed,
+        disabled,
+        state: ButtonState::Normal,
+        enabled,
+        text: Some(text),
+        shadow: Some(ButtonShadow {
+            color: shadow_color,
+            offset_x,
+            offset_y,
+        }),
+        show_shadow,
+        default_button,
+        region_name: table.get::<Option<String>>("name")?.unwrap_or_default(),
+    }))
+}
+
+/// 文本按钮某一状态的颜色：`{ background, text }`；`text_color` / `svg` 也认。
+fn text_button_colors(
+    table: &mlua::Table,
+    key: &str,
+    default_background: Color,
+    default_text: Color,
+) -> mlua::Result<ButtonColors> {
+    let Some(state) = table.get::<Option<mlua::Table>>(key)? else {
+        return Ok(ButtonColors {
+            background: default_background,
+            svg: default_text,
+        });
+    };
+    let text = color(&state, "text", false)?
+        .or(color(&state, "text_color", false)?)
+        .or(color(&state, "svg", false)?)
+        .unwrap_or(default_text);
+    Ok(ButtonColors {
+        background: color(&state, "background", false)?.unwrap_or(default_background),
+        svg: text,
+    })
+}
+
+/// `list_box` 的直接内容形式：`rows = { { height, elements = { … } }, … }`。
+///
+/// 页面树里的 `list_box` 由 `page_layout` 先展开成这个形状；这里只负责几何和嵌套元素。
+fn allow_select(table: &mlua::Table, _rows: usize) -> mlua::Result<bool> {
+    table
+        .get::<Option<bool>>("allow_select")
+        .map(|value| value.unwrap_or(false))
+}
+
+fn list_box_align(table: &mlua::Table) -> mlua::Result<ListBoxAlign> {
+    Ok(match table.get::<Option<String>>("align")?.as_deref() {
+        None | Some("center") => ListBoxAlign::Center,
+        Some("left") => ListBoxAlign::Left,
+        Some("right") => ListBoxAlign::Right,
+        Some(other) => {
+            return Err(mlua::Error::RuntimeError(format!(
+                "list_box.align 无法识别：{other}（left / center / right）"
+            )));
+        }
+    })
+}
+
+fn selected_index(table: &mlua::Table, rows: usize) -> mlua::Result<i32> {
+    let allow = allow_select(table, rows)?;
+    let explicit = table.get::<Option<i32>>("selected_index")?;
+    if !allow {
+        if explicit.unwrap_or(-2) != -2 {
+            return Err(mlua::Error::RuntimeError(
+                "allow_select = false 时 selected_index 只能是 -2".to_owned(),
+            ));
+        }
+        return Ok(-2);
+    }
+    let index = explicit.unwrap_or(-1);
+    if index < -1 || index >= rows as i32 {
+        return Err(mlua::Error::RuntimeError(format!(
+            "selected_index = {index} 超出 -1..{}",
+            rows as i32 - 1
+        )));
+    }
+    Ok(index)
+}
+
+fn parse_list_box(
+    table: &mlua::Table,
+    images: &mut ImageCache,
+    depth: usize,
+) -> mlua::Result<Element> {
+    let window = parse_list_box_window(table, images, depth, None)?;
+    let width = positive(table, "w", "width")?;
+    let height = positive(table, "h", "height")?;
+    let allow_select = allow_select(table, window.row_count)?;
+    Ok(Element::ListBox(ListBox {
+        x: number(table, "x", 0.0)?,
+        y: number(table, "y", 0.0)?,
+        width,
+        height,
+        radius: number(table, "radius", 3.0)?.max(0.0),
+        fill: color(table, "fill", false)?.or(color(table, "back_color", false)?),
+        edge_color: color(table, "edge_color", false)?
+            .or(color(table, "color", false)?)
+            .unwrap_or(Color::rgba(0xD2, 0xD2, 0xD2, 0xFF)),
+        edge_width: number(table, "edge_width", 1.0)?.max(0.0),
+        content_gap: number(table, "the_gap_between_border_and_content", 2.0)?.max(0.0),
+        gap: number(table, "gap", 0.0)?.max(0.0),
+        auto_item_gap_averaging: table
+            .get::<Option<bool>>("auto_item_gap_averaging")?
+            .unwrap_or(true),
+        align: list_box_align(table)?,
+        rows: window.rows,
+        row_count: window.row_count,
+        scroll_offset: window.scroll_offset,
+        content_height: window.content_height,
+        allow_select,
+        selected_index: selected_index(table, window.row_count)?,
+        auto_center_selected: allow_select
+            && table
+                .get::<Option<bool>>("auto_center_selected")?
+                .unwrap_or(false),
+        hovered_index: None,
+        region_name: table.get::<Option<String>>("name")?.unwrap_or_default(),
+    }))
+}
+
+fn parse_list_box_window(
+    table: &mlua::Table,
+    images: &mut ImageCache,
+    depth: usize,
+    scroll_offset: Option<f32>,
+) -> mlua::Result<ListBoxWindow> {
+    if depth >= MAX_PANEL_DEPTH {
+        return Err(mlua::Error::RuntimeError(format!(
+            "list_box 嵌套超过 {MAX_PANEL_DEPTH} 层"
+        )));
+    }
+    let mut rows = Vec::new();
+    let gap = number(table, "gap", 0.0)?.max(0.0);
+    let mut content_height: f32 = 0.0;
+    let mut visible_top: f32 = 0.0;
+    if let Some(list) = table.get::<Option<mlua::Table>>("rows")? {
+        for (fallback_index, row) in list.sequence_values::<mlua::Table>().enumerate() {
+            let row = row?;
+            let index = row.get::<Option<usize>>("index")?.unwrap_or(fallback_index);
+            let height = optional_positive(&row, "height")?.unwrap_or(0.0);
+            if height <= 0.0 {
+                return Err(mlua::Error::RuntimeError(
+                    "list_box 的每一行都要有正的 height".to_owned(),
+                ));
+            }
+            let mut elements = Vec::new();
+            let mut hits = Vec::new();
+            if let Some(children) = row.get::<Option<mlua::Table>>("elements")? {
+                for child in children.sequence_values::<mlua::Table>() {
+                    let child = child?;
+                    let handlers = parse_handlers(&child)?;
+                    let child_type = child.get::<Option<String>>("type")?;
+                    let text_control =
+                        matches!(child_type.as_deref(), Some("text_edit" | "text_box"));
+                    if (!handlers.is_empty() || text_control)
+                        && matches!(
+                            child_type.as_deref(),
+                            Some("flat_svg_button" | "text_button" | "text_edit" | "text_box")
+                        )
+                    {
+                        let x = number(&child, "x", 0.0)?;
+                        let y = number(&child, "y", 0.0)?;
+                        let width = number(&child, "w", 0.0)?;
+                        let height = number(&child, "h", 0.0)?;
+                        if width > 0.0 && height > 0.0 {
+                            hits.push(ListBoxHit {
+                                shape: HitShape::Rect(HitRect::new(x, y, width, height)),
+                                control: child.get::<Option<String>>("name")?.unwrap_or_default(),
+                                handlers,
+                                element: elements.len(),
+                            });
+                        }
+                    }
+                    elements.push(parse_element(&child, images, depth + 1)?);
+                }
+            }
+            let selected_elements =
+                if let Some(states) = row.get::<Option<mlua::Table>>("states")? {
+                    states
+                        .get::<Option<mlua::Table>>(2)?
+                        .map(|table| parse_list_box_row_elements(&table, images, depth + 1))
+                        .transpose()?
+                        .unwrap_or_default()
+                } else {
+                    Vec::new()
+                };
+            let hovered_elements = if let Some(states) = row.get::<Option<mlua::Table>>("states")? {
+                states
+                    .get::<Option<mlua::Table>>(3)?
+                    .map(|table| parse_list_box_row_elements(&table, images, depth + 1))
+                    .transpose()?
+                    .unwrap_or_default()
+            } else {
+                Vec::new()
+            };
+            let top = row.get::<Option<f32>>("top")?.unwrap_or(visible_top);
+            visible_top = top + height + gap;
+            content_height = content_height.max(top + height);
+            rows.push(ListBoxRow {
+                index,
+                top,
+                height,
+                width: row.get::<Option<f32>>("width")?.unwrap_or(0.0).max(0.0),
+                key: row.get::<Option<String>>("key")?,
+                elements,
+                selected_elements,
+                hovered_elements,
+                hits,
+            });
+        }
+    }
+    let computed_height =
+        content_height.max((visible_top - if rows.is_empty() { 0.0 } else { gap }).max(0.0));
+    let row_count = table
+        .get::<Option<usize>>("row_count")?
+        .unwrap_or(rows.len())
+        .max(rows.len());
+    let content_height = table
+        .get::<Option<f32>>("content_height")?
+        .unwrap_or(computed_height)
+        .max(computed_height);
+    let scroll_offset = scroll_offset
+        .unwrap_or(table.get::<Option<f32>>("scroll_offset")?.unwrap_or(0.0))
+        .max(0.0);
+    rows.sort_by_key(|row| row.index);
+    Ok(ListBoxWindow {
+        rows,
+        row_count,
+        content_height,
+        scroll_offset,
+    })
+}
+
+/// 文本按钮的文本范围（宽取最宽一行，高取行数 × 行高）。
+fn parse_list_box_row_elements(
+    elements: &mlua::Table,
+    images: &mut ImageCache,
+    depth: usize,
+) -> mlua::Result<Vec<Element>> {
+    let mut parsed = Vec::new();
+    for child in elements.sequence_values::<mlua::Table>() {
+        parsed.push(parse_element(&child?, images, depth)?);
+    }
+    Ok(parsed)
+}
+
+fn text_button_extent(text: &str, size: f32) -> (f32, f32) {
+    let measure = PARSE_MEASURE.with(|slot| slot.borrow().clone());
+    let line_height = size * 1.25;
+    let mut width = 0.0_f32;
+    let mut lines = 0;
+    for line in text.split('\n') {
+        lines += 1;
+        let line_width = measure
+            .as_ref()
+            .and_then(|measure| measure(line, size, 0.0, crate::runtime::MeasureFont::Candidate))
+            .map(|(width, _)| width)
+            .unwrap_or_else(|| line.chars().count() as f32 * size * 0.6);
+        width = width.max(line_width);
+    }
+    (width, lines.max(1) as f32 * line_height)
 }
 
 /// `text_edit`：背景胶囊 + 可选 SVG + Windowless RichEdit 承载的文本区。
@@ -2321,6 +3587,9 @@ fn parse_text_edit(table: &mlua::Table) -> mlua::Result<Element> {
         caret_color: color(table, "cursor_color", false)?.or(color(table, "caret_color", false)?),
         text_color: color(table, "text_color", false)?,
         read_only: table.get::<Option<bool>>("read_only")?.unwrap_or(false),
+        deselect_on_blur: table
+            .get::<Option<bool>>("deselect_on_blur")?
+            .unwrap_or(true),
         passkey: table
             .get::<Option<bool>>("passkey")?
             .or(table.get::<Option<bool>>("password")?)
@@ -2381,6 +3650,7 @@ fn parse_text_box(table: &mlua::Table) -> mlua::Result<Element> {
         border: color(table, "edge_color", false)?.or(color(table, "color", false)?),
         border_width,
         border_width_fixed,
+        content_gap: number(table, "the_gap_between_border_and_content", 2.0)?.max(0.0),
         selection_background: color(table, "sel_back_color", false)?.or(color(
             table,
             "selection_background",
@@ -2394,6 +3664,9 @@ fn parse_text_box(table: &mlua::Table) -> mlua::Result<Element> {
         caret_color: color(table, "cursor_color", false)?.or(color(table, "caret_color", false)?),
         text_color: color(table, "text_color", false)?,
         read_only: table.get::<Option<bool>>("read_only")?.unwrap_or(false),
+        deselect_on_blur: table
+            .get::<Option<bool>>("deselect_on_blur")?
+            .unwrap_or(true),
         auto_line_wrap: table.get::<Option<bool>>("auto_line_wrap")?.unwrap_or(true),
         line_spacing,
         font_name,
@@ -2928,6 +4201,9 @@ pub enum WindowAction {
     /// 键盘焦点离开（点了别的窗口、收起 / 销毁、或脚本 `win:focus(false)`）。
     Blur,
 
+    /// 窗口已经从 UI 侧销毁；Runtime 用它清理按窗口保存的虚拟列表状态。
+    Closed,
+
     /// 鼠标进入扁平按钮区域。
     MouseEnter,
 
@@ -2943,8 +4219,29 @@ pub enum WindowAction {
     /// 在扁平按钮上单击（没有拖拽、没有修饰键）。
     MouseClicked,
 
+    /// 文本按钮的单击：鼠标点击，或默认键 `Enter` / `Esc`。
+    Clicked,
+
+    /// `list_box` 的单击：鼠标在同一行 / 控件内按下并抬起。
+    ListClicked,
+
     /// 在扁平按钮上双击（第二次 `mouse_clicked`，没有修饰键）。
     MouseDoubleClicked,
+
+    /// `list_box` 的双击：不再派 `clicked`。
+    DoubleClicked,
+
+    /// `text_edit` / `text_box` 的三击：单行已全选，多行已选中整行。
+    TripleClicked,
+
+    /// `list_box` 的选中项变了。
+    SelectedIndexChanged,
+
+    /// `list_box` 的滚动偏移 / 滚动条可见性变了；`event.value` 是第一个可见行。
+    ScrollChanged,
+
+    /// `list_box` 选中行里的控件完成了一次操作；`event.child_action` 是子事件名。
+    SelectedItemOperated,
 
     /// `text_edit` 里的文字或选区变了（`event.control` / `event.text` 一起给）。
     TextChanged,
@@ -2973,12 +4270,19 @@ impl WindowAction {
             Self::Wheel => "wheel",
             Self::Focus => "focus",
             Self::Blur => "blur",
+            Self::Closed => "closed",
             Self::MouseEnter => "mouse_enter",
             Self::MouseLeave => "mouse_leave",
             Self::MousePressed => "mouse_pressed",
             Self::MouseReleased => "mouse_released",
             Self::MouseClicked => "mouse_clicked",
+            Self::Clicked | Self::ListClicked => "clicked",
             Self::MouseDoubleClicked => "mouse_double_clicked",
+            Self::DoubleClicked => "double_clicked",
+            Self::TripleClicked => "triple_clicked",
+            Self::SelectedIndexChanged => "selected_index_changed",
+            Self::ScrollChanged => "scroll_changed",
+            Self::SelectedItemOperated => "selected_item_operated",
             Self::TextChanged => "text_changed",
             Self::KeyPressed => "key_pressed",
             Self::Focused => "focused",
@@ -2997,13 +4301,19 @@ impl WindowAction {
             "wheel" => Self::Wheel,
             "focus" => Self::Focus,
             "blur" => Self::Blur,
+            "closed" => Self::Closed,
             "mouse_enter" => Self::MouseEnter,
             "mouse_leave" => Self::MouseLeave,
             "mouse_pressed" => Self::MousePressed,
             "mouse_released" => Self::MouseReleased,
             "mouse_clicked" => Self::MouseClicked,
+            "clicked" | "on_clicked" | "onClicked" => Self::Clicked,
             "mouse_double_clicked" => Self::MouseDoubleClicked,
-            "double_click" => Self::MouseDoubleClicked,
+            "double_click" | "double_clicked" | "on_double_clicked" => Self::DoubleClicked,
+            "triple_click" | "triple_clicked" | "on_triple_clicked" => Self::TripleClicked,
+            "selected_index_changed" | "on_selected_index_changed" => Self::SelectedIndexChanged,
+            "scroll_changed" | "on_scroll_changed" => Self::ScrollChanged,
+            "selected_item_operated" | "on_selected_item_operated" => Self::SelectedItemOperated,
             "text_changed" => Self::TextChanged,
             "key_pressed" => Self::KeyPressed,
             "on_key_pressed" | "onKeyPressed" => Self::KeyPressed,
@@ -3046,6 +4356,15 @@ pub struct ScriptWindowEvent {
 
     /// 命中的控件属于哪个子页面实例；普通窗口控件是 `None`。
     pub instance: Option<InstanceInfo>,
+
+    /// `list_box` 事件里的行号（0 起；空白 / 无选择时 `None`）。
+    pub index: Option<i32>,
+
+    /// `list_box` 事件里的稳定 key。
+    pub item_key: Option<String>,
+
+    /// `selected_item_operated` 里子控件实际发生的事件名。
+    pub child_action: Option<String>,
 
     /// 区域 / 布局为这个事件声明的处理器名（`events` 表）；没声明是 `None`。
     pub handler: Option<String>,
@@ -3097,7 +4416,22 @@ pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result
     }
     payload.set("handler", event.handler.clone())?;
     payload.set("text", event.text.clone())?;
-    payload.set("key", event.key)?;
+    payload.set("index", event.index)?;
+    payload.set("child_action", event.child_action.clone())?;
+    if let Some(item_key) = &event.item_key {
+        payload.set("item_key", item_key.clone())?;
+    }
+    let item_key = event.item_key.clone().or_else(|| {
+        event
+            .instance
+            .as_ref()
+            .and_then(|instance| instance.item_key.clone())
+    });
+    match (event.key, item_key) {
+        (Some(key), _) => payload.set("key", key)?,
+        (None, Some(key)) => payload.set("key", key)?,
+        (None, None) => payload.set("key", mlua::Value::Nil)?,
+    }
     payload.set("modifier", event.modifier)?;
     payload.set("value", event.value)?;
     payload.set("delta", event.delta)?;
@@ -3110,6 +4444,24 @@ pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn list_box_selection_defaults_and_ranges_are_checked() {
+        let lua = mlua::Lua::new();
+        let table = lua.create_table().unwrap();
+        assert_eq!(selected_index(&table, 3).unwrap(), -2);
+
+        table.set("allow_select", true).unwrap();
+        assert_eq!(selected_index(&table, 3).unwrap(), -1);
+        table.set("selected_index", 2).unwrap();
+        assert_eq!(selected_index(&table, 3).unwrap(), 2);
+        table.set("selected_index", 3).unwrap();
+        assert!(selected_index(&table, 3).is_err());
+
+        let table = lua.create_table().unwrap();
+        table.set("selected_index", 0).unwrap();
+        assert!(selected_index(&table, 3).is_err());
+    }
 
     /// 建窗口的缺省：面板底色（`background`）与阴影（`shadow`）都开着，与候选窗一致。
     #[test]
@@ -3139,7 +4491,7 @@ mod tests {
     #[test]
     fn bundled_json_layout_parses_into_a_document() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../Scripts/lib/test-caret-window.json");
+            .join("../../Scripts/layouts/test-caret-window.json");
         let lua = mlua::Lua::new();
         let document = load_layout_document(
             &lua,
@@ -3994,7 +5346,9 @@ mod tests {
             (WindowAction::MousePressed, "mouse_pressed"),
             (WindowAction::MouseReleased, "mouse_released"),
             (WindowAction::MouseClicked, "mouse_clicked"),
+            (WindowAction::Clicked, "clicked"),
             (WindowAction::MouseDoubleClicked, "mouse_double_clicked"),
+            (WindowAction::TripleClicked, "triple_clicked"),
         ] {
             assert_eq!(action.as_str(), name);
             assert_eq!(WindowAction::from_name(name), Some(action));
@@ -4100,7 +5454,11 @@ mod tests {
                 item_index: 1,
                 item_key: Some("2".to_owned()),
                 local_name: "title".to_owned(),
+                script: None,
             }),
+            index: Some(4),
+            item_key: Some("row-key".to_owned()),
+            child_action: None,
             handler: Some("plus_clicked".to_owned()),
             text: Some("12".to_owned()),
             key: Some(0x41),
@@ -4122,7 +5480,11 @@ mod tests {
         assert_eq!(payload.get::<String>("subpage").unwrap(), "rows");
         assert_eq!(payload.get::<String>("instance").unwrap(), "rows[1]");
         assert_eq!(payload.get::<usize>("item_index").unwrap(), 1);
-        assert_eq!(payload.get::<String>("item_key").unwrap(), "2");
+        assert_eq!(payload.get::<Option<i32>>("index").unwrap(), Some(4));
+        assert_eq!(
+            payload.get::<String>("item_key").unwrap(),
+            "row-key".to_owned()
+        );
         assert_eq!(
             payload.get::<String>("control_path").unwrap(),
             "rows[1].title"
@@ -4422,6 +5784,80 @@ mod tests {
                     && (width - 20.0).abs() < 0.01 && (height - 20.0).abs() < 0.01
                     && (radius - 3.0).abs() < 0.01
         ));
+    }
+
+    /// `text_button`：文本范围 + 内边距决定最小尺寸，字体 / 阴影 / 默认键都读出来。
+    #[test]
+    fn text_buttons_parse_text_size_font_shadow_and_default_button() {
+        let lua = mlua::Lua::new();
+        let content = lua
+            .load(
+                r##"
+                return {
+                    width = 200, height = 100,
+                    {
+                        type = "text_button", name = "ok", x = 10, y = 10,
+                        w = 10, h = 10, text = "OK",
+                        text_color = "#FF112233",
+                        font = { size = 20, weight = 600, italic = true },
+                        background = { shape = "round_rect", radius = 5, color = "#FF445566" },
+                        normal = { background = "#FF010203", text = "#FF040506" },
+                        hovered = { background = "#FF070809", text = "#FF0A0B0C" },
+                        pressed = { background = "#FF0D0E0F", text = "#FF101112" },
+                        disabled = { background = "#FF131415", text = "#FF161718" },
+                        shadow = { color = "#5A000000", offset = { x = 3, y = 7 } },
+                        show_shadow = true,
+                        enabled = false,
+                        default_button = "enter",
+                        events = { mouse_clicked = "confirm" },
+                    },
+                }
+            "##,
+            )
+            .eval::<mlua::Table>()
+            .unwrap();
+        let hook: crate::runtime::LayoutMeasureHook =
+            Rc::new(|_text, size, _spacing, _font| Some((size * 1.5, size * 1.25)));
+        let document = with_parse_measure(Some(&hook), || {
+            parse_document(
+                &content,
+                (Some(200.0), Some(100.0)),
+                &mut ImageCache::default(),
+            )
+        })
+        .expect("读得出来");
+        let Element::FlatSvgButton(button) = &document.elements[0] else {
+            panic!("不是 text_button：{:?}", document.elements[0]);
+        };
+        assert_eq!(button.width, 54.0, "最宽一行 30 + 左右内边距各 12");
+        assert_eq!(button.height, 37.0, "行高 25 + 上下内边距各 6");
+        assert!(button.svg.is_empty());
+        let text = button.text.as_ref().expect("文本按钮有文本");
+        assert_eq!(text.text, "OK");
+        assert_eq!(text.color, Color::rgb(0x04, 0x05, 0x06));
+        assert_eq!(text.size, 20.0);
+        assert_eq!(text.weight, 600);
+        assert!(text.italic);
+        assert_eq!(button.default_button, Some(DefaultButton::Enter));
+        assert!(!button.enabled);
+        assert!(button.show_shadow);
+        assert_eq!(button.normal.background, Color::rgb(0x01, 0x02, 0x03));
+        assert_eq!(button.normal.svg, Color::rgb(0x04, 0x05, 0x06));
+        assert_eq!(button.hovered.background, Color::rgb(0x07, 0x08, 0x09));
+        assert_eq!(button.hovered.svg, Color::rgb(0x0A, 0x0B, 0x0C));
+        assert_eq!(button.pressed.background, Color::rgb(0x0D, 0x0E, 0x0F));
+        assert_eq!(button.pressed.svg, Color::rgb(0x10, 0x11, 0x12));
+        assert_eq!(button.disabled.background, Color::rgb(0x13, 0x14, 0x15));
+        assert_eq!(button.disabled.svg, Color::rgb(0x16, 0x17, 0x18));
+        let shadow = button.shadow.expect("文本按钮缺省有阴影");
+        assert_eq!(shadow.offset_x, 3.0);
+        assert_eq!(shadow.offset_y, 7.0);
+        assert!(matches!(
+            button.shape,
+            ButtonShape::RoundRect { radius } if (radius - 5.0).abs() < 0.01
+        ));
+        assert_eq!(document.regions.len(), 1);
+        assert_eq!(document.regions[0].name, "ok");
     }
 
     /// `text_edit`：默认胶囊尺寸 / 文本区几何 / 自动区域；有 SVG 时文本区让到旁边。

@@ -18,19 +18,21 @@ use std::sync::Arc;
 use std::time::Instant;
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
-use windows::Win32::Graphics::Gdi::ScreenToClient;
+use windows::Win32::Graphics::Gdi::{ClientToScreen, ScreenToClient};
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::GetDpiForSystem;
 use windows::Win32::UI::Input::KeyboardAndMouse::{
     GetDoubleClickTime, GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT,
-    TrackMouseEvent, VK_CONTROL, VK_MENU, VK_SHIFT,
+    TrackMouseEvent, VK_CONTROL, VK_DOWN, VK_END, VK_ESCAPE, VK_HOME, VK_MENU, VK_NEXT, VK_PRIOR,
+    VK_RETURN, VK_SHIFT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, GetCursorPos, GetSystemMetrics, HTCLIENT, HTTRANSPARENT, IDC_ARROW, KillTimer,
-    LoadCursorW, MA_NOACTIVATE, SM_CXDOUBLECLK, SM_CYDOUBLECLK, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE,
-    SWP_NOSIZE, SWP_NOZORDER, SetTimer, SetWindowPos, ShowWindow, WM_CAPTURECHANGED,
-    WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST,
-    WM_RBUTTONUP, WM_TIMER,
+    DefWindowProcW, GetCursorPos, GetSystemMetrics, HTCLIENT, HTTRANSPARENT, IDC_ARROW, IDC_IBEAM,
+    KillTimer, LoadCursorW, MA_NOACTIVATE, SM_CXDOUBLECLK, SM_CYDOUBLECLK, SW_HIDE, SW_SHOWNA,
+    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetTimer, SetWindowPos, ShowWindow,
+    WM_CAPTURECHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_RBUTTONUP, WM_SETCURSOR,
+    WM_TIMER,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -44,15 +46,15 @@ use crate::window::mouse_transparent;
 use crate::window_class::WindowClass;
 use cloudime_platform::LayoutMode;
 use cloudime_render::{
-    ButtonState, Color, Document, Element, FontSlot, HitShape, Region, ScrollAxis,
-    StaticTextContent, TextBoxScroll,
+    ButtonState, Color, DefaultButton, Document, Element, FontSlot, HitShape, InstanceInfo,
+    ListBoxWindow, Region, ScrollAxis, StaticTextContent, TextBoxScroll,
 };
 use cloudime_script::{
     AuxiliarySpec, ScriptWindowEvent, WindowAction, WindowId, WindowRequest, WindowSpec,
 };
 use text_host::{
     ScrollInfo, TextHostWindow, WM_TEXT_CHANGED, WM_TEXT_FOCUS, WM_TEXT_KEY, WM_TEXT_SCROLL,
-    WM_TEXT_WHEEL,
+    WM_TEXT_TRIPLE_CLICK, WM_TEXT_WHEEL,
 };
 
 mod text_host;
@@ -108,6 +110,14 @@ impl ScriptWindows {
                     tracing::warn!(id, "脚本窗口：换内容时找不到这块窗口");
                 }
             }
+            WindowRequest::SetListWindow { id, name, window } => {
+                if let Some(host) = self.windows.get(&id) {
+                    host.set_list_window(&name, window);
+                } else {
+                    tracing::warn!(id, control = name, "脚本窗口不存在，忽略列表窗口更新");
+                }
+            }
+
             WindowRequest::Show(id, position) => {
                 if let Some(window) = self.windows.get(&id) {
                     window.show(position);
@@ -227,6 +237,38 @@ impl ScriptWindows {
                     tracing::warn!(id, control = name, "脚本窗口：clear 时找不到这块窗口");
                 }
             }
+            WindowRequest::ListBoxScrollTo {
+                id,
+                name,
+                index,
+                offset,
+            } => {
+                if let Some(window) = self.windows.get(&id) {
+                    window.list_box_scroll_to(&name, index, offset);
+                } else {
+                    tracing::warn!(
+                        id,
+                        control = name,
+                        "脚本窗口：list_box 滚动时找不到这块窗口"
+                    );
+                }
+            }
+            WindowRequest::ListBoxSelect {
+                id,
+                name,
+                index,
+                offset,
+            } => {
+                if let Some(window) = self.windows.get(&id) {
+                    window.list_box_select(&name, index, offset);
+                } else {
+                    tracing::warn!(
+                        id,
+                        control = name,
+                        "脚本窗口：list_box 选中时找不到这块窗口"
+                    );
+                }
+            }
         }
     }
 
@@ -274,9 +316,19 @@ impl ScriptWindows {
         if let Some(window) = self.windows.remove(&id) {
             // 关掉的窗口如果正拿着键盘焦点：先告诉工人线程（`key` 载荷不别再带它）
             window.notify_blur();
+            self.notify_closed(id, &window.name);
             tracing::info!(id, name = %window.name, "脚本独立窗口已关（名下资产一起放掉）");
             // 名下资产是它自己的资产表里放着的：`ScriptWindow` 一 `Drop`，模板先 `retire` 再销毁。
+            let removed: Vec<_> = self
+                .auxiliaries
+                .iter()
+                .filter(|(_, aux)| aux.owner == id)
+                .map(|(aux_id, aux)| (*aux_id, aux.name.clone()))
+                .collect();
             self.auxiliaries.retain(|_, aux| aux.owner != id);
+            for (aux_id, aux_name) in removed {
+                self.notify_closed(aux_id, &aux_name);
+            }
             drop(window);
             return;
         }
@@ -284,8 +336,35 @@ impl ScriptWindows {
             if let Some(owner) = self.windows.get(&aux.owner) {
                 owner.retire_asset(&aux.name);
             }
+            self.notify_closed(id, &aux.name);
             tracing::info!(id, name = %aux.name, owner = aux.owner, "脚本辅助窗口已关");
         }
+    }
+
+    fn notify_closed(&self, id: WindowId, name: &str) {
+        (self.events)(ScriptWindowEvent {
+            window: id,
+            name: name.to_owned(),
+            action: WindowAction::Closed,
+            x: 0.0,
+            y: 0.0,
+            element: None,
+            region: None,
+            control: None,
+            instance: None,
+            index: None,
+            item_key: None,
+            child_action: None,
+            handler: None,
+            text: None,
+            key: None,
+            modifier: None,
+            value: None,
+            delta: None,
+            ctrl: false,
+            alt: false,
+            shift: false,
+        });
     }
 
     /// 键盘焦点（独立窗口）或逻辑焦点（辅助窗口，经宿主指定）。
@@ -342,11 +421,11 @@ struct TextEditWindow {
     /// 自动区域名 / 控件名，`get_text` / `set_text` / 焦点都按它找。
     name: String,
 
-    /// 是 `text_box`（多行）还是 `text_edit`；同名但类型变了不能复用宿主。
-    multiline: bool,
-
     /// 控件左上角在内容区的绝对位置（点，已经累加父面板偏移）。
     origin: (f32, f32),
+
+    /// 列表盒等容器的裁剪矩形；普通编辑框为 `None`。
+    clip: Option<(f32, f32, f32, f32)>,
 
     /// 上一次派发给脚本的文本，重复的 `EN_CHANGE` / 输入消息不再重复派事件。
     last_text: RefCell<String>,
@@ -368,6 +447,41 @@ struct ScrollDrag {
     offset: f32,
 }
 
+/// `list_box` 内部滚动条拖动：元素下标 + 按住时相对滑块顶部的偏移（点）。
+#[derive(Clone, Copy)]
+struct ListBoxDrag {
+    index: usize,
+    offset: f32,
+}
+
+/// `list_box` 按下：元素下标 + 按下的行。
+#[derive(Clone, Copy)]
+struct ListBoxPress {
+    index: usize,
+    row: Option<usize>,
+    /// 命中的行内控件（`ListBoxRow::hits` 下标）。
+    child: Option<usize>,
+    /// 点击来自滚动条轨道：抬起时不要派 `clicked`。
+    suppress_click: bool,
+}
+
+type ListBoxClick = (Instant, usize, Option<usize>, (i32, i32));
+
+/// `list_box` 内部滚动的 140 ms 动画。
+struct ListBoxAnimation {
+    from: f32,
+    to: f32,
+    start: Instant,
+}
+
+/// 换内容时用来按 key 恢复列表盒的选中项 / 滚动位置。
+struct ListBoxState {
+    region: String,
+    selected: i32,
+    key: Option<String>,
+    scroll: f32,
+}
+
 /// `text_box` 内部滚动条拖动：元素路径 + 轴向 + 按下点相对滑块起点的偏移（点）。
 struct TextScrollDrag {
     path: Vec<usize>,
@@ -383,6 +497,7 @@ struct TextHostJob {
     path: Vec<usize>,
     name: String,
     origin: (f32, f32),
+    clip: Option<(f32, f32, f32, f32)>,
     text: String,
     font: FontSlot,
     font_name: Option<String>,
@@ -394,6 +509,7 @@ struct TextHostJob {
     caret_color: Option<Color>,
     font_flag: u8,
     read_only: bool,
+    deselect_on_blur: bool,
     passkey: bool,
     multiline: bool,
     auto_wrap: bool,
@@ -466,11 +582,17 @@ pub(super) struct ScriptWindow {
     /// 当前按下的扁平按钮元素下标（按下态）。
     pressed_button: Cell<Option<usize>>,
 
+    /// 页面默认键绑定的按钮（键、元素下标）；同一页面出现多个绑定则全部失效。
+    default_button: Cell<Option<(DefaultButton, usize)>>,
+
     /// 上一次按钮单击：时间、按钮下标、客户区坐标（判双击用）。
     last_click: Cell<Option<LastClick>>,
 
     /// 各 `text_edit` 的 windowless RichEdit 宿主窗。
     text_edits: RefCell<Vec<TextEditWindow>>,
+
+    /// 内容变了、宿主窗需要重建：等主窗口贴上对应帧后再改，避免文字先于行内容更新。
+    text_edits_dirty: Cell<bool>,
 
     /// 拖动中：按下时的光标屏幕坐标 + 窗口左上角。
     drag: Cell<Option<Drag>>,
@@ -478,11 +600,32 @@ pub(super) struct ScriptWindow {
     /// 滚动条拖动：正在拖哪个元素 + 按下点相对滑块起点的偏移。
     scrollbar_drag: Cell<Option<ScrollDrag>>,
 
+    /// `list_box` 内部滚动条拖动。
+    list_box_drag: Cell<Option<ListBoxDrag>>,
+
+    /// 当前拿到焦点的 `list_box` 元素下标。
+    focused_list_box: Cell<Option<usize>>,
+
+    /// `list_box` 内容区按下，等鼠标抬起判点击 / 双击。
+    list_box_press: Cell<Option<ListBoxPress>>,
+
+    /// 当前悬停的 `list_box` 和行（用于未来的 `item_state` 重绘）。
+    hover_list_box: Cell<Option<(usize, Option<usize>)>>,
+
+    /// 当前悬停的行内控件：列表盒下标、行、`ListBoxHit` 下标。
+    hover_list_child: Cell<Option<(usize, usize, usize)>>,
+
+    /// 上一次 `list_box` 点击：时间、元素下标、行、客户区坐标（判双击）。
+    last_list_click: Cell<Option<ListBoxClick>>,
+
     /// `text_box` 内部滚动条拖动。
     text_scroll_drag: RefCell<Option<TextScrollDrag>>,
 
     /// 滚动条过渡动画（元素下标 → 起止值 / 开始时间）。
     scroll_anims: RefCell<HashMap<usize, ScrollAnimation>>,
+
+    /// `list_box` 内部滚动动画（元素下标 → 起止偏移）。
+    list_box_anims: RefCell<HashMap<usize, ListBoxAnimation>>,
 
     /// `text_box` 内部滚动条过渡动画（元素路径 + 轴向）。
     text_scroll_anims: RefCell<HashMap<(Vec<usize>, ScrollAxis), TextScrollAnimation>>,
@@ -541,12 +684,21 @@ impl ScriptWindow {
             hover: Cell::new(None),
             hover_button: Cell::new(None),
             pressed_button: Cell::new(None),
+            default_button: Cell::new(None),
             last_click: Cell::new(None),
             text_edits: RefCell::new(Vec::new()),
+            text_edits_dirty: Cell::new(false),
             drag: Cell::new(None),
             scrollbar_drag: Cell::new(None),
+            list_box_drag: Cell::new(None),
+            focused_list_box: Cell::new(None),
+            list_box_press: Cell::new(None),
+            hover_list_box: Cell::new(None),
+            hover_list_child: Cell::new(None),
+            last_list_click: Cell::new(None),
             text_scroll_drag: RefCell::new(None),
             scroll_anims: RefCell::new(HashMap::new()),
+            list_box_anims: RefCell::new(HashMap::new()),
             text_scroll_anims: RefCell::new(HashMap::new()),
             scroll_anim_timer: Cell::new(0),
             moved_since_press: Cell::new(false),
@@ -568,20 +720,44 @@ impl ScriptWindow {
 
     /// 换一整份内容：显示着就立刻重画（名下的资产跟着重新摆）。
     fn set_content(&self, document: Document) {
+        let previous = self.list_box_states();
         *self.regions.borrow_mut() = document.regions.clone();
         *self.document.borrow_mut() = document;
+        let selection_changed = self.restore_list_box_states(&previous);
         // 新内容里的按钮从 normal 开始；鼠标下次移动再按位置切状态。
         self.hover.set(None);
         self.hover_button.set(None);
         self.pressed_button.set(None);
         self.scrollbar_drag.set(None);
+        self.list_box_drag.set(None);
+        self.list_box_press.set(None);
+        self.hover_list_box.set(None);
+        self.hover_list_child.set(None);
         *self.text_scroll_drag.borrow_mut() = None;
         self.scroll_anims.borrow_mut().clear();
+        self.list_box_anims.borrow_mut().clear();
         self.text_scroll_anims.borrow_mut().clear();
         self.stop_scroll_anim_timer();
         self.last_click.set(None);
-        self.rebuild_text_edits();
+        self.last_list_click.set(None);
+        self.rebuild_default_button();
+        self.text_edits_dirty.set(true);
         self.revision.set(self.revision.get() + 1);
+        for (index, row) in selection_changed {
+            if let Some(list) = self.list_box(index) {
+                let x = list.x + list.width * 0.5;
+                let y = list.y + list.edge_width + list.content_gap + list.row_top(row)
+                    - list.scroll_offset
+                    + list.row(row).map(|row| row.height).unwrap_or(0.0) * 0.5;
+                self.emit_list_box_event(
+                    WindowAction::SelectedIndexChanged,
+                    index,
+                    Some(row),
+                    x,
+                    y,
+                );
+            }
+        }
         if self.shown.get()
             && let Some(position) = self.position.get()
         {
@@ -590,17 +766,125 @@ impl ScriptWindow {
         }
     }
 
+    fn set_list_window(&self, name: &str, window: ListBoxWindow) {
+        let mut document = self.document.borrow_mut();
+        let Some(index) = document.elements.iter().position(
+            |element| matches!(element, Element::ListBox(list) if list.region_name == name),
+        ) else {
+            tracing::warn!(control = name, "列表窗口更新找不到 list_box");
+            return;
+        };
+        let Some(Element::ListBox(list)) = document.elements.get_mut(index) else {
+            return;
+        };
+        let selected = list.selected_index;
+        let selected_key = (selected >= 0)
+            .then(|| list.row(selected as usize))
+            .flatten()
+            .and_then(|row| row.key.clone());
+        list.rows = window.rows;
+        list.row_count = window.row_count.max(list.rows.len());
+        list.content_height = window.content_height;
+        list.hovered_index = None;
+        // 快速拖滚动条时 UI 可能已经跳到很远，而这一窗只覆盖目标附近；
+        // 当前偏移如果落在窗口外，直接对齐到窗口起点，宁可轻微吸附也不能整块空白。
+        if let (Some(top), Some(bottom)) = (
+            list.rows.iter().map(|row| row.top).reduce(f32::min),
+            list.rows
+                .iter()
+                .map(|row| row.top + row.height)
+                .reduce(f32::max),
+        ) {
+            let current = list.scroll_offset;
+            if current < top - 0.5 || current + list.viewport_height() > bottom + 0.5 {
+                list.scroll_offset = window.scroll_offset.clamp(0.0, list.max_scroll_px());
+                self.list_box_anims.borrow_mut().remove(&index);
+            }
+        }
+        if list.allow_select {
+            if let Some(key) = selected_key
+                && let Some(row) = list.rows.iter().find(|row| row.key.as_ref() == Some(&key))
+            {
+                list.selected_index = row.index as i32;
+            } else if selected >= list.row_count as i32 {
+                list.selected_index = list.row_count as i32 - 1;
+            }
+        }
+        drop(document);
+        self.text_edits_dirty.set(true);
+        self.revision.set(self.revision.get() + 1);
+        self.repaint();
+    }
+
     /// 按当前内容同步 windowless RichEdit 宿主窗。
     ///
     /// 同名、同类型的编辑框保留原宿主（keyed diff）：列表重排 / 只改其它行时，
     /// 焦点、选区、正在输入的文本都不会被打断；新出现的才建，消失的随 `old` 一起析构。
+    fn list_box_states(&self) -> Vec<ListBoxState> {
+        self.document
+            .borrow()
+            .elements
+            .iter()
+            .filter_map(|element| {
+                let Element::ListBox(list) = element else {
+                    return None;
+                };
+                let key = (list.selected_index >= 0)
+                    .then(|| list.row(list.selected_index as usize))
+                    .flatten()
+                    .and_then(|row| row.key.clone());
+                Some(ListBoxState {
+                    region: list.region_name.clone(),
+                    selected: list.selected_index,
+                    key,
+                    scroll: list.scroll_offset,
+                })
+            })
+            .collect()
+    }
+
+    fn restore_list_box_states(&self, previous: &[ListBoxState]) -> Vec<(usize, usize)> {
+        let mut changed = Vec::new();
+        let mut document = self.document.borrow_mut();
+        for (element_index, element) in document.elements.iter_mut().enumerate() {
+            let Element::ListBox(list) = element else {
+                continue;
+            };
+            let Some(state) = previous
+                .iter()
+                .find(|state| state.region == list.region_name)
+            else {
+                continue;
+            };
+            let old_selected = list.selected_index;
+            if list.allow_select {
+                if let Some(key) = &state.key
+                    && let Some(row) = list.rows.iter().find(|row| row.key.as_ref() == Some(key))
+                {
+                    list.selected_index = row.index as i32;
+                } else if state.selected >= 0 {
+                    list.selected_index = if list.row_count == 0 {
+                        -1
+                    } else if state.key.is_some() {
+                        (state.selected - 1).max(0).min(list.row_count as i32 - 1)
+                    } else {
+                        state.selected.min(list.row_count as i32 - 1)
+                    };
+                }
+            }
+            if list.scroll_offset == 0.0 {
+                list.scroll_offset = state.scroll.min(list.max_scroll_px());
+            }
+            if list.selected_index != old_selected && list.selected_index >= 0 {
+                changed.push((element_index, list.selected_index as usize));
+            }
+        }
+        changed
+    }
+
+    /// 主窗口贴好新一帧后，原地更新 / 增删 RichEdit 宿主（同名、同槽位优先复用）。
     fn rebuild_text_edits(&self) {
-        let mut old: HashMap<String, TextEditWindow> = self
-            .text_edits
-            .borrow_mut()
-            .drain(..)
-            .map(|edit| (edit.name.clone(), edit))
-            .collect();
+        let mut old: Vec<TextEditWindow> = self.text_edits.borrow_mut().drain(..).collect();
         let mut jobs = Vec::new();
         {
             let document = self.document.borrow();
@@ -616,6 +900,7 @@ impl ScriptWindow {
                     path: placement.path,
                     name: edit.region_name.clone(),
                     origin: (placement.x, placement.y),
+                    clip: placement.clip,
                     text: edit.text.clone(),
                     font: edit.font,
                     font_name: edit.font_name.clone(),
@@ -627,6 +912,7 @@ impl ScriptWindow {
                     caret_color: edit.caret_color,
                     font_flag: edit.font_flag,
                     read_only: edit.read_only,
+                    deselect_on_blur: edit.deselect_on_blur,
                     passkey: edit.passkey,
                     multiline: false,
                     auto_wrap: false,
@@ -644,6 +930,7 @@ impl ScriptWindow {
                     path: placement.path,
                     name: edit.region_name.clone(),
                     origin: (placement.x, placement.y),
+                    clip: placement.clip,
                     text: edit.text.clone(),
                     font: edit.font,
                     font_name: edit.font_name.clone(),
@@ -655,6 +942,7 @@ impl ScriptWindow {
                     caret_color: edit.caret_color,
                     font_flag: edit.font_flag,
                     read_only: edit.read_only,
+                    deselect_on_blur: edit.deselect_on_blur,
                     passkey: false,
                     multiline: true,
                     auto_wrap: edit.auto_line_wrap,
@@ -694,13 +982,23 @@ impl ScriptWindow {
             ),
         };
 
-        let mut edits = self.text_edits.borrow_mut();
+        let mut edits = Vec::new();
         for job in jobs {
-            if let Some(mut edit) = old.remove(&job.name)
-                && edit.multiline == job.multiline
-            {
+            let reuse = old
+                .iter()
+                .position(|edit| edit.name == job.name)
+                .or_else(|| {
+                    (job.path.len() > 1).then(|| {
+                        old.iter()
+                            .position(|edit| edit.path == job.path && !edit.host.is_focused())
+                    })?
+                });
+            if let Some(position) = reuse {
+                let mut edit = old.swap_remove(position);
                 edit.path = job.path;
+                edit.name = job.name;
                 edit.origin = job.origin;
+                edit.clip = job.clip;
                 if edit.host.text_string() != job.text {
                     edit.host.set_text(&job.text);
                 }
@@ -736,8 +1034,10 @@ impl ScriptWindow {
                 colorref(caret_color),
                 job.font_flag,
                 job.read_only,
+                job.deselect_on_blur,
                 job.passkey,
                 job.multiline,
+                true,
                 job.auto_wrap,
                 job.line_spacing,
                 self.dpi.get(),
@@ -756,7 +1056,7 @@ impl ScriptWindow {
                                 });
                         if let Some((_, _, width, height)) = initial {
                             let scale = self.dpi.get() as f32 / 96.0;
-                            host.set_bounds(
+                            let _ = host.set_bounds(
                                 0,
                                 0,
                                 (width * scale).round().max(1.0) as i32,
@@ -770,8 +1070,8 @@ impl ScriptWindow {
                     edits.push(TextEditWindow {
                         path: job.path,
                         name: job.name,
-                        multiline: job.multiline,
                         origin: job.origin,
+                        clip: job.clip,
                         last_text: RefCell::new(job.text),
                         host,
                     });
@@ -781,6 +1081,7 @@ impl ScriptWindow {
                 }
             }
         }
+        *self.text_edits.borrow_mut() = edits;
     }
 
     /// 把 RichEdit 的滚动范围写回 `text_box`，返回滚动条显隐是否变化。
@@ -819,7 +1120,25 @@ impl ScriptWindow {
         let scale = self.scale.get().max(0.01);
         let shown = self.shown.get();
         let document = self.document.borrow();
-        for edit in self.text_edits.borrow().iter() {
+        let placements: Vec<_> = document
+            .text_edits()
+            .into_iter()
+            .chain(document.text_boxes())
+            .collect();
+        let mut edits = self.text_edits.borrow_mut();
+        for edit in edits.iter_mut() {
+            let Some(placement) = placements.iter().find(|item| item.path == edit.path) else {
+                // 行已经滚出当前窗口：宿主先藏起来，等重建时再删。
+                edit.host.show(false);
+                continue;
+            };
+            if !placement.visible {
+                // 行还在当前窗口里，但没完整进入视口：保留宿主，先隐藏。
+                edit.host.show(false);
+                continue;
+            }
+            edit.origin = (placement.x, placement.y);
+            edit.clip = placement.clip;
             let Some(element) = document.element_at_path(&edit.path) else {
                 continue;
             };
@@ -828,30 +1147,91 @@ impl ScriptWindow {
                 Element::TextBox(control) => control.edit_rect(),
                 _ => continue,
             };
-            let x = position.0 + ((edit.origin.0 + x) * scale).round() as i32;
-            let y = position.1 + ((edit.origin.1 + y) * scale).round() as i32;
-            let width = (width * scale).round().max(1.0) as i32;
-            let height = (height * scale).round().max(1.0) as i32;
-            edit.host.set_bounds(x, y, width, height);
-            edit.host.show(shown);
+            let mut left = edit.origin.0 + x;
+            let mut top = edit.origin.1 + y;
+            let mut right = left + width;
+            let mut bottom = top + height;
+            if let Some((clip_x, clip_y, clip_width, clip_height)) = edit.clip {
+                left = left.max(clip_x);
+                top = top.max(clip_y);
+                right = right.min(clip_x + clip_width);
+                bottom = bottom.min(clip_y + clip_height);
+                if right <= left || bottom <= top {
+                    edit.host.show(false);
+                    continue;
+                }
+            }
+            let x = position.0 + (left * scale).round() as i32;
+            let y = position.1 + (top * scale).round() as i32;
+            let width = ((right - left) * scale).round().max(1.0) as i32;
+            let height = ((bottom - top) * scale).round().max(1.0) as i32;
+            let mut changed = edit.host.set_bounds(x, y, width, height);
+            changed |= edit.host.show(shown);
+            if changed {
+                edit.host.refresh();
+            }
+            edit.host.raise();
         }
     }
 
     fn destroy_text_edits(&self) {
         self.text_edits.borrow_mut().clear();
+        self.text_edits_dirty.set(false);
+    }
+
+    fn text_edit_target(
+        &self,
+        element: Option<usize>,
+        region: Option<String>,
+    ) -> Option<Rc<TextHostWindow>> {
+        self.text_edits
+            .borrow()
+            .iter()
+            .find(|edit| {
+                region.as_deref() == Some(edit.name.as_str())
+                    || element
+                        .is_some_and(|element| edit.path.len() == 1 && edit.path[0] + 1 == element)
+            })
+            .map(|edit| edit.host.clone())
     }
 
     /// 点到文本编辑框（顶层或面板里）的区域时，把焦点交给对应的 RichEdit 宿主。
     fn focus_text_edit(&self, element: Option<usize>, region: Option<String>) {
-        let edits = self.text_edits.borrow();
-        let target = edits.iter().find(|edit| {
-            region.as_deref() == Some(edit.name.as_str())
-                || element
-                    .is_some_and(|element| edit.path.len() == 1 && edit.path[0] + 1 == element)
-        });
-        if let Some(edit) = target {
-            edit.host.focus();
+        if let Some(host) = self.text_edit_target(element, region) {
+            host.focus();
         }
+    }
+
+    /// 色键透明区不会收到鼠标，主窗口收到后把同一次点击补发给 RichEdit，
+    /// 让多行编辑框的空白处也能像记事本一样移动插入点。
+    fn click_text_edit(
+        &self,
+        element: Option<usize>,
+        region: Option<String>,
+        client_x: i32,
+        client_y: i32,
+    ) {
+        if let Some(host) = self.text_edit_target(element, region) {
+            host.click_from_owner(self.hwnd(), client_x, client_y);
+        }
+    }
+
+    fn cursor_is_text_edit(&self, client_x: i32, client_y: i32) -> bool {
+        let (_, _, element, region) = self.hit_at(client_x, client_y);
+        let region = self.region_name(region);
+        let Some(host) = self.text_edit_target(element, region) else {
+            return false;
+        };
+        // text_box 的滚动条/内边距也在控件区域里，但不在 windowless 宿主矩形内；
+        // 只有真正落在文本宿主上的指针才显示 I 型。
+        let mut point = POINT {
+            x: client_x,
+            y: client_y,
+        };
+        unsafe {
+            let _ = ClientToScreen(self.hwnd(), &mut point);
+        }
+        host.contains_screen_point(point)
     }
 
     /// 按控件名把键盘焦点交给 `text_edit` / `text_box` 的宿主。
@@ -1011,7 +1391,7 @@ impl ScriptWindow {
             .unwrap_or_else(|| region_name.clone());
         let region = Some(region_name.clone());
         let element = (edit.path.len() == 1).then_some(edit.path[0] + 1);
-        let instance = document.instances.get(&control_name).cloned();
+        let instance = text_instance(&document, &edit.path, &control_name);
         let control = instance
             .as_ref()
             .map(|instance| instance.local_name.clone())
@@ -1028,6 +1408,9 @@ impl ScriptWindow {
             region,
             control: Some(control),
             instance,
+            index: None,
+            item_key: None,
+            child_action: None,
             handler,
             text: Some(text),
             key: None,
@@ -1068,7 +1451,7 @@ impl ScriptWindow {
             .unwrap_or_else(|| region_name.clone());
         let region = Some(region_name.clone());
         let element = (edit.path.len() == 1).then_some(edit.path[0] + 1);
-        let instance = document.instances.get(&control_name).cloned();
+        let instance = text_instance(&document, &edit.path, &control_name);
         let control = instance
             .as_ref()
             .map(|instance| instance.local_name.clone())
@@ -1085,6 +1468,9 @@ impl ScriptWindow {
             region,
             control: Some(control),
             instance,
+            index: None,
+            item_key: None,
+            child_action: None,
             handler,
             text: None,
             key,
@@ -1098,6 +1484,12 @@ impl ScriptWindow {
     }
 
     fn text_key_pressed(&self, host_hwnd: HWND, key: u32, modifier: u8) {
+        if modifier == 0
+            && let Some(default) = default_button_key(key)
+            && self.trigger_default_button(default, key)
+        {
+            return;
+        }
         self.emit_text_event(
             host_hwnd,
             WindowAction::KeyPressed,
@@ -1117,6 +1509,10 @@ impl ScriptWindow {
             None,
             None,
         );
+    }
+
+    fn text_triple_clicked(&self, host_hwnd: HWND) {
+        self.emit_text_event(host_hwnd, WindowAction::TripleClicked, None, None);
     }
 
     /// RichEdit 滚动位置变了：刷新内部滚动条并重画，让滑块跟上。
@@ -1172,9 +1568,20 @@ impl ScriptWindow {
         let index = element?.checked_sub(1)?;
         matches!(
             self.document.borrow().elements.get(index),
-            Some(Element::FlatSvgButton(_))
+            Some(Element::FlatSvgButton(button)) if button.enabled
         )
         .then_some(index)
+    }
+
+    /// 命中的是不是禁用中的动态按钮（`element` 是 1 起下标）。
+    fn disabled_button(&self, element: Option<usize>) -> bool {
+        let Some(index) = element.and_then(|element| element.checked_sub(1)) else {
+            return false;
+        };
+        matches!(
+            self.document.borrow().elements.get(index),
+            Some(Element::FlatSvgButton(button)) if !button.enabled
+        )
     }
 
     fn scrollbar_index(&self, element: Option<usize>) -> Option<usize> {
@@ -1403,6 +1810,727 @@ impl ScriptWindow {
         }
     }
 
+    fn list_box_index(&self, element: Option<usize>) -> Option<usize> {
+        let index = element?.checked_sub(1)?;
+        matches!(
+            self.document.borrow().elements.get(index),
+            Some(Element::ListBox(_))
+        )
+        .then_some(index)
+    }
+
+    fn list_box(&self, index: usize) -> Option<cloudime_render::ListBox> {
+        match self.document.borrow().elements.get(index) {
+            Some(Element::ListBox(list)) => Some(list.clone()),
+            _ => None,
+        }
+    }
+
+    fn set_list_box_scroll(&self, index: usize, offset: f32) -> bool {
+        let mut document = self.document.borrow_mut();
+        let Some(Element::ListBox(list)) = document.elements.get_mut(index) else {
+            return false;
+        };
+        let offset = offset.clamp(0.0, list.max_scroll_px());
+        if (list.scroll_offset - offset).abs() < 0.01 {
+            return false;
+        }
+        list.scroll_offset = offset;
+        let first = list.first_visible_row();
+        drop(document);
+        // 宿主窗要等主窗口贴上新一帧后再摆位，避免文字先动、行后动造成错位闪烁。
+        self.emit_list_box_scroll(index, first);
+        true
+    }
+
+    fn animate_list_box_scroll(&self, index: usize, target: f32) {
+        let Some(list) = self.list_box(index) else {
+            return;
+        };
+        let from = list.clamp_scroll();
+        let to = target.clamp(0.0, list.max_scroll_px());
+        if (to - from).abs() < 0.01 {
+            return;
+        }
+        self.list_box_anims.borrow_mut().insert(
+            index,
+            ListBoxAnimation {
+                from,
+                to,
+                start: Instant::now(),
+            },
+        );
+        self.ensure_scroll_anim_timer();
+    }
+
+    fn emit_list_box_scroll(&self, index: usize, first: usize) {
+        let (region, handler, control, instance, x, y) = {
+            let document = self.document.borrow();
+            let Some(Element::ListBox(list)) = document.elements.get(index) else {
+                return;
+            };
+            let region = list.region_name.clone();
+            let handler = self.region_handler(&region, WindowAction::ScrollChanged);
+            let control = document.control_name(index + 1).map(str::to_owned);
+            let instance = control
+                .as_ref()
+                .and_then(|name| document.instances.get(name).cloned());
+            (
+                region,
+                handler,
+                control,
+                instance,
+                list.x + list.width * 0.5,
+                list.y + list.height * 0.5,
+            )
+        };
+        let (ctrl, alt, shift) = modifiers();
+        (self.events)(ScriptWindowEvent {
+            window: self.id,
+            name: self.name.clone(),
+            action: WindowAction::ScrollChanged,
+            x,
+            y,
+            element: Some(index + 1),
+            region: Some(region),
+            control,
+            instance,
+            index: None,
+            item_key: None,
+            child_action: None,
+            handler,
+            text: None,
+            key: None,
+            modifier: None,
+            value: Some(first as u64),
+            delta: None,
+            ctrl,
+            alt,
+            shift,
+        });
+    }
+
+    /// 点是否落在内部滚动条轨道上；返回 `(在滑块上, 滑块矩形)`。
+    fn list_box_bar_at(
+        &self,
+        index: usize,
+        x: f32,
+        y: f32,
+    ) -> Option<(bool, (f32, f32, f32, f32))> {
+        let list = self.list_box(index)?;
+        if !list.scrollbar_visible() {
+            return None;
+        }
+        let local = (x - list.x, y - list.y);
+        let (tx, ty, tw, th) = list.track_rect();
+        if local.0 < tx || local.0 > tx + tw || local.1 < ty || local.1 > ty + th {
+            return None;
+        }
+        let (x, y, width, height) = list.thumb_rect();
+        let inside_thumb =
+            local.0 >= x && local.0 <= x + width && local.1 >= y && local.1 <= y + height;
+        Some((inside_thumb, (x, y, width, height)))
+    }
+
+    fn begin_list_box_press(&self, client_x: i32, client_y: i32) -> bool {
+        let (x, y, element, _) = self.hit_at(client_x, client_y);
+        let Some(index) = self.list_box_index(element) else {
+            return false;
+        };
+        let Some(list) = self.list_box(index) else {
+            return false;
+        };
+        if let Some((inside_thumb, (_, thumb_y, _, thumb_height))) =
+            self.list_box_bar_at(index, x, y)
+        {
+            if inside_thumb {
+                self.list_box_anims.borrow_mut().remove(&index);
+                self.list_box_drag.set(Some(ListBoxDrag {
+                    index,
+                    offset: y - list.y - thumb_y,
+                }));
+                let _ = unsafe { SetCapture(self.hwnd()) };
+                return true;
+            }
+            // 点击轨道空白（无论滑块上方还是下方）都直接定位到点击位置，
+            // 不做翻页；滑块本身仍走拖动逻辑。
+            let (_, track_y, _, track_height) = list.track_rect();
+            let travel = (track_height - thumb_height).max(1.0);
+            let ratio = ((y - list.y - track_y) / travel).clamp(0.0, 1.0);
+            let target = ratio * list.max_scroll_px();
+            self.list_box_press.set(Some(ListBoxPress {
+                index,
+                row: None,
+                child: None,
+                suppress_click: true,
+            }));
+            self.animate_list_box_scroll(index, target);
+            return true;
+        }
+        let local = (x - list.x, y - list.y);
+        if local.0 < 0.0 || local.0 > list.width || local.1 < 0.0 || local.1 > list.height {
+            return false;
+        }
+        let row = list.row_at(y - list.y);
+        let child = row.and_then(|row| list.hit_at(row, local.0, local.1));
+        self.list_box_press.set(Some(ListBoxPress {
+            index,
+            row,
+            child,
+            suppress_click: false,
+        }));
+        if self.focused_list_box.replace(Some(index)) != Some(index) {
+            self.notify_focus();
+        }
+        if self.hover_list_box.replace(Some((index, row))) != Some((index, row)) {
+            self.repaint();
+        }
+        if let (Some(row), Some(child)) = (row, child) {
+            self.set_list_box_child_state(index, row, child, ButtonState::Pressed);
+            if let Some(name) = self.list_box_text_child(index, row, child) {
+                self.focus_text(&name);
+            }
+        }
+        true
+    }
+
+    fn update_list_box_drag(&self, client_x: i32, client_y: i32) -> bool {
+        let Some(drag) = self.list_box_drag.get() else {
+            return false;
+        };
+        let (x, y, _, _) = self.hit_at(client_x, client_y);
+        let Some(list) = self.list_box(drag.index) else {
+            self.list_box_drag.set(None);
+            self.list_box_press.set(None);
+            self.hover_list_box.set(None);
+            self.hover_list_child.set(None);
+            return true;
+        };
+        let local = (x - list.x, y - list.y);
+        let (tx, ty, tw, th) = list.track_rect();
+        let (_, _, _, thumb) = list.thumb_rect();
+        if local.0 < tx || local.0 > tx + tw || local.1 < ty || local.1 > ty + th {
+            self.list_box_drag.set(None);
+            self.list_box_press.set(None);
+            self.hover_list_box.set(None);
+            self.hover_list_child.set(None);
+            let _ = unsafe { ReleaseCapture() };
+            return true;
+        }
+        let travel = (th - thumb).max(0.0);
+        let ratio = if travel <= 0.0 {
+            0.0
+        } else {
+            ((local.1 - drag.offset - ty) / travel).clamp(0.0, 1.0)
+        };
+        if self.set_list_box_scroll(drag.index, ratio * list.max_scroll_px()) {
+            self.repaint();
+        }
+        true
+    }
+
+    fn end_list_box_drag(&self) -> bool {
+        if self.list_box_drag.replace(None).is_some() {
+            let _ = unsafe { ReleaseCapture() };
+            true
+        } else {
+            false
+        }
+    }
+
+    fn list_box_wheel(&self, client_x: i32, client_y: i32, delta: i32) -> bool {
+        let (x, y, element, _) = self.hit_at(client_x, client_y);
+        let Some(index) = self.list_box_index(element) else {
+            return false;
+        };
+        let Some(list) = self.list_box(index) else {
+            return false;
+        };
+        let local = (x - list.x, y - list.y);
+        if local.0 < 0.0 || local.0 > list.width || local.1 < 0.0 || local.1 > list.height {
+            return false;
+        }
+        let step = list
+            .row_at(y - list.y)
+            .and_then(|row| list.row(row))
+            .map(|row| row.height + list.gap)
+            .unwrap_or(16.0);
+        let target = if delta > 0 {
+            list.clamp_scroll() - step
+        } else {
+            list.clamp_scroll() + step
+        };
+        self.animate_list_box_scroll(index, target);
+        true
+    }
+
+    fn list_box_index_by_name(&self, name: &str) -> Option<usize> {
+        self.document.borrow().elements.iter().position(
+            |element| matches!(element, Element::ListBox(list) if list.region_name == name),
+        )
+    }
+
+    fn list_box_scroll_to(&self, name: &str, index: usize, offset: Option<f32>) {
+        let Some(element) = self.list_box_index_by_name(name) else {
+            tracing::warn!(control = name, "list_box.scroll_to 找不到控件");
+            return;
+        };
+        let Some(list) = self.list_box(element) else {
+            return;
+        };
+        if index >= list.row_count {
+            tracing::warn!(
+                control = name,
+                index,
+                rows = list.row_count,
+                "list_box.scroll_to 越界"
+            );
+            return;
+        }
+        self.animate_list_box_scroll(element, offset.unwrap_or_else(|| list.scroll_to_row(index)));
+    }
+
+    fn list_box_select(&self, name: &str, index: i32, offset: Option<f32>) {
+        let Some(element) = self.list_box_index_by_name(name) else {
+            tracing::warn!(control = name, "list_box.set_selected_index 找不到控件");
+            return;
+        };
+        let Some(list) = self.list_box(element) else {
+            return;
+        };
+        if !list.allow_select {
+            tracing::warn!(control = name, "list_box 不允许选择");
+            return;
+        }
+        if index < -1 || index >= list.row_count as i32 {
+            tracing::warn!(
+                control = name,
+                index,
+                rows = list.row_count,
+                "list_box.set_selected_index 越界"
+            );
+            return;
+        }
+        if list.selected_index == index {
+            return;
+        }
+        {
+            let mut document = self.document.borrow_mut();
+            let Some(Element::ListBox(list)) = document.elements.get_mut(element) else {
+                return;
+            };
+            list.selected_index = index;
+        }
+        if index >= 0 {
+            let target = if list.auto_center_selected {
+                offset.unwrap_or_else(|| list.scroll_to_row(index as usize))
+            } else {
+                list.scroll_to_visible(index as usize)
+            };
+            self.animate_list_box_scroll(element, target);
+        }
+        self.repaint();
+        let x = list.x + list.width * 0.5;
+        let y = list.y + list.height * 0.5;
+        self.emit_list_box_event(
+            WindowAction::SelectedIndexChanged,
+            element,
+            (index >= 0).then_some(index as usize),
+            x,
+            y,
+        );
+    }
+
+    fn list_box_row_at(&self, index: usize, _x: f32, y: f32) -> Option<usize> {
+        let list = self.list_box(index)?;
+        list.row_at(y - list.y)
+    }
+
+    fn list_box_text_child(&self, index: usize, row: usize, child: usize) -> Option<String> {
+        let document = self.document.borrow();
+        let Element::ListBox(list) = document.elements.get(index)? else {
+            return None;
+        };
+        let row = list.row(row)?;
+        let hit = row.hits.get(child)?;
+        let element = row.elements.get(hit.element)?;
+        matches!(element, Element::TextEdit(_) | Element::TextBox(_)).then(|| hit.control.clone())
+    }
+
+    fn set_list_box_child_state(
+        &self,
+        index: usize,
+        row: usize,
+        child: usize,
+        state: ButtonState,
+    ) -> bool {
+        let mut document = self.document.borrow_mut();
+        let Some(Element::ListBox(list)) = document.elements.get_mut(index) else {
+            return false;
+        };
+        let Some(element) = list
+            .row(row)
+            .and_then(|row| row.hits.get(child))
+            .map(|hit| hit.element)
+        else {
+            return false;
+        };
+        let Some(row_ref) = list.rows.iter_mut().find(|row_ref| row_ref.index == row) else {
+            return false;
+        };
+        let mut changed = false;
+        for elements in [
+            &mut row_ref.elements,
+            &mut row_ref.selected_elements,
+            &mut row_ref.hovered_elements,
+        ] {
+            let Some(Element::FlatSvgButton(button)) = elements.get_mut(element) else {
+                continue;
+            };
+            if button.enabled && button.state != state {
+                button.state = state;
+                changed = true;
+            }
+        }
+        changed
+    }
+
+    fn list_box_child_at(&self, index: usize, x: f32, y: f32) -> Option<(usize, usize)> {
+        let list = self.list_box(index)?;
+        let row = list.row_at(y - list.y)?;
+        let child = list.hit_at(row, x - list.x, y - list.y)?;
+        Some((row, child))
+    }
+
+    fn set_list_box_hover(&self, index: usize, row: Option<usize>) -> bool {
+        let mut document = self.document.borrow_mut();
+        let Some(Element::ListBox(list)) = document.elements.get_mut(index) else {
+            return false;
+        };
+        let row = row.map(|row| row as i32);
+        if list.hovered_index == row {
+            return false;
+        }
+        list.hovered_index = row;
+        true
+    }
+
+    /// 改选中项；返回新行号与 key（没变 / 不允许选择时为 `None`）。
+    fn set_list_box_selected(&self, index: usize, row: usize) -> Option<(i32, Option<String>)> {
+        let mut document = self.document.borrow_mut();
+        let Some(Element::ListBox(list)) = document.elements.get_mut(index) else {
+            return None;
+        };
+        if !list.allow_select || row >= list.row_count || list.selected_index == row as i32 {
+            return None;
+        }
+        list.selected_index = row as i32;
+        let key = list.row(row).and_then(|row| row.key.clone());
+        drop(document);
+        // 选中态是普通绘制内容，不等滚动动画 / 下一次输入才刷新；点击后立即贴一帧。
+        self.repaint();
+        Some((row as i32, key))
+    }
+
+    fn emit_list_box_event(
+        &self,
+        action: WindowAction,
+        index: usize,
+        row: Option<usize>,
+        x: f32,
+        y: f32,
+    ) {
+        let (region, handler, control, instance, item_key) = {
+            let document = self.document.borrow();
+            let Some(Element::ListBox(list)) = document.elements.get(index) else {
+                return;
+            };
+            let region = list.region_name.clone();
+            let handler = self.region_handler(&region, action);
+            let control = document.control_name(index + 1).map(str::to_owned);
+            let instance = control
+                .as_ref()
+                .and_then(|name| document.instances.get(name).cloned());
+            let item_key = row
+                .and_then(|row| list.row(row))
+                .and_then(|row| row.key.clone());
+            (region, handler, control, instance, item_key)
+        };
+        let (ctrl, alt, shift) = modifiers();
+        (self.events)(ScriptWindowEvent {
+            window: self.id,
+            name: self.name.clone(),
+            action,
+            x,
+            y,
+            element: Some(index + 1),
+            region: Some(region),
+            control,
+            instance,
+            index: row.map(|row| row as i32),
+            item_key,
+            child_action: None,
+            handler,
+            text: None,
+            key: None,
+            modifier: None,
+            value: None,
+            delta: None,
+            ctrl,
+            alt,
+            shift,
+        });
+    }
+
+    fn emit_list_box_child(&self, index: usize, row: usize, child: usize, x: f32, y: f32) {
+        let (control, handlers, item_key, instance) = {
+            let document = self.document.borrow();
+            let Some(Element::ListBox(list)) = document.elements.get(index) else {
+                return;
+            };
+            let Some(row) = list.row(row) else {
+                return;
+            };
+            let Some(hit) = row.hits.get(child) else {
+                return;
+            };
+            let instance = document.instances.get(&hit.control).cloned().or_else(|| {
+                Some(InstanceInfo {
+                    subpage: "items".to_owned(),
+                    instance: format!("{}.items[{}]", list.region_name, row.index),
+                    item_index: row.index,
+                    item_key: row.key.clone(),
+                    local_name: hit.control.clone(),
+                    script: None,
+                })
+            });
+            (
+                hit.control.clone(),
+                hit.handlers.clone(),
+                row.key.clone(),
+                instance,
+            )
+        };
+        let action = if handlers.iter().any(|(name, _)| name == "clicked") {
+            WindowAction::Clicked
+        } else if handlers.iter().any(|(name, _)| name == "mouse_clicked") {
+            WindowAction::MouseClicked
+        } else if handlers.iter().any(|(name, _)| name == "click") {
+            WindowAction::Click
+        } else {
+            return;
+        };
+        let handler = handlers
+            .iter()
+            .find(|(name, _)| name == action.as_str())
+            .map(|(_, handler)| handler.clone());
+        let (ctrl, alt, shift) = modifiers();
+        let child_action = action.as_str().to_owned();
+        (self.events)(ScriptWindowEvent {
+            window: self.id,
+            name: self.name.clone(),
+            action,
+            x,
+            y,
+            element: Some(index + 1),
+            region: None,
+            control: Some(control.clone()),
+            instance: instance.clone(),
+            index: Some(row as i32),
+            item_key: item_key.clone(),
+            child_action: None,
+            handler,
+            text: None,
+            key: None,
+            modifier: None,
+            value: None,
+            delta: None,
+            ctrl,
+            alt,
+            shift,
+        });
+        let (region, handler, item_key) = {
+            let document = self.document.borrow();
+            let Some(Element::ListBox(list)) = document.elements.get(index) else {
+                return;
+            };
+            if !list.allow_select || list.selected_index != row as i32 {
+                return;
+            }
+            let region = list.region_name.clone();
+            let handler = self.region_handler(&region, WindowAction::SelectedItemOperated);
+            (
+                region,
+                handler,
+                list.row(row).and_then(|row| row.key.clone()),
+            )
+        };
+        (self.events)(ScriptWindowEvent {
+            window: self.id,
+            name: self.name.clone(),
+            action: WindowAction::SelectedItemOperated,
+            x,
+            y,
+            element: Some(index + 1),
+            region: Some(region),
+            control: Some(control),
+            instance: None,
+            index: Some(row as i32),
+            item_key,
+            child_action: Some(child_action),
+            handler,
+            text: None,
+            key: None,
+            modifier: None,
+            value: None,
+            delta: None,
+            ctrl,
+            alt,
+            shift,
+        });
+    }
+
+    fn end_list_box_press(&self, client_x: i32, client_y: i32) -> bool {
+        let Some(press) = self.list_box_press.replace(None) else {
+            return false;
+        };
+        if press.suppress_click {
+            return true;
+        }
+        let (x, y, element, _) = self.hit_at(client_x, client_y);
+        if self.list_box_index(element) != Some(press.index) {
+            if let (Some(row), Some(child)) = (press.row, press.child) {
+                self.set_list_box_child_state(press.index, row, child, ButtonState::Normal);
+            }
+            return true;
+        }
+        let row = self.list_box_row_at(press.index, x, y);
+        if row != press.row {
+            if let (Some(row), Some(child)) = (press.row, press.child) {
+                self.set_list_box_child_state(press.index, row, child, ButtonState::Normal);
+            }
+            return true;
+        }
+        let child = row.and_then(|row| {
+            let list = self.list_box(press.index)?;
+            list.hit_at(row, x - list.x, y - list.y)
+        });
+        if child != press.child {
+            if let (Some(row), Some(child)) = (press.row, press.child) {
+                self.set_list_box_child_state(press.index, row, child, ButtonState::Normal);
+            }
+            return true;
+        }
+        if let (Some(row), Some(child)) = (row, child) {
+            self.set_list_box_child_state(press.index, row, child, ButtonState::Hovered);
+        }
+        let now = Instant::now();
+        let double =
+            self.last_list_click
+                .get()
+                .is_some_and(|(then, index, last_row, (last_x, last_y))| {
+                    index == press.index
+                        && last_row == row
+                        && (now.duration_since(then).as_millis() as u32)
+                            < unsafe { GetDoubleClickTime() }
+                        && (client_x - last_x).abs()
+                            <= unsafe { GetSystemMetrics(SM_CXDOUBLECLK) } / 2
+                        && (client_y - last_y).abs()
+                            <= unsafe { GetSystemMetrics(SM_CYDOUBLECLK) } / 2
+                });
+        let action = if double {
+            WindowAction::DoubleClicked
+        } else {
+            WindowAction::ListClicked
+        };
+        self.emit_list_box_event(action, press.index, row, x, y);
+        self.last_list_click
+            .set(Some((now, press.index, row, (client_x, client_y))));
+        if let Some(row) = row
+            && let Some((index, _key)) = self.set_list_box_selected(press.index, row)
+        {
+            if let Some(list) = self.list_box(press.index) {
+                let target = if list.auto_center_selected {
+                    list.scroll_to_row(row)
+                } else {
+                    list.scroll_to_visible(row)
+                };
+                self.animate_list_box_scroll(press.index, target);
+            }
+            self.emit_list_box_event(
+                WindowAction::SelectedIndexChanged,
+                press.index,
+                Some(index as usize),
+                x,
+                y,
+            );
+        }
+        if let (Some(row), Some(child)) = (row, child) {
+            self.emit_list_box_child(press.index, row, child, x, y);
+        }
+        true
+    }
+
+    fn list_box_key(&self, key: u32) -> bool {
+        let Some(index) = self.focused_list_box.get() else {
+            return false;
+        };
+        let Some(list) = self.list_box(index) else {
+            return false;
+        };
+        if !list.allow_select || list.row_count == 0 {
+            return false;
+        }
+        let current = list.selected_index;
+        let last = list.row_count as i32 - 1;
+        let page = (list.viewport_height()
+            / list
+                .rows
+                .first()
+                .map(|row| row.height + list.gap)
+                .unwrap_or(16.0))
+        .floor()
+        .max(1.0) as i32;
+        let target = match key {
+            key if key == VK_UP.0 as u32 => (current - 1).max(0),
+            key if key == VK_DOWN.0 as u32 => (current + 1).min(last),
+            key if key == VK_HOME.0 as u32 => 0,
+            key if key == VK_END.0 as u32 => last,
+            key if key == VK_PRIOR.0 as u32 => (current - page).max(0),
+            key if key == VK_NEXT.0 as u32 => (current + page).min(last),
+            _ => return false,
+        };
+        let target = if current < 0 {
+            if key == VK_END.0 as u32 { last } else { 0 }
+        } else {
+            target
+        };
+        if let Some((selected, _key)) = self.set_list_box_selected(index, target as usize) {
+            let target = if list.auto_center_selected {
+                list.scroll_to_row(selected as usize)
+            } else {
+                list.scroll_to_visible(selected as usize)
+            };
+            self.animate_list_box_scroll(index, target);
+            let x = list.x + list.width * 0.5;
+            let y = list.y + list.edge_width + list.content_gap + list.row_top(selected as usize)
+                - list.scroll_offset
+                + list
+                    .row(selected as usize)
+                    .map(|row| row.height)
+                    .unwrap_or(0.0)
+                    * 0.5;
+            self.emit_list_box_event(
+                WindowAction::SelectedIndexChanged,
+                index,
+                Some(selected as usize),
+                x,
+                y,
+            );
+        }
+        true
+    }
+
     fn set_scrollbar_value(&self, index: usize, value: u64) -> bool {
         let mut document = self.document.borrow_mut();
         let Some(Element::ScrollBar(bar)) = document.elements.get_mut(index) else {
@@ -1478,6 +2606,41 @@ impl ScriptWindow {
         self.ensure_scroll_anim_timer();
     }
 
+    fn step_list_box_animations(&self, now: Instant) -> bool {
+        let mut finished = Vec::new();
+        let mut changed_indices = Vec::new();
+        {
+            let mut document = self.document.borrow_mut();
+            let mut anims = self.list_box_anims.borrow_mut();
+            for (index, anim) in anims.iter() {
+                let elapsed = now.duration_since(anim.start).as_millis() as u64;
+                let progress = (elapsed as f64 / SCROLL_ANIM_MS as f64).min(1.0);
+                let eased = 1.0 - (1.0 - progress).powi(3);
+                let value = anim.from + (anim.to - anim.from) * eased as f32;
+                if let Some(Element::ListBox(list)) = document.elements.get_mut(*index) {
+                    list.scroll_offset = value.clamp(0.0, list.max_scroll_px());
+                    changed_indices.push(*index);
+                }
+                if progress >= 1.0 {
+                    finished.push(*index);
+                }
+            }
+            for index in finished {
+                anims.remove(&index);
+            }
+        }
+        let mut changed = false;
+        for index in changed_indices {
+            if let Some(list) = self.list_box(index) {
+                self.emit_list_box_scroll(index, list.first_visible_row());
+                changed = true;
+            }
+        }
+        // RichEdit 宿主在 `repaint` 里等 `UpdateLayeredWindow` 之后统一摆位；
+        // 这里提前摆会先于主窗口动一帧，滚动时看起来就是文字/编辑框叠到相邻行。
+        changed
+    }
+
     fn step_scroll_animations(&self) {
         let now = Instant::now();
         let mut finished = Vec::new();
@@ -1506,11 +2669,15 @@ impl ScriptWindow {
                 anims.remove(&index);
             }
         }
+        let list_changed = self.step_list_box_animations(now);
         let text_changed = self.step_text_scroll_animations(now);
-        if changed || text_changed {
+        if changed || list_changed || text_changed {
             self.repaint();
         }
-        if self.scroll_anims.borrow().is_empty() && self.text_scroll_anims.borrow().is_empty() {
+        if self.scroll_anims.borrow().is_empty()
+            && self.list_box_anims.borrow().is_empty()
+            && self.text_scroll_anims.borrow().is_empty()
+        {
             self.stop_scroll_anim_timer();
         }
     }
@@ -1587,6 +2754,9 @@ impl ScriptWindow {
             region,
             control: Some(control),
             instance,
+            index: None,
+            item_key: None,
+            child_action: None,
             handler,
             text: None,
             key: None,
@@ -1814,7 +2984,8 @@ impl ScriptWindow {
             self.last_click.set(None);
             return;
         }
-        self.emit_button(WindowAction::MouseClicked, index, client_x, client_y);
+        let action = self.button_click_action(index);
+        self.emit_button(action, index, client_x, client_y);
         let now = Instant::now();
         let double_ms = unsafe { GetDoubleClickTime() };
         let double_dx = unsafe { GetSystemMetrics(SM_CXDOUBLECLK) }.max(1);
@@ -1842,6 +3013,71 @@ impl ScriptWindow {
         };
         if self.set_button_state(index, ButtonState::Normal) {
             self.repaint();
+        }
+    }
+
+    /// 重新收集页面默认键：整页最多一个非空 `default_button`，多了就全部失效。
+    fn rebuild_default_button(&self) {
+        let mut bindings = Vec::new();
+        {
+            let document = self.document.borrow();
+            for (index, element) in document.elements.iter().enumerate() {
+                if let Element::FlatSvgButton(button) = element
+                    && let Some(key) = button.default_button
+                {
+                    bindings.push((key, index));
+                }
+            }
+        }
+        if bindings.len() > 1 {
+            tracing::warn!(
+                id = self.id,
+                count = bindings.len(),
+                "脚本窗口：同一页面有多个 default_button，全部失效"
+            );
+            self.default_button.set(None);
+        } else {
+            self.default_button.set(bindings.first().copied());
+        }
+    }
+
+    /// 把 Enter / Esc 交给默认按钮；有处理器才消费这个键。
+    fn trigger_default_button(&self, key: DefaultButton, key_code: u32) -> bool {
+        let Some((bound, index)) = self.default_button.get() else {
+            return false;
+        };
+        if bound != key {
+            return false;
+        }
+        let Some(region) = self.button_region(index) else {
+            return false;
+        };
+        let action = self.button_click_action(index);
+        if self.region_handler(&region, action).is_none() {
+            return false;
+        }
+        let center = {
+            let document = self.document.borrow();
+            let Some(Element::FlatSvgButton(button)) = document.elements.get(index) else {
+                return false;
+            };
+            if !button.enabled {
+                return false;
+            }
+            (
+                button.x + button.width * 0.5,
+                button.y + button.height * 0.5,
+            )
+        };
+        self.emit_button_at(action, index, center.0, center.1, Some(key_code));
+        true
+    }
+
+    /// 文本按钮的点击事件叫 `clicked`；扁平 SVG 按钮沿用 `mouse_clicked`。
+    fn button_click_action(&self, index: usize) -> WindowAction {
+        match self.document.borrow().elements.get(index) {
+            Some(Element::FlatSvgButton(button)) if button.text.is_some() => WindowAction::Clicked,
+            _ => WindowAction::MouseClicked,
         }
     }
 
@@ -1946,6 +3182,18 @@ impl ScriptWindow {
             return;
         }
         let margin = rendered.rendered.content_x as i32;
+        *self.hits.borrow_mut() = rendered.hits;
+        self.scale.set(rendered.rendered.scale.max(0.01));
+        self.margin.set(margin);
+        self.content_size.set(content);
+        self.position.set(Some(position));
+        // 先按新内容 / 新偏移摆好并画好 RichEdit 宿主，再贴主窗口。
+        // 反过来做时，滚动动画中会短暂出现“标签已经滚到新位置、编辑框还停在上一帧”，
+        // 被截图时就像文字丢失或串行。
+        if self.text_edits_dirty.replace(false) {
+            self.rebuild_text_edits();
+        }
+        self.sync_text_edits();
         if let Err(error) = layered::present(
             self.hwnd(),
             &rendered.rendered.pixmap,
@@ -1956,14 +3204,11 @@ impl ScriptWindow {
             self.hide();
             return;
         }
-        *self.hits.borrow_mut() = rendered.hits;
-        self.scale.set(rendered.rendered.scale.max(0.01));
-        self.margin.set(margin);
-        self.content_size.set(content);
-        self.position.set(Some(position));
         self.painted.set(Some(signature));
-        let _ = unsafe { ShowWindow(self.hwnd(), SW_SHOWNA) };
-        self.sync_text_edits();
+        if !self.shown.get() {
+            // 已经可见的窗口每帧再 ShowWindow 一次没有意义，反而可能触发一次重绘。
+            let _ = unsafe { ShowWindow(self.hwnd(), SW_SHOWNA) };
+        }
     }
 
     /// 拖到另一块显示器之后：DPI 变了就按新 DPI 重画（点 → 像素的换算跟着换）。
@@ -1990,8 +3235,14 @@ impl ScriptWindow {
         self.hits.borrow_mut().clear();
         self.hover.set(None);
         self.scrollbar_drag.set(None);
+        self.list_box_drag.set(None);
+        self.list_box_press.set(None);
+        self.hover_list_box.set(None);
+        self.hover_list_child.set(None);
+        self.focused_list_box.set(None);
         *self.text_scroll_drag.borrow_mut() = None;
         self.scroll_anims.borrow_mut().clear();
+        self.list_box_anims.borrow_mut().clear();
         self.text_scroll_anims.borrow_mut().clear();
         self.stop_scroll_anim_timer();
         self.reset_button_states();
@@ -2112,6 +3363,9 @@ impl ScriptWindow {
         delta: Option<i32>,
     ) {
         let (x, y, element, region) = self.hit_at(client_x, client_y);
+        if self.disabled_button(element) {
+            return;
+        }
         let (region, handler) = self.region_details(region, action);
         let control = self.control_name(element).or_else(|| {
             region
@@ -2136,6 +3390,9 @@ impl ScriptWindow {
             region,
             control,
             instance,
+            index: None,
+            item_key: None,
+            child_action: None,
             handler,
             text: None,
             key: None,
@@ -2150,8 +3407,43 @@ impl ScriptWindow {
 
     fn emit_move(&self, client_x: i32, client_y: i32) {
         self.last.set((client_x, client_y));
-        let (_, _, element, region) = self.hit_at(client_x, client_y);
+        let (x, y, mut element, mut region) = self.hit_at(client_x, client_y);
+        if self.disabled_button(element) {
+            element = None;
+            region = None;
+        }
         self.update_hover_button(element);
+        let list_hover = self
+            .list_box_index(element)
+            .map(|index| (index, self.list_box_row_at(index, x, y)));
+        let list_child = self.list_box_index(element).and_then(|index| {
+            self.list_box_child_at(index, x, y)
+                .map(|(row, child)| (index, row, child))
+        });
+        let previous_hover = self.hover_list_box.replace(list_hover);
+        if previous_hover != list_hover {
+            if let Some((old, _)) = previous_hover {
+                self.set_list_box_hover(old, None);
+            }
+            if let Some((new, row)) = list_hover {
+                self.set_list_box_hover(new, row);
+            }
+            self.repaint();
+        }
+        let previous_child = self.hover_list_child.replace(list_child);
+        if previous_child != list_child {
+            if let Some((index, row, child)) = previous_child
+                && !matches!(self.list_box_press.get(), Some(press) if press.index == index && press.row == Some(row) && press.child == Some(child))
+            {
+                self.set_list_box_child_state(index, row, child, ButtonState::Normal);
+            }
+            if let Some((index, row, child)) = list_child
+                && !matches!(self.list_box_press.get(), Some(press) if press.index == index && press.row == Some(row) && press.child == Some(child))
+            {
+                self.set_list_box_child_state(index, row, child, ButtonState::Hovered);
+            }
+            self.repaint();
+        }
         let key = (element, region);
         if self.hover.replace(Some(key)) == Some(key) {
             return;
@@ -2164,6 +3456,14 @@ impl ScriptWindow {
     fn emit_leave(&self) {
         self.hover.set(None);
         self.update_hover_button(None);
+        if let Some((index, _)) = self.hover_list_box.replace(None) {
+            self.set_list_box_hover(index, None);
+            self.repaint();
+        }
+        if let Some((index, row, child)) = self.hover_list_child.replace(None) {
+            self.set_list_box_child_state(index, row, child, ButtonState::Normal);
+            self.repaint();
+        }
         let (x, y) = self.last.get();
         self.emit(WindowAction::Leave, x, y);
     }
@@ -2178,9 +3478,21 @@ impl ScriptWindow {
 
     /// 给某个扁平按钮发事件（`element` / `region` 固定成它，不被当前命中覆盖）。
     fn emit_button(&self, action: WindowAction, index: usize, client_x: i32, client_y: i32) {
+        let (x, y, _, _) = self.hit_at(client_x, client_y);
+        self.emit_button_at(action, index, x, y, None);
+    }
+
+    /// 键盘触发默认按钮：坐标用按钮中心，`key` 是虚拟键码。
+    fn emit_button_at(&self, action: WindowAction, index: usize, x: f32, y: f32, key: Option<u32>) {
         let Some(region) = self.button_region(index) else {
             return;
         };
+        if !matches!(
+            self.document.borrow().elements.get(index),
+            Some(Element::FlatSvgButton(button)) if button.enabled
+        ) {
+            return;
+        }
         let handler = self.region_handler(&region, action);
         let control = self.control_name(Some(index + 1));
         let instance = control
@@ -2190,7 +3502,6 @@ impl ScriptWindow {
             .as_ref()
             .map(|instance| instance.local_name.clone())
             .or(control);
-        let (x, y, _, _) = self.hit_at(client_x, client_y);
         let (ctrl, alt, shift) = modifiers();
         (self.events)(ScriptWindowEvent {
             window: self.id,
@@ -2202,9 +3513,12 @@ impl ScriptWindow {
             region: Some(region),
             control,
             instance,
+            index: None,
+            item_key: None,
+            child_action: None,
             handler,
             text: None,
-            key: None,
+            key,
             modifier: None,
             value: None,
             delta: None,
@@ -2420,6 +3734,9 @@ impl ScriptAuxiliary {
                 region: panel.region.clone(),
                 control: panel.control.clone(),
                 instance: None,
+                index: None,
+                item_key: None,
+                child_action: None,
                 handler: panel.handler.clone(),
                 text: None,
                 key: None,
@@ -2546,6 +3863,33 @@ fn element_at(hits: &[Option<HitShape>], x: f32, y: f32) -> Option<usize> {
 ///
 /// 窗口左上角 = **内容左上角 − 阴影留白**；客户区 0 点对应位图 0 点，所以内容像素 = 客户区 − 留白
 /// （别加反了：加反会差出两倍留白，真机上表现为「点哪儿都偏一截」）。
+/// 文本控件所属实例；普通控件直接查 `Document.instances`，列表盒行内控件按路径回退，
+/// 让子页面脚本也能收到行内 `text_changed` / `key_pressed`。
+fn text_instance(document: &Document, path: &[usize], control_name: &str) -> Option<InstanceInfo> {
+    if let Some(instance) = document.instances.get(control_name) {
+        return Some(instance.clone());
+    }
+    let [list_index, row_index, ..] = path else {
+        return None;
+    };
+    let Element::ListBox(list) = document.elements.get(*list_index)? else {
+        return None;
+    };
+    let row = list.rows.get(*row_index)?;
+    Some(InstanceInfo {
+        subpage: "items".to_owned(),
+        instance: format!("{}.items[{}]", list.region_name, row.index),
+        item_index: row.index,
+        item_key: row.key.clone(),
+        local_name: control_name
+            .rsplit('.')
+            .next()
+            .unwrap_or(control_name)
+            .to_owned(),
+        script: None,
+    })
+}
+
 fn content_point(client_x: i32, client_y: i32, margin: i32, scale: f32) -> (f32, f32) {
     let scale = scale.max(0.01);
     (
@@ -2634,6 +3978,14 @@ fn default_position() -> ((i32, i32), u32) {
 
 /// 客户区坐标：`lparam` 低 16 位是 x、高 16 位是 y（带符号）。
 /// 当前键盘修饰键状态（鼠标事件载荷用）。
+fn default_button_key(key: u32) -> Option<DefaultButton> {
+    match key {
+        key if key == VK_RETURN.0 as u32 => Some(DefaultButton::Enter),
+        key if key == VK_ESCAPE.0 as u32 => Some(DefaultButton::Escape),
+        _ => None,
+    }
+}
+
 fn modifiers() -> (bool, bool, bool) {
     let pressed = |key: windows::Win32::UI::Input::KeyboardAndMouse::VIRTUAL_KEY| unsafe {
         GetKeyState(key.0 as i32) < 0
@@ -2661,6 +4013,14 @@ fn track_leave(hwnd: HWND) {
 }
 
 /// 按 HWND 找回本线程的脚本窗口。
+fn set_ibeam_cursor() {
+    if let Ok(cursor) = unsafe { LoadCursorW(None, IDC_IBEAM) } {
+        unsafe {
+            let _ = SetCursor(Some(cursor));
+        }
+    }
+}
+
 fn with_window(hwnd: HWND, act: impl FnOnce(&ScriptWindow)) {
     let window = REGISTRY.with(|map| map.borrow().get(&(hwnd.0 as isize)).and_then(Weak::upgrade));
     if let Some(window) = window {
@@ -2680,20 +4040,57 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             })
         }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        WM_SETCURSOR => {
+            if (lparam.0 & 0xFFFF) as u32 == HTCLIENT {
+                let mut point = POINT::default();
+                unsafe {
+                    let _ = GetCursorPos(&mut point);
+                    let _ = ScreenToClient(hwnd, &mut point);
+                }
+                let mut text = false;
+                with_window(hwnd, |window| {
+                    text = window.cursor_is_text_edit(point.x, point.y);
+                });
+                if text {
+                    set_ibeam_cursor();
+                    return LRESULT(1);
+                }
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
         // 左键按下：开始记拖动起点；同时算这块窗口拿到键盘焦点。
         WM_LBUTTONDOWN => {
             with_window(hwnd, |window| {
                 if window.begin_scrollbar_press(client_x(lparam), client_y(lparam)) {
                     return;
                 }
+                if window.begin_list_box_press(client_x(lparam), client_y(lparam)) {
+                    return;
+                }
+                window.focused_list_box.set(None);
                 if window.begin_text_box_press(client_x(lparam), client_y(lparam)) {
                     return;
                 }
                 let (_, _, element, region) = window.hit_at(client_x(lparam), client_y(lparam));
+                if window.disabled_button(element) {
+                    return;
+                }
                 let region_name = window.region_name(region);
-                window.focus_text_edit(element, region_name);
+                window.focus_text_edit(element, region_name.clone());
+                window.click_text_edit(element, region_name, client_x(lparam), client_y(lparam));
                 window.begin_button_press(client_x(lparam), client_y(lparam));
                 window.begin_drag(client_x(lparam), client_y(lparam));
+            });
+            LRESULT(0)
+        }
+        // 空白处色键透明时第二次点击可能以 WM_LBUTTONDBLCLK 到主窗口；
+        // 同样补发给宿主，宿主才能数到第三击并选行。
+        WM_LBUTTONDBLCLK => {
+            with_window(hwnd, |window| {
+                let (_, _, element, region) = window.hit_at(client_x(lparam), client_y(lparam));
+                let region_name = window.region_name(region);
+                window.focus_text_edit(element, region_name.clone());
+                window.click_text_edit(element, region_name, client_x(lparam), client_y(lparam));
             });
             LRESULT(0)
         }
@@ -2701,6 +4098,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             track_leave(hwnd);
             with_window(hwnd, |window| {
                 if window.update_scrollbar_drag(client_x(lparam), client_y(lparam)) {
+                    return;
+                }
+                if window.update_list_box_drag(client_x(lparam), client_y(lparam)) {
                     return;
                 }
                 if window.update_text_box_drag(client_x(lparam), client_y(lparam)) {
@@ -2717,6 +4117,29 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         WM_MOUSELEAVE => {
             with_window(hwnd, ScriptWindow::emit_leave);
             LRESULT(0)
+        }
+        WM_KEYDOWN => {
+            let key = wparam.0 as u32;
+            let (ctrl, alt, shift) = modifiers();
+            let consumed = Cell::new(false);
+            if !ctrl && !alt && !shift {
+                with_window(hwnd, |window| {
+                    if let Some(default) = default_button_key(key) {
+                        consumed.set(window.trigger_default_button(default, key));
+                    }
+                });
+            }
+            if !consumed.get() && !ctrl && !alt && !shift {
+                with_window(hwnd, |window| {
+                    if window.list_box_key(key) {
+                        consumed.set(true);
+                    }
+                });
+            }
+            if consumed.get() {
+                return LRESULT(0);
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
         }
         WM_TIMER => {
             let active = Cell::new(false);
@@ -2761,13 +4184,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             with_window(hwnd, |window| window.text_wheel(host, delta));
             LRESULT(0)
         }
+        WM_TEXT_TRIPLE_CLICK => {
+            let host = HWND(wparam.0 as *mut _);
+            with_window(hwnd, |window| window.text_triple_clicked(host));
+            LRESULT(0)
+        }
         // 拖过就不是点击（阈值在 `drag_to` 里判）。
         WM_LBUTTONUP => {
             with_window(hwnd, |window| {
                 if window.end_scrollbar_drag() {
                     return;
                 }
+                if window.end_list_box_drag() {
+                    return;
+                }
                 if window.end_text_box_drag() {
+                    return;
+                }
+                if window.end_list_box_press(client_x(lparam), client_y(lparam)) {
                     return;
                 }
                 window.end_button_press(client_x(lparam), client_y(lparam));
@@ -2791,6 +4225,12 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
                 window.cancel_button_press();
                 window.drag.set(None);
                 window.scrollbar_drag.set(None);
+                window.list_box_drag.set(None);
+                if let Some(press) = window.list_box_press.replace(None)
+                    && let (Some(row), Some(child)) = (press.row, press.child)
+                {
+                    window.set_list_box_child_state(press.index, row, child, ButtonState::Normal);
+                }
                 *window.text_scroll_drag.borrow_mut() = None;
             });
             LRESULT(0)
@@ -2804,6 +4244,9 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             };
             let _ = unsafe { ScreenToClient(hwnd, &mut point) };
             with_window(hwnd, |window| {
+                if window.list_box_wheel(point.x, point.y, delta) {
+                    return;
+                }
                 if window.scrollbar_wheel(point.x, point.y, delta) {
                     return;
                 }

@@ -5,12 +5,13 @@
 
 ## 1. 定位
 
-- `panel`：静态分组容器，只画背景 / 边框，子控件按页面树布局。
-- `self_drawing_panel`：容器 + 内部 draw list + 局部命中区域。
+- `panel`：静态控件容器，只画背景 / 边框，子控件按页面树布局。
+- `self_drawing_panel`：**特殊控件**，不是容器；自带内部 draw list 和局部命中区域。
   - `draw` 用 Render 的基础元素直接画界面，不参与布局；
-  - `children` 是普通动态控件，参与页面树布局，画在 `draw` 上面；
+  - `children` 是控件内部的动态控件组合，参与页面树布局，画在 `draw` 上面；
   - `regions` 给 draw 内容声明局部点击 / 拖拽区域；
-  - 默认裁剪在面板范围内。
+  - 默认裁剪在面板范围内；
+  - 它不套用容器的子节点矩阵，也不能代替子页面容器放子页面。
 
 它同时可用于：
 
@@ -68,7 +69,8 @@
 
 ### 2.2 children
 
-- 普通动态控件 / 容器，参与页面树布局；
+- `children` 是控件内部的组合内容，放普通动态控件；它不是页面树容器边界，
+  不按容器的子节点矩阵扩展，子页面仍要放进子页面容器；
 - 位置由页面树与面板的 `layout` / `padding` 决定；
 - 绘制顺序：`draw` 在下，`children` 在上；
 - 第一版限制嵌套自绘面板深度，建议最多 4 层。
@@ -158,7 +160,7 @@ SelfDrawingPanel {
 
 ## 6. 与页面树 / 候选窗口
 
-- v2 页面树新增节点类型 `self_drawing_panel`，按 Container 参与布局；`draw` 不占布局空间。
+- v2 页面树新增节点类型 `self_drawing_panel`，作为普通控件参与布局；`draw` 不占布局空间。
 - `auto_size` 在 `cloudime-script` 的页面树测量阶段调用 `LayoutMeasureHook`。
 - 候选窗口迁移进度：
   - 候选窗口现在走 `CandidateView` → `PageTree`（拼音行 / 每个候选行或格 / 底部信息）→

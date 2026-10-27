@@ -178,6 +178,17 @@ fn commit_feeds_learner_and_reorders() {
 }
 
 #[test]
+fn rare_polyphonic_reading_does_not_borrow_common_user_weight() {
+    let dictionary = Dictionary::parse("的\tde\t48000000\n的\tdi\t10\n地\tdi\t300000\n").unwrap();
+    let mut weights = HashMap::new();
+    weights.insert("的".to_owned(), 100_000u32);
+    let mut engine = Engine::new(dictionary).with_learner(Box::new(CountingLearner(weights)));
+    engine.set_input("di");
+    let query = engine.query().unwrap();
+    assert_eq!(query.candidates.items[0].text, "地");
+}
+
+#[test]
 fn candidate_words_are_recorded_as_seen_and_committed() {
     let book = Arc::new(Mutex::new(HashMap::new()));
     let mut engine = engine().with_vocabulary_tracker(Box::new(MemoryVocabulary(book.clone())));

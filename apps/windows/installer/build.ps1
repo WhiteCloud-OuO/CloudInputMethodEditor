@@ -174,17 +174,6 @@ if ((Test-Path $tutorial) -and (Test-Path $changelog) -and
     Write-Host 'tutorial.md（使用手册）比 CHANGELOG.md 旧：确认这一版有没有用户可见的改动要写进手册。' -ForegroundColor Yellow
 }
 
-# 小牛翻译的两份样例和窗口布局必须随包（.iss 从 Scripts\lib\* 通配收；这里提前拦住误删）
-foreach ($sample in @(
-    'Scripts\lib\example-niutrans.lua',
-    'Scripts\lib\niutrans-window.lua',
-    'Scripts\lib\niutrans-window.json'
-)) {
-    if (-not (Test-Path (Join-Path $Repo $sample))) {
-        throw "缺少随包脚本样例：$sample"
-    }
-}
-
 Invoke-Checked $iscc @("/DAppVersion=$Version", "/DAppVersionNumeric=$VersionNumeric", $Iss)
 
 $out = Join-Path $Repo "target\installer\cloudime-$Version-windows-x86_64-setup.exe"

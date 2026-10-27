@@ -1,9 +1,9 @@
-//! 随包的测试脚本（`Scripts/lib/test-caret-window.lua`）的行为：
+//! 随包的测试脚本（`Scripts/test-caret-window.lua`）的行为：
 //! `manual` 事件请求光标 → `caret` 事件建窗口 / 读 SVG → 点扁平按钮的自动区域销毁。
 
 use std::path::{Path, PathBuf};
 
-use cloudime_render::{ButtonState, Color, Document, Element};
+use cloudime_render::{ButtonState, Color, DefaultButton, Document, Element};
 use cloudime_script::{Runtime, WindowRequest, mlua};
 
 /// 一个干净的临时脚本目录。
@@ -34,8 +34,7 @@ fn content_of(requests: &[WindowRequest], id: u32) -> &Document {
 
 #[test]
 fn the_caret_window_script_draws_and_closes_itself() {
-    let source =
-        Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Scripts/lib/test-caret-window.lua");
+    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Scripts/test-caret-window.lua");
     let dir = script_dir("caret-window");
     std::fs::copy(&source, dir.join("test-caret-window.lua")).unwrap();
     let runtime = Runtime::load(&dir, &[]);
@@ -107,12 +106,56 @@ fn the_caret_window_script_draws_and_closes_itself() {
         "关闭按钮是扁平 SVG 按钮（画板 20×20，自动区域 close）"
     );
     assert!(document.regions.iter().any(|region| region.name == "close"));
+    let ok = document
+        .elements
+        .iter()
+        .find_map(|element| match element {
+            Element::FlatSvgButton(button) if button.region_name == "ok" => Some(button),
+            _ => None,
+        })
+        .expect("测试布局里有文本按钮 ok");
+    assert_eq!(
+        ok.default_button,
+        Some(DefaultButton::Enter),
+        "ok 绑定 Enter"
+    );
+    assert!(ok.show_shadow, "ok 打开按钮阴影");
+    assert!(ok.enabled);
+    assert_eq!(
+        ok.text.as_ref().map(|text| text.text.as_str()),
+        Some("确定\n(Enter)"),
+        "文本按钮支持 JSON 换行"
+    );
+    let ok_region = document
+        .regions
+        .iter()
+        .find(|region| region.name == "ok")
+        .expect("文本按钮自动区域");
+    assert_eq!(ok_region.handler("clicked"), Some("confirm"));
+    let disabled = document
+        .elements
+        .iter()
+        .find_map(|element| match element {
+            Element::FlatSvgButton(button) if button.region_name == "disabled_demo" => Some(button),
+            _ => None,
+        })
+        .expect("测试布局里有禁用按钮");
+    assert!(!disabled.enabled);
+    assert!(!disabled.show_shadow);
     assert!(
         document.elements.iter().any(|element| matches!(
             element,
-            Element::TextBox(edit) if edit.region_name == "notes" && edit.auto_line_wrap
+            Element::TextBox(edit)
+                if edit.region_name == "notes" && edit.auto_line_wrap && edit.deselect_on_blur
         )),
-        "测试布局里有自动换行的多行编辑框"
+        "测试布局里有自动换行、失焦取消选区的多行编辑框"
+    );
+    assert!(
+        document.elements.iter().any(|element| matches!(
+            element,
+            Element::TextEdit(edit) if edit.region_name == "search" && edit.deselect_on_blur
+        )),
+        "单行编辑框默认失焦取消选区"
     );
     assert!(
         document

@@ -1,0 +1,67 @@
+{
+  "version": 2,
+  "page": {
+    "w": 320,
+    "h": 480,
+    "children": [
+      {
+        "name": "background",
+        "type": "rect",
+        "w": 320,
+        "h": 480,
+        "radius": 12,
+        "color": "#FFFFFFFF",
+        "position": "absolute",
+        "inset": { "left": 0, "top": 0 }
+      },
+      {
+        "name": "title",
+        "type": "label",
+        "size": 16,
+        "runs": [{ "text": "列表盒测试（滚动 / 选中 / 行内输入）", "color": "#FF222222" }],
+        "position": "absolute",
+        "inset": { "left": 16, "top": 12 }
+      },
+      {
+        "name": "list",
+        "type": "list_box",
+        "w": 300,
+        "h": 420,
+        "self_adaption": false,
+        "allow_select": true,
+        "auto_center_selected": true,
+        "selected_index": -1,
+        "subpage": ["test-list-box-row.json"],
+        "repeat": "items",
+        "key": "id",
+        "item_height": 32,
+        "align": "center",
+        "gap": 0,
+        "radius": 6,
+        "fill": "#FFFFFFFF",
+        "edge_color": "#FFD2D2D2",
+        "edge_width": 1,
+        "the_gap_between_border_and_content": 2,
+        "position": "absolute",
+        "inset": { "left": 10, "top": 42 }
+      },
+      {
+        "name": "close",
+        "type": "text_button",
+        "w": 44,
+        "h": 28,
+        "text": "关闭",
+        "text_color": "#FF1F2329",
+        "font": { "size": 13, "weight": 400 },
+        "background": { "shape": "round_rect", "radius": 3, "color": "#FFF2F4F7" },
+        "normal": { "background": "#FFF2F4F7", "text": "#FF1F2329" },
+        "hovered": { "background": "#FFE3E8EF", "text": "#FF1F2329" },
+        "pressed": { "background": "#FFD2D8E0", "text": "#FF1F2329" },
+        "enabled": true,
+        "events": { "clicked": "close" },
+        "position": "absolute",
+        "inset": { "left": 264, "top": 8 }
+      }
+    ]
+  }
+}

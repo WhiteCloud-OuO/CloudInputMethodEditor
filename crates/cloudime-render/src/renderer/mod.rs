@@ -121,7 +121,8 @@ struct ShadowKey {
     radius: u32,
     scale: u32,
     blur: u32,
-    offset: u32,
+    offset_x: u32,
+    offset_y: u32,
     color: Color,
 }
 
@@ -144,7 +145,8 @@ impl ShadowKey {
             radius: radius.to_bits(),
             scale: scale.to_bits(),
             blur: shadow.blur.to_bits(),
-            offset: shadow.offset_y.to_bits(),
+            offset_x: shadow.offset_x.to_bits(),
+            offset_y: shadow.offset_y.to_bits(),
             color: shadow.color,
         }
     }
@@ -1209,8 +1211,12 @@ fn draw_element(
             None
         }
         Element::FlatSvgButton(button) => {
-            button.draw(render, scale, origin, margin);
+            button.draw(render, m.theme, scale, origin, margin);
             Some(button.hit_shape(origin))
+        }
+        Element::ListBox(list) => {
+            draw_list_box(render, list, m, scale, origin, margin);
+            Some(list.hit_shape(origin))
         }
         Element::ScrollBar(bar) => {
             bar.draw(render, m.theme, scale, origin, margin);
@@ -1225,6 +1231,116 @@ fn draw_element(
             Some(edit.hit_shape(origin))
         }
     }
+}
+
+/// 列表盒：背景 → 行内容 → 滚动条 → 边框。行内容单独一层，按矩形内容区裁剪。
+fn draw_list_box(
+    render: &mut Render,
+    list: &crate::control::ListBox,
+    m: &Metrics,
+    scale: f32,
+    origin: (f32, f32),
+    margin: f32,
+) {
+    let x = margin + (origin.0 + list.x) * scale;
+    let y = margin + (origin.1 + list.y) * scale;
+    let width = (list.width * scale).ceil().max(1.0) as u32;
+    let height = (list.height * scale).ceil().max(1.0) as u32;
+    let Ok(mut layer) = Render::new(width, height, render.text_handle()) else {
+        return;
+    };
+    let local = Metrics {
+        theme: m.theme,
+        scale,
+    };
+    let edge = list.edge_width.max(0.0);
+    let gap = list.content_gap.max(0.0);
+    let scrollbar = list.scrollbar_visible();
+    if let Some(fill) = list.fill {
+        layer.round_rect(
+            edge + gap,
+            edge + gap,
+            (list.width * scale - (edge + gap) * 2.0).max(0.0),
+            (list.height * scale - (edge + gap) * 2.0).max(0.0),
+            list.radius * scale,
+            fill,
+        );
+    }
+    let content_x = edge + gap;
+    let content_y = edge + gap;
+    let content_width =
+        (list.width * scale - (edge + gap) * 2.0 - if scrollbar { 12.0 * scale } else { 0.0 })
+            .ceil()
+            .max(1.0) as u32;
+    let content_height = (list.height * scale - (edge + gap) * 2.0).ceil().max(1.0) as u32;
+    if let Ok(mut content) = Render::new(content_width, content_height, render.text_handle()) {
+        let available = list.content_width(scrollbar);
+        for row in &list.rows {
+            let Some(row_y) = list.row_view_top(row) else {
+                continue;
+            };
+            let row_width = if row.width > 0.0 {
+                row.width
+            } else {
+                available
+            };
+            let row_x = match list.align {
+                crate::control::ListBoxAlign::Left => 0.0,
+                crate::control::ListBoxAlign::Center => (available - row_width).max(0.0) * 0.5,
+                crate::control::ListBoxAlign::Right => (available - row_width).max(0.0),
+            };
+            let elements = row.active_elements(
+                list.selected_index == row.index as i32,
+                list.hovered_index == Some(row.index as i32),
+            );
+            for element in elements {
+                let _ = draw_element(&mut content, element, &local, 0.0, (row_x, row_y));
+            }
+        }
+        layer.blend_pixmap_at(
+            content_x.round() as i32,
+            content_y.round() as i32,
+            &content.into_pixmap(),
+        );
+    }
+    if scrollbar {
+        let (tx, ty, tw, th) = list.track_rect();
+        layer.round_rect(
+            tx * scale,
+            ty * scale,
+            tw * scale,
+            th * scale,
+            tw * scale * 0.5,
+            Color::rgb(0xC8, 0xC8, 0xC8),
+        );
+        let (tx, ty, tw, th) = list.thumb_rect();
+        if th > 0.0 {
+            layer.round_rect(
+                tx * scale,
+                ty * scale,
+                tw * scale,
+                th * scale,
+                tw * scale * 0.5,
+                Color::rgb(0x88, 0x88, 0x88),
+            );
+        }
+    }
+    if list.edge_width > 0.0
+        && let Some(rect) = tiny_skia::Rect::from_xywh(
+            list.edge_width * 0.5,
+            list.edge_width * 0.5,
+            (list.width * scale - list.edge_width).max(0.0),
+            (list.height * scale - list.edge_width).max(0.0),
+        )
+    {
+        layer.stroke_round_rect(
+            rect,
+            (list.radius * scale - list.edge_width * 0.5).max(0.0),
+            list.edge_width,
+            list.edge_color,
+        );
+    }
+    render.blend_pixmap_at(x.round() as i32, y.round() as i32, &layer.into_pixmap());
 }
 
 /// 在线翻译那一段段文字按 `\n` 拆成几行（脚本体里写了换行就显示成多行，换行后面的字从新一行左端开始）。
@@ -2353,7 +2469,16 @@ mod tests {
                 background: Color::rgb(0, 0, 255),
                 svg: Color::rgb(255, 255, 0),
             },
+            disabled: ButtonColors {
+                background: Color::rgb(0, 0, 0),
+                svg: Color::rgb(0, 0, 0),
+            },
             state,
+            enabled: true,
+            text: None,
+            shadow: None,
+            show_shadow: false,
+            default_button: None,
             region_name: "button".to_owned(),
         };
         let render = |state| {
@@ -2408,5 +2533,146 @@ mod tests {
             (255, 0, 0),
             "hovered 的背景是红色"
         );
+    }
+
+    #[test]
+    fn list_boxes_draw_rows_scrollbar_and_border() {
+        use crate::color::Color;
+        use crate::control::{ListBox, ListBoxRow};
+        use crate::document::{Document, Element};
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let list = ListBox {
+            x: 10.0,
+            y: 10.0,
+            width: 100.0,
+            height: 60.0,
+            radius: 3.0,
+            fill: Some(Color::rgb(255, 255, 255)),
+            edge_color: Color::rgb(0xD2, 0xD2, 0xD2),
+            edge_width: 1.0,
+            content_gap: 2.0,
+            gap: 0.0,
+            auto_item_gap_averaging: true,
+            align: crate::control::ListBoxAlign::Left,
+            rows: vec![
+                ListBoxRow {
+                    index: 0,
+                    top: 0.0,
+                    height: 40.0,
+                    width: 40.0,
+                    key: None,
+                    hits: Vec::new(),
+                    selected_elements: Vec::new(),
+                    hovered_elements: Vec::new(),
+                    elements: vec![Element::Rect {
+                        x: 0.0,
+                        y: 0.0,
+                        width: 40.0,
+                        height: 40.0,
+                        radius: 0.0,
+                        color: Color::rgb(255, 0, 0),
+                    }],
+                },
+                ListBoxRow {
+                    index: 1,
+                    top: 40.0,
+                    height: 40.0,
+                    width: 40.0,
+                    key: None,
+                    hits: Vec::new(),
+                    selected_elements: Vec::new(),
+                    hovered_elements: Vec::new(),
+                    elements: Vec::new(),
+                },
+            ],
+            row_count: 2,
+            scroll_offset: 0.0,
+            content_height: 80.0,
+            allow_select: false,
+            selected_index: -2,
+            auto_center_selected: false,
+            hovered_index: None,
+            region_name: "list".to_owned(),
+        };
+        let document = Document {
+            width: 120.0,
+            height: 80.0,
+            regions: Vec::new(),
+            control_names: Vec::new(),
+            instances: Default::default(),
+            elements: vec![Element::ListBox(list)],
+        };
+        let rendered = renderer
+            .render_document(&document, &Theme::new(), 1.0, None, false)
+            .expect("画得出来");
+        assert!(rendered.hits[0].is_some(), "列表盒有命中区域");
+        // 内容区里的行，以及右侧滚动条轨道都应被画出来。
+        assert_eq!(rendered.rendered.pixmap.pixel(20, 20).unwrap().red(), 255);
+        assert_eq!(rendered.rendered.pixmap.pixel(105, 30).unwrap().red(), 0x88);
+    }
+
+    #[test]
+    fn text_buttons_draw_multiline_text_and_shadow() {
+        use crate::color::Color;
+        use crate::control::{
+            ButtonColors, ButtonShadow, ButtonShape, ButtonState, ButtonText, FlatSvgButton,
+        };
+        use crate::document::{Document, Element};
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let colors = ButtonColors {
+            background: Color::rgb(255, 255, 255),
+            svg: Color::rgb(0, 0, 0),
+        };
+        let button = FlatSvgButton {
+            x: 12.0,
+            y: 12.0,
+            width: 80.0,
+            height: 40.0,
+            shape: ButtonShape::RoundRect { radius: 3.0 },
+            svg: String::new(),
+            svg_size: (80.0, 40.0),
+            normal: colors,
+            hovered: colors,
+            pressed: colors,
+            disabled: colors,
+            state: ButtonState::Normal,
+            enabled: true,
+            text: Some(ButtonText {
+                text: "第一行\n第二行".to_owned(),
+                color: Color::rgb(0, 0, 0),
+                family: None,
+                size: 14.0,
+                weight: 500,
+                italic: false,
+            }),
+            shadow: Some(ButtonShadow {
+                color: Color::rgba(0, 0, 0, 0x5A),
+                offset_x: 2.0,
+                offset_y: 6.0,
+            }),
+            show_shadow: true,
+            default_button: None,
+            region_name: "text".to_owned(),
+        };
+        let document = Document {
+            width: 100.0,
+            height: 60.0,
+            regions: Vec::new(),
+            control_names: Vec::new(),
+            instances: Default::default(),
+            elements: vec![Element::FlatSvgButton(button)],
+        };
+        let rendered = renderer
+            .render_document(&document, &Theme::new(), 1.0, None, false)
+            .expect("画得出来");
+        assert!(rendered.hits[0].is_some(), "文本按钮有命中区域");
+        let pixel = rendered.rendered.pixmap.pixel(52, 32).unwrap();
+        assert_eq!(pixel.alpha(), 255);
     }
 }

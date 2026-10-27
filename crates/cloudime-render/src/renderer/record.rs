@@ -14,7 +14,8 @@ use tiny_skia::{Path, Rect};
 use crate::color::Color;
 use crate::document::Element;
 use crate::elements::{
-    ImageElement, LineElement, PathElement, RectElement, StrokeElement, SvgElement, TextElement,
+    ImageElement, LineElement, PathElement, RectElement, ShadowElement, StrokeElement, SvgElement,
+    TextElement,
 };
 use crate::error::RenderError;
 use crate::text::{TextPainter, TextSize, TextStyle};
@@ -81,6 +82,8 @@ impl TextElement for DrawRecorder {
         self.text.borrow_mut().supports_char(ch, style)
     }
 }
+
+impl ShadowElement for DrawRecorder {}
 
 impl SvgElement for DrawRecorder {
     fn svg(

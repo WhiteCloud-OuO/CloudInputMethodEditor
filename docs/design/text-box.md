@@ -37,9 +37,9 @@
 
 ## 属性
 
-与 `text_edit` 相同的属性：`x` / `y` / `w` / `h`、`read_only`、`back_color`、`edge_color`、
-`edge_width`、`text_color`、`cursor_color`、`sel_back_color`、`sel_text_color`、
-`font_name` / `font_size` / `font_flag`、`text`、`font`、`name`、`events`。
+与 `text_edit` 相同的属性：`x` / `y` / `w` / `h`、`read_only`、`deselect_on_blur`（缺省 `true`，
+失焦时把选区收成插入点）、`back_color`、`edge_color`、`edge_width`、`text_color`、`cursor_color`、
+`sel_back_color`、`sel_text_color`、`font_name` / `font_size` / `font_flag`、`text`、`font`、`name`、`events`。
 
 不同 / 新增：
 
@@ -73,7 +73,8 @@ win:clear("editor")
 - `text_changed`：`event.control` / `event.text`；
 - `key_pressed`：`event.key` / `event.modifier`；
 - `focused` / `unfocused`；
-- 布局事件名继续接受 `onKeyPressed` / `on_key_pressed` 等别名。
+- `triple_clicked`：三击完成选行后派发；
+- 布局事件名继续接受 `onKeyPressed` / `on_key_pressed` / `on_triple_clicked` 等别名。
 
 内部水平 / 垂直滚动条**不暴露为脚本控件**，不派发 `value_changed`；滚动由用户鼠标操作，
 脚本只看到文本变化 / 焦点 / 按键事件。
@@ -97,6 +98,11 @@ win:clear("editor")
 
 ## 鼠标交互
 
+- 文本区（文字之间和空白处）鼠标指针始终是 I 型文本选择指针；空白处单击也会把插入点
+  移到最近文本位置，行为与系统记事本一致。滚动条和边框内边距不属于 windowless 文本区，
+  指针保持普通箭头。
+- 三击文本区（包括空白处）选中点击位置所在的**逻辑行**；自动换行产生的软换行会一起选中，
+  行界按 `\n` / `\r\n` 计算，不选中换行符。
 - 点击文本区：焦点交给 RichEdit，开始正常编辑 / 选区 / IME。
 - 点滚动条滑块：拖动时按滚动范围的 `pos` 更新 RichEdit 滚动位置；滚动条滑块长度按
   `page / (max - min + page)` 计算，比单行滚动条的固定 1/4 更准确。

@@ -75,12 +75,26 @@ pub trait StrokeElement {
     fn stroke_round_rect(&mut self, rect: Rect, radius: f32, thickness: f32, color: Color);
 }
 
+/// **单件阴影**：在控件自己的矩形下面垫一层柔光（文本按钮用）。
+///
+/// 默认空实现：只有真正走位图的后端需要覆盖；绘制后端没有离屏层时忽略即可。
+pub trait ShadowElement {
+    fn shadow(&mut self, _shadow: &crate::Shadow, _content: Rect, _radius: f32, _scale: f32) {}
+}
+
 /// 控件绘制用的一整套原语：能画控件的地方必须同时实现上面这些 trait。
 ///
 /// `Render` 全实现了，所以控件在内存渲染器上直接可用；以后加别的后端（比如直接画 DC）
 /// 只要也实现这几个 trait，控件代码不用改。
 pub trait ControlRender:
-    TextElement + SvgElement + ImageElement + LineElement + RectElement + PathElement + StrokeElement
+    TextElement
+    + SvgElement
+    + ImageElement
+    + LineElement
+    + RectElement
+    + PathElement
+    + StrokeElement
+    + ShadowElement
 {
 }
 
@@ -92,5 +106,6 @@ impl<T> ControlRender for T where
         + RectElement
         + PathElement
         + StrokeElement
+        + ShadowElement
 {
 }

@@ -11,13 +11,13 @@
 | [`docs/design/online-translate.md`](docs/design/online-translate.md) | 「在线翻译由脚本自己实现」这一条的来龙去脉 |
 | [`docs/notes/crate-notes.md`](docs/notes/crate-notes.md) | 实现要点（`crates/cloudime-script`、Server 的「用户脚本」两节） |
 | [`Scripts/template.lua`](Scripts/template.lua) | 「新建脚本」用的模板（只有清单骨架） |
-| [`Scripts/lib/example-theme-by-app.lua`](Scripts/lib/example-theme-by-app.lua) | 示例：按前台程序换主题（组合键触发 + `cloudime.foreground_app()` / `cloudime.apply_theme()`） |
-| [`Scripts/lib/example-auto-number.lua`](Scripts/lib/example-auto-number.lua) | 示例：自动序号（`combination_key` + `none` 单键 + `cloudime.context` + `commit`「换行 + 下一条序号」） |
+| [`Scripts/shared/example-theme-by-app.lua`](Scripts/shared/example-theme-by-app.lua) | 示例：按前台程序换主题（组合键触发 + `cloudime.foreground_app()` / `cloudime.apply_theme()`） |
+| [`Scripts/shared/example-auto-number.lua`](Scripts/shared/example-auto-number.lua) | 示例：自动序号（`combination_key` + `none` 单键 + `cloudime.context` + `commit`「换行 + 下一条序号」） |
 
 实际使用的脚本（小牛候选翻译、小牛整句翻译窗口、在线查询）在
 [CloudIME_ScriptWarehouse](https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse) 的 `src\` 下；
-本仓库源码的 `Scripts\lib` 只保留示例与共享工具。**安装包只装 `Scripts\template.lua`**，
-示例、共享模块和实际脚本都不随包，需要时自己下载到 `Scripts\`。
+本仓库源码的 `Scripts\shared` 只保留示例与共享工具。**安装包只装 `Scripts\template.lua`**，
+示例、共享模块和实际脚本都不随包，需要时自己下载到对应目录。
 
 ## 目录
 
@@ -63,15 +63,16 @@
 
 ## 2. 五分钟上手
 
-1. **放哪儿**：安装目录下的 `Scripts\`（与 `Phrases\`、`WordBank\` 同级）。
-   相对路径按 Server 的工作目录（就是安装目录）算。安装包只带 `template.lua`；示例与 `md5.lua`
-   在源码仓库的 `Scripts\lib` 和脚本仓库里，要引共享模块就自己建 `Scripts\lib\` 再放进去。
-2. **怎么建**：设置 → 脚本 → 「新建脚本」会用模板建一个文件并用记事本打开。
-   也可以自己往 `Scripts\` 里丢一个 UTF-8 的 `.lua`。
+1. **放哪儿**：实际脚本放安装目录下的 `Scripts\` 根部（与 `Phrases\`、`WordBank\` 同级）；
+   共享 Lua 放 `Scripts\shared\`，JSON 布局放 `Scripts\layouts\`，DLL 放 `Scripts\dlls\`，
+   脚本数据写 `Scripts\saved\`。路径优先用 `cloudime.shared_path` / `layout_path` /
+   `dll_path` / `saved_path`，不要依赖 Server 的当前工作目录。
+2. **怎么建**：设置 → 脚本 → 「新建脚本」会用模板在 `Scripts\` 根部建一个文件并用记事本打开。
+   也可以自己往 `Scripts\` 根部丢一个 UTF-8 的 `.lua`。
 3. **什么时候生效**：**改完要重启输入法服务** —— 任务栏「中 / 英」图标右键 → 「重启输入法服务」，
    或者「设置 → 脚本」页「新建脚本」右边那个同名按钮。没有热重载。
-4. **只加载根目录的 `Scripts\*.lua`**：`Scripts\lib\` 是子目录、加载器不认，适合放共享模块
-   （用 `dofile` 引）；`template.lua` 是模板，**不执行**；在 `[script] disabled` 名单里的也跳过。
+4. **只加载根目录的 `Scripts\*.lua`**：`shared\` / `layouts\` / `dlls\` / `saved\` 都是子目录，
+   加载器不认；`template.lua` 是模板，**不执行**；在 `[script] disabled` 名单里的也跳过。
 
 最小可用脚本（和模板的默认骨架一样：Ctrl+Alt+J 上屏；模板里还留了时间段的 `time_range`、
 候选拼音的 `candidate_pinyin`、焦点程序的 `apps` 这几行，换触发方式时取消注释即可）：
@@ -132,8 +133,8 @@ end)
 - **一个文件一个脚本、UTF-8 编码**；`cloudime.on` 只能在**加载期**调（也就是在清单之后、文件里直接写），
   运行期再登记会被拒绝。
 - **不许改 `cloudime` 表**：脚本拿到的是只读代理，写会报错。脚本自己的状态放普通全局变量里。
-- **持久状态写数据目录**（`%APPDATA%\CloudIME\` 下），别写安装目录 —— 普通用户写不进去，
-  而且**升级 / 卸载会删掉安装目录整棵**（`Scripts\` 里的脚本也会没，记得备份）。
+- **持久状态写 `Scripts\saved\`**：用 `cloudime.saved_path(...)` 拿路径（会自动建子目录）；
+  不要写安装目录其它位置，也别忘了**卸载会删掉安装目录整棵**（脚本和 saved 数据记得备份）。
 - **不许长时间占住工人线程**：唯一允许的「等」是两个**异步** HTTP（时限必给）。
 - `apps` 除了当 `focus_app` 的触发条件，还会过滤 `key` / `candidates` / `time`（都按当时聚焦的程序）；
   `startup` 早于任何应用、异步回调在请求发出时就已经判过。
@@ -195,7 +196,7 @@ end)
 Windows 11 记事本不给光标前的文字，那里 `cloudime.context` 一直是空串（见[第 11 节](#11-调试与排错)）。
 `cloudime.text.*` 那份整篇快照只随**组句**更新，组合键脚本一般用不上（可能 `nil` 或偏旧）。
 ⚠️ **脚本自己刚上屏的那一行，紧接着读回来可能少最后一个字符**（宿主差异，Firefox 实测）—— 靠它判断
-「上一行是不是序号」时要能容忍；`Scripts/lib/example-auto-number.lua` 记着自己刚写的序号来补全。
+「上一行是不是序号」时要能容忍；`Scripts/shared/example-auto-number.lua` 记着自己刚写的序号来补全。
 
 ### `candidates` 的载荷
 
@@ -284,6 +285,10 @@ cloudime.on(事件名, function(载荷) … end)   -- 登记处理函数，只�
 | `cloudime.caret()` | 请求一次**光标位置**：DLL 在下一次按键处理完之后量插入点，结果以 **`caret` 事件**送来（不是返回值，见下） |
 | `cloudime.install_dir()` | 安装目录的绝对路径（`Scripts\` / `Images\` 的上一级）；测试 / 没有安装目录时给 `nil` |
 | `cloudime.install_path(相对路径)` | 安装目录里的文件绝对路径（如 `"Images/SVG/打叉.svg"`）；文件不存在给 `nil`，`..` 跑出安装目录**报错** |
+| `cloudime.shared_path(文件名)` | `Scripts\shared\` 里的共享 Lua 绝对路径；不存在给 `nil`，跑出该目录**报错** |
+| `cloudime.layout_path(文件名)` | `Scripts\layouts\` 里的 JSON 布局绝对路径；不存在给 `nil`，跑出该目录**报错** |
+| `cloudime.dll_path(文件名)` | `Scripts\dlls\` 里的 DLL 绝对路径；不存在给 `nil`，跑出该目录**报错** |
+| `cloudime.saved_path(相对路径?)` | `Scripts\saved\` 下可写路径；自动建父目录，空参数返回 saved 根目录，`..` / 绝对路径**报错** |
 | `cloudime.get_theme()` | 当前生效主题的颜色表（`{ candidate = { … }, bar = { … }, tip = { … } }`，颜色是 `#AARRGGBB`）；详见下面「主题颜色」 |
 | `cloudime.image.load(路径)` | 读一张图（PNG / BMP / JPG）→ 图像句柄（用户数据），给 `static_image` 的 `image` 字段；同一文件按长度 + 修改时间缓存 |
 | `cloudime.get_time()` | 当前**本地时间** → `{ year, month, day, hour, minute, second, weekday, unix }`；`weekday` 1 = 周一 … 7 = 周日，`unix` 是 Unix 秒（标准库的 `os.date` / `os.time` 也能用，这一份是不依赖标准库的稳定形状） |
@@ -456,7 +461,7 @@ local box = cloudime.ui.truncate(文本, 行宽 [, 选项])   -- → { text, lin
 -- 建一块 240 × 120 点的面板（interactive = true 才接鼠标）
 local win = cloudime.window.create{
     name = "统计", width = 240, height = 120, interactive = true,
-    layout = "Scripts/lib/main.json",  -- 推荐：控件布局在 JSON 里；尺寸以布局文件为准
+    layout = cloudime.layout_path("main.json"),  -- 布局放 Scripts\layouts；尺寸以布局文件为准
     -- background = false  -- 不要输入法画的面板底色 / 圆角，改由元素表自己画背景
 }
 
@@ -546,8 +551,9 @@ aux:show()
   `events = { 事件名 = "处理器名" }`；事件名用
   `click` / `right_click` / `hover` / `leave` / `wheel` / `focus` / `blur` / `mouse_enter` / `mouse_leave` /
   `mouse_pressed` / `mouse_released` / `mouse_clicked` / `mouse_double_clicked` / `text_changed` /
-  `key_pressed` / `focused` / `unfocused` / `value_changed`（`text_edit` / `text_box` 也接受 `on_key_pressed` / `onKeyPressed`、
-  `on_focused` / `onFocused`、`on_unfocused` / `onUnfocused`；滚动条也接受 `on_value_changed`），
+  `key_pressed` / `focused` / `unfocused` / `triple_clicked` / `value_changed`（`text_edit` / `text_box` 也接受
+  `on_key_pressed` / `onKeyPressed`、`on_focused` / `onFocused`、`on_unfocused` / `onUnfocused`、
+  `on_triple_clicked`；滚动条也接受 `on_value_changed`），
   处理器名由脚本自己分发。
   窗口事件载荷里会多一个 `event.handler`（没声明时是 `nil`），例如：
 
@@ -561,7 +567,7 @@ aux:show()
 
   没有声明 `events` 的普通交互仍按 `event.region` / `event.element` + `event.action` 分发。
 - 布局文件里的 `svg_path` / `img.path` 先按布局文件所在目录找，再逐级向上找；因此放在
-  `Scripts/lib/` 的布局可以直接写 `Images/...`（落到安装根目录），也可以把素材放在布局旁边。
+  `Scripts/layouts/` 的布局可以直接写 `Images/...`（落到安装根目录），也可以把素材放在布局旁边。
   改布局文件后要重新 `load_layout` 或重启输入法服务；不会自动监听文件变化。
 
 **页面树 v2（实验）**：布局文件顶层写 `"version": 2` 时，使用页面树 / 布局算法，而不是上面的绝对坐标。
@@ -569,10 +575,10 @@ aux:show()
 
 ```lua
 local win = cloudime.window.create{
-    layout = "Scripts/lib/list.json",
+    layout = cloudime.layout_path("list.json"),
     data = { items = { { title = "A" }, { title = "B" } } },
 }
--- 或：win:load_layout("Scripts/lib/list.json", { items = ... })
+-- 或：win:load_layout(cloudime.layout_path("list.json"), { items = ... })
 win:set_data{ items = { { title = "C" } } }
 win:set_visible("rows[0].title", false)   -- 也接受 key：rows[abc].title / rows["abc"].title
 ```
@@ -581,6 +587,12 @@ win:set_visible("rows[0].title", false)   -- 也接受 key：rows[abc].title / r
 （例如 `event.control = "title"`），完整路径在 `event.control_path`（例如 `rows[1].title`）；
 `subpage.required = { "title", "meta" }` 可声明每个 item 必填的数据字段，缺一项整份布局失败。
 路径 API（`set_visible` / `*_at`）同时接受实例下标和 key；key 优先写成 `rows[abc]` 或 `rows["abc"]`。
+
+子页面可以带自己的实例脚本（放在 `Scripts/shared/`）：在子页面模板 `page` 或 `subpage` 节点写
+`"script": "row.lua"`。脚本返回一个表，支持 `created(ctx)` / `event(ctx, event)` / `destroyed(ctx)`；
+`ctx.window` 是窗口句柄，`ctx.item` / `ctx.index` / `ctx.key` 是当前实例数据，`ctx.path("title")`
+返回该实例的完整控件路径。`event` 先于主窗口脚本执行，返回 `true` 可吞掉该事件。示例见
+`Scripts/shared/test-list-box-row.lua`。
 
 大列表可在 `subpage` 上开虚拟化，只创建可见行：
 
@@ -617,8 +629,8 @@ v2 目前是实验接口，细节和限制以设计文档为准。
 | `panel` | `x` / `y` / `w` / `h` / `radius`（缺省 6）/ `color`（**边缘**颜色，缺省 `#FFE0E0E0`）/ `border_width`（缺省 1 点，100% 缩放下 1 像素）/ `fill`（可选填充，不写 = 无填充）/ `children = { …元素… }`；子控件用面板内相对坐标 |
 | `self_drawing_panel` | 自绘容器：`name` / `x` / `y` / `w` / `h`（可省，写 `auto_size = "draw"` 时按 draw 量尺寸）/ `clip`（缺省 true）/ `draw = { … }` / `regions = { … }` / `children = { … }`。`draw` 只接受 `rect` / `line` / `circle` / `text` / `svg` / `img` / `path`，每项必须有唯一非空 `name`（大小写敏感）；draw 用面板左上角局部坐标，不扣 padding；draw 先画，children 后画 |
 | `flat_svg_button` | `x` / `y`；`w` / `h` 可省（缺省取 SVG 画板）；`svg`（整段 SVG）或 `svg_path`（文件）；`shape = rect / round_rect / circle / path` + `radius`；`name`（自动区域名）；`normal` / `hovered` / `pressed = { background = …, svg = … }`；`events = { 动作名 = "处理器名" }` |
-| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 `h/2`）；`read_only` / `passkey`；`back_color`（背景）/ `edge_color`（边框）/ `edge_width`（缺省 1 点，100% 缩放下 1 像素；0 不显示）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align = left / right`；`font_name` / `font_size` / `font_flag`；`text` 初始文本；`font`（缺省 `candidate`）；`name`（自动区域名）；`events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
-| `text_box` | 多行编辑框：`x` / `y` / `w` / `h`；`radius`（缺省 6）；`read_only`；`back_color` / `edge_color` / `edge_width`（缺省 1 点，100% 缩放下 1 像素；0 不显示）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color`；`font_name` / `font_size` / `font_flag`；`auto_line_wrap`（缺省 true，启用时无水平滚动条）/ `line_spacing`（u16，缺省 8）；`text` / `font` / `name` / `events`；没有 `passkey` 和 SVG 属性；`text_edit` 的文本方法 / 事件都适用 |
+| `text_edit` | `x` / `y` / `w` / `h`；`radius`（缺省 `h/2`）；`read_only` / `passkey` / `deselect_on_blur`（缺省 true）；`back_color`（背景）/ `edge_color`（边框）/ `edge_width`（缺省 1 点，100% 缩放下 1 像素；0 不显示）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color` / `fill_color`；`svg` / `svg_path` + `svg_align = left / right`；`font_name` / `font_size` / `font_flag`；`text` 初始文本；`font`（缺省 `candidate`）；`name`（自动区域名）；`events`；旧名 `fill` / `color` / `border_width` / `caret_color` / `selection_background` / `selection_color` / `svg_color` / `size` 仍兼容 |
+| `text_box` | 多行编辑框：`x` / `y` / `w` / `h`；`radius`（缺省 6）；`read_only` / `deselect_on_blur`（缺省 true）；`back_color` / `edge_color` / `edge_width`（缺省 1 点，100% 缩放下 1 像素；0 不显示）；`text_color` / `cursor_color` / `sel_back_color` / `sel_text_color`；`font_name` / `font_size` / `font_flag`；`auto_line_wrap`（缺省 true，启用时无水平滚动条）/ `line_spacing`（u16，缺省 8）；`text` / `font` / `name` / `events`；没有 `passkey` 和 SVG 属性；`text_edit` 的文本方法 / 事件都适用 |
 | `hscroll_bar` | 水平滚动条：`x` / `y` 必给；`w` / `h` 可省，缺省都是 8（水平条通常写长度 `w`，只写 `h` 就是 8 点厚）；`value` / `min_value` / `max_value`（非负整数，缺省 0 / 0 / 100）/ `step`（滚轮和点轨道的步长，u64，缺省 1，不能为 0）；`background_color`（兼容 `back_color` / `background` / `color` / `fill`）/ `thumb_color`（兼容 `slider_color` / `thumb` / `highlight`）；`name`；`events` |
 | `vscroll_bar` | 垂直滚动条，字段同 `hscroll_bar`，`w` / `h` 缺省都是 8；也接受拼写 `vhscroll_bar` / `vhsroll_bar` |
 
@@ -903,7 +915,7 @@ end)
 ## 7. 标准库与运行环境
 
 - 语言是 **Lua 5.1**（LuaJIT）。`string` / `table` / `math` / `os` / `io` / `package` 都在；
-  **没有 `debug` 库**；LuaJIT 的 `bit` 库可用（源码仓库 `Scripts\lib\md5.lua` 就靠它）。
+  **没有 `debug` 库**；LuaJIT 的 `bit` 库可用（源码仓库 `Scripts\shared\md5.lua` 就靠它）。
 - 脚本的 **JIT 关掉**了（LuaJIT 编成 trace 之后不再检查调试钩子，预算就失效了），`jit.on` 也收掉了。
 - 刻意改过的几处（都是「会退进程 / 会卡住」的入口）：
 
@@ -938,11 +950,11 @@ end)
 
 - **Lua 全局变量**：跨事件保留（`startup` 里初始化、`key` / 回调里用），
   但**跨应用共用**、**Server 重启就没了**（重启输入法服务等于清空）。
-- 想真持久化就写文件，**写数据目录**：`%APPDATA%\CloudIME\` 下（那个目录一定在）。
-  别写安装目录：普通用户可能写不进去，升级 / 卸载还会删。
+- 想真持久化就写文件，**写 `Scripts\saved\`**：用 `cloudime.saved_path(...)` 拿路径，
+  它会自动建 `saved` 和子目录，也不会跑出安装目录。
 
 ```lua
-local file = os.getenv("APPDATA") .. "\\CloudIME\\我的脚本.data"
+local file = cloudime.saved_path("我的脚本/data.txt")
 
 local function load_lines()
     local handle = io.open(file, "r")
@@ -1198,12 +1210,12 @@ cloudime.script{
 }
 ```
 
-### 12.11 共享模块（放 `Scripts\lib\`）
+### 12.11 共享模块（放 `Scripts\shared\`）
 
-`lib\` 里的文件不会被加载，用 `dofile` 引：
+`shared\` 里的文件不会被加载，用 `dofile` 引：
 
 ```lua
-local helpers = dofile("Scripts/lib/helpers.lua")   -- 相对路径按安装目录算
+local helpers = dofile(cloudime.shared_path("helpers.lua"))
 ```
 
 ### 12.12 复制全文到剪贴板（`cloudime.text.all`）
@@ -1234,7 +1246,7 @@ end)
 ### 12.13 自动序号（`combination_key` 单键 + 光标前文 + `commit`）
 
 在 `1.` / `一、` 后面敲回车，自动接下一条的序号（像 Word）。完整版（含中文数字 `一、`→`二、`）见
-[`Scripts/lib/example-auto-number.lua`](Scripts/lib/example-auto-number.lua)。
+[`Scripts/shared/example-auto-number.lua`](Scripts/shared/example-auto-number.lua)。
 
 ```lua
 cloudime.script{

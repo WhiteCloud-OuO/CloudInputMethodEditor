@@ -16,7 +16,8 @@ use tiny_skia::{BlendMode, Path, Pixmap};
 use crate::canvas::Canvas;
 use crate::color::Color;
 use crate::elements::{
-    ImageElement, LineElement, PathElement, RectElement, StrokeElement, SvgElement, TextElement,
+    ImageElement, LineElement, PathElement, RectElement, ShadowElement, StrokeElement, SvgElement,
+    TextElement,
 };
 use crate::error::RenderError;
 use crate::image;
@@ -113,6 +114,21 @@ impl SvgElement for Render {
 impl ImageElement for Render {
     fn image(&mut self, image: &Pixmap, x: f32, y: f32, width: f32, height: f32) {
         image::draw_image(self.canvas.pixmap_mut(), image, x, y, width, height);
+    }
+}
+
+impl ShadowElement for Render {
+    fn shadow(
+        &mut self,
+        shadow: &crate::Shadow,
+        content: tiny_skia::Rect,
+        radius: f32,
+        scale: f32,
+    ) {
+        let Some(layer) = shadow.layer(self.width(), self.height(), content, radius, scale) else {
+            return;
+        };
+        self.blend_pixmap_at(0, 0, &layer);
     }
 }
 

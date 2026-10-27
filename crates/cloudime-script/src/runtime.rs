@@ -873,8 +873,10 @@ impl Runtime {
                     .flatten()
                     .map(|entry| entry.path())
                     .filter(|path| {
-                        path.extension()
-                            .is_some_and(|extension| extension.eq_ignore_ascii_case("lua"))
+                        path.is_file()
+                            && path
+                                .extension()
+                                .is_some_and(|extension| extension.eq_ignore_ascii_case("lua"))
                     })
                     .collect();
                 files.sort();
@@ -1027,11 +1029,25 @@ impl Runtime {
     ) -> Vec<Table> {
         // UI 线程的编辑框文本变化先落进脚本侧缓存，`win:get_text` 不用等下一个来回。
         if event == "window" {
+            crate::window::observe_list_box_event(&payload);
             let id = payload.get::<u32>("id").ok();
             let control = payload.get::<String>("control").ok();
             let text = payload.get::<String>("text").ok();
-            if let (Some(id), Some(control), Some(text)) = (id, control, text) {
+            if let (Some(id), Some(control), Some(text)) = (id, control.clone(), text) {
                 self.window_texts.borrow_mut().insert((id, control), text);
+            }
+            if payload.get::<String>("action").ok().as_deref() == Some("scroll_changed")
+                && let (Some(id), Some(control)) = (id, control)
+                && let Ok(first) = payload.get::<u64>("value")
+                && let Err(error) =
+                    crate::window::auto_list_scroll(self.lua(), id, &control, first as usize)
+            {
+                tracing::warn!(%error, "list_box 虚拟窗口刷新失败");
+            }
+            match crate::window::dispatch_subpage_event(self.lua(), &payload) {
+                Ok(true) => return Vec::new(),
+                Ok(false) => {}
+                Err(error) => tracing::warn!(%error, "子页面脚本事件处理失败"),
             }
         }
         // `key`：组句里 Server 会派发**所有**按键，组合键脚本只该收它声明的那一组（修饰键 + 键）。
@@ -1165,8 +1181,22 @@ impl Runtime {
     ///
     /// 脚本在**工人线程**上产出这些请求，窗口在 **UI 线程**上建 / 改 / 收：Server 每次派发
     ///（按键、候选、`time`、HTTP 回调、窗口事件）结束后取一次，按顺序转给 UI 线程即可。
+    /// UI 侧窗口已销毁：清理该窗口的虚拟列表 handler / 状态缓存。
+    pub fn forget_window(&self, id: window::WindowId) {
+        window::forget_window(id);
+        self.window_texts
+            .borrow_mut()
+            .retain(|(window, _), _| *window != id);
+    }
+
     pub fn take_window_requests(&self) -> Vec<window::Request> {
-        std::mem::take(&mut *self.window_requests.borrow_mut())
+        let requests = std::mem::take(&mut *self.window_requests.borrow_mut());
+        for request in &requests {
+            if let window::Request::Close(id) = request {
+                self.forget_window(*id);
+            }
+        }
+        requests
     }
 
     /// 有没有攒着的窗口操作（`take_window_requests` 取走之前先看它 —— 别让「响应为空」把
@@ -1457,6 +1487,32 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 .resolve(&relative)
                 .map_err(mlua::Error::RuntimeError)
         })?,
+    )?;
+    for (name, kind) in [
+        ("shared_path", "shared"),
+        ("layout_path", "layouts"),
+        ("dll_path", "dlls"),
+    ] {
+        let state = install.clone();
+        table.set(
+            name,
+            lua.create_function(move |_, relative: String| -> mlua::Result<Option<String>> {
+                state
+                    .resolve_script(kind, &relative)
+                    .map_err(mlua::Error::RuntimeError)
+            })?,
+        )?;
+    }
+    let saved_state = install.clone();
+    table.set(
+        "saved_path",
+        lua.create_function(
+            move |_, relative: Option<String>| -> mlua::Result<Option<String>> {
+                saved_state
+                    .saved(relative.as_deref())
+                    .map_err(mlua::Error::RuntimeError)
+            },
+        )?,
     )?;
     let log_current = current.clone();
     table.set(
@@ -2765,6 +2821,60 @@ mod tests {
         let _ = std::fs::remove_file(outside);
     }
 
+    /// `shared_path` / `layout_path` / `dll_path` 只认各自的子目录；`saved_path` 会建可写目录。
+    #[test]
+    fn script_subdirectory_paths_and_saved_data_are_scoped() {
+        let dir = script_dir("script-paths");
+        for (kind, file) in [
+            ("shared", "helpers.lua"),
+            ("layouts", "main.json"),
+            ("dlls", "helper.dll"),
+        ] {
+            let folder = dir.join("Scripts").join(kind);
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(folder.join(file), "x").unwrap();
+        }
+        let runtime = Runtime::none();
+        runtime.set_install_dir(dir.clone());
+        for (api, file) in [
+            ("shared_path", "helpers.lua"),
+            ("layout_path", "main.json"),
+            ("dll_path", "helper.dll"),
+        ] {
+            let found: String = runtime
+                .lua()
+                .load(format!(r#"return cloudime.{api}("{file}")"#))
+                .eval()
+                .unwrap();
+            assert!(Path::new(&found).is_absolute());
+            assert_eq!(Path::new(&found).file_name().unwrap(), file);
+        }
+        let saved: String = runtime
+            .lua()
+            .load(r#"return cloudime.saved_path("test_saved/data.txt")"#)
+            .eval()
+            .unwrap();
+        let saved = PathBuf::from(saved);
+        assert_eq!(saved.file_name().unwrap(), "data.txt");
+        assert!(
+            saved.parent().unwrap().is_dir(),
+            "saved_path 要把子目录建出来"
+        );
+        let saved_root = dir.join("Scripts").join("saved").canonicalize().unwrap();
+        assert!(
+            saved.starts_with(&saved_root),
+            "数据只能落在 Scripts\\saved 下"
+        );
+        let error = runtime
+            .lua()
+            .load(r#"return cloudime.saved_path("../outside.txt")"#)
+            .eval::<Option<String>>()
+            .unwrap_err()
+            .to_string();
+        assert!(error.contains("相对路径"), "{error}");
+        let _ = std::fs::remove_dir_all(dir);
+    }
+
     /// 一个合法清单：测试脚本都用它（`write_script` 自动加在最前面）。
     /// **不写 `name`** —— 于是脚本名取文件名，`scripts()` 的断言还能一眼看出是哪个脚本。
     const MANIFEST: &str = "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'none', keys = { 'a', 'b' }, budget = 1000000, timeout = 10000, \
@@ -3162,13 +3272,13 @@ mod tests {
         assert!(request.contains(r#"{"a":1}"#), "POST 体要发出去：{request}");
     }
 
-    /// 随包的 `Scripts/lib/md5.lua`（用户脚本拿它算签名）：拿 RFC 1321 的向量与小牛翻译文档里的例子回归。
+    /// 随包的 `Scripts/shared/md5.lua`（用户脚本拿它算签名）：拿 RFC 1321 的向量与小牛翻译文档里的例子回归。
     /// 这份文件随包发布、用户直接 `dofile` 它 —— 写错了签名就全错，所以放在这儿当用例。
     #[test]
     fn the_shipped_lua_md5_matches_the_known_vectors() {
         let dir = script_dir("md5-lib");
-        // 装到用户机器上时它在安装目录的 `Scripts\lib\`；这里指仓库里那份随包文件
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Scripts/lib/md5.lua");
+        // 装到用户机器上时它在安装目录的 `Scripts\shared\`；这里指仓库里那份随包文件
+        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Scripts/shared/md5.lua");
         // 80 位数字（RFC 1321 的向量之一，跨 55 / 56 / 64 字节的填充边界）
         const DIGITS: &str =
             "12345678901234567890123456789012345678901234567890123456789012345678901234567890";

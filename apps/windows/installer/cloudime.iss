@@ -114,8 +114,8 @@ Source: "{#Repo}\data\generated\lm.qj";          DestDir: "{app}\data\generated"
 Source: "{#Repo}\WordBank\*.db";   DestDir: "{app}\WordBank"; Flags: ignoreversion; Excludes: "UserWordBank.db"
 ; —— 短语库：安装目录 Phrases\Phrase.db（user 与 cloudime_default 两张表）——
 ; 用户脚本目录：只装「新建脚本」用的模板（用户在设置页里建的脚本不随包走；升级会覆盖模板）。
-; 示例、共享模块和实际脚本都不随安装包；需要时从源码仓库或 CloudIME_ScriptWarehouse 取，
-; 放到用户自己的 Scripts\（共享模块可自建 Scripts\lib\，加载器只认根部的 *.lua）。
+; 实际脚本放 Scripts\ 根部；共享 Lua / JSON 布局 / DLL / 数据分别放
+; Scripts\shared / Scripts\layouts / Scripts\dlls / Scripts\saved（目录由 [Dirs] 建出来）。
 Source: "{#Repo}\Scripts\template.lua"; DestDir: "{app}\Scripts"; Flags: ignoreversion
 
 ; —— 主题：安装目录 Themes\ 只放**随包默认**主题（只读）；用户自己编辑 / 新建的主题在
@@ -149,6 +149,12 @@ Source: "{#Repo}\target\release\cloudime-server.exe";   DestDir: "{app}"; Flags:
 ; 用户在设置页要能改方案文件、程序要能写 use_input_scheme.cfg 与首次运行样例，所以 [Run] ①.8 会给它授
 ; 「普通用户可写」。目录先建出来；随包不放方案文件（样例由程序首次运行写出）。
 Name: "{app}\InputSchemes"
+; 脚本目录约定：shared（共享 Lua）、layouts（JSON 界面）、dlls（动态链接库）、saved（脚本数据）。
+; [Run] ①.7 已经把整个 Scripts\ 递归授给普通用户可写。
+Name: "{app}\Scripts\shared"
+Name: "{app}\Scripts\layouts"
+Name: "{app}\Scripts\dlls"
+Name: "{app}\Scripts\saved"
 
 [Icons]
 Name: "{group}\云朵输入法 设置"; Filename: "{app}\cloudime-settings.exe"; IconFilename: "{app}\cloudime.ico"

@@ -66,6 +66,9 @@ pub struct InstanceInfo {
 
     /// 实例内控件原名，例如 `title`。
     pub local_name: String,
+
+    /// 子页面脚本的绝对路径（`Scripts/shared/...`）；没有为 `None`。
+    pub script: Option<String>,
 }
 
 impl InstanceInfo {
@@ -94,20 +97,41 @@ pub struct TextEditPlacement {
     /// 控件左上角的绝对内容坐标（点）。
     pub x: f32,
     pub y: f32,
+
+    /// 列表盒等容器的裁剪矩形（左上角 + 宽高）；普通控件为 `None`。
+    pub clip: Option<(f32, f32, f32, f32)>,
+
+    /// 这一项当前是否应该显示。列表盒里尚未完整进入视口的行仍保留宿主，
+    /// 但先隐藏；滚动到它时不重新建窗，避免底部新露出的行出现空编辑框。
+    pub visible: bool,
 }
 
 impl Document {
     /// 内容里所有 `text_edit`（含面板里的）的绝对位置。
     pub fn text_edits(&self) -> Vec<TextEditPlacement> {
         let mut placements = Vec::new();
-        collect_text_edits(&self.elements, (0.0, 0.0), &mut Vec::new(), &mut placements);
+        collect_text_edits(
+            &self.elements,
+            (0.0, 0.0),
+            None,
+            true,
+            &mut Vec::new(),
+            &mut placements,
+        );
         placements
     }
 
     /// 内容里所有 `text_box` 的绝对位置。
     pub fn text_boxes(&self) -> Vec<TextEditPlacement> {
         let mut placements = Vec::new();
-        collect_text_boxes(&self.elements, (0.0, 0.0), &mut Vec::new(), &mut placements);
+        collect_text_boxes(
+            &self.elements,
+            (0.0, 0.0),
+            None,
+            true,
+            &mut Vec::new(),
+            &mut placements,
+        );
         placements
     }
 
@@ -115,6 +139,15 @@ impl Document {
     pub fn element_at_path_mut(&mut self, path: &[usize]) -> Option<&mut Element> {
         let (first, rest) = path.split_first()?;
         let mut element = self.elements.get_mut(*first)?;
+        let rest = if let Element::ListBox(list) = element {
+            let (row_index, rest) = rest.split_first()?;
+            let row = list.rows.get_mut(*row_index)?;
+            let (child_index, rest) = rest.split_first()?;
+            element = row.elements.get_mut(*child_index)?;
+            rest
+        } else {
+            rest
+        };
         for index in rest {
             element = match element {
                 Element::Panel(panel) => panel.children.get_mut(*index)?,
@@ -129,6 +162,15 @@ impl Document {
     pub fn element_at_path(&self, path: &[usize]) -> Option<&Element> {
         let (first, rest) = path.split_first()?;
         let mut element = self.elements.get(*first)?;
+        let rest = if let Element::ListBox(list) = element {
+            let (row_index, rest) = rest.split_first()?;
+            let row = list.rows.get(*row_index)?;
+            let (child_index, rest) = rest.split_first()?;
+            element = row.elements.get(*child_index)?;
+            rest
+        } else {
+            rest
+        };
         for index in rest {
             element = match element {
                 Element::Panel(panel) => panel.children.get(*index)?,
@@ -195,6 +237,8 @@ impl Document {
 fn collect_text_edits(
     elements: &[Element],
     origin: (f32, f32),
+    clip: Option<(f32, f32, f32, f32)>,
+    visible: bool,
     path: &mut Vec<usize>,
     placements: &mut Vec<TextEditPlacement>,
 ) {
@@ -205,28 +249,81 @@ fn collect_text_edits(
                 path: path.clone(),
                 x: origin.0 + edit.x,
                 y: origin.1 + edit.y,
+                clip,
+                visible,
             }),
             Element::Panel(panel) => collect_text_edits(
                 &panel.children,
                 (origin.0 + panel.x, origin.1 + panel.y),
+                clip,
+                visible,
                 path,
                 placements,
             ),
             Element::SelfDrawingPanel(panel) => collect_text_edits(
                 &panel.children,
                 (origin.0 + panel.x, origin.1 + panel.y),
+                clip,
+                visible,
                 path,
                 placements,
             ),
+            Element::ListBox(list) => {
+                let content = (
+                    origin.0 + list.x + list.edge_width + list.content_gap,
+                    origin.1 + list.y + list.edge_width + list.content_gap,
+                    list.content_width(list.scrollbar_visible()),
+                    list.viewport_height(),
+                );
+                let content = merge_clip(clip, content);
+                for (row_index, row) in list.rows.iter().enumerate() {
+                    // 路径里的行号是 `rows` 向量下标，行位置却按逻辑行号查。
+                    // 窗口从中间行开始时两者不相等，混用会让整窗编辑框全部消失或叠在一起。
+                    let Some((row_x, row_y)) = list.row_origin(row.index) else {
+                        continue;
+                    };
+                    path.push(row_index);
+                    collect_text_edits(
+                        &row.elements,
+                        (origin.0 + list.x + row_x, origin.1 + list.y + row_y),
+                        content,
+                        visible && list.row_visible(row),
+                        path,
+                        placements,
+                    );
+                    path.pop();
+                }
+            }
             _ => {}
         }
         path.pop();
     }
 }
 
+fn merge_clip(
+    outer: Option<(f32, f32, f32, f32)>,
+    inner: (f32, f32, f32, f32),
+) -> Option<(f32, f32, f32, f32)> {
+    let Some(outer) = outer else {
+        return Some(inner);
+    };
+    let left = outer.0.max(inner.0);
+    let top = outer.1.max(inner.1);
+    let right = (outer.0 + outer.2).min(inner.0 + inner.2);
+    let bottom = (outer.1 + outer.3).min(inner.1 + inner.3);
+    if right > left && bottom > top {
+        Some((left, top, right - left, bottom - top))
+    } else {
+        // 交集为空也要保留裁剪信息，让宿主窗口隐藏，而不是退回“不裁剪”。
+        Some((left, top, 0.0, 0.0))
+    }
+}
+
 fn collect_text_boxes(
     elements: &[Element],
     origin: (f32, f32),
+    clip: Option<(f32, f32, f32, f32)>,
+    visible: bool,
     path: &mut Vec<usize>,
     placements: &mut Vec<TextEditPlacement>,
 ) {
@@ -237,19 +334,49 @@ fn collect_text_boxes(
                 path: path.clone(),
                 x: origin.0 + edit.x,
                 y: origin.1 + edit.y,
+                clip,
+                visible,
             }),
             Element::Panel(panel) => collect_text_boxes(
                 &panel.children,
                 (origin.0 + panel.x, origin.1 + panel.y),
+                clip,
+                visible,
                 path,
                 placements,
             ),
             Element::SelfDrawingPanel(panel) => collect_text_boxes(
                 &panel.children,
                 (origin.0 + panel.x, origin.1 + panel.y),
+                clip,
+                visible,
                 path,
                 placements,
             ),
+            Element::ListBox(list) => {
+                let content = (
+                    origin.0 + list.x + list.edge_width + list.content_gap,
+                    origin.1 + list.y + list.edge_width + list.content_gap,
+                    list.content_width(list.scrollbar_visible()),
+                    list.viewport_height(),
+                );
+                let content = merge_clip(clip, content);
+                for (row_index, row) in list.rows.iter().enumerate() {
+                    let Some((row_x, row_y)) = list.row_origin(row.index) else {
+                        continue;
+                    };
+                    path.push(row_index);
+                    collect_text_boxes(
+                        &row.elements,
+                        (origin.0 + list.x + row_x, origin.1 + list.y + row_y),
+                        content,
+                        visible && list.row_visible(row),
+                        path,
+                        placements,
+                    );
+                    path.pop();
+                }
+            }
             _ => {}
         }
         path.pop();
@@ -729,6 +856,9 @@ pub enum Element {
 
     /// 动态控件：扁平 SVG 按钮（背景形状 / 区域 / SVG 三件套，状态由窗口自动切换）。
     FlatSvgButton(FlatSvgButton),
+
+    /// 子页面容器控件：单列列表盒。
+    ListBox(crate::control::ListBox),
 
     /// 动态控件：水平 / 垂直滚动条（背景胶囊 + 滑块胶囊）。
     ScrollBar(ScrollBar),
@@ -1252,6 +1382,13 @@ impl std::fmt::Debug for Element {
             Self::FlatSvgButton(button) => f
                 .debug_struct("FlatSvgButton")
                 .field("state", &button.state)
+                .field("enabled", &button.enabled)
+                .field("text", &button.text.as_ref().map(|text| text.text.as_str()))
+                .finish(),
+            Self::ListBox(list) => f
+                .debug_struct("ListBox")
+                .field("rows", &list.rows.len())
+                .field("scroll_offset", &list.scroll_offset)
                 .finish(),
             Self::ScrollBar(bar) => f
                 .debug_struct("ScrollBar")

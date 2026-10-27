@@ -11,10 +11,18 @@
 --   1. 必须在文件**最前面**声明一次清单 cloudime.script{…}（下面那块）；缺或写错 → 无效。
 --   2. cloudime.on 只能在加载期调，运行期再登记会被拒绝。
 --   3. 清单里 api / trigger_condition / sync / handover / timeout / on_error 必写；budget 只能比全局上限小。
---   4. 不许改 cloudime 表；脚本自己的持久状态写别处（别写安装目录 —— 升级 / 卸载会删）。
+--   4. 不许改 cloudime 表；脚本自己的持久状态用 cloudime.saved_path(...) 写到
+--      Scripts\saved\ 下（可再建子目录），不要写安装目录其它位置。
 --   5. 唯一允许的「等」是 cloudime.http_get 与 cloudime.http_post（异步；时限必给，且不能超过清单里的 timeout）。
---   6. 建脚本窗口时默认把控件布局写进 JSON 布局文件（create{ layout = … } / load_layout）；
+--   6. 建脚本窗口时默认把控件布局写进 JSON 布局文件（放 Scripts\layouts\，用 cloudime.layout_path）；
 --      只有确需运行时动态生成大量控件或整份布局频繁变化时，才用 set_content 内联元素表。
+--
+-- 目录约定（都在安装目录 \Scripts\ 下）：
+--   根部 *.lua  = 可加载、可在设置页看到的实际脚本；
+--   shared\    = 共享 Lua（dofile(cloudime.shared_path("md5.lua"))）；
+--   layouts\   = JSON 界面布局（cloudime.layout_path("main.json")）；
+--   dlls\      = 动态链接库（cloudime.dll_path("helper.dll")）；
+--   saved\     = 脚本数据（cloudime.saved_path("test_saved/data.txt")，会自动建子目录）。
 
 cloudime.script{
     name        = "我的脚本",           -- 日志里点名用；不写就用文件名
