@@ -132,6 +132,17 @@ fn place(anchor: RECT, status: Option<RECT>, content: (i32, i32), gap: i32) -> (
         x: anchor.left,
         y: anchor.top,
     });
+    place_in(anchor, status, content, gap, work)
+}
+
+/// [`place`] 的纯计算部分；工作区单独传进来，测试不依赖当前显示器的分辨率。
+fn place_in(
+    anchor: RECT,
+    status: Option<RECT>,
+    content: (i32, i32),
+    gap: i32,
+    work: RECT,
+) -> (i32, i32) {
     let x = anchor
         .left
         .clamp(work.left, (work.right - content.0).max(work.left));
@@ -178,8 +189,17 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 
 #[cfg(test)]
 mod tests {
-    use super::place;
+    use super::place_in;
     use windows::Win32::Foundation::RECT;
+
+    fn work_area() -> RECT {
+        RECT {
+            left: 0,
+            top: 0,
+            right: 1920,
+            bottom: 1080,
+        }
+    }
 
     #[test]
     fn the_tip_follows_the_caret_when_it_does_not_hit_the_status_bar() {
@@ -195,7 +215,37 @@ mod tests {
             right: 500,
             bottom: 1060,
         };
-        assert_eq!(place(anchor, Some(status), (120, 40), 6), (100, 926));
+        assert_eq!(
+            place_in(anchor, Some(status), (120, 40), 6, work_area()),
+            (100, 926)
+        );
+    }
+
+    #[test]
+    fn a_short_work_area_places_the_tip_above_the_caret() {
+        let anchor = RECT {
+            left: 100,
+            top: 700,
+            right: 120,
+            bottom: 740,
+        };
+        let status = RECT {
+            left: 200,
+            top: 800,
+            right: 500,
+            bottom: 860,
+        };
+        let work = RECT {
+            left: 0,
+            top: 0,
+            right: 1024,
+            bottom: 768,
+        };
+        // 下面放不下、上面放得下：不能假设 CI 的工作区有 1080 高
+        assert_eq!(
+            place_in(anchor, Some(status), (120, 40), 6, work),
+            (100, 654)
+        );
     }
 
     #[test]
@@ -212,7 +262,7 @@ mod tests {
             right: 500,
             bottom: 1060,
         };
-        let (x, y) = place(anchor, Some(status), (120, 40), 6);
+        let (x, y) = place_in(anchor, Some(status), (120, 40), 6, work_area());
         assert_eq!(x, 250);
         assert!(y + 40 <= status.top);
     }
