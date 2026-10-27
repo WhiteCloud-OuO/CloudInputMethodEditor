@@ -159,7 +159,7 @@ Engine 查词的词库是一个列表，**按优先级从高到低**：用户词
 它们一起进词级查询和整句词图，且**跨词库按词文本去重、靠前优先**：同一个词在靠前的词库里命中后，后面的词库不再产出这条
 （同一本词库内部的重复照旧全收，交给排序按名次去重）。附加词库不带语言模型，它的词在路径上按词频兜底打分（`sentence::fallback_log_prob`），
 所以导入的第三方词库只影响「有没有这个词」和它的词频，不改变语言模型的尺度。
-主词库装配成三份：普通中文（`Engine::new` 的主词库）、稀有中文（`Engine::with_rare`，`Engine::set_rare_enabled` 整组开关，缺省关，装配后按 `[word_bank] rare_items` 设置）、
+主词库装配成三份：普通中文（`Engine::new` 的主词库）、稀有中文（`Engine::with_rare` / `Engine::set_rare`，`Engine::set_rare_enabled` 整组开关，缺省关；启动时按 `[word_bank] rare_items` 决定是否读取，关着时等开关打开后再由热加载按需加载）、
 英文（`Engine::with_english`）给中英混输的英文候选与句末英文段用；中文两份仍是原来的内存二分词库。
 壳负责装配：词库都在随包根的 `WordBank\` 下，主词库 `Dict.db`；用户导入的第三方词库是同目录下另外的 `.db`，
 目录里有的全部加载（没有 List.dat 这种启用清单）。导入 = `cloudime_dictionary::import` 只收现成的 `.db`（读一遍校验后原样复制进目录），

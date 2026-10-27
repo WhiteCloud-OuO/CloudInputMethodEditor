@@ -23,6 +23,10 @@ pub struct AssemblySpec {
 
     /// 是否写输入日志（`[general] input_log`）。
     pub input_log: bool,
+
+    /// 启动时是否读入稀有组（`[word_bank] rare_items`）。关着时只装普通组，
+    /// 配置热加载打开开关后再用 [`cloudime_dictionary::DictDb::rare_from_path`] 按需加载。
+    pub load_rare: bool,
 }
 
 impl AssemblySpec {
@@ -34,6 +38,7 @@ impl AssemblySpec {
             user_dir: None,
             user_word_bank: None,
             input_log: false,
+            load_rare: true,
         }
     }
 }

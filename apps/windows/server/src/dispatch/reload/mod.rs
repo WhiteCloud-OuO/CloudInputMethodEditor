@@ -9,6 +9,7 @@ mod tests;
 use std::path::{Path, PathBuf};
 use std::time::{Duration, Instant, SystemTime};
 
+use cloudime_dictionary::DictDb;
 use cloudime_platform::{Config, PhraseStore};
 
 pub(super) use self::state::ConfigReload;
@@ -153,6 +154,11 @@ impl Router {
             config.input.simp_trad_chinese_chars_toggle == cloudime_platform::SimpTrad::Traditional,
         );
         self.engine.set_learning(config.general.learning);
+        if config.word_bank.rare_items {
+            self.load_rare_if_needed();
+        } else {
+            self.engine.clear_rare();
+        }
         self.engine.set_rare_enabled(config.word_bank.rare_items);
         // 全角 / 半角是会话内状态（不进配置文件）：重建配置时沿用当前值，用户刚切的不被热加载冲掉
         let full_width_punctuation = self.config.full_width_punctuation;
@@ -209,6 +215,39 @@ impl Router {
                 reload.phrase_files = reload.dirs.phrase_snapshot();
             }
             self.reload_phrases();
+        }
+    }
+
+    /// 稀有组启动时未读、配置又打开了 `rare_items`：这时才从主词库补齐。
+    /// 已经挂着就不重复读；读失败只告警，普通组与本次输入照常可用。
+    fn load_rare_if_needed(&mut self) {
+        if self.engine.rare_dictionary().is_some() {
+            return;
+        }
+        let Some(path) = self
+            .reload
+            .as_ref()
+            .and_then(|reload| reload.dirs.main_dict.clone())
+        else {
+            tracing::warn!("稀有词库未加载：没有主词库路径");
+            return;
+        };
+        let started = Instant::now();
+        match DictDb::rare_from_path(&path) {
+            Ok(rare) if !rare.is_empty() => {
+                let words = rare.len();
+                self.engine.set_rare(rare);
+                tracing::info!(
+                    path = %path.display(),
+                    words,
+                    load_ms = started.elapsed().as_millis(),
+                    "稀有词库已按需加载"
+                );
+            }
+            Ok(_) => tracing::warn!(path = %path.display(), "主词库里没有可加载的稀有组"),
+            Err(error) => {
+                tracing::warn!(path = %path.display(), %error, "稀有词库按需加载失败")
+            }
         }
     }
 

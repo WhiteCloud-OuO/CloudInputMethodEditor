@@ -17,7 +17,11 @@ pub use self::spec::AssemblySpec;
 
 pub fn assemble(spec: &AssemblySpec) -> Result<Engine, ServerError> {
     let started = Instant::now();
-    let data = DictDb::from_path(&spec.dict)?;
+    let data = if spec.load_rare {
+        DictDb::from_path(&spec.dict)?
+    } else {
+        DictDb::from_path_without_rare(&spec.dict)?
+    };
     let dictionary = data.chinese;
     let rare = data.rare;
     let english = data.english;

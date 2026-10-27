@@ -4,7 +4,8 @@ use std::path::Path;
 use std::time::{Duration, Instant, SystemTime};
 
 use cloudime_core::Engine;
-use cloudime_dictionary::Dictionary;
+use cloudime_dictionary::{DictDb, Dictionary};
+use cloudime_format::Metadata;
 use cloudime_platform::{Config, WordBank};
 
 use super::CONFIG_POLL_INTERVAL;
@@ -178,6 +179,78 @@ fn rare_items_toggle_follows_config() {
     modified_at(&config_path, 300);
     poll(&mut router);
     assert!(!router.engine.rare_enabled());
+
+    drop(router);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn rare_items_load_lazily_from_main_dict() {
+    let dir =
+        std::env::temp_dir().join(format!("cloudime-reload-rare-lazy-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let main_dict = dir.join("Dict.db");
+    DictDb {
+        chinese: Dictionary::parse("开发\tkai fa\t9000\n").unwrap(),
+        rare: Dictionary::parse("龘\tda\t1\n").unwrap(),
+        english: Default::default(),
+        metadata: None,
+    }
+    .write(&main_dict, &Metadata::default())
+    .unwrap();
+
+    let config_path = dir.join("config.toml");
+    std::fs::write(&config_path, "[word_bank]\nrare_items = false\n").unwrap();
+    let config = Config::load(&config_path).unwrap();
+    let mut router = Router::new(
+        Engine::new(Dictionary::default()),
+        RouterConfig::from(&config),
+    );
+    router.watch_config(
+        &config,
+        config_path.clone(),
+        DataDirs {
+            user_root: Some(dir.clone()),
+            word_bank: Some(WordBank { dir: dir.clone() }),
+            main_dict: Some(main_dict),
+            ..DataDirs::default()
+        },
+    );
+    poll(&mut router);
+    assert!(router.engine.rare_dictionary().is_none());
+
+    std::fs::write(&config_path, "[word_bank]\nrare_items = true\n").unwrap();
+    modified_at(&config_path, 200);
+    poll(&mut router);
+    assert!(router.engine.rare_enabled());
+    assert_eq!(
+        router
+            .engine
+            .rare_dictionary()
+            .expect("打开开关后补上稀有组")
+            .lookup(&["da"], false)[0]
+            .text,
+        "龘"
+    );
+
+    std::fs::write(&config_path, "[word_bank]\nrare_items = false\n").unwrap();
+    modified_at(&config_path, 300);
+    poll(&mut router);
+    assert!(!router.engine.rare_enabled());
+    assert!(
+        router.engine.rare_dictionary().is_none(),
+        "关掉后释放稀有组"
+    );
+
+    std::fs::write(&config_path, "[word_bank]\nrare_items = true\n").unwrap();
+    modified_at(&config_path, 400);
+    poll(&mut router);
+    assert!(router.engine.rare_enabled());
+    assert!(
+        router.engine.rare_dictionary().is_some(),
+        "再打开时重新按需加载"
+    );
 
     drop(router);
     let _ = std::fs::remove_dir_all(&dir);

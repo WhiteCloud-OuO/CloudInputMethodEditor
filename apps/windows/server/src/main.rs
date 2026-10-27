@@ -195,6 +195,7 @@ fn main() {
         user_dir: user_dir(),
         user_word_bank: Some(user_word_bank),
         input_log: config.general.input_log,
+        load_rare: config.word_bank.rare_items,
         ..AssemblySpec::new(&dict)
     };
     let mut engine = match assemble_with_fallback(spec, &root) {

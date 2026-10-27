@@ -196,13 +196,18 @@ pub(crate) fn open(path: &Path) -> Result<Dictionary, DictionaryError> {
 /// 打开 `Dict.db`：普通中文 / 稀有中文 / 英文各还原成一份（旧存档只有中文）。
 pub(crate) fn open_word_bank(
     path: &Path,
+    load_rare: bool,
 ) -> Result<(Dictionary, Dictionary, WordList, Metadata), DictionaryError> {
     let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
     let metadata = read_metadata(&connection)?;
-    // 格式 3：7 张表各读各的
+    // 格式 3：7 张表各读各的；关掉稀有项时连那一组表都不碰
     if has_table(&connection, "words_common")? {
         let chinese = read_tables(&connection, &ORDINARY_TABLES)?;
-        let rare = read_tables(&connection, &RARE_TABLES)?;
+        let rare = if load_rare {
+            read_tables(&connection, &RARE_TABLES)?
+        } else {
+            Dictionary::default()
+        };
         let english = read_english(&connection)?;
         tracing::debug!(
             chinese = chinese.len(),
@@ -224,7 +229,7 @@ pub(crate) fn open_word_bank(
         ));
     }
     // 格式 2：单张 words 表，中文行按判据拆普通 / 稀有
-    let (chinese, rare, english) = read_split(&connection)?;
+    let (chinese, rare, english) = read_split(&connection, load_rare)?;
     tracing::debug!(
         chinese = chinese.len(),
         rare = rare.len(),
@@ -233,6 +238,20 @@ pub(crate) fn open_word_bank(
         "词库已从 SQLite 读入（中英分流）"
     );
     Ok((chinese, rare, english, metadata))
+}
+
+/// 只读 `Dict.db` 的稀有组；启动时跳过、打开开关后按需加载用。
+pub(crate) fn open_rare(path: &Path) -> Result<Dictionary, DictionaryError> {
+    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
+    read_metadata(&connection)?;
+    if has_table(&connection, "words_common")? {
+        read_tables(&connection, &RARE_TABLES)
+    } else if has_column(&connection, "language")? {
+        // 旧格式 2 没有分类表，读一遍再留下稀有那半；正常随包格式 3 不走这里。
+        Ok(read_split(&connection, true)?.1)
+    } else {
+        Ok(Dictionary::default())
+    }
 }
 
 /// 写成 `.db`：只写中文行（导入的单份词库用），稀有组为空。
@@ -404,6 +423,7 @@ fn read_english(connection: &Connection) -> Result<WordList, DictionaryError> {
 /// 格式 2：单张 `words` 表，中文行按 [`classify`] 拆普通 / 稀有，英文行装词表。
 fn read_split(
     connection: &Connection,
+    load_rare: bool,
 ) -> Result<(Dictionary, Dictionary, WordList), DictionaryError> {
     let mut chinese: Vec<(String, String, u32)> = Vec::new();
     let mut rare: Vec<(String, String, u32)> = Vec::new();
@@ -420,7 +440,9 @@ fn read_split(
             if language == ENGLISH {
                 english.push((text, pinyin, weight));
             } else if classify(&text, weight).is_rare() {
-                rare.push((text, pinyin, weight));
+                if load_rare {
+                    rare.push((text, pinyin, weight));
+                }
             } else {
                 chinese.push((text, pinyin, weight));
             }

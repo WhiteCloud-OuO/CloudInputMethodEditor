@@ -36,7 +36,16 @@ impl DictDb {
     /// 打开 `Dict.db`：按语言与稀有度分流成普通中文 / 稀有中文 / 英文。
     /// 非 SQLite（TSV / `.qj`，样例词库与开发数据）当单份中文词库读，没有稀有组与英文。
     pub fn from_path(path: impl AsRef<Path>) -> Result<Self, DictionaryError> {
-        let path = path.as_ref();
+        Self::from_path_inner(path.as_ref(), true)
+    }
+
+    /// 同 [`Self::from_path`]，但启动时先不读稀有组；之后需要时用
+    /// [`Self::rare_from_path`] 单独加载。
+    pub fn from_path_without_rare(path: impl AsRef<Path>) -> Result<Self, DictionaryError> {
+        Self::from_path_inner(path.as_ref(), false)
+    }
+
+    fn from_path_inner(path: &Path, load_rare: bool) -> Result<Self, DictionaryError> {
         if !db::is_db(path) {
             let chinese = Dictionary::from_path(path)?;
             let metadata = chinese.metadata().cloned();
@@ -47,13 +56,22 @@ impl DictDb {
                 metadata,
             });
         }
-        let (chinese, rare, english, metadata) = db::open_word_bank(path)?;
+        let (chinese, rare, english, metadata) = db::open_word_bank(path, load_rare)?;
         Ok(Self {
             chinese,
             rare,
             english,
             metadata: Some(metadata),
         })
+    }
+
+    /// 只读 `Dict.db` 的稀有组；非 SQLite 词库（TSV / `.qj`）没有稀有组，返回空。
+    pub fn rare_from_path(path: impl AsRef<Path>) -> Result<Dictionary, DictionaryError> {
+        let path = path.as_ref();
+        if !db::is_db(path) {
+            return Ok(Dictionary::default());
+        }
+        db::open_rare(path)
     }
 
     /// 写成 `Dict.db`：7 张分类表一起落盘，`(text, pinyin, language)` 重复的权重大的胜出。
@@ -188,6 +206,39 @@ mod tests {
         let dictionary = Dictionary::from_path(&path).unwrap();
         assert_eq!(dictionary.lookup(&["cuo", "ci"], false)[0].text, "生僻词");
         assert_eq!(dictionary.len(), 3);
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn can_skip_rare_at_startup_and_load_it_later() {
+        let path = temp("lazy-rare");
+        let value = DictDb {
+            chinese: Dictionary::parse("开发\tkai fa\t9000\n").unwrap(),
+            rare: Dictionary::parse("龘\tda\t1\n生僻词\tcuo ci\t30\n").unwrap(),
+            english: WordList::parse("github\tgithub\t700\n").unwrap(),
+            metadata: None,
+        };
+        value.write(&path, &Metadata::default()).unwrap();
+
+        let ordinary = DictDb::from_path_without_rare(&path).unwrap();
+        assert!(ordinary.rare.is_empty());
+        assert_eq!(
+            ordinary.chinese.lookup(&["kai", "fa"], false)[0].text,
+            "开发"
+        );
+        assert_eq!(
+            ordinary.english.get("github"),
+            Some("github"),
+            "跳过稀有组时普通中文与英文仍要读进来"
+        );
+
+        let rare = DictDb::rare_from_path(&path).unwrap();
+        assert_eq!(rare.lookup(&["da"], false)[0].text, "龘");
+        assert_eq!(rare.lookup(&["cuo", "ci"], false)[0].text, "生僻词");
+        assert!(
+            ordinary.chinese.lookup(&["cuo", "ci"], false).is_empty(),
+            "稀有词不该混进普通组"
+        );
         let _ = std::fs::remove_file(&path);
     }
 

@@ -343,13 +343,25 @@ impl Engine {
 
     /// 挂上稀有词库（生僻字 / 生僻词，来自 `Dict.db` 的稀有组）。格子缓存随之作废。
     pub fn with_rare(mut self, rare: Dictionary) -> Self {
+        self.set_rare(rare);
+        self
+    }
+
+    /// 运行中补装稀有词库；已经挂着时整体替换，避免按需加载留下旧数据。
+    pub fn set_rare(&mut self, rare: Dictionary) {
         self.rare = Some(rare);
         self.forget_span_cache();
-        self
     }
 
     pub fn rare_dictionary(&self) -> Option<&Dictionary> {
         self.rare.as_ref()
+    }
+
+    /// 丢掉已挂上的稀有词库，回到“按需再加载”的状态；关掉开关时用来释放内存。
+    pub fn clear_rare(&mut self) {
+        if self.rare.take().is_some() {
+            self.forget_span_cache();
+        }
     }
 
     /// 稀有组开关（缺省关）：打开后整组参与词级查询与整句词图。

@@ -18,10 +18,13 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 前两张是**稀有组**（生僻字 + 生僻词），其余四张是**普通组**。写盘先去重（`(text, pinyin, language)` 权重大的胜出）再归类，
 所以同一条不会因权重跨判据落进两张表。
 装配：`DictDb::from_path` 把普通组装成 `DictDb::chinese`、稀有组装成 `DictDb::rare`、英文装成 `DictDb::english`；
+`DictDb::from_path_without_rare` 只装普通组与英文，`DictDb::rare_from_path` 之后单独补稀有组。
 `Dictionary::from_path`（单份中文旧入口）把普通组与稀有组合并读回。**查询仍是原来那套二分收窄**：SQLite 只当存档格式，热路径不查库，
 `Match` 里的拼音仍借自内存键 arena。
 键按字节序排好，查询逐音节位置二分收窄（简拼位置按音节块跳扫），`lookup_pattern`（≥ 模式长度）与 `lookup_exact`（正好等长）同一套实现。
-稀有组可整体跳过：`DictDb::rare` 交给 `Engine::with_rare` 挂上，由 `Engine::set_rare_enabled` 开关（缺省关，装配层按 `[word_bank] rare_items` 设置）；
+稀有组懒加载：启动时只有 `[word_bank] rare_items = true` 才读；关着时装配层走 `from_path_without_rare`，配置热加载打开开关后由
+`dispatch/reload` 调 `rare_from_path` 补上；再关掉开关时 `Engine::clear_rare` 丢掉这一组释放内存，下次打开重新加载。
+`DictDb::rare` 交给 `Engine::with_rare` / `Engine::set_rare` 挂上，由 `Engine::set_rare_enabled` 开关；
 关掉后不参与词级查询与整句词图。英文仍由 `[input] mixture_input` 门控（`push_english` 里早退），从 `words_english` 装配，不再读 `english.tsv`。
 存档版本写在 `meta.format`（当前 `3`）；旧存档仍读得回来：`format` 2（单张 `words` 带 `language`，中文行按同一判据拆两组）、
 `format` 1（`keys` + `words(key_id, text, frequency)`，只有中文、没有分流）。

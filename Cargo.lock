@@ -615,6 +615,7 @@ dependencies = [
  "cloud-ui",
  "cloudime-core",
  "cloudime-dictionary",
+ "cloudime-format",
  "cloudime-learning",
  "cloudime-lm",
  "cloudime-neural",
