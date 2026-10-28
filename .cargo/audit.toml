@@ -2,4 +2,9 @@
 ignore = [
     # paste 停止维护。链路 candle-core → gemm 0.19 → paste，见 issue #38。
     "RUSTSEC-2024-0436",
+    # zip 8.6.0 由 candle-core 0.11.0 固定依赖，只有 .pth / .npz 读取会用到；
+    # 云朵只加载本地 safetensors / .qjm，不调用 ZipArchive::extract，等 candle 升级到 zip 9 后移除。
+    "RUSTSEC-2026-0367",
+    "RUSTSEC-2026-0368",
+    "RUSTSEC-2026-0369",
 ]
