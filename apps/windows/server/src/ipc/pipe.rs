@@ -66,6 +66,7 @@ pub fn serve_pipe(
         let now = Instant::now();
         if now >= due {
             router.tick();
+            router.refresh_special_alt_state();
             due = Instant::now() + router.next_tick();
             continue;
         }
@@ -81,9 +82,11 @@ pub fn serve_pipe(
             Ok(Work::Status(event)) => router.handle_status_event(event),
             Ok(Work::Candidate(event)) => router.handle_candidate_event(event),
             Ok(Work::ScriptWindow(event)) => router.handle_script_window_event(*event),
+            Ok(Work::SpecialAlt { down }) => router.handle_special_alt(down),
             Err(RecvTimeoutError::Timeout) => continue,
             Err(RecvTimeoutError::Disconnected) => break,
         }
+        router.refresh_special_alt_state();
         // 处理完消息节拍可能变短了（按键起了防抖）：到点时间只提前不推后
         due = due.min(Instant::now() + router.next_tick());
     }

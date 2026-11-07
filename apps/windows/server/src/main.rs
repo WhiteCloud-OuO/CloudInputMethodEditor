@@ -344,7 +344,17 @@ fn serve(mut router: Router) {
             }
         })
     };
-    match UiHandle::spawn(on_status, on_candidates, script_window_events) {
+    // 右 Alt 的低层键盘钩子：Word / Office 的 Alt 不走 TSF，只能由 UI 线程在系统之前截住。
+    // 钩子读这个原子量决定吞不吞，Router 每次处理完一件活刷新它。
+    let special_alt = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+    router.set_special_alt_flag(special_alt.clone());
+    let special_alt_events = work_tx.clone();
+    match UiHandle::spawn(
+        on_status,
+        on_candidates,
+        script_window_events,
+        Some((special_alt, special_alt_events)),
+    ) {
         Ok(ui) => {
             router.set_candidate_sink(Box::new(ui.clone()));
             router.set_status_sink(Box::new(ui.clone()));

@@ -343,6 +343,7 @@ bigram 语言模型 + Viterbi，加上简拼、模糊音。没有整句输入，
   其余（`@` 数字等）继续放行，宿主连不上 Server 时也只吃「可能是在打拼音」的字母（`service/key_sink.rs`），
   免得断连窗口里标点 / 数字跟着一起没反应；右 Alt 只在全拼 / 双拼方案、候选窗口显示的中文状态切换特殊输入模式，
   `marked_parts(..., special)` 把首音节之后的拼音标成 `Rest`、渲染成角标色，窗口销毁（`Composed` 变 `None`）时自动关闭；
+  Word / Office 的 Alt 不经过 TSF，改由 Server UI 线程的 `WH_KEYBOARD_LL` 在前台是这些程序且正在组句时截住并切换；
   应用标识仍随 `OpenSession { app }` 报一次（宿主进程的 exe 文件名，`GetModuleFileNameW(NULL)` 取的，DLL 加载在应用进程里），
   Server 每会话记下、写进输入日志。
   一次要绘制的状态是 `Frame`（preedit 分段 + 候选页 + 可选的提示 `notice`；当前没有来源使用 `notice`，字段保留），preedit 用 `PreeditSegment`（Core `MarkedSegment` 的可序列化镜像，

@@ -200,6 +200,29 @@ fn right_alt_toggles_special_input_and_commits_one_character_at_a_time() {
     assert!(!r.engine.special_input());
 }
 
+/// 低层钩子只在 Office 宿主 + 组句 + 中文 + 方案支持时吞右 Alt；其他程序仍走 TSF 击键 sink。
+#[test]
+fn low_level_special_alt_is_office_only() {
+    let normal = KeyModifiers::default();
+    let mut r = special_router();
+    r.handle(ClientMessage::OpenSession {
+        session: SessionId(1),
+        app: Some("WINWORD.EXE".to_owned()),
+        protocol: PROTOCOL_VERSION,
+    });
+    assert!(!r.special_alt_available(), "还没组句时不吞");
+    compose(&mut r, "yun'duo", normal);
+    assert!(r.special_alt_available(), "Word 组句中要吞");
+    r.handle_special_alt(false);
+    assert!(!r.engine.special_input(), "抬起不切换");
+    r.handle_special_alt(true);
+    assert!(r.engine.special_input(), "按下切换");
+
+    let mut notepad = special_router();
+    compose(&mut notepad, "yun'duo", normal);
+    assert!(!notepad.special_alt_available(), "非 Office 不绕过 TSF");
+}
+
 /// 特殊输入模式只对全拼 / 双拼开放：`RouterConfig::special_input` 跟着输入方案走。
 #[test]
 fn special_input_support_follows_the_input_scheme() {
