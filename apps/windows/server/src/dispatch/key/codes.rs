@@ -5,6 +5,10 @@ use cloudime_platform::protocol::KeyEvent;
 /// 右 Alt（Alt Gr）：中文状态下切换特殊输入模式。
 pub(crate) const RIGHT_ALT: u32 = 0xA5;
 
+/// 主键盘正斜杠（VK_OEM_2）：组句里切换特殊输入模式。
+/// 小键盘的除号是 `VK_DIVIDE`（0x6F），不在这里，避免误触。
+pub(crate) const SLASH: u32 = 0xBF;
+
 pub(crate) const BACK: u32 = 0x08;
 pub(crate) const TAB: u32 = 0x09;
 pub(crate) const RETURN: u32 = 0x0D;

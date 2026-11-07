@@ -164,9 +164,15 @@ impl Router {
             .store(self.special_alt_available(), Ordering::Relaxed);
     }
 
-    /// 右 Alt（Alt Gr）：中文状态下切换特殊输入模式。模式本身由 Engine 记着，下次查询就只出单字。
+    /// 右 Alt（Alt Gr）或主键盘 `/`：组句里切换特殊输入模式。模式本身由 Engine 记着，
+    /// 下次查询就只出单字。`/` 只认主键盘的 VK_OEM_2 + 裸键；小键盘除号与带修饰键的组合不算。
     fn special_input_key(&mut self, event: &KeyEvent) -> Option<Effect> {
-        if event.virtual_key != codes::RIGHT_ALT
+        let slash = event.virtual_key == codes::SLASH
+            && event.character == Some('/')
+            && !event.modifiers.has_command_key()
+            && !event.modifiers.shift;
+        let trigger = event.virtual_key == codes::RIGHT_ALT || slash;
+        if !trigger
             || event.modifiers.english_mode
             || !self.composing()
             || !self.config.special_input

@@ -200,6 +200,35 @@ fn right_alt_toggles_special_input_and_commits_one_character_at_a_time() {
     assert!(!r.engine.special_input());
 }
 
+/// 主键盘 `/` 也能切特殊输入模式；小键盘除号与带修饰键的组合不算。
+#[test]
+fn slash_toggles_special_input_on_the_main_keyboard_only() {
+    let normal = KeyModifiers::default();
+    let mut r = special_router();
+    compose(&mut r, "yun'duo", normal);
+
+    // 小键盘除号（VK_DIVIDE）不是触发键；它按普通标点走，可能把组句上屏，重新打一段再试主键盘。
+    key(&mut r, 0x6F, Some('/'), normal);
+    assert!(!r.engine.special_input());
+    compose(&mut r, "yun'duo", normal);
+
+    let (outcome, commit, _) = key(&mut r, 0xBF, Some('/'), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit, None, "触发键不当作标点上屏");
+    assert!(r.engine.special_input(), "主键盘 / 打开特殊输入模式");
+
+    key(&mut r, 0xBF, Some('/'), normal);
+    assert!(!r.engine.special_input(), "再按一次关闭");
+
+    // Ctrl + / 归应用，不切换。
+    let ctrl = KeyModifiers {
+        ctrl: true,
+        ..normal
+    };
+    key(&mut r, 0xBF, Some('/'), ctrl);
+    assert!(!r.engine.special_input());
+}
+
 /// 低层钩子只在 Office 宿主 + 组句 + 中文 + 方案支持时吞右 Alt；其他程序仍走 TSF 击键 sink。
 #[test]
 fn low_level_special_alt_is_office_only() {

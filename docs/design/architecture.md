@@ -341,7 +341,7 @@ bigram 语言模型 + Viterbi，加上简拼、模糊音。没有整句输入，
   组句外没有全角映射的字符里，`-` `=` 也改由壳自己插入（`dispatch/key/input.rs::apply_punctuation`）：
   放行要等宿主把键交回应用，实测在部分宿主（Edge / QQ 等）里这个键到不了，用户看到的是「按了没反应」；
   其余（`@` 数字等）继续放行，宿主连不上 Server 时也只吃「可能是在打拼音」的字母（`service/key_sink.rs`），
-  免得断连窗口里标点 / 数字跟着一起没反应；右 Alt 只在全拼 / 双拼方案、候选窗口显示的中文状态切换特殊输入模式，
+  免得断连窗口里标点 / 数字跟着一起没反应；右 Alt 或主键盘 `/` 只在全拼 / 双拼方案、候选窗口显示的中文状态切换特殊输入模式（`/` 组句外仍是普通标点），
   `marked_parts(..., special)` 把首音节之后的拼音标成 `Rest`、渲染成角标色，窗口销毁（`Composed` 变 `None`）时自动关闭；
   Word / Office 的 Alt 不经过 TSF，改由 Server UI 线程的 `WH_KEYBOARD_LL` 在前台是这些程序且正在组句时截住并切换；
   应用标识仍随 `OpenSession { app }` 报一次（宿主进程的 exe 文件名，`GetModuleFileNameW(NULL)` 取的，DLL 加载在应用进程里），
