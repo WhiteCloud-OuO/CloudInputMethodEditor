@@ -64,6 +64,11 @@ pub struct TextService {
     /// （否则应用还是拿不到）。别的键先到就把标记作废（那次重放没回来）。见 `key_sink.rs::replay_to_app`。
     replaying: Cell<Option<u32>>,
 
+    /// 这一轮右 Alt 的按下已经被输入法吃掉（特殊输入模式开关）：抬起也要一起吃。
+    /// 只吃按下不吃抬起时，应用会收到一个孤立的 Alt 抬起，在不少程序里等于「按 Alt」弹出菜单 / 进入选区，
+    /// 把刚切开的特殊输入模式又打断。见 `key_sink.rs` 的 `OnTestKeyUp` / `OnKeyUp`。
+    special_alt_down: Cell<bool>,
+
     /// 中 / 英模式（单击切换键翻转，见 `[shortcut] switch_mode`），与语言栏按钮共用。
     mode_state: Rc<ModeState>,
 
@@ -221,6 +226,7 @@ impl TextService {
             poll_timer: RefCell::new(None),
             last_connect_failure: Cell::new(None),
             replaying: Cell::new(None),
+            special_alt_down: Cell::new(false),
             mode_state: ModeState::new(),
             mode_button: RefCell::new(None),
             mode_sinks: RefCell::new(Vec::new()),

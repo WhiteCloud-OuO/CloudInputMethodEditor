@@ -85,10 +85,16 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         }
         // 右 Alt：按住不放会连发 key-down，只认第一拍；宿主报 0x12 / 0xA5 都统一合成 0xA5 送 Server。
         if is_right_alt(vk, lparam) && self.special_input_allowed() {
-            if is_auto_repeat(lparam) {
+            // 第一拍已经切过：后面的自动重复拍只吃掉，不再切换。
+            if is_auto_repeat(lparam) && self.special_alt_down.get() {
                 return Ok(TRUE);
             }
-            return Ok(self.handle_key(pic, self.key_event(0xA5)).into());
+            let eaten = self.handle_key(pic, self.key_event(0xA5));
+            // 按下吃了，抬起也得吃：只留下一个孤立的 Alt 抬起，应用会当成「按 Alt」弹菜单。
+            if eaten {
+                self.special_alt_down.set(true);
+            }
+            return Ok(eaten.into());
         }
         if self.char_width_hotkey(vk) {
             self.send_indicator(IndicatorCommand::ToggleCharWidthType);
@@ -98,13 +104,23 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         Ok(self.handle_key(pic, event).into())
     }
 
-    fn OnTestKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
-        self.note_key_up(wparam.0 as u32);
+    fn OnTestKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        let vk = wparam.0 as u32;
+        self.note_key_up(vk);
+        // 右 Alt 的按下被当成特殊输入模式开关吃掉了：抬起也必须吃掉。
+        if eats_special_alt_up(vk, lparam, self.special_alt_down.get()) {
+            return Ok(TRUE);
+        }
         Ok(FALSE)
     }
 
-    fn OnKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
-        self.note_key_up(wparam.0 as u32);
+    fn OnKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        let vk = wparam.0 as u32;
+        self.note_key_up(vk);
+        if eats_special_alt_up(vk, lparam, self.special_alt_down.get()) {
+            self.special_alt_down.set(false);
+            return Ok(TRUE);
+        }
         Ok(FALSE)
     }
 
@@ -567,6 +583,12 @@ fn special_input_supported(input: Option<InputSettings>) -> bool {
     input.is_some_and(|input| input.special_input)
 }
 
+/// 右 Alt 的按下被当成特殊输入模式开关吃掉后，抬起也要吃掉：
+/// 应用只收到一个孤立的 Alt 抬起时，会当成「按 Alt」弹出菜单 / 进入选区。
+fn eats_special_alt_up(vk: u32, lparam: LPARAM, swallowed_down: bool) -> bool {
+    swallowed_down && is_right_alt(vk, lparam)
+}
+
 /// `lparam` 的 bit 30：这是按住不放的自动重复，不是新的一次按键。
 fn is_auto_repeat(lparam: LPARAM) -> bool {
     (lparam.0 as u32) & (1 << 30) != 0
@@ -660,8 +682,9 @@ mod tests {
     use windows::Win32::Foundation::LPARAM;
 
     use super::{
-        eats_without_server, is_modifier_key, is_replay, is_right_alt, smart_space_key,
-        special_input_supported, wants_declared_key, wants_script_key, wants_special_input,
+        eats_special_alt_up, eats_without_server, is_modifier_key, is_replay, is_right_alt,
+        smart_space_key, special_input_supported, wants_declared_key, wants_script_key,
+        wants_special_input,
     };
     use crate::com::key::event::to_key_event;
 
@@ -882,6 +905,16 @@ mod tests {
             special_input: true,
             ..InputSettings::default()
         })));
+    }
+
+    /// 右 Alt 的按下被当成特殊输入模式开关吃掉后，抬起也要吃；没吃按下时抬起照常归应用。
+    #[test]
+    fn right_alt_key_up_is_eaten_after_the_switch() {
+        assert!(eats_special_alt_up(0xA5, LPARAM(0), true));
+        // 宿主可能把右 Alt 报成 VK_MENU + 扩展位。
+        assert!(eats_special_alt_up(0x12, LPARAM(1 << 24), true));
+        assert!(!eats_special_alt_up(0xA5, LPARAM(0), false));
+        assert!(!eats_special_alt_up(0xA4, LPARAM(0), true));
     }
 
     /// 修饰键**本身**不吃（`Ctrl` / `Alt` / `Shift` / `Win` 左右键）：吃了它，后面那个键在 TSF
