@@ -198,6 +198,12 @@ Filename: "{syswow64}\regsvr32.exe"; Parameters: "/s ""{app}\{#TsfDll32}"""; \
 ;    完成页点 Finish 再试一次（已经起过就不重复）。uiAccess=true 的 exe 不能用
 ;    CreateProcess / runasoriginaluser 拉起（报 740），必须走 ShellExecute（等同双击），
 ;    所以不能用 [Run] 条目，只能在 [Code] 里 ShellExecAsOriginalUser。
+; ⑤ 完成页的两个可选项：帮助手册默认勾选、打开设置默认不勾选。
+;    都以原（非提升）用户身份打开，别让文档编辑器或设置程序以管理员身份运行。
+Filename: "{app}\tutorial.md"; Description: "查看帮助手册"; \
+  Flags: postinstall shellexec nowait skipifsilent runasoriginaluser
+Filename: "{app}\cloudime-settings.exe"; Description: "打开设置"; WorkingDir: "{app}"; \
+  Flags: postinstall nowait skipifsilent runasoriginaluser unchecked
 
 [UninstallRun]
 ; 反向：先删登录任务、杀 Server / 设置程序、反注册 DLL，Inno 再删文件（DLL 若仍被占用，重启后删）。
