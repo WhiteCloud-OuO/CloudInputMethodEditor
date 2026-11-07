@@ -41,7 +41,12 @@ impl ITfEditSession_Impl for SurroundingSession_Impl {
             report_privacy(&self.engine, input.private);
             // 读不到也送一条**空的**：让 Server 把上一段的前文清掉。记事本 / OpenCode 这类宿主不给
             // 光标前文，`cloudime.context` 该是空串，而不是上一段组句的残留（残留会让脚本误判、胡乱上屏）。
-            report_surrounding(&self.engine, input.before.unwrap_or_default(), None);
+            report_surrounding(
+                &self.engine,
+                input.before.unwrap_or_default(),
+                None,
+                input.id,
+            );
         }));
         if result.is_err() {
             crate::com::log::log("按键前读光标前文 panic（已兜住）");
@@ -51,7 +56,8 @@ impl ITfEditSession_Impl for SurroundingSession_Impl {
     }
 }
 
-/// 请求一个异步只读会话，按键前现读光标前文（只有 `InputSettings.script_wants_text` 时才调）。
+/// 请求一个异步只读会话，按键前现读光标前文（`InputSettings.script_wants_text` 或
+/// `smart_symbols` 时才调）。
 pub(crate) fn request_surrounding_now(context: &ITfContext, client_id: u32, engine: SharedClient) {
     let session = SurroundingSession {
         context: context.clone(),
@@ -72,15 +78,20 @@ pub(crate) struct InputContext {
 
     /// 整篇快照（`cloudime.text.*` 用）：只在 Server 请过时读（[`document_text`]）。
     pub(crate) document: Option<DocumentText>,
+
+    /// 聚焦文本上下文标识（`ITfContext` 指针）：Server 据此判断换了输入框。
+    pub(crate) id: u64,
 }
 
 /// 起组句时读一次：先判私密，不私密再读前文（Server 要的话连整篇一起读）。
 pub(crate) fn input_context(context: &ITfContext, ec: u32, document: bool) -> InputContext {
+    let id = context.as_raw() as u64;
     let Some(range) = selection_start(context, ec) else {
         return InputContext {
             private: false,
             before: None,
             document: None,
+            id,
         };
     };
     if private_input(context, ec, &range) {
@@ -89,12 +100,14 @@ pub(crate) fn input_context(context: &ITfContext, ec: u32, document: bool) -> In
             private: true,
             before: None,
             document: None,
+            id,
         };
     }
     InputContext {
         private: false,
         before: text_before_caret(ec, &range),
         document: document.then(|| document_text(ec, &range)).flatten(),
+        id,
     }
 }
 

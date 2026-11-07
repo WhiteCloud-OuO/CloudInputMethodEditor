@@ -198,12 +198,12 @@ impl Router {
             return None;
         }
         let index = self.highlight / page_size * page_size + digit - 1;
-        let file = self.layout_candidate(index)?.text;
+        let id = self.layout_candidate(index)?.text;
         let info = self
             .scripts
             .script_infos()
             .iter()
-            .find(|info| info.file.eq_ignore_ascii_case(&file))
+            .find(|info| info.id.eq_ignore_ascii_case(&id))
             .cloned();
         if event.modifiers.ctrl {
             let text = info
@@ -216,31 +216,31 @@ impl Router {
                     text,
                     state: OnlineState::Done,
                 },
-                file,
+                id,
             );
             return Some(Effect::Navigated);
         }
         if event.modifiers.alt {
-            self.open_script_files(&file);
+            self.open_script_files(&id);
             return Some(Effect::Navigated);
         }
         if event.modifiers.shift {
-            self.spawn_manual_script(&file);
+            self.spawn_manual_script(&id);
             self.finish_i_mode();
             return Some(Effect::Changed(None));
         }
-        Some(self.run_script_file(&file))
+        Some(self.run_script_file(&id))
     }
 
     fn run_highlighted_script(&mut self) -> Effect {
-        let Some(file) = self.layout_candidate(self.highlight).map(|c| c.text) else {
+        let Some(id) = self.layout_candidate(self.highlight).map(|c| c.text) else {
             return Effect::Navigated;
         };
-        self.run_script_file(&file)
+        self.run_script_file(&id)
     }
 
-    fn run_script_file(&mut self, file: &str) -> Effect {
-        let commit = self.run_manual_script(file);
+    fn run_script_file(&mut self, id: &str) -> Effect {
+        let commit = self.run_manual_script(id);
         self.finish_i_mode();
         Effect::Changed(commit.filter(|text| !text.is_empty()))
     }
@@ -252,26 +252,37 @@ impl Router {
         self.online.clear();
     }
 
-    /// Alt+数字：用记事本打开脚本文件，以及脚本源码里引用到的 JSON 布局。
-    fn open_script_files(&self, file: &str) {
+    /// Alt+数字：用记事本打开脚本入口文件，以及脚本源码里引用到的 JSON 布局。
+    fn open_script_files(&self, id: &str) {
         let Some(dir) = &self.config.scripts_dir else {
-            tracing::warn!(file, "没有脚本目录，无法编辑脚本");
+            tracing::warn!(id, "没有脚本目录，无法编辑脚本");
             return;
         };
-        let lua = dir.join(file);
+        let Some(info) = self
+            .scripts
+            .script_infos()
+            .iter()
+            .find(|info| info.id.eq_ignore_ascii_case(id))
+        else {
+            tracing::warn!(id, "找不到这个脚本的入口文件");
+            return;
+        };
+        let folder = dir.join(&info.id);
+        let lua = folder.join(&info.file);
         let mut paths = vec![lua.clone()];
         if let Ok(source) = std::fs::read_to_string(&lua) {
             for reference in json_references(&source) {
-                if let Some(path) = resolve_json(dir, &reference) {
+                if let Some(path) = resolve_json(&folder, &reference) {
                     paths.push(path);
                 }
             }
         }
         // 同名的 JSON 也顺手打开：有的脚本把路径拼出来，源码里不一定有完整字符串。
-        let stem = Path::new(file).file_stem().unwrap_or_default();
+        let stem = Path::new(&info.file).file_stem().unwrap_or_default();
         for candidate in [
-            dir.join(stem).with_extension("json"),
-            dir.join("lib").join(stem).with_extension("json"),
+            folder.join(stem).with_extension("json"),
+            folder.join("layouts").join(stem).with_extension("json"),
+            folder.join("shared").join(stem).with_extension("json"),
         ] {
             if candidate.is_file() {
                 paths.push(candidate);
@@ -309,19 +320,21 @@ fn json_references(source: &str) -> Vec<String> {
     found
 }
 
-/// 把脚本里写的路径按「安装根目录 → 脚本目录 → 脚本目录/lib」找一遍。
-fn resolve_json(scripts_dir: &Path, reference: &str) -> Option<PathBuf> {
+/// 把脚本里写的路径按「安装根目录 → 脚本文件夹 → 脚本文件夹/layouts → 脚本文件夹/shared」找一遍。
+fn resolve_json(script_dir: &Path, reference: &str) -> Option<PathBuf> {
     let raw = Path::new(reference);
     if raw.is_absolute() && raw.is_file() {
         return Some(raw.to_path_buf());
     }
     let mut candidates = Vec::new();
-    if let Some(root) = scripts_dir.parent() {
+    // script_dir = `<安装目录>\Scripts\<id>`：上两级才是安装根目录。
+    if let Some(root) = script_dir.parent().and_then(Path::parent) {
         candidates.push(root.join(raw));
     }
-    candidates.push(scripts_dir.join(raw));
+    candidates.push(script_dir.join(raw));
     if let Some(name) = raw.file_name() {
-        candidates.push(scripts_dir.join("lib").join(name));
+        candidates.push(script_dir.join("layouts").join(name));
+        candidates.push(script_dir.join("shared").join(name));
     }
     candidates.into_iter().find(|path| path.is_file())
 }

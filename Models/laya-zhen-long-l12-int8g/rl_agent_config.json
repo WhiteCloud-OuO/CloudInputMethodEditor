@@ -1,0 +1,28 @@
+{
+  "encoder": "jhu-clsp/mmBERT-small",
+  "head_layers": 2,
+  "max_len": 1024,
+  "head_max_len": 256,
+  "max_prefixes": 6,
+  "act_costs": {
+    "escalate": 0.5
+  },
+  "cost_wrong_act": 3.0,
+  "amp_dtype": "bf16",
+  "model_name": "rl-agent",
+  "temperature": [
+    1.0,
+    1.0,
+    1.0
+  ],
+  "temperature_by_options": {},
+  "training": {
+    "name": "知意 1.4V2-Long-L12 / Zhiyi 1.4V2-Long-L12",
+    "method": "1.4V2's structure with 12 of its 22 encoder layers (layers 0, 1, 2, 6, 7, 8, 12, 13, 14, 19, 20, 21 kept), word choice distilled from a Qwen3.5-9B teacher (LoRA, Apache-2.0 base) in the ctx-first sequence; the continuation head distilled from a second Qwen3.5-9B teacher (LoRA) that writes the typed characters",
+    "data": "3.77M word-choice rows (2.89M Chinese, 0.88M English) with the IME's real candidates, typed codes and preceding text, loss 0.3 x cross-entropy to the right candidates + 0.7 x teacher KL (T 2); 4.31M composition rows (2.2M with the teacher's top-16 characters per syllable, 0.5 x T^2 soft cross-entropy + 0.5 x cross-entropy)",
+    "base": "1.4V2 (model-zhen-unified-s3) pruned to 12 layers, 3 epochs",
+    "choice_format": "ctx-first"
+  },
+  "student": "small",
+  "zhiyi_prompt": "guess+slots"
+}

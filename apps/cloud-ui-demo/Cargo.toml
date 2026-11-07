@@ -1,0 +1,26 @@
+[package]
+name = "cloud-ui-demo"
+description = "cloud-ui 独立窗口示例：普通 Win32 窗口 + Document 渲染"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "cloud-ui-demo"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+cloud-ui.workspace = true
+cloudime-render.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[build-dependencies]
+embed-manifest.workspace = true
+
+[target."cfg(windows)".build-dependencies]
+winresource.workspace = true

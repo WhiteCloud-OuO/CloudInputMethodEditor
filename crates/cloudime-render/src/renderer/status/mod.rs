@@ -53,6 +53,9 @@ impl Renderer {
         {
             self.paint_shadow(&mut render, content, radius, scale, shadow);
         }
+        if margin > 0.0 {
+            render.set_clip(margin, margin, content_width, content_height);
+        }
         render.round_rect(
             margin,
             margin,

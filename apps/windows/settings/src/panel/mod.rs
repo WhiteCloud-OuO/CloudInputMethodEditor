@@ -90,6 +90,9 @@ pub(crate) struct Settings {
     /// 最近一次脚本操作的结果，显示在脚本页（新建 / 删除 / 改名）。
     script_status: String,
 
+    /// 脚本页的在线脚本列表状态。
+    remote_scripts: scripts::RemoteState,
+
     /// 「主题」页：可选主题名（去 `.json`）。
     theme_names: Vec<String>,
 

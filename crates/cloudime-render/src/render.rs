@@ -20,7 +20,6 @@ use crate::elements::{
     TextElement,
 };
 use crate::error::RenderError;
-use crate::image;
 use crate::svg;
 use crate::text::{TextPainter, TextSize, TextStyle};
 
@@ -56,6 +55,23 @@ impl Render {
     /// 把一张离屏位图按 source-over 合成到 `(x, y)`（像素坐标）。
     pub(crate) fn blend_pixmap_at(&mut self, x: i32, y: i32, layer: &Pixmap) {
         self.canvas.blend_pixmap(x, y, layer);
+    }
+
+    /// 设备像素对齐矩形（窗口图标用）：不 anti-alias。
+    pub(crate) fn fill_rect_crisp(
+        &mut self,
+        x: f32,
+        y: f32,
+        width: f32,
+        height: f32,
+        color: Color,
+    ) {
+        self.canvas.fill_rect_crisp(x, y, width, height, color);
+    }
+
+    /// 把后续内容裁剪到 `(x, y, width, height)`（像素）；背景 / 阴影在设置前画，不受影响。
+    pub(crate) fn set_clip(&mut self, x: f32, y: f32, width: f32, height: f32) {
+        self.canvas.set_clip(x, y, width, height);
     }
 
     /// 内存区域宽（像素）。
@@ -113,7 +129,7 @@ impl SvgElement for Render {
 
 impl ImageElement for Render {
     fn image(&mut self, image: &Pixmap, x: f32, y: f32, width: f32, height: f32) {
-        image::draw_image(self.canvas.pixmap_mut(), image, x, y, width, height);
+        self.canvas.draw_image(image, x, y, width, height);
     }
 }
 

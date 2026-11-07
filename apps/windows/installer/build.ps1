@@ -55,7 +55,7 @@ if (-not $SkipBuild) {
     try {
         Invoke-Checked 'cargo' @('build', '--release', '--locked',
             '-p', 'cloudime-windows-server', '-p', 'cloudime-windows-tsf', '-p', 'cloudime-windows-settings',
-            '-p', 'cloudime-wordbank-transformer')
+            '-p', 'cloudime-mcp-server', '-p', 'cloudime-mcp-client-sidecar', '-p', 'cloudime-wordbank-transformer')
         Invoke-Checked 'cargo' @('build', '--release', '--locked',
             '-p', 'cloudime-windows-tsf', '--target', 'i686-pc-windows-msvc')
         # TSF DLL 按位数起固定名（cloudime_tsf_x64.dll / cloudime_tsf_x86.dll，不带版本号）：
@@ -77,7 +77,9 @@ $targets = @(
     'release\cloudime_tsf_x64.dll',
     'i686-pc-windows-msvc\release\cloudime_tsf_x86.dll',
     'release\cloudime-server.exe',
-    'release\cloudime-settings.exe'
+    'release\cloudime-settings.exe',
+    'release\cloudime-mcp-server.exe',
+    'release\cloudime-mcp-client.exe'
 )
 foreach ($t in $targets) {
     $p = Join-Path $Repo "target\$t"
@@ -87,6 +89,17 @@ foreach ($t in $targets) {
 # 特殊字符输入器是随仓库带的成品（VFB 编，不参与 cargo 构建）：缺了 Inno 编到 [Files] 那行才报错，这里先说清楚。
 $ssiExe = Join-Path $Repo 'apps\windows\ssi\release64\SpecialSymbolsInserter.exe'
 if (-not (Test-Path $ssiExe)) { throw "缺特殊字符输入器：$ssiExe（随仓库带的 VFB 成品，构建时只拷不编）" }
+
+# 知意（增强档）模型随包：缺了安装包会不完整。
+$zhiyiModel = Join-Path $Repo 'Models\laya-zhen-long-l12-int8g\laya.int8g.onnx'
+if (-not (Test-Path $zhiyiModel)) { throw "缺知意模型：$zhiyiModel（增强档随安装包提供）" }
+
+# 1.1) 知意（ONNX）运行库：取不到不阻塞打包，安装包里对应文件是 skipifsourcedoesntexist。
+try {
+    & (Join-Path $PSScriptRoot '..\scripts\fetch-onnxruntime.ps1')
+} catch {
+    Write-Warning "ONNX Runtime 没取到，增强（知意）档在装机后不可用：$($_.Exception.Message)"
+}
 
 # 本地词典（翻译 Tip）：清单与词典文件一起随包装进 {app}\LocalDictionary\。
 $localDict = Join-Path $Repo 'LocalDictionary'

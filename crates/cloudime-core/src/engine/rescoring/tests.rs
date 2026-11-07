@@ -41,6 +41,15 @@ fn texts(paths: &[Conversion]) -> Vec<&str> {
 }
 
 #[test]
+fn sentence_scorer_can_be_limited_to_long_inputs() {
+    let mut engine =
+        engine().with_async_sentence_scorer(Box::new(Prefers("开发")), None, None, None);
+    engine.set_sentence_scorer_min_syllables(9);
+    assert!(!engine.sentence_scorer_applies(8));
+    assert!(engine.sentence_scorer_applies(9));
+}
+
+#[test]
 fn sync_scorer_reorders_paths_in_place() {
     let engine = engine().with_sentence_scorer(Box::new(Prefers("开放")), Some(0.5), None, None);
     let mut paths = vec![path("开饭", -10.0), path("开放", -11.0)];
@@ -63,11 +72,13 @@ fn async_scorer_waits_for_the_shell_to_request_and_poll() {
     assert!(engine.rescoring_pending());
     assert!(engine.request_rescoring());
     assert!(!engine.rescoring_pending());
+    assert!(engine.rescoring_in_flight());
     let started = Instant::now();
     while !engine.poll_rescoring() {
         assert!(started.elapsed() < Duration::from_secs(5), "后台没回结果");
         std::thread::sleep(Duration::from_millis(5));
     }
+    assert!(!engine.rescoring_in_flight());
     let mut paths = vec![path("开饭", -10.0), path("开放", -11.0)];
     engine.rescore_paths(&mut paths);
     assert_eq!(texts(&paths), ["开放", "开饭"]);

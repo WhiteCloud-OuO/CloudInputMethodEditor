@@ -1,18 +1,10 @@
-//! 随包的测试脚本（`Scripts/test-caret-window.lua`）的行为：
+//! 随包的测试脚本（`Scripts/test-caret-window/test-caret-window.lua`）的行为：
 //! `manual` 事件请求光标 → `caret` 事件建窗口 / 读 SVG → 点扁平按钮的自动区域销毁。
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use cloudime_render::{ButtonState, Color, DefaultButton, Document, Element};
 use cloudime_script::{Runtime, WindowRequest, mlua};
-
-/// 一个干净的临时脚本目录。
-fn script_dir(name: &str) -> PathBuf {
-    let dir = std::env::temp_dir().join(format!("cloudime-script-{name}"));
-    let _ = std::fs::remove_dir_all(&dir);
-    std::fs::create_dir_all(&dir).unwrap();
-    dir
-}
 
 fn event(runtime: &Runtime, fields: &[(&str, mlua::Value)]) -> mlua::Table {
     let table = runtime.lua().create_table().unwrap();
@@ -34,11 +26,8 @@ fn content_of(requests: &[WindowRequest], id: u32) -> &Document {
 
 #[test]
 fn the_caret_window_script_draws_and_closes_itself() {
-    let source = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../Scripts/test-caret-window.lua");
-    let dir = script_dir("caret-window");
-    std::fs::copy(&source, dir.join("test-caret-window.lua")).unwrap();
-    let runtime = Runtime::load(&dir, &[]);
-    runtime.set_install_dir(Path::new(env!("CARGO_MANIFEST_DIR")).join("../.."));
+    let repo = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+    let runtime = Runtime::load(&repo.join("Scripts"), &[]);
     assert!(runtime.scripts().iter().any(|name| name == "光标窗口测试"));
 
     // i 模式选中脚本（`manual`）：脚本请求光标位置。

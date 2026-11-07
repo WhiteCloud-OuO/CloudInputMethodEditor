@@ -3,6 +3,9 @@
 用 [Inno Setup](https://jrsoftware.org/isinfo.php) 打的安装包，把 TSF DLL（64 位与 32 位各一份）、Server、设置程序与随包数据一起装进
 `C:\Program Files\CloudIME`，注册文本服务，并设登录自启。
 
+> 独立应用（例如 `apps/cloud-ui-demo`）有自己的示例安装包，见 `apps/cloud-ui-demo/installer/README.md`；
+> 它不混进本安装包，也不注册 TSF / 不写输入法数据。
+
 ## 安装布局
 
 ```
@@ -11,6 +14,8 @@ C:\Program Files\CloudIME\
     cloudime_tsf_x86.dll          同上的 32 位版（企业微信 / WPS / 32 位 QQ 这类 32 位应用只能加载它）
     cloudime-server.exe       输入内核 Server（跑在应用进程外）
     cloudime-settings.exe     设置界面
+    cloudime-mcp-server.exe   只读 stdio MCP Server（供外部 AI 客户端按需拉起，不开机启动）
+    cloudime-mcp-client.exe   MCP Client sidecar（脚本显式 cloudime.mcp.start 时由 Server 启动）
     Microsoft.UI.Xaml.dll …   设置程序自带的 Windows App Runtime（自包含部署，见下节；约 53 MB / 35 个文件）
     cloudime.ico              开始菜单 / 启动项快捷方式的图标（exe 里也嵌了一份）
     tutorial.md               使用手册（键盘、鼠标、候选窗的全部用法；随仓库根目录的 tutorial.md，发版前同步）
@@ -20,16 +25,21 @@ C:\Program Files\CloudIME\
                               「设置 → 翻译 → 本地词典」的选项就是清单里的显示名，Server 与设置程序都从这儿读（约 50 MB，按需要留哪几份）
     tools\                    工具目录：cwt-gui.exe（词库转换工具，GUI）+ cwt.exe（同上的命令行版）+ tools.list（悬浮状态条「工具」按钮的菜单清单）
     data\generated\           lm.qj（语言模型；英文词表已在 Dict.db 里，不再单独装）
+    Models\                   本地模型统一放在这里：
+      hanzhang-zhiwei-small.qjm  含章（基本档）整句模型
+      laya-zhen-long-l12-int8g\  知意（增强/混合档）模型：laya.int8g.onnx、tokenizer.json、unified_vocab.json、许可证；
+                                 随安装包提供，不需要用户下载（约 120 MB）
+    onnxruntime.dll           知意使用的 ONNX Runtime（CPU，动态加载）
     WordBank\                 Dict.db（7 张表：中文普通组 / 稀有组 + 英文）与用户导入的附加词库（本目录对普通用户可写，导入 / 删除词库走它）
     Phrases\Phrase.db         自定义短语库（user 与 cloudime_default 两张表；本目录对普通用户可写，「设置 → 短语」页走它；
                               随仓库带一份成品，升级不覆盖用户短语）
     data\phrase-default.db    内置短语的同步源（与上面同一份文件换个名字，每次升级都覆盖；Server 启动时把它的
                               cloudime_default 同步进 Phrases\Phrase.db，用户短语不受影响）
-    Scripts\                  用户 Lua 脚本（根部一个 .lua 一个脚本；本目录对普通用户可写，「设置 → 脚本」页走它）+
-                              template.lua（「新建脚本」的模板，加载器按文件名跳过、不执行；升级会覆盖它，用户脚本不动）。
-                              shared\ 放共享 Lua，layouts\ 放 JSON 布局，dlls\ 放动态链接库，saved\ 放脚本数据。
-                              安装包只装模板并建好这四个子目录；示例、共享模块和实际脚本都不随包，实际脚本在
-                              https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse
+    Scripts\                  用户 Lua 脚本（一个脚本一个文件夹，本目录对普通用户可写，「设置 → 脚本」页走它）+
+                              template.lua（清单骨架参考，加载器按文件名跳过、不执行；升级会覆盖它，用户脚本不动）。
+                              每个脚本文件夹：入口 .lua 在根部（只能有一个），shared\ 放共享 Lua，layouts\ 放 JSON 布局，
+                              dlls\ 放动态链接库，saved\ 放脚本数据。安装包只装模板；示例、共享模块和实际脚本都不随包，
+                              实际脚本在 https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse
     data\icons-arrangement.cfg 悬浮状态条的按钮排布（哪个按钮、位置、图标）
     data\icons\*.svg          那些按钮的图标（20×20）
     InputSchemes\             双键拼音方案文件（DoubleKeysPinyin\*.toml / .ini 与 AuxiliaryCodes\ 辅助码表；
@@ -86,7 +96,7 @@ Server 与设置程序按 **exe 相对**定位随包资源（`cloudime_platform:
 卸载反向：杀 Server / 设置程序 → 反注册当前版本 DLL（DLL 自己删掉 `%ProgramData%\CloudIME\cloudime.ico`）→ 删文件。
 输入法 DLL 被加载在**每个用过输入法的进程**里（连 explorer.exe 都在内），文件锁着删不掉：卸载器对删不掉的
 `cloudime_tsf*.dll` 调用 `RestartReplace`（`MoveFileEx` 的 `DELAY_UNTIL_REBOOT`）登记到重启后由系统删除，并在结束前提示重启；
-`[UninstallDelete]` 清掉整个安装目录（含用户导入的词库、`Phrases\Phrase.db` 里的用户短语、`Scripts\` 下的用户脚本与 `Scripts\saved\` 数据）与用户数据（`%APPDATA%\CloudIME`、`%LOCALAPPDATA%\CloudIME`、`%ProgramData%\CloudIME`）。
+`[UninstallDelete]` 清掉整个安装目录（含用户导入的词库、`Phrases\Phrase.db` 里的用户短语、`Scripts\` 下的用户脚本与各脚本 `saved\` 数据）与用户数据（`%APPDATA%\CloudIME`、`%LOCALAPPDATA%\CloudIME`、`%ProgramData%\CloudIME`）。
 
 ## 升级：DLL 被占用怎么办
 

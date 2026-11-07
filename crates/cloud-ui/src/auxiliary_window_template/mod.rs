@@ -35,22 +35,34 @@ use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
-use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DefWindowProcW, DestroyWindow, HTCLIENT, HTTRANSPARENT, MA_NOACTIVATE,
-    SW_HIDE, SW_SHOWNA, ShowWindow, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
-    WM_NCHITTEST, WM_RBUTTONUP, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW,
-    WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    CreateWindowExW, DefWindowProcW, DestroyWindow, GetCursorPos, GetWindowRect, HTCLIENT,
+    HTTRANSPARENT, HWND_NOTOPMOST, HWND_TOP, HWND_TOPMOST, IDC_ARROW, IsWindow, LoadCursorW,
+    MA_NOACTIVATE, SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOMOVE, SWP_NOSIZE, SWP_NOZORDER,
+    SetCursor, SetWindowPos, ShowWindow, WM_CAPTURECHANGED, WM_LBUTTONDOWN, WM_LBUTTONUP,
+    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_RBUTTONUP, WM_SETCURSOR,
+    WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE, WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, Result, w};
 
-use cloudime_platform::LayoutMode;
+use cloud_ui_types::LayoutMode;
+#[cfg(feature = "ime")]
 use cloudime_platform::input_schemes;
-use cloudime_render::{Color, ControlName, Layout, StaticTextContent, key_map_cell, key_map_size};
+use cloudime_render::{Color, ControlName, Layout, StaticTextContent};
+#[cfg(feature = "ime")]
+use cloudime_render::{key_map_cell, key_map_size};
 
+#[cfg(feature = "ime")]
+use crate::WindowMask;
+#[cfg(feature = "ime")]
+use crate::auxiliary::Bridge;
 use crate::layered;
 use crate::monitor;
 use crate::painter::{Painter, SharedPainter};
+use crate::text_edit::TextHostWindow;
 use crate::window::{module_handle, mouse_transparent, set_mouse_transparent};
 use crate::window_class::WindowClass;
 
@@ -74,7 +86,19 @@ const VERTICAL_ROWS: usize = 9;
 const HORIZONTAL_ROWS: usize = 6;
 
 /// u 模式符号窗口的格子边长（逻辑点）：四排 × 12 列，固定大小，不跟候选窗同高。
+#[cfg(feature = "ime")]
 const SYMBOL_CELL: f32 = 52.0;
+
+/// 辅助窗口模板的种类：普通辅助窗口（JSON / 调用方内容）还是 Cloud UI 内置对话框。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum AssetKind {
+    /// 普通辅助窗口（缺省）。
+    #[default]
+    Auxiliary,
+
+    /// 内置对话框：创建即强制模态，生命周期内不能取消模态。
+    Dialog,
+}
 
 /// 窗口模板的三个属性（**物理像素**）；`None` = 用按候选窗口形状算出来的默认值。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
@@ -89,16 +113,31 @@ pub struct AuxiliaryWindowSpec {
     pub gap: Option<i32>,
 }
 
+/// 内置对话框的创建参数（正文内容之后按具体 dialog 种类再补；现在先留空）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct DialogOptions {
+    /// 是否要求所有者开蒙版（默认 `WindowMask::dim(0.35)`）；销毁时恢复原蒙版。
+    pub mask: bool,
+}
+
 /// 面板里画什么。
 enum Content {
     /// 空面板：主题背景 + 圆角 + 阴影，尺寸按宿主形状 / 用户设的属性算。
     Empty,
 
     /// 键位映射参考 / u 模式符号窗口：格子边长按目标高度反推；`Some` 是固定的逻辑点边长。
+    #[cfg(feature = "ime")]
     KeyMap(input_schemes::KeyMapLayout, Option<f32>),
 
     /// 脚本给的一份内容（`cloudime.window.create_auxiliary` + `set_content`）。
     Document(cloudime_render::Document),
+}
+
+/// 面板摆在宿主旁边还是居中盖在宿主上。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Placement {
+    Beside,
+    Centered,
 }
 
 /// 面板上的鼠标动作（键位映射参考不接鼠标；脚本辅助窗口接）。
@@ -144,6 +183,24 @@ pub type PanelEvents = Box<dyn Fn(PanelEvent) + Send>;
 /// 窗口模板创建的那个窗口；不显示时只是藏在层里。
 pub struct AuxiliaryWindowTemplate {
     hwnd: HWND,
+
+    /// 内置种类：普通辅助窗口 / 对话框。
+    kind: AssetKind,
+
+    /// 对话框要求所有者开的蒙版；`None` = 不碰所有者蒙版。
+    #[cfg(feature = "ime")]
+    mask: Option<WindowMask>,
+
+    /// 是否已经替所有者切到 `mask`（销毁 / detach 时恢复 `previous_mask`）。
+    #[cfg(feature = "ime")]
+    mask_applied: Cell<bool>,
+
+    /// 应用蒙版之前所有者原来的蒙版。
+    #[cfg(feature = "ime")]
+    previous_mask: Cell<Option<WindowMask>>,
+
+    /// 这会儿是不是**模态**（所有者经 [`super::auxiliary::Assets::set_modal`] 设的）。
+    modal: Cell<bool>,
 
     /// 创建时声明的「允许获取焦点」（`able_to_get_focus`）：`false`（缺省）时**永远**不接输入。
     focusable: bool,
@@ -191,6 +248,9 @@ pub struct AuxiliaryWindowTemplate {
     /// 要不要阴影（脚本可以关掉；键位映射参考 / 空面板按缺省开）。
     shadow: Cell<bool>,
 
+    /// 要不要画窗口面板背景（主题底色 + 圆角）。消息对话框自己画整块背景时关掉，避免两套底色在圆角处叠出亮边。
+    background: Cell<bool>,
+
     /// 这次显示摆在哪（内容左上角 + 内容尺寸；物理像素）；`None` = 没显示。
     placed: Cell<Option<(i32, i32, i32, i32)>>,
 
@@ -199,7 +259,33 @@ pub struct AuxiliaryWindowTemplate {
 
     /// 上次真画出来的是哪一幅（位置 / 尺寸 / 版面版本 / 渲染器代号）：一样就不再重画。
     painted: Cell<Option<Painted>>,
+
+    /// 建窗口时的所有者；dialog 拖拽时跟着一起挪。
+    owner: Option<HWND>,
+
+    /// dialog 拖拽的起点（光标 + 对话框 / 所有者窗口位置）；`None` = 没在拖。
+    drag: Cell<Option<DialogDrag>>,
+
+    /// 这一按是否已经真的拖动过：拖动过的左键抬起不再当点击。
+    dragged: Cell<bool>,
+
+    /// dialog 拖拽时跟着所有者一起挪的 RichEdit 宿主（所有者名下的 + 对话框自己的）。
+    follow_hosts: RefCell<Vec<Rc<TextHostWindow>>>,
+
+    /// dialog 拖拽时跟着所有者一起挪的其它顶层窗口（例如蒙版）。
+    follow_windows: RefCell<Vec<HWND>>,
 }
+
+/// 一次 dialog 拖拽的起点。
+#[derive(Debug, Clone, Copy)]
+struct DialogDrag {
+    cursor: (i32, i32),
+    dialog: (i32, i32),
+    owner: (i32, i32),
+}
+
+/// 拖动超过几个像素才算拖拽（与脚本窗口一致）。
+const DRAG_THRESHOLD: i32 = 4;
 
 /// 上次画出来的那一幅：位置 `(x, y)` + 内容尺寸 + 版面版本 + 渲染器代号。
 type Painted = (i32, i32, i32, i32, u64, u64);
@@ -209,21 +295,25 @@ impl AuxiliaryWindowTemplate {
     /// （见 [`super::auxiliary::Asset::able_to_get_focus`]）；`false`（缺省）时永远不接输入。
     /// 声明了也只是「能」—— 创建之后的焦点仍在所有者手上，直到所有者**指定**给它。失败返回 `Err`，
     /// 调用方降级为不显示。
-    pub fn new(painter: SharedPainter, able_to_get_focus: bool) -> Result<Self> {
+    ///
+    /// `owner` 是宿主独立窗口的句柄：给了就建它的 **owned window**，辅助窗口在屏幕上始终排在所有者上层
+    /// （模态也靠这条关系，见 [`Self::set_modal`]）。内部面板（键位映射参考）可以给 `None`。
+    pub fn new(
+        painter: SharedPainter,
+        able_to_get_focus: bool,
+        owner: Option<HWND>,
+    ) -> Result<Self> {
         CLASS.ensure(|| WNDCLASSEXW {
             lpfnWndProc: Some(wndproc),
             hInstance: module_handle(),
+            hCursor: unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default(),
             lpszClassName: CLASS_NAME,
             ..Default::default()
         })?;
         // TRANSPARENT：现在还只是一块空面板，鼠标点它等于点在底下的应用上。NOACTIVATE：不抢焦点。
         let hwnd = unsafe {
             CreateWindowExW(
-                WS_EX_LAYERED
-                    | WS_EX_TOOLWINDOW
-                    | WS_EX_TOPMOST
-                    | WS_EX_NOACTIVATE
-                    | WS_EX_TRANSPARENT,
+                WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE | WS_EX_TRANSPARENT,
                 CLASS_NAME,
                 w!("云朵辅助窗口"),
                 WS_POPUP,
@@ -231,7 +321,7 @@ impl AuxiliaryWindowTemplate {
                 0,
                 0,
                 0,
-                None,
+                owner,
                 None,
                 Some(module_handle()),
                 None,
@@ -239,6 +329,14 @@ impl AuxiliaryWindowTemplate {
         };
         Ok(Self {
             hwnd,
+            kind: AssetKind::Auxiliary,
+            #[cfg(feature = "ime")]
+            mask: None,
+            #[cfg(feature = "ime")]
+            mask_applied: Cell::new(false),
+            #[cfg(feature = "ime")]
+            previous_mask: Cell::new(None),
+            modal: Cell::new(false),
             focusable: able_to_get_focus,
             focused: Cell::new(false),
             painter,
@@ -254,10 +352,58 @@ impl AuxiliaryWindowTemplate {
             scale: Cell::new(1.0),
             margin: Cell::new(0),
             shadow: Cell::new(true),
+            background: Cell::new(true),
             placed: Cell::new(None),
             revision: Cell::new(0),
             painted: Cell::new(None),
+            owner,
+            drag: Cell::new(None),
+            dragged: Cell::new(false),
+            follow_hosts: RefCell::new(Vec::new()),
+            follow_windows: RefCell::new(Vec::new()),
         })
+    }
+
+    /// 建一个**内置对话框**（`AssetKind::Dialog`）：创建即由 `Assets::add` 压入模态栈顶，
+    /// 生命周期内不能取消模态。正文内容暂时留空（`Content::Empty`），按具体 dialog 种类再补。
+    pub fn dialog(painter: SharedPainter, owner: HWND, options: DialogOptions) -> Result<Self> {
+        let mut template = Self::new(painter, true, Some(owner))?;
+        template.kind = AssetKind::Dialog;
+        template.set_top_most(true);
+        #[cfg(feature = "ime")]
+        if options.mask {
+            template.mask = Some(WindowMask::dim(0.35));
+        }
+        #[cfg(not(feature = "ime"))]
+        let _ = options.mask;
+        Ok(template)
+    }
+
+    /// 资产种类：普通辅助窗口 / 内置对话框。
+    pub fn kind(&self) -> AssetKind {
+        self.kind
+    }
+
+    /// 对话框要求开蒙版时，第一次 `sync` 记下所有者原来的蒙版并切过去。
+    #[cfg(feature = "ime")]
+    pub fn apply_mask(&self, owner: &dyn Bridge) {
+        let Some(mask) = self.mask else {
+            return;
+        };
+        if self.mask_applied.replace(true) {
+            return;
+        }
+        self.previous_mask.set(owner.mask());
+        owner.set_mask(Some(mask));
+    }
+
+    /// 对话框销毁前恢复所有者原来的蒙版。
+    #[cfg(feature = "ime")]
+    pub fn restore_mask(&self, owner: &dyn Bridge) {
+        if self.mask_applied.replace(false) {
+            owner.set_mask(self.previous_mask.get());
+            self.previous_mask.set(None);
+        }
     }
 
     /// 把自己登记进本线程的表，窗口过程按 HWND 找回它（`Weak`：不续命，`Drop` 之后自然没了）。
@@ -268,12 +414,77 @@ impl AuxiliaryWindowTemplate {
         });
     }
 
+    /// 这块面板自己的窗口句柄。
+    pub fn hwnd(&self) -> HWND {
+        self.hwnd
+    }
+
+    /// 最近一帧位图四周的阴影留白（像素）；内容区左上角 = 窗口左上角 + 它。
+    pub fn margin(&self) -> i32 {
+        self.margin.get()
+    }
+
+    /// 置顶开关；缺省不置顶（`new` 不写 `WS_EX_TOPMOST`）。
+    pub fn set_top_most(&self, top_most: bool) {
+        let insert_after = if top_most {
+            Some(HWND_TOPMOST)
+        } else {
+            Some(HWND_NOTOPMOST)
+        };
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                insert_after,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
     /// 设三个属性（物理像素）；`None` 的项回到默认算法。
     pub fn set_spec(&self, spec: AuxiliaryWindowSpec) {
         self.spec.set(spec);
     }
 
+    /// 设置 / 取消**模态**（由所有者经 [`super::auxiliary::Assets::set_modal`] 调）。
+    ///
+    /// 打开时把这件资产重新提到最前 —— 所有者可能刚抬过自己的 RichEdit 宿主或别的资产；
+    /// 辅助窗口本身是宿主的 owned window（见 [`Self::new`]），所以**始终排在所有者上层**。
+    /// 关掉时只改状态，不改变 z-order 关系（辅助窗口本来就该在所有者上面）。
+    pub fn set_modal(&self, modal: bool) {
+        if self.modal.replace(modal) == modal {
+            return;
+        }
+        if modal {
+            self.raise_above_owner();
+        }
+        tracing::debug!(modal, "辅助窗口模板：模态开关");
+    }
+
+    /// 把窗口提到最前（模态资产在所有者抬了别的窗口之后重新露头时用）。
+    pub fn raise(&self) {
+        self.raise_above_owner();
+    }
+
+    fn raise_above_owner(&self) {
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                Some(HWND_TOP),
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
     /// 换面板里要画的键位映射参考版面（当前方案变了一整份重送）；空版面就是一块空面板。
+    #[cfg(feature = "ime")]
     pub fn set_key_map(&self, layout: input_schemes::KeyMapLayout) {
         *self.content.borrow_mut() = Content::KeyMap(layout, None);
         // 版面变了：下次 `show` 一定重画
@@ -281,6 +492,7 @@ impl AuxiliaryWindowTemplate {
     }
 
     /// u 模式符号窗口：四排方形格子，边长固定（逻辑点），不与候选窗同高。
+    #[cfg(feature = "ime")]
     pub fn set_symbol_key_map(&self, layout: input_schemes::KeyMapLayout) {
         *self.content.borrow_mut() = Content::KeyMap(layout, Some(SYMBOL_CELL));
         self.revision.set(self.revision.get() + 1);
@@ -353,6 +565,12 @@ impl AuxiliaryWindowTemplate {
         self.revision.set(self.revision.get() + 1);
     }
 
+    /// 要不要画窗口面板背景（主题底色 + 圆角）。消息对话框自己画整块背景时关掉。
+    pub fn set_background(&self, background: bool) {
+        self.background.set(background);
+        self.revision.set(self.revision.get() + 1);
+    }
+
     /// 装鼠标事件出口（脚本辅助窗口用；键位映射参考不装，鼠标一律穿透）。
     pub fn set_events(&self, events: PanelEvents) {
         *self.events.borrow_mut() = Some(events);
@@ -378,6 +596,88 @@ impl AuxiliaryWindowTemplate {
             });
         let region = crate::region::hit(&self.regions.borrow(), x, y);
         (x, y, element, region)
+    }
+
+    /// 指定 dialog 拖拽时要跟着所有者一起挪的窗口：RichEdit 宿主与其它顶层窗口（蒙版）。
+    pub(crate) fn set_owner_followers(&self, hosts: Vec<Rc<TextHostWindow>>, windows: Vec<HWND>) {
+        *self.follow_hosts.borrow_mut() = hosts;
+        *self.follow_windows.borrow_mut() = windows;
+    }
+
+    /// 让一个额外顶层窗口跟着 dialog 平移（文本输入对话框自己的编辑框宿主）。
+    pub(crate) fn follow_edit_host(&self, host: Rc<TextHostWindow>) {
+        self.follow_hosts.borrow_mut().push(host);
+    }
+
+    /// dialog 拖拽：按下时记起点；按在按钮 / 区域上留给点击，不拖窗口。
+    fn begin_drag(&self, client_x: i32, client_y: i32) {
+        if self.kind != AssetKind::Dialog {
+            return;
+        }
+        let Some(owner) = self.owner else {
+            return;
+        };
+        if self.hit_at(client_x, client_y).3.is_some() {
+            return;
+        }
+        let mut cursor = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut cursor);
+        }
+        self.drag.set(Some(DialogDrag {
+            cursor: (cursor.x, cursor.y),
+            dialog: window_origin(self.hwnd),
+            owner: window_origin(owner),
+        }));
+        self.dragged.set(false);
+        unsafe {
+            SetCapture(self.hwnd);
+        }
+    }
+
+    /// 拖拽中：超过阈值后把对话框和所有者一起挪同样的位移。
+    fn drag_to(&self) {
+        let Some(drag) = self.drag.get() else {
+            return;
+        };
+        let Some(owner) = self.owner else {
+            return;
+        };
+        let mut cursor = POINT::default();
+        unsafe {
+            let _ = GetCursorPos(&mut cursor);
+        }
+        let dx = cursor.x - drag.cursor.0;
+        let dy = cursor.y - drag.cursor.1;
+        if !self.dragged.get() && dx.abs().max(dy.abs()) < DRAG_THRESHOLD {
+            return;
+        }
+        self.dragged.set(true);
+        let target = (drag.dialog.0 + dx, drag.dialog.1 + dy);
+        let before = window_origin(self.hwnd);
+        move_window(self.hwnd, target.0, target.1);
+        let (step_x, step_y) = (target.0 - before.0, target.1 - before.1);
+        // RichEdit 宿主 / 蒙版都是独立顶层窗口，不会跟着 dialog 或所有者移动。
+        for host in self.follow_hosts.borrow().iter() {
+            host.move_by(step_x, step_y);
+        }
+        for hwnd in self.follow_windows.borrow().iter() {
+            let (x, y) = window_origin(*hwnd);
+            move_window(*hwnd, x + step_x, y + step_y);
+        }
+        if unsafe { IsWindow(Some(owner)) }.as_bool() {
+            move_window(owner, drag.owner.0 + dx, drag.owner.1 + dy);
+        }
+    }
+
+    /// 结束拖拽；返回这一按有没有真的拖动过（拖动过就不再派点击）。
+    fn end_drag(&self) -> bool {
+        let dragged = self.dragged.replace(false);
+        self.drag.set(None);
+        unsafe {
+            let _ = ReleaseCapture();
+        }
+        dragged
     }
 
     /// 把一次鼠标动作交给出口（没装出口就什么也不做）。
@@ -460,6 +760,15 @@ impl AuxiliaryWindowTemplate {
 
     /// 贴在候选窗口的内容矩形旁边显示：`layout` 决定贴右侧（竖排）还是下方（横排）。
     pub fn show(&self, candidate: RECT, layout: LayoutMode) {
+        self.show_with(candidate, layout, Placement::Beside);
+    }
+
+    /// 在宿主内容区矩形里居中显示（消息对话框等同步面板用）。
+    pub fn show_centered(&self, candidate: RECT, layout: LayoutMode) {
+        self.show_with(candidate, layout, Placement::Centered);
+    }
+
+    fn show_with(&self, candidate: RECT, layout: LayoutMode, placement: Placement) {
         let point = POINT {
             x: candidate.left,
             y: candidate.top,
@@ -473,6 +782,7 @@ impl AuxiliaryWindowTemplate {
             .max(1);
         self.dpi.set(dpi);
         let spec = self.spec.get();
+        #[cfg(feature = "ime")]
         let target = key_map_target(candidate, layout, dpi);
         // 出图：键位映射参考 / 脚本内容 / 空面板，三选一
         let (rendered, hits, regions, generation) = {
@@ -485,6 +795,7 @@ impl AuxiliaryWindowTemplate {
             };
             let generation = painter.generation();
             match &*content {
+                #[cfg(feature = "ime")]
                 Content::KeyMap(layout_map, fixed_cell) if !layout_map.rows.is_empty() => {
                     let render_layout = to_render_layout(layout_map);
                     let nine_rows = painter.key_map_height_nine(dpi);
@@ -511,7 +822,12 @@ impl AuxiliaryWindowTemplate {
                     )
                 }
                 Content::Document(document) => {
-                    let rendered = painter.render_document(document, dpi, self.shadow.get(), true);
+                    let rendered = painter.render_document(
+                        document,
+                        dpi,
+                        self.shadow.get(),
+                        self.background.get(),
+                    );
                     let hits = rendered
                         .as_ref()
                         .map(|rendered| rendered.hits.clone())
@@ -549,7 +865,10 @@ impl AuxiliaryWindowTemplate {
             rendered.content_height as i32,
         );
         let gap = spec.gap.unwrap_or((DEFAULT_GAP * dpi as i32) / 96);
-        let (x, y) = place(candidate, content, gap, layout);
+        let (x, y) = match placement {
+            Placement::Beside => place(candidate, content, gap, layout),
+            Placement::Centered => centered(candidate, content),
+        };
         // 位置 / 尺寸 / 版面 / 渲染器都没变：窗口里已经是这一幅，不重贴
         let revision = self.revision.get();
         let signature = (x, y, content.0, content.1, revision, generation);
@@ -570,6 +889,10 @@ impl AuxiliaryWindowTemplate {
         self.scale.set(rendered.scale.max(0.01));
         self.margin.set(margin);
         let _ = unsafe { ShowWindow(self.hwnd, SW_SHOWNA) };
+        if self.modal.get() {
+            // 显示动作可能把它压到刚建 / 刚抬起的宿主窗下面：模态窗口必须回到最前
+            self.raise_above_owner();
+        }
         self.painted.set(Some(signature));
         // 从「没显示」到「显示」记一条：排查「按了键没看见」时看它就知道摆到哪去了。
         if self.placed.get().is_none() {
@@ -633,6 +956,7 @@ impl Drop for AuxiliaryWindowTemplate {
 /// 候选窗底下多一行译文 / 多一页页码时它也就跟着高（那两行的有无要看译文与页数，量不出来）。
 /// 横排宿主又扁又宽、按不了，返回 `None`（调用方按「装 9 个候选项」量一个缺省高度）；
 /// 宿主没显示（高度不是正的）也返回 `None`。
+#[cfg(feature = "ime")]
 fn key_map_target(host: RECT, layout: LayoutMode, dpi: u32) -> Option<f32> {
     match layout {
         LayoutMode::Horizontal => None,
@@ -646,12 +970,14 @@ fn key_map_target(host: RECT, layout: LayoutMode, dpi: u32) -> Option<f32> {
 /// 「键位映射参考」窗口的**最低高度**（**物理像素**）：无论竖排还是横排都不比它矮。
 ///
 /// 别按逻辑像素理解 —— 这是「看得清」那条线（格子边长由这个高度反推，太矮了格子里那些字号撑不住）。
+#[cfg(feature = "ime")]
 const MIN_KEY_MAP_HEIGHT: f32 = 316.0;
 
 /// 「键位映射参考」窗口画多高（**点**）：**竖排**跟宿主（候选窗口）现在的高度一样高，
 /// 候选窗底下多一行译文 / 多一页页码时它也跟着高（那两行的有无要看译文与页数，量不出来）；
 /// **横排**宿主又扁又宽、按不了，用「装 9 个候选项」那档（`nine_rows`）。
 /// 两种排布都再夹一道 [`MIN_KEY_MAP_HEIGHT`]（物理像素折成点）—— 谁都不比它矮。
+#[cfg(feature = "ime")]
 fn key_map_height(host: Option<f32>, nine_rows: f32, dpi: u32) -> f32 {
     let floor = MIN_KEY_MAP_HEIGHT / (dpi.max(1) as f32 / 96.0);
     host.unwrap_or(nine_rows).max(nine_rows).max(floor)
@@ -661,6 +987,7 @@ fn key_map_height(host: Option<f32>, nine_rows: f32, dpi: u32) -> f32 {
 ///
 /// 两侧的 `KeyMapLayout` / `KeyCap` 各有一份：平台那份是「方案里有什么」，渲染器那份是「画什么」，
 /// 渲染器不依赖平台（那是另一层的类型），转换就落在这里。
+#[cfg(feature = "ime")]
 fn to_render_layout(layout: &input_schemes::KeyMapLayout) -> cloudime_render::KeyMapLayout {
     let cap = |cap: &input_schemes::KeyCap| cloudime_render::KeyCap {
         key: cap.key.clone(),
@@ -680,6 +1007,24 @@ fn to_render_layout(layout: &input_schemes::KeyMapLayout) -> cloudime_render::Ke
         fallback_family: layout.fallback_family.clone(),
         fallback_first: layout.fallback_first,
     }
+}
+
+/// 在宿主矩形里居中，最后夹进工作区。
+fn centered(owner: RECT, content: (i32, i32)) -> (i32, i32) {
+    let work = monitor::work_area_near(POINT {
+        x: owner.left,
+        y: owner.top,
+    });
+    center_in(work, owner, content)
+}
+
+/// [`centered`] 的纯函数部分（工作区给死，便于单测）。
+fn center_in(work: RECT, owner: RECT, content: (i32, i32)) -> (i32, i32) {
+    let clamp_x = |x: i32| x.clamp(work.left, (work.right - content.0).max(work.left));
+    let clamp_y = |y: i32| y.clamp(work.top, (work.bottom - content.1).max(work.top));
+    let x = (owner.left + owner.right - content.0) / 2;
+    let y = (owner.top + owner.bottom - content.1) / 2;
+    (clamp_x(x), clamp_y(y))
 }
 
 /// 内容左上角：按**候选窗口矩形中心点**所在的半屏往另一边摆 ——
@@ -742,10 +1087,24 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             })
         }
         WM_MOUSEACTIVATE => LRESULT(MA_NOACTIVATE as isize),
+        // 光标：编辑框宿主自己管 I 型光标；面板其余地方（以及鼠标从宿主移回面板时）
+        // 一律恢复箭头，避免一直停在 I 型。
+        WM_SETCURSOR => {
+            if (lparam.0 & 0xFFFF) as u32 == HTCLIENT {
+                if let Ok(cursor) = unsafe { LoadCursorW(None, IDC_ARROW) } {
+                    unsafe {
+                        let _ = SetCursor(Some(cursor));
+                    }
+                }
+                return LRESULT(1);
+            }
+            unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) }
+        }
         // 装了事件出口（脚本辅助窗口）才把鼠标动作送出去；键位映射参考没装，这些消息就当没看见。
         WM_MOUSEMOVE => {
             track_leave(hwnd);
             with_template(hwnd, |template| {
+                template.drag_to();
                 template.emit_move(client_x(lparam), client_y(lparam));
             });
             LRESULT(0)
@@ -754,9 +1113,30 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             with_template(hwnd, AuxiliaryWindowTemplate::emit_leave);
             LRESULT(0)
         }
-        WM_LBUTTONUP => {
+        // dialog：按在非区域处开始拖拽（连同所有者一起挪）。
+        WM_LBUTTONDOWN => {
             with_template(hwnd, |template| {
-                template.emit(PanelAction::Click, client_x(lparam), client_y(lparam), None);
+                template.begin_drag(client_x(lparam), client_y(lparam));
+            });
+            LRESULT(0)
+        }
+        WM_LBUTTONUP => {
+            let mut dragged = false;
+            with_template(hwnd, |template| {
+                dragged = template.end_drag();
+            });
+            if !dragged {
+                with_template(hwnd, |template| {
+                    template.emit(PanelAction::Click, client_x(lparam), client_y(lparam), None);
+                });
+            }
+            LRESULT(0)
+        }
+        // 捕获被别处拿走：这一次拖拽就作废，别留着旧起点。
+        WM_CAPTURECHANGED => {
+            with_template(hwnd, |template| {
+                template.drag.set(None);
+                template.dragged.set(false);
             });
             LRESULT(0)
         }
@@ -785,6 +1165,30 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
             LRESULT(0)
         }
         _ => unsafe { DefWindowProcW(hwnd, msg, wparam, lparam) },
+    }
+}
+
+/// 窗口左上角的屏幕坐标（物理像素）。
+fn window_origin(hwnd: HWND) -> (i32, i32) {
+    let mut rect = RECT::default();
+    unsafe {
+        let _ = GetWindowRect(hwnd, &mut rect);
+    }
+    (rect.left, rect.top)
+}
+
+/// 只挪位置：不动尺寸 / z-order，也不激活。
+fn move_window(hwnd: HWND, x: i32, y: i32) {
+    unsafe {
+        let _ = SetWindowPos(
+            hwnd,
+            None,
+            x,
+            y,
+            0,
+            0,
+            SWP_NOSIZE | SWP_NOZORDER | SWP_NOACTIVATE,
+        );
     }
 }
 
@@ -819,8 +1223,10 @@ fn with_template(hwnd: HWND, act: impl FnOnce(&AuxiliaryWindowTemplate)) {
 
 #[cfg(test)]
 mod tests {
-    use super::{MIN_KEY_MAP_HEIGHT, key_map_height, key_map_target, place_in};
-    use cloudime_platform::LayoutMode;
+    #[cfg(feature = "ime")]
+    use super::{MIN_KEY_MAP_HEIGHT, key_map_height, key_map_target};
+    use super::{center_in, place_in};
+    use cloud_ui_types::LayoutMode;
     use windows::Win32::Foundation::RECT;
 
     fn rect(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
@@ -832,8 +1238,18 @@ mod tests {
         }
     }
 
+    #[test]
+    fn centered_panels_sit_in_the_middle_of_the_owner() {
+        let work = rect(0, 0, 800, 600);
+        let owner = rect(100, 100, 500, 300);
+        assert_eq!(center_in(work, owner, (200, 100)), (200, 150));
+        // 靠近屏幕边缘时夹回工作区
+        assert_eq!(center_in(work, rect(0, 0, 100, 100), (300, 200)), (0, 0));
+    }
+
     /// 「键位映射参考」的目标高度：竖排就是宿主现在的（内容）高度，按 DPI 折回点；横排不按宿主，
     /// 宿主没显示（高度不是正的）也交给缺省。
+    #[cfg(feature = "ime")]
     #[test]
     fn the_key_map_target_follows_the_host_height_only_when_vertical() {
         let host = rect(0, 0, 812, 302);
@@ -850,6 +1266,7 @@ mod tests {
 
     /// 高度：竖排跟宿主、横排用「装 9 个候选项」那档，但两种排布都不低于 [`MIN_KEY_MAP_HEIGHT`]
     /// （物理像素折成点）—— 候选很少、或者屏幕缩放 150% 时都按这条线来。
+    #[cfg(feature = "ime")]
     #[test]
     fn the_key_map_window_never_goes_below_the_minimum_height() {
         let nine = 313.0_f32; // 「装 9 个候选项」量出来的高度（96 dpi、16pt 候选）

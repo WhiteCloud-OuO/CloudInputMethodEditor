@@ -2,7 +2,8 @@
 //!
 //! 脚本跑在 Server 的工人线程上，窗口在 UI 线程上：两边不能直接互相调用，所以脚本不「画」，
 //! 只交一份数据（坐标一律是**点**、左上角原点），由 UI 线程经 [`crate::Renderer::render_document`]
-//! 一次性出图。元素就是渲染器那七类：`rect`（含圆角 / 圆）/ `line` / `text` / `svg` / `img` / `path`。
+//! 一次性出图。元素就是渲染器那几类：`rect`（含圆角 / 圆）/ `line` / `text` / `svg` / `img` / `path` /
+//! `window_icon`（按设备像素对齐的窗口字形）。
 //!
 //! 内容变了就整份替换（没有「只改某一个元素」的口子）—— 与窗口的渲染模型一致：一块内存区域 = 一帧。
 
@@ -67,7 +68,7 @@ pub struct InstanceInfo {
     /// 实例内控件原名，例如 `title`。
     pub local_name: String,
 
-    /// 子页面脚本的绝对路径（`Scripts/shared/...`）；没有为 `None`。
+    /// 子页面脚本的绝对路径（`Scripts/<脚本>/shared/...`）；没有为 `None`。
     pub script: Option<String>,
 }
 
@@ -260,14 +261,23 @@ fn collect_text_edits(
                 path,
                 placements,
             ),
-            Element::SelfDrawingPanel(panel) => collect_text_edits(
-                &panel.children,
-                (origin.0 + panel.x, origin.1 + panel.y),
-                clip,
-                visible,
-                path,
-                placements,
-            ),
+            Element::SelfDrawingPanel(panel) => {
+                let panel_origin = (origin.0 + panel.x, origin.1 + panel.y);
+                let panel_clip = panel.clip.then_some((
+                    panel_origin.0,
+                    panel_origin.1,
+                    panel.width,
+                    panel.height,
+                ));
+                collect_text_edits(
+                    &panel.children,
+                    panel_origin,
+                    panel_clip.map_or(clip, |panel_clip| merge_clip(clip, panel_clip)),
+                    visible,
+                    path,
+                    placements,
+                )
+            }
             Element::ListBox(list) => {
                 let content = (
                     origin.0 + list.x + list.edge_width + list.content_gap,
@@ -345,14 +355,23 @@ fn collect_text_boxes(
                 path,
                 placements,
             ),
-            Element::SelfDrawingPanel(panel) => collect_text_boxes(
-                &panel.children,
-                (origin.0 + panel.x, origin.1 + panel.y),
-                clip,
-                visible,
-                path,
-                placements,
-            ),
+            Element::SelfDrawingPanel(panel) => {
+                let panel_origin = (origin.0 + panel.x, origin.1 + panel.y);
+                let panel_clip = panel.clip.then_some((
+                    panel_origin.0,
+                    panel_origin.1,
+                    panel.width,
+                    panel.height,
+                ));
+                collect_text_boxes(
+                    &panel.children,
+                    panel_origin,
+                    panel_clip.map_or(clip, |panel_clip| merge_clip(clip, panel_clip)),
+                    visible,
+                    path,
+                    placements,
+                )
+            }
             Element::ListBox(list) => {
                 let content = (
                     origin.0 + list.x + list.edge_width + list.content_gap,
@@ -759,6 +778,14 @@ pub struct SelfDrawingPanel {
     pub regions: Vec<Region>,
 }
 
+/// 标题栏窗口图标：在设备像素上直接画矩形，不经过 SVG 等比缩放。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum WindowGlyph {
+    Minimize,
+    Maximize,
+    Restore,
+}
+
 /// 一类元素（坐标 / 尺寸都是**点**）。
 #[derive(Clone)]
 pub enum Element {
@@ -815,13 +842,23 @@ pub enum Element {
         gamma: f32,
     },
 
-    /// SVG：按自身宽高比等比塞进 `size` 见方的框；`tint` 给 `Some` 时整张按该颜色染。
+    /// SVG：按自身宽高比等比塞进 `size` 见方的框；`tint` 给 `Some` 时按 alpha 整张染色，
+    /// 给 `None` 时保留 SVG 自己的 fill / stroke 颜色（`currentColor` 由源里的 `color` 决定）。
     Svg {
         x: f32,
         y: f32,
         size: f32,
         source: String,
         tint: Option<Color>,
+    },
+
+    /// 窗口图标（最小化 / 最大化 / 还原）：按当前 DPI 取整到设备像素后画矩形，不经过 SVG 缩放。
+    WindowIcon {
+        x: f32,
+        y: f32,
+        size: f32,
+        glyph: WindowGlyph,
+        color: Color,
     },
 
     /// 图像（已经解码好的预乘 RGBA 位图；`Arc` 让同一张图在多份内容里共享，不复制像素）。
@@ -1343,6 +1380,20 @@ impl std::fmt::Debug for Element {
                 .field("source_len", &source.len())
                 .field("tint", tint)
                 .finish(),
+            Self::WindowIcon {
+                x,
+                y,
+                size,
+                glyph,
+                color,
+            } => f
+                .debug_struct("WindowIcon")
+                .field("x", x)
+                .field("y", y)
+                .field("size", size)
+                .field("glyph", glyph)
+                .field("color", color)
+                .finish(),
             Self::Image {
                 x,
                 y,
@@ -1689,5 +1740,58 @@ mod tests {
         );
         assert!(ring.intersects(&on_ring));
         assert!(ring.contains_region(&on_ring));
+    }
+
+    fn sample_text_edit() -> TextEdit {
+        TextEdit {
+            x: 0.0,
+            y: -10.0,
+            width: 80.0,
+            height: 20.0,
+            radius: 4.0,
+            fill: None,
+            border: None,
+            border_width: 1.0,
+            border_width_fixed: true,
+            svg: None,
+            svg_size: (0.0, 0.0),
+            svg_align: crate::control::SvgAlign::Left,
+            svg_tint: None,
+            selection_background: None,
+            selection_color: None,
+            caret_color: None,
+            text_color: None,
+            read_only: false,
+            deselect_on_blur: true,
+            passkey: false,
+            font_name: None,
+            font_flag: 0,
+            handlers: Vec::new(),
+            text: String::new(),
+            font: FontSlot::Candidate,
+            size: None,
+            region_name: "input".to_owned(),
+        }
+    }
+
+    #[test]
+    fn clipped_panel_limits_text_edit_placements() {
+        let mut document = Document::empty(200.0, 100.0);
+        document
+            .elements
+            .push(Element::SelfDrawingPanel(SelfDrawingPanel {
+                x: 10.0,
+                y: 20.0,
+                width: 100.0,
+                height: 50.0,
+                clip: true,
+                draw: Vec::new(),
+                regions: Vec::new(),
+                children: vec![Element::TextEdit(sample_text_edit())],
+            }));
+        let placements = document.text_edits();
+        assert_eq!(placements.len(), 1);
+        assert_eq!((placements[0].x, placements[0].y), (10.0, 10.0));
+        assert_eq!(placements[0].clip, Some((10.0, 20.0, 100.0, 50.0)));
     }
 }

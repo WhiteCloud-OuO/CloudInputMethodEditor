@@ -11,20 +11,12 @@
 /LocalDictionary
 /Phrases/*
 !/Phrases/Phrase.db
-# 用户脚本目录：只跟踪模板、测试脚本、shared\ 共享模块与 layouts\ 布局；
-# 用户自己写在 Scripts\ 根部的脚本（可能带着自己的 API key）一律不进仓库。
-# dlls\ / saved\ 只保留空目录占位，实际 DLL 与脚本数据不进仓库。
+# 用户脚本目录：只跟踪模板、测试脚本与示例；
+# 用户自己的脚本文件夹（可能带着自己的 API key）一律不进仓库。
 /Scripts/*
 !/Scripts/template.lua
-!/Scripts/test-caret-window.lua
-!/Scripts/shared/
-!/Scripts/layouts/
-!/Scripts/dlls/
-!/Scripts/saved/
-/Scripts/dlls/*
-!/Scripts/dlls/.gitkeep
-/Scripts/saved/*
-!/Scripts/saved/.gitkeep
+!/Scripts/test-caret-window/
+!/Scripts/examples/
 tree.md
 version.txt
 cargo-build.ps1

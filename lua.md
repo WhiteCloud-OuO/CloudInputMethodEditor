@@ -10,14 +10,14 @@
 | [`docs/design/script.md`](docs/design/script.md) | 脚本功能的设计与规则（清单、闸门、派发点） |
 | [`docs/design/online-translate.md`](docs/design/online-translate.md) | 「在线翻译由脚本自己实现」这一条的来龙去脉 |
 | [`docs/notes/crate-notes.md`](docs/notes/crate-notes.md) | 实现要点（`crates/cloudime-script`、Server 的「用户脚本」两节） |
-| [`Scripts/template.lua`](Scripts/template.lua) | 「新建脚本」用的模板（只有清单骨架） |
-| [`Scripts/shared/example-theme-by-app.lua`](Scripts/shared/example-theme-by-app.lua) | 示例：按前台程序换主题（组合键触发 + `cloudime.foreground_app()` / `cloudime.apply_theme()`） |
-| [`Scripts/shared/example-auto-number.lua`](Scripts/shared/example-auto-number.lua) | 示例：自动序号（`combination_key` + `none` 单键 + `cloudime.context` + `commit`「换行 + 下一条序号」） |
+| [`Scripts/template.lua`](Scripts/template.lua) | 清单骨架参考（设置页「打开脚本目录」后可以拷一份） |
+| [`Scripts/examples/theme-by-app/theme-by-app.lua`](Scripts/examples/theme-by-app/theme-by-app.lua) | 示例：按前台程序换主题（组合键触发 + `cloudime.foreground_app()` / `cloudime.apply_theme()`） |
+| [`Scripts/examples/auto-number/auto-number.lua`](Scripts/examples/auto-number/auto-number.lua) | 示例：自动序号（`combination_key` + `none` 单键 + `cloudime.context` + `commit`「换行 + 下一条序号」） |
 
 实际使用的脚本（小牛候选翻译、小牛整句翻译窗口、在线查询）在
 [CloudIME_ScriptWarehouse](https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse) 的 `src\` 下；
-本仓库源码的 `Scripts\shared` 只保留示例与共享工具。**安装包只装 `Scripts\template.lua`**，
-示例、共享模块和实际脚本都不随包，需要时自己下载到对应目录。
+本仓库源码的 `Scripts\examples` 只保留示例。**安装包只装 `Scripts\template.lua`**，
+示例、共享模块和实际脚本都不随包，需要时自己下载到对应脚本文件夹。
 
 ## 目录
 
@@ -44,6 +44,7 @@
 | 给候选加权 / 降权、改顺序、改显示 | `adjust` / `order` / `display` |
 | 弹一行提示 | `notice` |
 | 接厂商接口做在线翻译，写在候选窗底部那一行 | `http_post` + `online` |
+| 调用本机 / 外部 MCP Server 的工具 | `cloudime.mcp.*`（需要 `mcp.toml`） |
 | 改候选窗尺寸、缩放、一页几个 | `cloudime.candidate.*` |
 | 量文字宽、截断 / 折行（按窗口宽度排版） | `cloudime.ui.*` |
 | 建自己的面板 / 悬浮小窗（可点、可悬停） | `cloudime.window.*` |
@@ -63,16 +64,17 @@
 
 ## 2. 五分钟上手
 
-1. **放哪儿**：实际脚本放安装目录下的 `Scripts\` 根部（与 `Phrases\`、`WordBank\` 同级）；
-   共享 Lua 放 `Scripts\shared\`，JSON 布局放 `Scripts\layouts\`，DLL 放 `Scripts\dlls\`，
-   脚本数据写 `Scripts\saved\`。路径优先用 `cloudime.shared_path` / `layout_path` /
+1. **放哪儿**：每个脚本单独一个文件夹（安装目录的 `Scripts\<脚本名>\`，与 `Phrases\`、`WordBank\` 同级）：
+   入口 `.lua` 直接放文件夹根部（**只能有一个**）；这个脚本的共享 Lua / JSON 布局 / DLL / 数据分别放
+   它自己的 `shared\` / `layouts\` / `dlls\` / `saved\`。路径优先用 `cloudime.shared_path` / `layout_path` /
    `dll_path` / `saved_path`，不要依赖 Server 的当前工作目录。
-2. **怎么建**：设置 → 脚本 → 「新建脚本」会用模板在 `Scripts\` 根部建一个文件并用记事本打开。
-   也可以自己往 `Scripts\` 根部丢一个 UTF-8 的 `.lua`。
+2. **怎么建**：设置 → 脚本 → 「打开脚本目录」，在 `Scripts\` 下建一个文件夹（文件夹名就是脚本 id），
+   把 UTF-8 的入口 `.lua` 放进去；`Scripts\template.lua` 可以拷一份当清单骨架。
 3. **什么时候生效**：**改完要重启输入法服务** —— 任务栏「中 / 英」图标右键 → 「重启输入法服务」，
-   或者「设置 → 脚本」页「新建脚本」右边那个同名按钮。没有热重载。
-4. **只加载根目录的 `Scripts\*.lua`**：`shared\` / `layouts\` / `dlls\` / `saved\` 都是子目录，
-   加载器不认；`template.lua` 是模板，**不执行**；在 `[script] disabled` 名单里的也跳过。
+   或者「设置 → 脚本」页「在线获取脚本」旁边那个同名按钮。没有热重载。
+4. **只加载一级脚本文件夹**：`Scripts\` 根部的 `template.lua` 是模板，**不执行**；根部其它旧版平铺
+   `.lua` 不再加载；子目录里的 `.lua` 也不参与启动加载；在 `[script] disabled` 名单里的文件夹跳过
+   （名单写文件夹名，不带 `.lua`）。
 
 最小可用脚本（和模板的默认骨架一样：Ctrl+Alt+J 上屏；模板里还留了时间段的 `time_range`、
 候选拼音的 `candidate_pinyin`、焦点程序的 `apps` 这几行，换触发方式时取消注释即可）：
@@ -87,6 +89,7 @@ cloudime.script{
     keys        = { "j" },                -- 具体键
     budget      = 200000,          -- 单次调用的指令数上限（只能收窄）
     timeout     = 200,             -- 单次调用的墙钟上限（毫秒）
+    show_in_i_mode = false,        -- 可选：手动触发脚本也列进 i 模式
     sync        = true,            -- 同步：处理函数算完就返回
     handover    = "return",        -- 必须与 sync 一致
     on_error    = function(event, message)
@@ -118,22 +121,33 @@ end)
 | `time_range` | `time_range` 时**是** | 表 | `{ from = "20:00", to = "06:00" }`（本地时间，左闭右开；`from > to` 表示跨夜）。**每个时间段窗口只触发一次** |
 | `candidate_pinyin` | `candidate_context` 时**是** | 字符串 | 候选窗口出现且拼音串等于它才触发；比较时忽略 `'` 与空白、不区分大小写（`Ni'Hao` = `nihao`） |
 | `needs_context` | 否 | 布尔 | `true` = 每次派发前刷新 `cloudime.context`（按键前多读一次光标前文）；读前文的脚本要写它 |
+| `show_in_i_mode` | 否 | 布尔 | 手动触发脚本要不要也列进 **i 模式**；缺省 `false`，不写不报错。只对带修饰键的组合键脚本有意义（`manual` 本来就在 i 模式里）；自动触发脚本写了会忽略并记警告 |
 | `sync` | **是** | 布尔 | `true` = 同步（处理函数算完就返回）；`false` = 只用异步回调（配 `http_get` / `http_post`） |
 | `handover` | **是** | 字符串 | `"return"` / `"callback"`，**必须与 `sync` 一致**（`true`↔`"return"`、`false`↔`"callback"`） |
 | `timeout` | **是** | 整数 | 单次调用的**墙钟上限**（毫秒，`1`–`60000`）：同步处理函数与异步回调都按它算，到点中止这一次 |
 | `on_error` | **是** | 函数 / `false` | 形式 `function(event, message)`：这个脚本出错时调它。写 `false` = 不处理，直接中止这一次 |
 | `budget` | 否 | 整数 | 单次调用的**指令数**上限；缺省用全局 `100000000`（一亿）。**只能收窄不能放宽**（写大了按全局走并记一条日志） |
 | `apps` | `focus_app` 时**是**；其余可选 | 字符串数组 | 光标在哪些程序里触发（`focus_app`）；其它触发条件下是「只在哪些应用里跑」（**exe 文件名**，大小写不敏感，如 `"notepad.exe"`）。空 / 不写 = 所有应用 / 不触发 |
-| `name` | 否 | 字符串 | 日志与设置页里点名用；缺省 = 文件名 |
-| `description` | 否 | 字符串 | 设置页列表里的一句话介绍（**扫文本**取出来，不执行脚本）；缺省显示文件名 |
-| `priority` | 否 | 整数 | 多个脚本要改同一项时：大的盖小的；同值按文件名顺序 |
+| `name` | 否 | 字符串 | 日志与设置页里点名用；缺省 = 文件夹名 |
+| `description` | 否 | 字符串 | 设置页列表里的一句话介绍（**扫文本**取出来，不执行脚本）；缺省显示名称 |
+| `priority` | 否 | 整数 | 多个脚本要改同一项时：大的盖小的；同值按加载顺序（文件夹名） |
+
+**自动触发 / 手动触发**：
+
+- **自动触发**：`time_range` / `candidate_context` / `focus_app`，或 `combination_key` 且
+  `combination_modifiers = "none"`（单键，比如自动序号的 `Enter`）。这类脚本**不会出现在 i 模式**，
+  写了 `show_in_i_mode` 也只记一条警告。
+- **手动触发**：`manual`，或带修饰键的 `combination_key`。`manual` 一直列在 i 模式里；
+  组合键脚本要写 `show_in_i_mode = true` 才列进去。
+- 从 i 模式运行组合键脚本时，输入法按清单**第一个** `keys` 与那套修饰键合成一次 `key` 事件，
+  原来的 `cloudime.on("key", …)` 照常跑；这时 `event.highlight` 是空串（i 模式没有候选高亮）。
 
 几条铁律：
 
-- **一个文件一个脚本、UTF-8 编码**；`cloudime.on` 只能在**加载期**调（也就是在清单之后、文件里直接写），
-  运行期再登记会被拒绝。
+- **一个文件夹一个脚本、UTF-8 编码**；文件夹根部必须正好有一个 `.lua`；`cloudime.on` 只能在**加载期**调
+  （也就是在清单之后、文件里直接写），运行期再登记会被拒绝。
 - **不许改 `cloudime` 表**：脚本拿到的是只读代理，写会报错。脚本自己的状态放普通全局变量里。
-- **持久状态写 `Scripts\saved\`**：用 `cloudime.saved_path(...)` 拿路径（会自动建子目录）；
+- **持久状态写当前脚本文件夹的 `saved\`**：用 `cloudime.saved_path(...)` 拿路径（会自动建子目录）；
   不要写安装目录其它位置，也别忘了**卸载会删掉安装目录整棵**（脚本和 saved 数据记得备份）。
 - **不许长时间占住工人线程**：唯一允许的「等」是两个**异步** HTTP（时限必给）。
 - `apps` 除了当 `focus_app` 的触发条件，还会过滤 `key` / `candidates` / `time`（都按当时聚焦的程序）；
@@ -175,7 +189,7 @@ end)
 | `caret` | 脚本调过 `cloudime.caret()`，DLL 量到插入点之后（见下面「光标位置与安装目录」） | 同 `candidates`；载荷是插入点的屏幕矩形 + 所在显示器工作区（屏幕坐标 / 点） |
 | 异步回调 | HTTP 结果回来那一拍（**所有脚本**） | 同 `candidates`；`passthrough` / `commit` 给了只记日志 |
 
-多个脚本按 `(priority, 文件名)` 顺序合并，**后面返回的盖前面的**（表里没写的项不动）。
+多个脚本按 `(priority, 加载顺序)` 合并，**后面返回的盖前面的**（表里没写的项不动）。
 返回值类型严格匹配，写错记一条日志当没写。
 
 ### `key` 的载荷
@@ -196,7 +210,7 @@ end)
 Windows 11 记事本不给光标前的文字，那里 `cloudime.context` 一直是空串（见[第 11 节](#11-调试与排错)）。
 `cloudime.text.*` 那份整篇快照只随**组句**更新，组合键脚本一般用不上（可能 `nil` 或偏旧）。
 ⚠️ **脚本自己刚上屏的那一行，紧接着读回来可能少最后一个字符**（宿主差异，Firefox 实测）—— 靠它判断
-「上一行是不是序号」时要能容忍；`Scripts/shared/example-auto-number.lua` 记着自己刚写的序号来补全。
+「上一行是不是序号」时要能容忍；`Scripts/examples/auto-number/auto-number.lua` 记着自己刚写的序号来补全。
 
 ### `candidates` 的载荷
 
@@ -285,10 +299,10 @@ cloudime.on(事件名, function(载荷) … end)   -- 登记处理函数，只�
 | `cloudime.caret()` | 请求一次**光标位置**：DLL 在下一次按键处理完之后量插入点，结果以 **`caret` 事件**送来（不是返回值，见下） |
 | `cloudime.install_dir()` | 安装目录的绝对路径（`Scripts\` / `Images\` 的上一级）；测试 / 没有安装目录时给 `nil` |
 | `cloudime.install_path(相对路径)` | 安装目录里的文件绝对路径（如 `"Images/SVG/打叉.svg"`）；文件不存在给 `nil`，`..` 跑出安装目录**报错** |
-| `cloudime.shared_path(文件名)` | `Scripts\shared\` 里的共享 Lua 绝对路径；不存在给 `nil`，跑出该目录**报错** |
-| `cloudime.layout_path(文件名)` | `Scripts\layouts\` 里的 JSON 布局绝对路径；不存在给 `nil`，跑出该目录**报错** |
-| `cloudime.dll_path(文件名)` | `Scripts\dlls\` 里的 DLL 绝对路径；不存在给 `nil`，跑出该目录**报错** |
-| `cloudime.saved_path(相对路径?)` | `Scripts\saved\` 下可写路径；自动建父目录，空参数返回 saved 根目录，`..` / 绝对路径**报错** |
+| `cloudime.shared_path(文件名)` | **当前脚本文件夹** `shared\` 里的共享 Lua 绝对路径；不存在给 `nil`，跑出该目录**报错** |
+| `cloudime.layout_path(文件名)` | **当前脚本文件夹** `layouts\` 里的 JSON 布局绝对路径；不存在给 `nil`，跑出该目录**报错** |
+| `cloudime.dll_path(文件名)` | **当前脚本文件夹** `dlls\` 里的 DLL 绝对路径；不存在给 `nil`，跑出该目录**报错** |
+| `cloudime.saved_path(相对路径?)` | **当前脚本文件夹** `saved\` 下的可写路径；自动建父目录，空参数返回 saved 根目录，`..` / 绝对路径**报错** |
 | `cloudime.get_theme()` | 当前生效主题的颜色表（`{ candidate = { … }, bar = { … }, tip = { … } }`，颜色是 `#AARRGGBB`）；详见下面「主题颜色」 |
 | `cloudime.image.load(路径)` | 读一张图（PNG / BMP / JPG）→ 图像句柄（用户数据），给 `static_image` 的 `image` 字段；同一文件按长度 + 修改时间缓存 |
 | `cloudime.get_time()` | 当前**本地时间** → `{ year, month, day, hour, minute, second, weekday, unix }`；`weekday` 1 = 周一 … 7 = 周日，`unix` 是 Unix 秒（标准库的 `os.date` / `os.time` 也能用，这一份是不依赖标准库的稳定形状） |
@@ -401,6 +415,51 @@ cloudime.http_post(url, body, {
   `:match('"tgtText"%s*:%s*"(.-)"')`）。
 - 想让回调生效，清单按 `sync = false, handover = "callback"` 写（两者必须自洽：`true` 配 `"return"`）。
 
+### MCP（异步，调用外部 MCP Server）
+
+先在 `%APPDATA%\CloudIME\mcp.toml` 里配置要连接的 stdio MCP Server：
+
+```toml
+[[servers]]
+name = "search"
+command = "C:\\Tools\\mcp-search.exe"
+args = []
+timeout_ms = 10000
+allowed_tools = ["search"]
+
+[servers.env]
+API_KEY = "..."
+```
+
+脚本里：
+
+```lua
+cloudime.mcp.servers()                          -- 同步，返回配置里的名字
+cloudime.mcp.start("search", 5000, function(result) … end)
+cloudime.mcp.tools("search", 5000, function(result) … end)
+cloudime.mcp.call("search", "search", { query = "云朵" }, 5000, function(result) … end)
+cloudime.mcp.stop("search", 5000, function(result) … end)
+```
+
+- **必须显式 `start`**：MCP Client sidecar 和外部 MCP Server 都不随输入法启动，也不会在
+  `tools` / `call` 时自动拉起；没 `start` 就调用会回 `error`。
+- `servers()` 只读配置，不启动进程；`start` / `stop` / `tools` / `call` 都是异步回调，必须给 `timeout_ms`。
+- `start` 的结果：`{ server, started = true, client_owned }`；`client_owned = true` 表示这次是
+  脚本把 sidecar 拉起来的。`stop` 的结果：`{ server, stopped = true }`。
+- **脚本拉起的进程在链尾自动关**：从 `start` 开始，到这条脚本的异步任务链结束（所有 `call`
+  回调都跑完、没有挂起的 MCP 请求）时，运行时会 `stop` 它启动的 Server，并关掉由 Lua 拉起的
+  sidecar；不需要也可以自己提前 `stop`。
+- 手动启动的 sidecar（用户自己运行 `cloudime-mcp-client.exe --config %APPDATA%\CloudIME\mcp.toml`，
+  默认管道名可省略 `--pipe`）不会被脚本关掉；脚本只停自己 `start` 的 Server session。
+- 参数表转成 MCP 的 JSON：字符串键 → 对象，从 1 连续的整数下标 → 数组；空表按对象处理。
+- `tools` 的回调结果：`{ server, tools = { { name, description }, … } }`。
+- `call` 的回调结果：`{ server, tool, content, structured, is_error, error }`。
+- 失败时回调结果带 `error`（未知 Server / 未 start / 工具不在白名单 / 超时 / 外部进程退出），**不自动上屏**。
+- 只能调用 `mcp.toml` 里配置的 Server 和 `allowed_tools`；脚本不能动态新增 Server。
+- 一个脚本 `start` 的 Server 只给它自己这一轮任务用，别跨脚本共享；正常输入不经过 sidecar。
+- JSON 的 `null` 在 Lua 表里是 `nil`（对应的键会消失）。
+- 修改 `mcp.toml` 后重启 Server 生效（第一版不热加载）。
+
 ### 候选窗
 
 | 方法 | 说明 |
@@ -461,7 +520,7 @@ local box = cloudime.ui.truncate(文本, 行宽 [, 选项])   -- → { text, lin
 -- 建一块 240 × 120 点的面板（interactive = true 才接鼠标）
 local win = cloudime.window.create{
     name = "统计", width = 240, height = 120, interactive = true,
-    layout = cloudime.layout_path("main.json"),  -- 布局放 Scripts\layouts；尺寸以布局文件为准
+    layout = cloudime.layout_path("main.json"),  -- 布局放当前脚本文件夹的 layouts；尺寸以布局文件为准
     -- background = false  -- 不要输入法画的面板底色 / 圆角，改由元素表自己画背景
 }
 
@@ -567,7 +626,7 @@ aux:show()
 
   没有声明 `events` 的普通交互仍按 `event.region` / `event.element` + `event.action` 分发。
 - 布局文件里的 `svg_path` / `img.path` 先按布局文件所在目录找，再逐级向上找；因此放在
-  `Scripts/layouts/` 的布局可以直接写 `Images/...`（落到安装根目录），也可以把素材放在布局旁边。
+  `Scripts/<脚本>/layouts/` 的布局可以直接写 `Images/...`（落到安装根目录），也可以把素材放在布局旁边。
   改布局文件后要重新 `load_layout` 或重启输入法服务；不会自动监听文件变化。
 
 **页面树 v2（实验）**：布局文件顶层写 `"version": 2` 时，使用页面树 / 布局算法，而不是上面的绝对坐标。
@@ -588,11 +647,11 @@ win:set_visible("rows[0].title", false)   -- 也接受 key：rows[abc].title / r
 `subpage.required = { "title", "meta" }` 可声明每个 item 必填的数据字段，缺一项整份布局失败。
 路径 API（`set_visible` / `*_at`）同时接受实例下标和 key；key 优先写成 `rows[abc]` 或 `rows["abc"]`。
 
-子页面可以带自己的实例脚本（放在 `Scripts/shared/`）：在子页面模板 `page` 或 `subpage` 节点写
+子页面可以带自己的实例脚本（放在**当前脚本文件夹**的 `shared/`）：在子页面模板 `page` 或 `subpage` 节点写
 `"script": "row.lua"`。脚本返回一个表，支持 `created(ctx)` / `event(ctx, event)` / `destroyed(ctx)`；
 `ctx.window` 是窗口句柄，`ctx.item` / `ctx.index` / `ctx.key` 是当前实例数据，`ctx.path("title")`
 返回该实例的完整控件路径。`event` 先于主窗口脚本执行，返回 `true` 可吞掉该事件。示例见
-`Scripts/shared/test-list-box-row.lua`。
+`Scripts/test-caret-window/shared/test-list-box-row.lua`。
 
 大列表可在 `subpage` 上开虚拟化，只创建可见行：
 
@@ -915,7 +974,7 @@ end)
 ## 7. 标准库与运行环境
 
 - 语言是 **Lua 5.1**（LuaJIT）。`string` / `table` / `math` / `os` / `io` / `package` 都在；
-  **没有 `debug` 库**；LuaJIT 的 `bit` 库可用（源码仓库 `Scripts\shared\md5.lua` 就靠它）。
+  **没有 `debug` 库**；LuaJIT 的 `bit` 库可用（源码仓库 `Scripts/examples/md5/md5.lua` 就靠它）。
 - 脚本的 **JIT 关掉**了（LuaJIT 编成 trace 之后不再检查调试钩子，预算就失效了），`jit.on` 也收掉了。
 - 刻意改过的几处（都是「会退进程 / 会卡住」的入口）：
 
@@ -940,8 +999,8 @@ end)
 | 没有 `debug` 库 | mlua 的 `Lua::new()` 只开安全子集 | 脚本主动 / 无意摘掉预算钩子 |
 | 不给协程 | `coroutine.create` / `wrap` 报错 | 「把死循环藏在协程里」 |
 
-**允许的「等」只有 `cloudime.http_get` 与 `cloudime.http_post`**（都在自己的线程上跑、时限必给）。
-在同步处理函数里自己等 = 卡住所有应用。
+**允许的「等」只有 `cloudime.http_get`、`cloudime.http_post` 与 `cloudime.mcp.tools` / `cloudime.mcp.call`**
+（都在自己的线程或 sidecar 进程里跑、时限必给）。在同步处理函数里自己等 = 卡住所有应用。
 
 已知的残余风险（没法在 Lua 层便宜地堵）：`io.open` 打开**设备 / 管道路径**（`\\.\pipe\…`、`COM1:`）
 与**慢速网络盘**上的读写仍可能长时间阻塞。路径是脚本自己写死的 —— 自担。
@@ -950,8 +1009,8 @@ end)
 
 - **Lua 全局变量**：跨事件保留（`startup` 里初始化、`key` / 回调里用），
   但**跨应用共用**、**Server 重启就没了**（重启输入法服务等于清空）。
-- 想真持久化就写文件，**写 `Scripts\saved\`**：用 `cloudime.saved_path(...)` 拿路径，
-  它会自动建 `saved` 和子目录，也不会跑出安装目录。
+- 想真持久化就写文件，**写当前脚本文件夹的 `saved\`**：用 `cloudime.saved_path(...)` 拿路径，
+  它会自动建 `saved` 和子目录，也不会跑出这个脚本文件夹。
 
 ```lua
 local file = cloudime.saved_path("我的脚本/data.txt")
@@ -981,10 +1040,10 @@ end
 
 设置 → 脚本：
 
-- **脚本列表**：文件名 / 介绍（清单里的 `description`，扫文本取出来、不执行脚本）/
-  启用开关 + 「删除此脚本」+ 「编辑此脚本」（用记事本打开）。
-- **新建脚本**：在 `Scripts\` 下建一个不重名的文件（`script.lua` → `script-2.lua` …）写入模板并打开。
-- 开关写进配置 `[script] disabled = ["a.lua"]`（`config.toml`），Server **启动时**按它跳过；
+- **脚本列表**：脚本名称（清单里的 `name`，扫文本取出来、不执行脚本；没写就显示文件夹名）/
+  介绍（`description`，没写就显示名称）/ 启用开关 + 「删除此脚本」（删整个文件夹）+ 「编辑此脚本」（用记事本打开入口 `.lua`）。
+- **打开脚本目录**：在资源管理器里打开 `Scripts\`；建文件夹、放入口 `.lua` 都自己来，`template.lua` 可作参考。
+- 开关写进配置 `[script] disabled = ["niutrans-window"]`（**文件夹名，不带 `.lua`**；`config.toml`），Server **启动时**按它跳过；
   禁用只是不加载，文件还在。
 - 列表**不显示 `template.lua`**。
 - **卸载会删掉 `{app}` 整棵**，包括 `Scripts\` —— 自己的脚本记得在别处留一份。
@@ -1004,7 +1063,7 @@ end
 | 现象 | 原因 |
 |---|---|
 | 改了脚本没反应 | 没重启输入法服务（不做热重载） |
-| 脚本完全没加载 | 清单没写在最前面 / `api` 不是 `1` / `sync` 与 `handover` 对不上 / 缺必写字段 / 文件不在 `Scripts\` **根部**（`lib\` 里的不加载）/ 在禁用名单里 |
+| 脚本完全没加载 | 清单没写在最前面 / `api` 不是 `2` / `sync` 与 `handover` 对不上 / 缺必写字段 / 脚本不在 `Scripts\<文件夹>\` 根部（文件夹根部必须正好一个 `.lua`；`shared\` 等子目录里的不加载）/ 在禁用名单里 |
 | 运行期登记处理函数报错 | `cloudime.on` 只能在加载期调 |
 | `cloudime.http_get` 报「时限」错 | 第二个参数给 `0` / 没给，或给了比清单 `timeout` 更大的值 |
 | 返回 `commit = 42` 没上屏 | `commit` 要**字符串**，数字不会被悄悄转成字符串（写错会记日志） |
@@ -1210,7 +1269,7 @@ cloudime.script{
 }
 ```
 
-### 12.11 共享模块（放 `Scripts\shared\`）
+### 12.11 共享模块（放当前脚本文件夹的 `shared\`）
 
 `shared\` 里的文件不会被加载，用 `dofile` 引：
 
@@ -1246,7 +1305,7 @@ end)
 ### 12.13 自动序号（`combination_key` 单键 + 光标前文 + `commit`）
 
 在 `1.` / `一、` 后面敲回车，自动接下一条的序号（像 Word）。完整版（含中文数字 `一、`→`二、`）见
-[`Scripts/shared/example-auto-number.lua`](Scripts/shared/example-auto-number.lua)。
+[`Scripts/examples/auto-number/auto-number.lua`](Scripts/examples/auto-number/auto-number.lua)。
 
 ```lua
 cloudime.script{

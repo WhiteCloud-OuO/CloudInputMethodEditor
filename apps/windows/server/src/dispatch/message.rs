@@ -32,6 +32,7 @@ impl Router {
                 // 同一会话重开（DLL 断线重连）：从干净状态起。
                 if self.focused == Some(session) {
                     self.reset_composition();
+                    self.input_box = None;
                     self.focused = None;
                     self.sync_focused_app();
                     // 重连：DLL 的文本快照重新读一份
@@ -65,9 +66,15 @@ impl Router {
                 session,
                 text,
                 document,
+                context,
             } => {
-                tracing::trace!(?session, chars = text.chars().count(), "收到光标前文");
-                self.set_surrounding(session, text);
+                tracing::trace!(
+                    ?session,
+                    chars = text.chars().count(),
+                    context,
+                    "收到光标前文"
+                );
+                self.set_surrounding(session, text, context);
                 // 整篇快照只认聚焦会话那份（DLL 在起组句时读，天然就是当前文档）
                 if self.focused == Some(session) {
                     self.document.store(document);
@@ -150,6 +157,7 @@ impl Router {
                 self.sessions.remove(&session);
                 if self.focused == Some(session) {
                     self.reset_composition();
+                    self.input_box = None;
                     self.focused = None;
                     self.sync_focused_app();
                 }
@@ -164,6 +172,8 @@ impl Router {
 
     fn handle_key(&mut self, session: SessionId, event: KeyEvent) -> ServerMessage {
         self.ensure_focus(session);
+        // 不是紧接着的第二个空格：双击空格作废。
+        self.note_key_for_smart_symbol(&event);
         // 脚本先看一眼这一键：返回的表能改这一拍的结果（见 `script`）。
         // **输入法自己占用的组合键（`Ctrl+数字` / `Ctrl+Enter` / `Ctrl+反引号` / `Shift+反引号`）
         // 不派发给脚本** —— 谁先定义谁优先，脚本抢不走（见 `docs/design/script.md`）。
@@ -189,6 +199,7 @@ impl Router {
         self.delete_after = 0;
         // 脚本把这一键接管了：不吃，原样交给应用（游戏里抢键）。
         if actions.passthrough {
+            self.note_key_result(&event, None);
             let shown = self.self_drawn_frame();
             self.reconcile_candidates(&shown);
             return ServerMessage::KeyResult {
@@ -205,6 +216,7 @@ impl Router {
         // 脚本把这一键接管了：上屏它的文本，当前组句作废。
         if let Some(text) = actions.commit {
             self.reset_composition();
+            self.note_key_result(&event, Some(&text));
             return ServerMessage::KeyResult {
                 session,
                 outcome: KeyOutcome::Consumed,
@@ -225,6 +237,8 @@ impl Router {
             Effect::Navigated => (None, KeyOutcome::Consumed),
             Effect::Passthrough => (None, KeyOutcome::Passthrough),
         };
+        // 智能符号：把「光标前一个字符」推进到这一键之后（本进程刚上屏的文本比 DLL 前文更新）。
+        self.note_key_result(&event, commit.as_deref());
         // 脚本在这一键里（例如 i 模式运行的 manual 脚本）才调 `cloudime.caret()`：也要带上。
         want_caret |= self.scripts.take_caret_request();
         // 脚本要的在线翻译那一行（`online`）：放在按键派发**之后**，脚本看到的是这一拍之后的状态

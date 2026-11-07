@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 仓库现状
 
-Windows 输入法（只做 Windows，上游的 macOS / Linux 壳已删除）。Core 平台无关，壳只做接入：`apps/windows/{server,tsf,settings,installer}`。
+Windows 输入法（只做 Windows，上游的 macOS / Linux 壳已删除）。Core 平台无关，壳只做接入：`apps/windows/{server,tsf,settings,installer}`；另有 MCP 的 `apps/mcp`（只读 Server）与 `apps/mcp-client`（Client sidecar）。
 本仓库从青简 fork、版本号独立，从 `0.0.1` 起，唯一来源是根目录 `version.txt`（发版之间带 `-dev`，`CHANGELOG.md` 顶上那一节就是它）。
 阶段与已完成项见 `docs/plan/roadmap.md`，待办见 `docs/plan/todo.md`。
 
@@ -21,11 +21,17 @@ Windows 输入法（只做 Windows，上游的 macOS / Linux 壳已删除）。C
 - `crates/cloudime-platform`：平台层共用：`Config`（TOML 配置）、`extra_dictionaries`、Windows Server ↔ DLL 的 `protocol` 类型。
 - `crates/cloudime-translate`：本地词典（安装目录 `LocalDictionary\` 下的 `.qj` / `.db`）的释义查询与「学没学会」，翻译 Tip 用它。
 - `crates/cloudime-script`：用户脚本的运行时（mlua + LuaJIT，LuaJIT 源码随包编）。改哪些输入法行为、脚本在哪几处跑，见 `docs/design/script.md`。
+- `crates/cloudime-script-store`：在线脚本仓库：读 `index.json` 索引、下载脚本文件并装进安装目录 `Scripts\<脚本文件夹>\`；设置页「在线获取脚本」用它。索引格式与冲突规则见 `docs/design/script.md`。
+- `crates/cloudime-mcp-client`：MCP Client 的 `mcp.toml`、命名管道帧与 sidecar IPC 消息；不含 rmcp，脚本运行时只依赖这层协议。
 - `crates/cloudime-render`：自绘渲染器（spike 中，分支 renderer-spike）：候选窗一帧 + 主题 → 位图，壳只贴图。见 `docs/design/rendering.md`。
 - `crates/cloud-ui-core`：页面树、布局约束与尺寸核心，不依赖 Windows / 脚本运行时。
-- `crates/cloud-ui`：Windows 壳共用的分层窗口 / 资产窗口 / 脚本窗口 / RichEdit 宿主，以及共享 `Painter` 与 `RenderSettings`；`cloudime-render` 只负责出图。见 `docs/notes/crate-notes.md`「crates/cloud-ui」。
+- `crates/cloud-ui-types`：`cloud-ui` 与平台共用的轻量 UI 类型（排布、序号样式、主题），不依赖 Windows / 词库。
+- `crates/cloud-ui`：Windows 壳共用的分层窗口 / 资产窗口 / 脚本窗口 / RichEdit 宿主，以及 `app` 独立窗口宿主与 `view` 无 Lua 控件层；共享 `Painter` 与 `RenderSettings`。默认只依赖 `cloud-ui-types` + `cloudime-render`，IME 能力在 `ime` / `script` 特性下。见 `docs/notes/crate-notes.md`「crates/cloud-ui」。
 - `crates/cloudime-update`：检查更新：读官网的 `releases.json`、验 ed25519 签名、按平台与渠道挑新版本，只提示不安装；发版侧的签名工具是 `tools/release-sign`。见 `docs/design/update.md`。
 - `apps/cli`：Core 的验证工具：查询、逐键计时、输入日志回放、整句评测、常数扫描。排序 / 整句 / 纠错的改动先跑它再合。
+- `apps/mcp`：只读 stdio MCP Server `cloudime-mcp-server`，给外部 AI 客户端查询拼音 / 词库；不依赖 TSF DLL，不接触当前输入会话。见 `docs/plan/mcp-server.md`。
+- `apps/mcp-client`：MCP Client sidecar `cloudime-mcp-client`，由 Server 在脚本显式 `cloudime.mcp.start` 时启动，经命名管道把 Lua 的 `cloudime.mcp.*` 转给外部 MCP Server。见 `docs/plan/mcp-client.md`。
+- `apps/cloud-ui-demo`：`cloud-ui` 的独立窗口示例（普通 Win32 窗口 + `Document` 渲染 + 无边框标题栏 + 多窗口 + 托盘 + 窗口蒙版），验证 UI 库脱离 Server 运行；`installer/` 是独立应用打包参考，不混入输入法安装包。见 `docs/design/cloud-ui-app.md`。
 - `apps/windows`：`server`（Server 进程：Engine + IPC + 自绘候选窗与状态条）+ `tsf`（TSF DLL）+ `settings`（WinUI 3）+ `installer`（Inno）。DLL 不能带 Engine 的依赖树，所以是两个 package。
 - `tools/dict-convert`、`tools/corpus`：产品数据生成（词库 / 语言模型 / 英文词表），词库合并输出到 `WordBank/Dict.db`、语言模型与英文 TSV 中间产物输出到 `data/generated/`（都 gitignore）。
 - `assets/`：随包数据源与样例，各目录有 README 写来源与许可。雾凇拼音（GPL）已彻底移除，不要再引入。
@@ -56,7 +62,12 @@ cargo run -p cloudime-cli -- <拼音>...          # Core 的主要验证方式�
 
 ## 约定
 
-架构约束、代码组织、版本号、提交信息、文档同步、提交前检查与发版都在 `docs/contributing.md`，随本文件一起载入：
+架构约束、代码组织、版本号、提交信息、文档同步、CloudUI 同步、提交前检查与发版都在 `docs/contributing.md`，随本文件一起载入：
+
+- **改了 `cloud-ui` 界面库要同步 CloudUI 仓库**：`crates/cloud-ui`、`crates/cloud-ui-core`、`crates/cloud-ui-types` 在
+  `D:\Programming\RUST\CloudUI` 里有独立副本；接口、行为、修复或对应文档的改动，同一个任务里必须把等价改动同步过去。
+  渲染器两边包名不同（本仓库 `cloudime-render`、CloudUI 里 `cloud-ui-render`），不要整目录覆盖。详见
+  `docs/contributing.md`「CloudUI 同步」。
 
 @docs/contributing.md
 

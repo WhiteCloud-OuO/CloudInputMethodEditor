@@ -70,6 +70,14 @@
 - **改了脚本对外的东西**（`cloudime` 表上的方法、事件载荷、动作表、清单字段、闸门、`Scripts\` 的约定），
   同一个提交里同步根目录的 `lua.md`（脚本作者的技术文档）与 `Scripts\template.lua`。
 
+## CloudUI 同步
+
+- `crates/cloud-ui`、`crates/cloud-ui-core`、`crates/cloud-ui-types` 在 `D:\Programming\RUST\CloudUI` 里有**独立 workspace 副本**（渲染器在那边叫 `cloud-ui-render`，本仓库叫 `cloudime-render`）。
+- **改了这些 UI 库 crate 的接口、行为、修复或对应文档，同一个任务里必须把等价改动同步到 CloudUI 的对应 crate / 文档**；不要只改 CloudIME 这一边。
+- 两边分别跑 `cargo fmt --all -- --check`、`cargo clippy --workspace --all-targets -- -D warnings`、`cargo test --workspace --locked`。
+- 不要整目录复制：两边顶部的模块说明、特性开关与依赖名可能不同（例如 `cloud-ui-render` / `cloudime-render`）；只改等价部分，并保持 CloudUI 仓库自己的写法。
+- CloudUI 是独立 Git 仓库，提交信息同样按 Conventional Commits 写，不要混进本仓库的提交。
+
 ## 提交前检查
 
 - 钩子：`.githooks/pre-commit`（禁装饰性分隔注释 + fmt + clippy）、`.githooks/commit-msg`（提交信息格式）、`.githooks/pre-push`（全 workspace 测试）；`git config core.hooksPath .githooks` 启用一次。

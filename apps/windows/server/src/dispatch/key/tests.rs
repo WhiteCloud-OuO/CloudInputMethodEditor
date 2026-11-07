@@ -1,5 +1,6 @@
 //! Tab 展开「更多候选项」与分页的三端约定。
 use std::sync::{Arc, Mutex};
+use std::time::{Duration, Instant};
 
 use crate::dispatch::{CandidateEvent, CandidateSink, RenderSettings, Router, RouterConfig};
 use cloudime_core::{CandidateKind, CustomPhrase, Engine};
@@ -78,6 +79,28 @@ fn router(size: usize) -> Router {
     });
     router
 }
+fn special_router() -> Router {
+    let engine = Engine::new(
+        Dictionary::parse(
+            "云\tyun\t1000\n运\tyun\t900\n多\tduo\t1000\n朵\tduo\t800\n云朵\tyun duo\t9000\n",
+        )
+        .unwrap(),
+    );
+    let mut router = Router::new(
+        engine,
+        RouterConfig {
+            page_size: 9,
+            ..Default::default()
+        },
+    );
+    router.handle(ClientMessage::OpenSession {
+        session: SessionId(1),
+        app: None,
+        protocol: PROTOCOL_VERSION,
+    });
+    router
+}
+
 fn key(
     router: &mut Router,
     code: u32,
@@ -104,6 +127,137 @@ fn compose(router: &mut Router, text: &str, modifiers: KeyModifiers) {
     for c in text.chars() {
         key(router, c as u32, Some(c), modifiers);
     }
+}
+
+/// 右 Alt（Alt Gr）切特殊输入模式；`yun'duo` 先出 `yun` 的单字，选完再出 `duo`。
+#[test]
+fn right_alt_toggles_special_input_and_commits_one_character_at_a_time() {
+    let normal = KeyModifiers::default();
+    let alt = KeyModifiers {
+        alt: true,
+        ..normal
+    };
+    let mut r = special_router();
+    // 没有候选窗口时不切换（右 Alt 原样归应用）。
+    assert_eq!(key(&mut r, 0xA5, None, alt).0, KeyOutcome::Passthrough);
+    assert!(!r.engine.special_input());
+
+    compose(&mut r, "yun'duo", normal);
+    let (outcome, commit, _) = key(&mut r, 0xA5, None, alt);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit, None);
+    assert!(
+        r.engine.special_input(),
+        "候选窗口显示时右 Alt 打开特殊输入模式"
+    );
+    // 再按一次关掉，第三次再打开；开关本身不改已敲的拼音。
+    key(&mut r, 0xA5, None, alt);
+    assert!(!r.engine.special_input());
+    key(&mut r, 0xA5, None, alt);
+    assert!(r.engine.special_input());
+
+    let items = r.engine.query().unwrap().candidates.items;
+    assert!(
+        items
+            .iter()
+            .all(|candidate| candidate.text.chars().count() == 1),
+        "特殊模式只出单字：{items:?}"
+    );
+    let yun = items
+        .iter()
+        .position(|candidate| candidate.text == "云")
+        .expect("yun 的单字候选");
+    let (_, commit, frame) = key(
+        &mut r,
+        0x31 + yun as u32,
+        Some(char::from(b'1' + yun as u8)),
+        normal,
+    );
+    assert_eq!(commit, None, "还有 duo 没选");
+    let duo = frame
+        .candidates
+        .items
+        .iter()
+        .position(|candidate| candidate.text == "多")
+        .expect("duo 的单字候选");
+    let (_, commit, _) = key(
+        &mut r,
+        0x31 + duo as u32,
+        Some(char::from(b'1' + duo as u8)),
+        normal,
+    );
+    assert_eq!(commit.as_deref(), Some("云多"));
+    assert!(
+        !r.engine.special_input(),
+        "候选窗口销毁后自动关闭特殊输入模式"
+    );
+
+    // 形码等不支持特殊输入模式的方案：候选窗口显示着，右 Alt 也原样归应用。
+    let mut r = special_router();
+    r.config.special_input = false;
+    compose(&mut r, "yun'duo", normal);
+    assert_eq!(key(&mut r, 0xA5, None, alt).0, KeyOutcome::Passthrough);
+    assert!(!r.engine.special_input());
+}
+
+/// 特殊输入模式只对全拼 / 双拼开放：`RouterConfig::special_input` 跟着输入方案走。
+#[test]
+fn special_input_support_follows_the_input_scheme() {
+    for (scheme, expected) in [
+        (cloudime_platform::InputScheme::FullPinyin, true),
+        (cloudime_platform::InputScheme::DualKeyPinyin, true),
+        (cloudime_platform::InputScheme::ShapeCode, false),
+    ] {
+        let mut config = cloudime_platform::Config::default();
+        config.input.input_schemes = scheme;
+        assert_eq!(
+            RouterConfig::from(&config).special_input,
+            expected,
+            "{scheme:?}"
+        );
+    }
+}
+
+/// 与 [`key`] 相同，但把成对补全的 `caret_shift` 与智能符号的 `delete_before` 也带出来。
+fn key_details(
+    router: &mut Router,
+    code: u32,
+    character: Option<char>,
+    modifiers: KeyModifiers,
+) -> (KeyOutcome, Option<String>, i16, u16) {
+    match router
+        .handle(ClientMessage::Key {
+            session: SessionId(1),
+            event: KeyEvent::new(code, character, modifiers),
+        })
+        .unwrap()
+    {
+        ServerMessage::KeyResult {
+            outcome,
+            commit,
+            caret_shift,
+            delete_before,
+            ..
+        } => (outcome, commit, caret_shift, delete_before),
+        _ => panic!("key result"),
+    }
+}
+
+/// 开了智能符号（`[input] smart_symbols`，缺省关）的 Router。
+fn smart_router(size: usize) -> Router {
+    let mut router = router(size);
+    router.config.smart_symbols = true;
+    router
+}
+
+/// 模拟 DLL 在按键前送来的光标前文。
+fn surrounding(router: &mut Router, text: &str) {
+    router.handle(ClientMessage::Surrounding {
+        session: SessionId(1),
+        text: text.to_owned(),
+        document: None,
+        context: 0,
+    });
 }
 
 /// 表达式计算面板里按回车：算得出来上屏「算式=结果」；算不出来照旧原样上屏。
@@ -646,8 +800,7 @@ fn a_script_can_resize_the_candidate_window() {
     let dir = std::env::temp_dir().join("cloudime-key-tests-candidate-size");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("size.lua"),
+    write_script(&dir, "size.lua",
         "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', keys = { 'z' }, budget = 1000000, timeout = 10000, \
          sync = false, handover = 'callback', on_error = false }\n\
          cloudime.on('key', function(event)\n\
@@ -730,8 +883,7 @@ fn a_script_can_switch_the_theme() {
     let dir = std::env::temp_dir().join("cloudime-key-tests-theme");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("theme.lua"),
+    write_script(&dir, "theme.lua",
         "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', keys = { 'z', 'x', 'c' }, budget = 1000000, timeout = 10000, \
          sync = false, handover = 'callback', on_error = false }\n\
          cloudime.on('key', function(event)\n\
@@ -769,8 +921,7 @@ fn a_script_theme_waits_until_the_candidate_window_closes() {
     let dir = std::env::temp_dir().join("cloudime-key-tests-theme-deferred");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("theme.lua"),
+    write_script(&dir, "theme.lua",
         "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', keys = { 'z' }, budget = 1000000, \
          timeout = 10000, sync = false, handover = 'callback', on_error = false }\n\
          cloudime.on('key', function(event)\n\
@@ -1139,6 +1290,149 @@ fn punctuation_commits_the_highlighted_candidate_first() {
 }
 
 #[test]
+fn smart_space_after_a_committed_candidate_becomes_comma_then_period() {
+    let normal = KeyModifiers::default();
+    let mut r = smart_router(5);
+    compose(&mut r, "ni", normal);
+    // 空格先把高亮候选「你」上屏；智能符号的本地前文也跟着变成「你」。
+    let (_, commit, _, _) = key_details(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(commit.as_deref(), Some("你"));
+    // 上屏之后才到的「上屏前」前文（异步编辑会话的先后不保证）：不能把刚记下的「你」冲掉。
+    surrounding(&mut r, "hello");
+
+    // 单个空格 → 全角逗号。
+    let (outcome, commit, caret_shift, delete_before) =
+        key_details(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit.as_deref(), Some("，"));
+    assert_eq!((caret_shift, delete_before), (0, 0));
+
+    // 紧接着再按一次 → 「你」不在特殊名单里，换成句号；先删掉刚才的逗号。
+    let (outcome, commit, caret_shift, delete_before) =
+        key_details(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit.as_deref(), Some("。"));
+    assert_eq!((caret_shift, delete_before), (0, 1));
+}
+
+#[test]
+fn double_space_after_say_opens_a_quote_and_follows_pairwise_completion() {
+    let normal = KeyModifiers::default();
+    let mut r = smart_router(5);
+    r.focused = Some(SessionId(1));
+    r.config.pairwise_completion = 256; // 「“”」那一项
+    surrounding(&mut r, "他说");
+
+    assert_eq!(
+        key_details(&mut r, 0x20, Some(' '), normal).1.as_deref(),
+        Some("，")
+    );
+    let (outcome, commit, caret_shift, delete_before) =
+        key_details(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit.as_deref(), Some("：“”"));
+    assert_eq!(caret_shift, -1, "光标停在两个引号中间");
+    assert_eq!(delete_before, 1, "删掉第一击的逗号");
+}
+
+#[test]
+fn double_space_picks_the_symbol_after_the_right_character() {
+    let normal = KeyModifiers::default();
+    for (before, expected) in [
+        ("好吗", "？"),
+        ("好呢", "？"),
+        ("好嘛", "？"),
+        ("好呀", "！"),
+        ("好哇", "！"),
+        ("轰呜", "——"),
+        ("吱", "——"),
+        ("好", "。"),
+    ] {
+        let mut r = smart_router(5);
+        r.focused = Some(SessionId(1));
+        surrounding(&mut r, before);
+        assert_eq!(
+            key_details(&mut r, 0x20, Some(' '), normal).1.as_deref(),
+            Some("，"),
+            "{before}"
+        );
+        let (_, commit, _, delete_before) = key_details(&mut r, 0x20, Some(' '), normal);
+        assert_eq!(commit.as_deref(), Some(expected), "{before}");
+        assert_eq!(delete_before, 1, "{before}");
+    }
+}
+
+#[test]
+fn smart_space_double_only_works_within_one_second() {
+    let normal = KeyModifiers::default();
+    let mut r = smart_router(5);
+    r.focused = Some(SessionId(1));
+    surrounding(&mut r, "好");
+    assert_eq!(
+        key_details(&mut r, 0x20, Some(' '), normal).1.as_deref(),
+        Some("，")
+    );
+    // 把第一击的时间拨回 1.1 秒前：第二击按普通空格处理，刚才的逗号留着。
+    if let Some(pending) = r.smart_space.as_mut() {
+        pending.at = Instant::now() - Duration::from_millis(1100);
+    }
+    let (outcome, commit, caret_shift, delete_before) =
+        key_details(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(outcome, KeyOutcome::Passthrough);
+    assert_eq!(commit, None);
+    assert_eq!((caret_shift, delete_before), (0, 0));
+}
+
+#[test]
+fn smart_symbols_off_leaves_space_alone() {
+    let normal = KeyModifiers::default();
+    let mut r = router(5);
+    r.focused = Some(SessionId(1));
+    surrounding(&mut r, "好");
+    let (outcome, commit, caret_shift, delete_before) =
+        key_details(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(outcome, KeyOutcome::Passthrough);
+    assert_eq!(commit, None);
+    assert_eq!((caret_shift, delete_before), (0, 0));
+}
+
+#[test]
+fn smart_space_leaves_non_chinese_text_alone() {
+    let normal = KeyModifiers::default();
+    let mut r = smart_router(5);
+    r.focused = Some(SessionId(1));
+    surrounding(&mut r, "hello");
+    for _ in 0..2 {
+        let (outcome, commit, _, delete_before) = key_details(&mut r, 0x20, Some(' '), normal);
+        assert_eq!(outcome, KeyOutcome::Passthrough);
+        assert_eq!(commit, None);
+        assert_eq!(delete_before, 0);
+    }
+}
+
+#[test]
+fn smart_space_double_needs_the_second_space_right_after_the_first() {
+    let normal = KeyModifiers::default();
+    let caps = KeyModifiers {
+        caps: true,
+        ..normal
+    };
+    let mut r = smart_router(5);
+    r.focused = Some(SessionId(1));
+    surrounding(&mut r, "好");
+    assert_eq!(
+        key_details(&mut r, 0x20, Some(' '), normal).1.as_deref(),
+        Some("，")
+    );
+    // 中间插了一个交给应用的字母：下一空格不再按双击规则换标点。
+    key_details(&mut r, u32::from(b'A'), Some('a'), caps);
+    let (outcome, commit, _, delete_before) = key_details(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(outcome, KeyOutcome::Passthrough);
+    assert_eq!(commit, None);
+    assert_eq!(delete_before, 0);
+}
+
+#[test]
 fn ctrl_digit_kills_the_slot_and_command_keys_stay_passthrough() {
     let normal = KeyModifiers::default();
     let ctrl = KeyModifiers {
@@ -1444,8 +1738,7 @@ fn script_window_requests_reach_the_ui_sink_in_order() {
     let dir = std::env::temp_dir().join("cloudime-key-tests-script-window");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("win.lua"),
+    write_script(&dir, "win.lua",
         "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'none', keys = { 'w' }, \
          budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
          local win\n\
@@ -1733,11 +2026,22 @@ fn ctrl_alt_u_and_v_enter_modes_in_both_schemes() {
     assert!(dual.engine.expression_mode(), "非全拼 Ctrl+Alt+V");
 }
 
+/// 写一个脚本文件：`dir` 是 `Scripts\` 根目录，入口文件放进 `<文件名去后缀>/` 文件夹。
+fn write_script(dir: &std::path::Path, file: &str, source: impl AsRef<str>) -> std::io::Result<()> {
+    let stem = std::path::Path::new(file)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| file.to_owned());
+    let folder = dir.join(stem);
+    std::fs::create_dir_all(&folder)?;
+    std::fs::write(folder.join(file), source.as_ref().as_bytes())
+}
+
 fn write_i_script(dir: &std::path::Path, file: &str, name: &str, description: &str, commit: &str) {
     let source = format!(
         "cloudime.script{{ api = 2, trigger_condition = 'manual', name = '{name}', description = '{description}', budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }}\ncloudime.on('manual', function(event) return {{ commit = '{commit}' }} end)\n"
     );
-    std::fs::write(dir.join(file), source).unwrap();
+    write_script(dir, file, source).unwrap();
 }
 
 fn i_mode_scripts(dir: &std::path::Path) {
@@ -1749,8 +2053,7 @@ fn i_mode_scripts(dir: &std::path::Path) {
 
 /// 非 manual 的脚本即使有 manual 处理函数也不进 i 模式候选。
 fn write_non_manual_script(dir: &std::path::Path) {
-    std::fs::write(
-        dir.join("c.lua"),
+    write_script(dir, "c.lua",
         "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'ctrl+alt', keys = { 'f3' }, name = '组合键脚本', budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\ncloudime.on('manual', function(event) return { commit = '不应运行' } end)\n",
     )
     .unwrap();
@@ -1908,6 +2211,62 @@ fn i_mode_run_without_commit_closes_the_candidate_window() {
     assert!(frame.candidates.items.is_empty());
 }
 
+/// 组合键脚本在清单写 `show_in_i_mode = true` 后也能从 i 模式运行：
+/// i 模式按它声明的键合成一次 `key` 事件，原来的键处理函数照常跑。
+#[test]
+fn i_mode_runs_a_combo_script_that_opts_in() {
+    let dir = std::env::temp_dir().join("cloudime-key-tests-i-mode-combo");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write_script(
+        &dir,
+        "combo.lua",
+        "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'ctrl+alt', keys = { 'y' }, \
+         name = '组合键脚本', show_in_i_mode = true, budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
+         cloudime.on('key', function(event)\n\
+             if event.ctrl and event.alt and event.vk == 89 then return { commit = '组合键运行' } end\n\
+             return {}\n\
+         end)\n",
+    )
+    .unwrap();
+    let mut r = router(9);
+    r.scripts = cloudime_script::Runtime::load(&dir, &[]);
+    let normal = KeyModifiers::default();
+
+    key(&mut r, 0x49, Some('i'), normal);
+    let (outcome, commit, frame) = key(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit.as_deref(), Some("组合键运行"));
+    assert!(!r.i_mode);
+    assert!(frame.candidates.items.is_empty());
+}
+
+/// 自动触发脚本即使写了 `show_in_i_mode = true` 也不出现在 i 模式。
+#[test]
+fn i_mode_ignores_auto_trigger_scripts() {
+    let dir = std::env::temp_dir().join("cloudime-key-tests-i-mode-auto");
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    write_script(
+        &dir,
+        "auto.lua",
+        "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'none', keys = { 'enter' }, \
+         name = '自动脚本', show_in_i_mode = true, budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
+         cloudime.on('key', function() return {} end)\n",
+    )
+    .unwrap();
+    let mut r = router(9);
+    r.scripts = cloudime_script::Runtime::load(&dir, &[]);
+    let normal = KeyModifiers::default();
+
+    key(&mut r, 0x49, Some('i'), normal);
+    let frame = r.self_drawn_frame();
+    assert!(
+        frame.candidates.items.is_empty(),
+        "自动脚本不该进 i 模式：{frame:?}"
+    );
+}
+
 /// 数字直接运行对应下标，不是运行当前高亮；Ctrl+数字只写额外内容。
 #[test]
 fn i_mode_digits_run_the_selected_script_and_ctrl_shows_description() {
@@ -2011,8 +2370,7 @@ fn i_mode_shift_digit_runs_in_background_and_forwards_windows() {
     let dir = std::env::temp_dir().join("cloudime-key-tests-i-mode-background");
     let _ = std::fs::remove_dir_all(&dir);
     std::fs::create_dir_all(&dir).unwrap();
-    std::fs::write(
-        dir.join("bg.lua"),
+    write_script(&dir, "bg.lua",
         "cloudime.script{ api = 2, trigger_condition = 'manual', name = '后台窗口', budget = 1000000, \
          timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
          cloudime.on('manual', function(event)\n\

@@ -40,11 +40,17 @@ cloudime/
 │   ├── cloudime-platform/      # 平台层的公共部分：配置文件、协议类型
 │   ├── cloudime-render/        # 自绘渲染器：一帧 + 主题 → 预乘 RGBA 位图
 │   ├── cloudime-script/        # 用户脚本运行时（LuaJIT）
+│   ├── cloudime-script-store/  # 在线脚本仓库：读索引、下载并安装到 Scripts\
+│   ├── cloudime-mcp-client/    # MCP Client 的 mcp.toml、命名管道帧与 sidecar IPC 协议
 │   ├── cloud-ui-core/          # 页面树、布局约束与尺寸核心（无 Windows / 脚本依赖）
+│   ├── cloud-ui-types/         # UI 共用轻量类型：排布、序号样式、主题
 │   └── cloud-ui/               # Windows 壳：分层窗口、资产窗口、脚本窗口、RichEdit 宿主
 │
 ├── apps/
 │   ├── cli/                    # 测试工具：查询、逐键计时、输入日志回放评测、整句评测
+│   ├── mcp/                    # 只读 stdio MCP Server：主词库 + 导入词库的拼音 / 候选查询
+│   ├── mcp-client/             # MCP Client sidecar：按 mcp.toml 连接外部 Server，经命名管道供 Server 调用
+│   ├── cloud-ui-demo/          # cloud-ui 独立窗口示例（普通 Win32 窗口 + Document；installer/ 是独立应用打包参考）
 │   └── windows/                # Windows 壳：server（Server 进程：IPC 分派 + Engine + 命名管道 + 自绘候选窗）、settings（设置程序）、tsf（TSF 文本服务 DLL，cdylib）
 │
 ├── tools/
@@ -335,7 +341,8 @@ bigram 语言模型 + Viterbi，加上简拼、模糊音。没有整句输入，
   组句外没有全角映射的字符里，`-` `=` 也改由壳自己插入（`dispatch/key/input.rs::apply_punctuation`）：
   放行要等宿主把键交回应用，实测在部分宿主（Edge / QQ 等）里这个键到不了，用户看到的是「按了没反应」；
   其余（`@` 数字等）继续放行，宿主连不上 Server 时也只吃「可能是在打拼音」的字母（`service/key_sink.rs`），
-  免得断连窗口里标点 / 数字跟着一起没反应；
+  免得断连窗口里标点 / 数字跟着一起没反应；右 Alt 只在全拼 / 双拼方案、候选窗口显示的中文状态切换特殊输入模式，
+  `marked_parts(..., special)` 把首音节之后的拼音标成 `Rest`、渲染成角标色，窗口销毁（`Composed` 变 `None`）时自动关闭；
   应用标识仍随 `OpenSession { app }` 报一次（宿主进程的 exe 文件名，`GetModuleFileNameW(NULL)` 取的，DLL 加载在应用进程里），
   Server 每会话记下、写进输入日志。
   一次要绘制的状态是 `Frame`（preedit 分段 + 候选页 + 可选的提示 `notice`；当前没有来源使用 `notice`，字段保留），preedit 用 `PreeditSegment`（Core `MarkedSegment` 的可序列化镜像，
@@ -355,10 +362,10 @@ bigram 语言模型 + Viterbi，加上简拼、模糊音。没有整句输入，
   收键与运行细节记进 `%LOCALAPPDATA%\CloudIME\logs\tsf.<日期>.log`（与 Server / 设置程序同目录，按天一个文件、留 7 天；多进程追加同一文件）；候选窗口不再由 DLL 自绘（已搬到 Server 进程，见上「候选窗口」），DLL 侧只做 preedit 内联 + 上报光标矩形。
 - **交叉编译验证**：`cloudime-core` / `-dictionary` / `-format` / `-lm` / `-platform` / `apps/windows/{server,tsf}` 已能
   `cargo check --target x86_64-pc-windows-gnu` 通过（借此修掉 `cloudime-format` 里 unix 专有的 `Mmap::advise` 未 `cfg` 的移植 bug）；
-  本机只 `check`，真正编译在 Windows 机器上做（`cloudime-neural` 的 candle 后端在 Windows 走 CPU，已接进 Server，见下「本地整句模型」）。
-- **本地整句模型（Server 进程）**：`server/src/dispatch/rescore/`。启动时 `find_model`（用户目录 `%APPDATA%\CloudIME\local_models\` 优先，否则随包 `data\local_models\`；`.qjm` 单文件或三件套目录，目录里有多份时优先词表含汉字的字级模型）；`[candidate] use_local_sentence_organization_model` 开着就起线程加载并预热（`ModelLoader`），下一次按键 / tick 接上 `set_async_sentence_scorer`。
+  本机只 `check`，真正编译在 Windows 机器上做（`cloudime-neural` 的 candle / ONNX 后端在 Windows 走 CPU，已接进 Server，见下「本地模型」）。
+- **本地模型（Server 进程）**：`server/src/dispatch/rescore/`。`[candidate] local_model` 四档：`off` / `basic`（含章·知微）/ `enhanced`（知意）/ `hybrid`（含章+知意）。`basic` 启动时 `find_model`（用户目录 `%APPDATA%\CloudIME\local_models\` 优先，否则随包 `Models\`；旧的 `data/local_models\` 只作开发兜底；`.qjm` 单文件或三件套目录，目录里有多份时优先词表含汉字的字级模型），起线程加载并预热（`ModelLoader`），下一次按键 / tick 接上 `set_async_sentence_scorer`。`enhanced` 用知意：`find_zhiyi` 优先找随包的 `Models/laya-zhen-long-l12-int8g/laya.int8g.onnx`（用户目录 `models/zhiyi-onnx` 可替换）与安装目录的 `onnxruntime.dll`，加载 `ChoiceScorer` 后接 `set_choice_model`；前者做候选页重排，后者按音节给整句词图出字。短语输入（4–8 音节）会把重排前最好的词候选补进模型窗口（位置先验 / LM 按 0.1 折扣），重排后保在前 3 条，避免整句备选把正确的词挤到第 4 位；2–3 字词不补，>8 音节交给整句候选。`hybrid` 同时加载两份：短输入（≤8 音节）跳过含章的整句重打分，只走知意；≥9 音节 `set_async_sentence_scorer` + `set_choice_model` 同时在线，含章先重排整句路径、知意再出字和重排候选。两个后台线程可能先后回来，`Engine::rescoring_in_flight` 让 Server 轮询到两边都收完再重画。
   Server 没有定时器：缓冲变化后 `schedule_rescoring` 起防抖，工人循环 `recv_timeout(router.next_tick())` 按 `RescoreState` 的节拍醒来（防抖 80 ms → `request_rescoring`；然后 20 ms 一次 `poll_rescoring`，最多等 2 s），DLL 组句期间每 80 ms 的 `Poll` 也顺带 `tick`。分到了重查一次、重建候选布局、由 Server 自绘的候选窗直接重画，DLL 下一次 `Poll` 拿到新帧更新内联 preedit；翻过页 / 动过高亮不动。热加载那一项变了才重载 / 卸载。
-  前文：DLL 在**起组句的那次读写编辑会话**里顺手读选区起点前 64 个 UTF-16 单元（`com/edit/surrounding.rs::text_before_caret`，拼音还没插进去、不用再开一次会话），随 `ClientMessage::Surrounding` 单向送来。**密码框与私密输入**（2026-09-12 查了微软文档 / SampleIME / Chromium 源码后定）：
+  前文：DLL 在**起组句的那次读写编辑会话**里顺手读选区起点前 64 个 UTF-16 单元（`com/edit/surrounding.rs::text_before_caret`，拼音还没插进去、不用再开一次会话），随 `ClientMessage::Surrounding` 单向送来（`context` 是 TSF 上下文标识，变了就清当前输入框的历史）。应用给不出前文时，模型退回 `InputHistory` 里**当前应用 / 当前输入框**最近上屏的字：默认 60 秒过期，`[candidate] context_memory_seconds` 可改，0 表示一直算。**密码框与私密输入**（2026-09-12 查了微软文档 / SampleIME / Chromium 源码后定）：
   TSF 规定键盘类 TIP 必须看上下文的 `GUID_COMPARTMENT_KEYBOARD_DISABLED`（微软文档明说密码框应禁用文本服务、`IS_PASSWORD` 只是标注不提供保护；Chromium 给密码框的上下文设的就是它），
   DLL 在 `OnTestKeyDown` / `OnKeyDown` / 保留键里没在组句时先查它（连同 `EMPTYCONTEXT`，`com/context.rs`），非零整键放行、不组句（密码框里根本不进输入法）；
   输入范围（`GUID_PROP_INPUTSCOPE`）只在起组句那次编辑会话里读一次（`com/edit/surrounding.rs::input_context`）：含 `IS_PRIVATE` / 密码 / PIN 之一算**私密**——Chromium 源码里密码框与不学习的输入框映射成 `IS_PRIVATE`（含义「别学」；2026-09-12 box 实测 Edge InPrivate 的网页文本框报的仍是 `IS_SEARCH`，`IS_PRIVATE` 只在密码框见过，这条是兜底）——私密时不读前文，并随 `ClientMessage::Privacy` 告诉 Server（客户端只在变了时发；记事本等不支持该属性的应用 `GetValue` 失败按不私密）。

@@ -8,7 +8,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CAPITAL, VK_SPACE};
 use windows::Win32::UI::TextServices::{ITfContext, ITfKeyEventSink_Impl};
 use windows::core::{BOOL, GUID, Ref, Result};
 
-use cloudime_platform::protocol::{IndicatorCommand, KeyEvent, KeyOutcome};
+use cloudime_platform::protocol::{IndicatorCommand, InputSettings, KeyEvent, KeyOutcome};
 
 use super::TextService_Impl;
 use super::next::Next;
@@ -42,17 +42,26 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         if self.keyboard_disabled(&pic) {
             return Ok(FALSE);
         }
+        if is_right_alt(vk, lparam) && self.special_input_allowed() {
+            return Ok(TRUE);
+        }
         if self.char_width_hotkey(vk) {
             return Ok(TRUE);
         }
-        // 有 `key` 触发脚本（`script_wants_text`）：**没在组句时每个按键**前现读一份光标前文（异步只读会话）。
-        // 读发生在这一键之后，于是下一次按键时脚本读到的就是「上一键之后」的文档 —— 自动序号按 `Enter`
-        // 时 `cloudime.context` 里已经有刚敲的 `1.`（挂在这一层是因为它对**所有**键都调，见上面注释）。
+        // 有 `key` 触发脚本（`script_wants_text`）或智能符号（`smart_symbols`）：**没在组句时每个按键**前
+        // 现读一份光标前文（异步只读会话）。读发生在这一键之后，于是下一次按键时拿到的就是「上一键之后」的
+        // 文档 —— 自动序号按 `Enter` 时 `cloudime.context` 里已经有刚敲的 `1.`；智能符号按空格时也能看到
+        // 光标前那个字（挂在这一层是因为它对**所有**键都调，见上面注释）。
         // 组句里不另读：那份前文由起组句那次读写会话送，且组句期间不变。
-        if self
-            .input_settings
-            .get()
-            .is_some_and(|input| input.script_wants_text)
+        // 智能符号只在中文状态、正常接管的程序里需要，英文模式 / 名单程序不额外读。
+        let input = self.input_settings.get();
+        let smart_text = input.is_some_and(|input| {
+            input.smart_symbols
+                && !input.raw_input
+                && !self.mode_state.disabled()
+                && !self.mode_state.english()
+        });
+        if (smart_text || input.is_some_and(|input| input.script_wants_text))
             && !self.shared.composing()
             && let Ok(context) = pic.ok()
         {
@@ -73,6 +82,13 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         self.note_key_down(vk, lparam);
         if self.keyboard_disabled(&pic) {
             return Ok(FALSE);
+        }
+        // 右 Alt：按住不放会连发 key-down，只认第一拍；宿主报 0x12 / 0xA5 都统一合成 0xA5 送 Server。
+        if is_right_alt(vk, lparam) && self.special_input_allowed() {
+            if is_auto_repeat(lparam) {
+                return Ok(TRUE);
+            }
+            return Ok(self.handle_key(pic, self.key_event(0xA5)).into());
         }
         if self.char_width_hotkey(vk) {
             self.send_indicator(IndicatorCommand::ToggleCharWidthType);
@@ -221,11 +237,23 @@ impl TextService_Impl {
         if self.raw_input() || self.mode_state.disabled() {
             return false;
         }
+        // 右 Alt（Alt Gr）：只在候选窗口显示着（组句中）的中文状态、且当前方案支持时
+        // 留给特殊输入模式开关；形码等方案原样归应用。
+        if self.special_input_allowed() && wants_special_input(event, self.mode_state.english()) {
+            return true;
+        }
         // 修饰键本身不吃（见 [`is_modifier_key`]）：这一拍与「Ctrl 组合要不要接管」无关。
         if is_modifier_key(event.virtual_key) {
             return false;
         }
         let input = self.input_settings.get();
+        if smart_space_key(
+            event,
+            self.shared.composing(),
+            input.is_some_and(|input| input.smart_symbols),
+        ) {
+            return true;
+        }
         let shift_letter_compose = input.is_some_and(|input| input.shift_letter_compose);
         let full_width_chars = input.is_some_and(|input| input.full_width_chars);
         // 「为脚本提供全局热键」只在中文状态抢占：英文状态交给应用，别在按键 sink 里再吃掉。
@@ -273,6 +301,16 @@ impl TextService_Impl {
             "Server 没接管，重放回应用 vk={}",
             event.virtual_key
         ));
+    }
+
+    /// 右 Alt 现在能不能当特殊输入模式开关（候选窗口显示着、中文、没被禁用、不是直通名单，
+    /// 且当前输入方案支持 —— 只有全拼 / 双拼，形码等方案下右 Alt 原样归应用）。
+    fn special_input_allowed(&self) -> bool {
+        self.shared.composing()
+            && !self.raw_input()
+            && !self.mode_state.disabled()
+            && !self.mode_state.english()
+            && special_input_supported(self.input_settings.get())
     }
 
     /// 当前设置是不是「完全不接管」（名单里的程序）。
@@ -467,6 +505,21 @@ fn modifier_mask(event: &KeyEvent) -> u8 {
     event.modifiers.mask() as u8
 }
 
+/// 智能符号要的空格：中文状态、没在组句、不带修饰键。它不在「可打印标点 / 数字」那条规则里，
+/// 不在这里主动吃就永远到不了 Server（空格会直接被应用吃掉）。
+///
+/// `Shift + Space` 是翻转全角 / 半角的内置热键，上面已经先处理，不抢。
+fn smart_space_key(event: &KeyEvent, composing: bool, smart_symbols: bool) -> bool {
+    smart_symbols
+        && !composing
+        && !event.modifiers.english_mode
+        && !event.modifiers.ctrl
+        && !event.modifiers.alt
+        && !event.modifiers.win
+        && !event.modifiers.shift
+        && event.virtual_key == u32::from(VK_SPACE.0)
+}
+
 /// 这个键是不是脚本声明要的（`InputSettings.script_keys` 位图，见清单的 `keys`）：
 /// 是就**没组句也先问一趟 Server**（脚本不吃就重放回应用）。
 ///
@@ -496,7 +549,31 @@ fn is_replay(replaying: &std::cell::Cell<Option<u32>>, vk: u32) -> bool {
     replaying.take() == Some(vk)
 }
 
+/// 右 Alt（Alt Gr，`VK_RMENU`）：中文状态下由输入法吃掉，当特殊输入模式开关；英文状态归应用。
+///
+/// 有的宿主把右 Alt 报成 `VK_MENU`（0x12）而不是 `VK_RMENU`（0xA5），靠 `lparam` 的扩展位区分。
+fn is_right_alt(vk: u32, lparam: LPARAM) -> bool {
+    vk == 0xA5 || (vk == 0x12 && ((lparam.0 as u32) & (1 << 24)) != 0)
+}
+
+/// 给 Server 的合成右 Alt 事件用（不管宿主报的是 0xA5 还是 0x12，都统一成 0xA5）。
+fn wants_special_input(event: &KeyEvent, english: bool) -> bool {
+    event.virtual_key == 0xA5 && !english
+}
+
+/// 当前输入方案支不支持逐音节特殊输入模式：Server 在 `InputSettings::special_input` 里下发，
+/// 只有全拼 / 双拼为真；形码等方案下右 Alt 原样交给应用。
+fn special_input_supported(input: Option<InputSettings>) -> bool {
+    input.is_some_and(|input| input.special_input)
+}
+
+/// `lparam` 的 bit 30：这是按住不放的自动重复，不是新的一次按键。
+fn is_auto_repeat(lparam: LPARAM) -> bool {
+    (lparam.0 as u32) & (1 << 30) != 0
+}
+
 /// 修饰键**本身**（Ctrl / Alt / Shift / Win 的左右键）：不是「组合键」，一律不吃。
+/// 例外是右 Alt（`0xA5`）：它由 [`TextService_Impl::would_eat`] 在中文状态下单独吃掉，当特殊输入模式开关。
 ///
 /// 这条很关键：`OnTestKeyDown` 一旦吃了 `Ctrl` 的 key-down，**后面那个键在 TSF 与应用眼里就没有
 /// 修饰键了**（`modifiers.ctrl` 变 false），表现成 `Ctrl+A` 打出一个 `a`、全选失效 —— 而 Ctrl 组合
@@ -578,10 +655,13 @@ fn eats_key(
 /// 组句里 Ctrl 组合能不能被吃进 Server：见 [`eats_key`] 里那条规则（带 Ctrl、不带 Alt / Win 就吃）。
 #[cfg(test)]
 mod tests {
-    use cloudime_platform::protocol::{KeyEvent, KeyModifiers};
+    use cloudime_platform::protocol::{InputSettings, KeyEvent, KeyModifiers};
+
+    use windows::Win32::Foundation::LPARAM;
 
     use super::{
-        eats_without_server, is_modifier_key, is_replay, wants_declared_key, wants_script_key,
+        eats_without_server, is_modifier_key, is_replay, is_right_alt, smart_space_key,
+        special_input_supported, wants_declared_key, wants_script_key, wants_special_input,
     };
     use crate::com::key::event::to_key_event;
 
@@ -776,8 +856,37 @@ mod tests {
         }
     }
 
-    /// 修饰键**本身**一律不吃（`Ctrl` / `Alt` / `Shift` / `Win` 左右键）：吃了它，后面那个键在 TSF
+    /// 右 Alt 只在中文状态当特殊输入开关；英文状态与左 Alt 都归应用。
+    #[test]
+    fn right_alt_is_the_special_input_switch_in_chinese_only() {
+        let alt = KeyModifiers {
+            alt: true,
+            ..KeyModifiers::default()
+        };
+        assert!(wants_special_input(&KeyEvent::new(0xA5, None, alt), false));
+        assert!(!wants_special_input(&KeyEvent::new(0xA5, None, alt), true));
+        assert!(!wants_special_input(&KeyEvent::new(0xA4, None, alt), false));
+        // 宿主可能把右 Alt 报成 VK_MENU + 扩展位。
+        assert!(is_right_alt(0xA5, LPARAM(0)));
+        assert!(is_right_alt(0x12, LPARAM(1 << 24)));
+        assert!(!is_right_alt(0x12, LPARAM(0)));
+        assert!(!is_right_alt(0xA4, LPARAM(1 << 24)));
+    }
+
+    /// 特殊输入模式只认全拼 / 双拼：Server 没下发（旧协议 / 刚连上）或形码方案下都不接管右 Alt。
+    #[test]
+    fn special_input_needs_a_scheme_that_supports_it() {
+        assert!(!special_input_supported(None));
+        assert!(!special_input_supported(Some(InputSettings::default())));
+        assert!(special_input_supported(Some(InputSettings {
+            special_input: true,
+            ..InputSettings::default()
+        })));
+    }
+
+    /// 修饰键**本身**不吃（`Ctrl` / `Alt` / `Shift` / `Win` 左右键）：吃了它，后面那个键在 TSF
     /// 与应用眼里就没有修饰键了 —— `Ctrl+A` 会变成打出一个 `a`、全选失效。
+    /// 右 Alt 在 `eats_key` 这层也不吃，中文状态的特殊模式开关在 `would_eat` 更前面处理。
     #[test]
     fn modifier_keys_are_never_eaten() {
         let ctrl = KeyModifiers {
@@ -901,7 +1010,7 @@ mod tests {
             false
         ));
 
-        // Alt / Win / Ctrl+Alt（AltGr）一律不碰：它们在系统 / 外壳那一层，输入法不该拦
+        // 右 Alt 除外（特殊输入开关）；其余 Alt / Win / Ctrl+Alt（AltGr）一律不碰：它们在系统 / 外壳那一层，输入法不该拦
         let alt = KeyModifiers { alt: true, ..ctrl };
         assert!(!eats(
             &with_modifiers(0x31, '\u{1}', alt),
@@ -1047,6 +1156,59 @@ mod tests {
         assert!(eats_without_server(&key(0x41, caps, english))); // A
         assert!(!eats_without_server(&key(0x41, true, english))); // Caps 亮着是直通英文
         assert!(!eats_without_server(&key(0x41, caps, true))); // 英文模式
+    }
+
+    #[test]
+    fn smart_symbols_eat_space_only_in_chinese_without_modifiers() {
+        let space = KeyEvent::new(0x20, Some(' '), KeyModifiers::default());
+        assert!(smart_space_key(&space, false, true), "中文、没组句：送来问");
+        assert!(
+            !smart_space_key(&space, false, false),
+            "没开智能符号：归应用"
+        );
+        assert!(!smart_space_key(&space, true, true), "组句里空格照旧选候选");
+        for (name, modifiers) in [
+            (
+                "shift",
+                KeyModifiers {
+                    shift: true,
+                    ..KeyModifiers::default()
+                },
+            ),
+            (
+                "ctrl",
+                KeyModifiers {
+                    ctrl: true,
+                    ..KeyModifiers::default()
+                },
+            ),
+            (
+                "alt",
+                KeyModifiers {
+                    alt: true,
+                    ..KeyModifiers::default()
+                },
+            ),
+            (
+                "win",
+                KeyModifiers {
+                    win: true,
+                    ..KeyModifiers::default()
+                },
+            ),
+            (
+                "english",
+                KeyModifiers {
+                    english_mode: true,
+                    ..KeyModifiers::default()
+                },
+            ),
+        ] {
+            assert!(
+                !smart_space_key(&with_modifiers(0x20, ' ', modifiers), false, true),
+                "{name} 不抢"
+            );
+        }
     }
 
     #[test]

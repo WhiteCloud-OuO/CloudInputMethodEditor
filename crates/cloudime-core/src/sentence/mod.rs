@@ -35,7 +35,9 @@ pub use span::{MAX_SPAN_CACHE_ENTRIES, SpanCache, SpanWord};
 pub(crate) use text_segment::is_han;
 pub use text_segment::{MAX_TEXT_WORD_CHARS, segment_text};
 pub use user_ngram::UserNgram;
-pub use viterbi::{convert, convert_paths, convert_whole, convert_with};
+pub use viterbi::{
+    convert, convert_paths, convert_paths_with_emission, convert_whole, convert_with,
+};
 
 /// 句首标记：个人 n-gram 里句首词的前词。与 `cloudime-lm` 语料统计用的是同一个记号。
 pub const SENTENCE_START: &str = "<s>";

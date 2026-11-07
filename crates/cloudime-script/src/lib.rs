@@ -4,14 +4,16 @@
 //! 与词库存档自带 SQLite（`rusqlite` 的 `bundled`）是同一个路子。`mlua` 只在本 crate 声明一次，
 //! 别处用 [`mlua`] 这个再导出，后端与特性开关就只此一处。
 //!
-//! 脚本由 Server 加载与派发（[`Runtime`]）：脚本文件放数据目录的 `scripts\` 下（[`DIRECTORY`]），
-//! 加载时按文件名排序依次执行一遍，用 `cloudime.on(事件名, 处理函数)` 登记处理函数。
+//! 脚本由 Server 加载与派发（[`Runtime`]）：脚本放安装目录的 `Scripts\<脚本名>\`（[`DIRECTORY`]），
+//! 每个文件夹一个脚本、根部正好一个入口 `.lua`；加载时按文件夹名排序执行一遍，用
+//! `cloudime.on(事件名, 处理函数)` 登记处理函数。
 //! 用的是**完整的 Lua 标准库**（`io` / `os` / `package` 都在）：脚本就是用户自己写的本机程序，
 //! 能读写文件、起进程，风险由用户自担。
 
 mod http;
 mod install;
 mod layout_file;
+mod mcp;
 mod page_layout;
 mod runtime;
 mod window;
@@ -20,11 +22,13 @@ pub use cloud_ui_core as layout_core;
 pub use mlua;
 pub use runtime::{
     AppHook, ClipboardGetHook, ClipboardSetHook, ConfigHook, DIRECTORY, KeyboardHook, MeasureFont,
-    Runtime, ScriptInfo, SizeRequest, TEMPLATE_FILE, TextHook, TextRange, ThemeHook,
-    TriggerCondition, combination_name, is_reserved_combination,
+    MessageDialogHook, Runtime, ScriptInfo, SizeRequest, TEMPLATE_FILE, TextHook,
+    TextInputDialogHook, TextRange, ThemeHook, TriggerCondition, combination_name,
+    is_reserved_combination,
 };
 pub use window::{
-    AuxiliarySpec, Request as WindowRequest, ScriptWindowEvent, WindowAction, WindowId, WindowSpec,
+    AuxiliarySpec, DialogSpec, DialogStyle, MessageDialogRequest, Request as WindowRequest,
+    ScriptWindowEvent, TextInputDialogRequest, WindowAction, WindowId, WindowSpec,
     event_payload as window_event_payload,
 };
 

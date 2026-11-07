@@ -13,6 +13,7 @@ mod model;
 pub mod qjm;
 mod scorer;
 mod vocab;
+pub mod zhiyi;
 
 pub use config::ModelConfig;
 pub use error::NeuralError;

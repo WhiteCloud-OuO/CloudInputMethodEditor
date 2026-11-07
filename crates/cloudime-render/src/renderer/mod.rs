@@ -18,7 +18,9 @@ use std::cell::RefCell;
 use std::rc::Rc;
 
 use crate::color::Color;
-use crate::document::{self, Document, Element, HitRect, HitShape, Region, SelfDrawingPanel};
+use crate::document::{
+    self, Document, Element, HitRect, HitShape, Region, SelfDrawingPanel, WindowGlyph,
+};
 use crate::elements::{
     ControlRender, ImageElement, LineElement, PathElement, RectElement, StrokeElement, SvgElement,
     TextElement,
@@ -432,6 +434,9 @@ impl Renderer {
         {
             self.paint_shadow(&mut render, content, radius, scale, shadow);
         }
+        if margin > 0.0 {
+            render.set_clip(margin, margin, content_width, content_height);
+        }
         render.round_rect(
             margin,
             margin,
@@ -609,6 +614,10 @@ impl Renderer {
                 tiny_skia::Rect::from_xywh(margin, margin, content_width, content_height)
         {
             self.paint_shadow(&mut render, content, radius, scale, shadow);
+        }
+        // 有阴影留白时内容只允许落在内容区里；没有留白时整张位图就是内容区，不需要遮罩。
+        if margin > 0.0 {
+            render.set_clip(margin, margin, content_width, content_height);
         }
         if background {
             render.round_rect(
@@ -963,6 +972,77 @@ pub(super) fn truncate_with(
 ///
 /// `margin` 是位图四周的阴影留白（像素）：内容区左上角在位图里的位置，所有坐标都要加上它。
 /// 命中区域仍然只报**内容区**坐标（与 `Document` 同一套，鼠标事件那边减掉留白再换算）。
+/// 窗口图标的矩形列表（相对图标左上角，设备像素）。
+///
+/// 所有坐标都是整数；线宽由 `line` 决定，同一 DPI 下三个图标共用同一条线宽。
+/// 这样不经过 SVG 的 20→N 等比缩放，不会出现「最小化 2px、最大化 1px」。
+fn window_icon_rects(glyph: WindowGlyph, icon: i32, line: i32) -> Vec<(i32, i32, i32, i32)> {
+    let icon = icon.max(1);
+    let line = line.clamp(1, icon);
+    let outline = |x: i32, y: i32, size: i32| {
+        vec![
+            (x, y, size, line),
+            (x, y + size - line, size, line),
+            (x, y, line, size),
+            (x + size - line, y, line, size),
+        ]
+    };
+    match glyph {
+        WindowGlyph::Minimize => {
+            let width = ((icon as f32 * 0.9).round() as i32).clamp(1, icon);
+            let left = (icon - width) / 2;
+            let top = (icon - line) / 2;
+            vec![(left, top, width, line)]
+        }
+        WindowGlyph::Maximize => {
+            let min_outer = (line * 2 + 1).min(icon);
+            let outer = ((icon as f32 * 0.7).round() as i32).clamp(min_outer, icon);
+            let offset = (icon - outer) / 2;
+            outline(offset, offset, outer)
+        }
+        WindowGlyph::Restore => {
+            let min_square = (line * 2 + 1).min(icon);
+            let square = ((icon as f32 * 0.5).round() as i32).clamp(min_square, icon);
+            let offset =
+                |ratio: f32| ((icon as f32 * ratio).round() as i32).clamp(0, icon - square);
+            let front_x = offset(0.15);
+            let front_y = offset(0.35);
+            let back_x = offset(0.35);
+            let back_y = offset(0.15);
+            let mut rects = Vec::with_capacity(6);
+            // 后窗只留上、右两条边，左下由前窗盖住。
+            rects.push((back_x, back_y, square, line));
+            rects.push((back_x + square - line, back_y, line, square));
+            rects.extend(outline(front_x, front_y, square));
+            rects
+        }
+    }
+}
+
+fn draw_window_icon(
+    render: &mut Render,
+    x: f32,
+    y: f32,
+    size: f32,
+    glyph: WindowGlyph,
+    color: Color,
+    scale: f32,
+) {
+    let icon = size.round().max(1.0) as i32;
+    let line = (1.2 * scale).round().max(1.0) as i32;
+    let x = x.round() as i32;
+    let y = y.round() as i32;
+    for (rect_x, rect_y, width, height) in window_icon_rects(glyph, icon, line) {
+        render.fill_rect_crisp(
+            (x + rect_x) as f32,
+            (y + rect_y) as f32,
+            width as f32,
+            height as f32,
+            color,
+        );
+    }
+}
+
 fn draw_element(
     render: &mut Render,
     element: &Element,
@@ -1095,6 +1175,24 @@ fn draw_element(
             render
                 .svg(source, x_at(*x), y_at(*y), len(*size), *tint)
                 .ok()?;
+            Some(HitShape::Rect(HitRect::new(*x, *y, *size, *size)))
+        }
+        Element::WindowIcon {
+            x,
+            y,
+            size,
+            glyph,
+            color,
+        } => {
+            draw_window_icon(
+                render,
+                x_at(*x),
+                y_at(*y),
+                len(*size),
+                *glyph,
+                *color,
+                scale,
+            );
             Some(HitShape::Rect(HitRect::new(*x, *y, *size, *size)))
         }
         Element::Image {
@@ -1456,6 +1554,7 @@ fn highlight_rect(frame: &Frame, rects: &[HighlightRect]) -> Option<HighlightRec
 #[cfg(test)]
 mod tests {
     use super::highlight_rect;
+    use crate::document::{Document, Element};
     use crate::fonts::FontLibrary;
     use crate::frame::{
         Auxiliary, Frame, HighlightAnimation, HighlightRect, Preedit, Row, TipSegment, Tone,
@@ -1463,6 +1562,7 @@ mod tests {
     use crate::layout::Layout;
     use crate::renderer::Renderer;
     use crate::theme::Theme;
+    use crate::{Color, Shadow};
 
     fn rects() -> [HighlightRect; 3] {
         [
@@ -2674,5 +2774,71 @@ mod tests {
         assert!(rendered.hits[0].is_some(), "文本按钮有命中区域");
         let pixel = rendered.rendered.pixmap.pixel(52, 32).unwrap();
         assert_eq!(pixel.alpha(), 255);
+    }
+
+    #[test]
+    fn window_icon_glyphs_share_device_line_width() {
+        use crate::document::WindowGlyph;
+
+        for (icon, line) in [(12, 1), (15, 2), (18, 2), (24, 2), (30, 3)] {
+            let minimize = super::window_icon_rects(WindowGlyph::Minimize, icon, line);
+            assert_eq!(minimize.len(), 1);
+            assert_eq!(minimize[0].3, line, "最小化线宽");
+
+            let maximize = super::window_icon_rects(WindowGlyph::Maximize, icon, line);
+            assert_eq!(maximize.len(), 4);
+            assert_eq!(maximize[0].3, line, "最大化上边");
+            assert_eq!(maximize[1].3, line, "最大化下边");
+            assert_eq!(maximize[2].2, line, "最大化左边");
+            assert_eq!(maximize[3].2, line, "最大化右边");
+
+            let restore = super::window_icon_rects(WindowGlyph::Restore, icon, line);
+            assert_eq!(restore.len(), 6);
+            for (index, rect) in restore.iter().enumerate() {
+                assert!(
+                    rect.0 >= 0
+                        && rect.1 >= 0
+                        && rect.0 + rect.2 <= icon
+                        && rect.1 + rect.3 <= icon,
+                    "{index} 越界：{rect:?}"
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn document_content_is_clipped_to_the_window() {
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let document = Document {
+            width: 20.0,
+            height: 20.0,
+            regions: Vec::new(),
+            control_names: Vec::new(),
+            instances: Default::default(),
+            elements: vec![Element::Rect {
+                x: -10.0,
+                y: -10.0,
+                width: 60.0,
+                height: 60.0,
+                radius: 0.0,
+                color: Color::rgb(255, 0, 0),
+            }],
+        };
+        let rendered = renderer
+            .render_document(&document, &Theme::new(), 1.0, Some(&Shadow::panel()), false)
+            .expect("画得出来");
+        let x = rendered.rendered.content_x as i32;
+        let y = rendered.rendered.content_y as i32;
+        let pixmap = &rendered.rendered.pixmap;
+        let inside = pixmap.pixel((x + 5) as u32, (y + 5) as u32).unwrap();
+        assert_eq!((inside.red(), inside.green(), inside.blue()), (255, 0, 0));
+        let outside = pixmap.pixel((x - 2) as u32, (y + 5) as u32).unwrap();
+        assert_ne!(
+            (outside.red(), outside.green(), outside.blue()),
+            (255, 0, 0),
+            "内容不能画到阴影留白里"
+        );
     }
 }

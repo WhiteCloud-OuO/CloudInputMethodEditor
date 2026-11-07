@@ -4,6 +4,7 @@
 //! 默认实现都是空操作，所以单元测试和 CLI 不需要真实词典也能跑。
 
 mod alignment;
+mod choice;
 mod commit;
 mod composing;
 mod english_case;
@@ -27,6 +28,7 @@ use std::time::{Duration, Instant};
 use cloudime_dictionary::{Dictionary, Match, WordList};
 
 pub use alignment::Alignment;
+pub use choice::{CharTable, ChoiceModel, ChoiceTier};
 pub use commit::{LastCommit, Transition};
 pub use english_case::EnglishCase;
 pub use input_log::{
@@ -151,8 +153,26 @@ pub struct Engine {
     /// 异步重打分：后台线程里的打分器，壳在停顿后送任务、轮询结果（见 [`rescoring`]）。
     rescorer: Option<rescoring::RescoreWorker>,
 
+    /// 整句打分器只在这么多音节以上的输入才用；`0` = 一直用。混合档用它让短输入只走知意。
+    sentence_scorer_min_syllables: usize,
+
+    /// 整句后台线程最近收到的序号；比 `rescorer.latest()` 小就是还有任务在算。
+    sentence_done: std::cell::Cell<u64>,
+
     /// 「前文 + 整句文本 → 神经分」缓存，同步与异步打分共用。
     neural_cache: std::cell::RefCell<rescoring::NeuralCache>,
+
+    /// 特殊输入模式：逐音节只出单字候选，选完一个字再进入下一个音节。
+    special_input: bool,
+
+    /// 选词模型（知意）：候选页重排与按音节出字。
+    choice: Option<choice::ChoiceRanker>,
+
+    /// 选词模型档位：比几条候选、看多长前文。
+    choice_tier: ChoiceTier,
+
+    /// 选词后台线程最近收到的序号；比 `choice.worker.latest()` 小就是还有任务在算。
+    choice_done: std::cell::Cell<u64>,
 
     /// 壳给的应用里光标前的文本；`None` 时前文用本会话历史。
     rescoring_before: Option<String>,
@@ -299,6 +319,15 @@ const MAX_ASSOCIATION_COUNTS: usize = 4;
 /// 神经重打分看 Viterbi 的前几条路径：束宽是 8，再多也没有。
 const RESCORE_PATHS: usize = 6;
 
+/// 整句候选最多显示几条（重排后裁剪；词候选仍占第一页）。
+pub(crate) const SENTENCE_CANDIDATES: usize = 3;
+
+/// 接了选词模型时，交给它重排的整句备选条数。
+pub(crate) const CHOICE_SENTENCE_CANDIDATES: usize = 16;
+
+/// 输入至少这么多音节才给第 2、3 条整句备选；短输入那几格留给词候选。
+const ALTERNATE_MIN_SYLLABLES: usize = 4;
+
 /// 神经重打分的缺省权重 λ（见 `Engine::neural_weight`）：整句评测集上 0.5 到 1.0 一样好、0.75 最高（见 docs/notes/neural-rescoring.md），
 /// 取 0.5 给个人 n-gram 留余量；回放里看到的「λ 大整句掉」是那把尺子的偏差。
 pub const NEURAL_WEIGHT: f64 = 0.5;
@@ -340,7 +369,13 @@ impl Engine {
             language_model: Box::new(NoLanguageModel),
             sentence_scorer: None,
             rescorer: None,
+            sentence_scorer_min_syllables: 0,
+            sentence_done: std::cell::Cell::new(0),
             neural_cache: std::cell::RefCell::new(rescoring::NeuralCache::default()),
+            special_input: false,
+            choice: None,
+            choice_tier: ChoiceTier::default(),
+            choice_done: std::cell::Cell::new(0),
             rescoring_before: None,
             neural_weight: NEURAL_WEIGHT,
             neural_margin: NEURAL_MARGIN,

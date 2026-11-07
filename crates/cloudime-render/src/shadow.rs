@@ -34,7 +34,7 @@ impl Shadow {
     }
 
     /// 阴影在内容四周要留多宽的边（点）。
-    pub(crate) fn margin(&self) -> f32 {
+    pub fn margin(&self) -> f32 {
         self.blur * 2.0 + self.offset_x.abs().max(self.offset_y.abs())
     }
 

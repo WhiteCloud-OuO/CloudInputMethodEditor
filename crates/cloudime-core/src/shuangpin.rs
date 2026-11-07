@@ -475,7 +475,8 @@ fn spelled(initial: &str, final_: &str) -> String {
 }
 
 /// 辅助码表：Core 不读文件，表由 platform 读出来后注入（与重打分那套「注入 trait」一个路子）。
-pub trait AuxiliaryTable {
+/// `Send` 让带辅助码表的 `Engine` 也能放进 MCP 的 blocking 查询线程。
+pub trait AuxiliaryTable: Send {
     /// 这个词的码（都按大写）；没有这个词就是 `None`。
     fn codes(&self, word: &str) -> Option<&[String]>;
 

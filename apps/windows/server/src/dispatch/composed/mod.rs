@@ -57,6 +57,8 @@ impl Router {
         }
         self.navigated = false;
         if self.engine.composition().is_empty() {
+            // 候选窗口要收起来了：特殊输入模式只在窗口显示期间有效，跟着一起关。
+            self.engine.set_special_input(false);
             self.composed = None;
             self.candidate_weights.clear();
             self.stop_rescoring();
@@ -86,7 +88,7 @@ impl Router {
         let wants_weights =
             self.scripts.has_handlers("candidates") || self.scripts.has_pending_requests();
         let built = self.engine.query().ok().map(|query| {
-            let (preedit, cursor) = marked_parts(&query);
+            let (preedit, cursor) = marked_parts(&query, self.engine.special_input());
             (
                 query.candidates.items.clone(),
                 wants_weights.then(|| query.weights.clone()),
@@ -148,9 +150,9 @@ impl Router {
                 .scripts
                 .script_infos()
                 .iter()
-                .filter(|info| info.manual)
+                .filter(|info| info.i_mode)
                 .map(|info| Candidate {
-                    text: info.file.clone(),
+                    text: info.id.clone(),
                     display: Some(info.name.clone()),
                     kind: CandidateKind::Shortcut,
                     syllables: Vec::new(),
@@ -178,7 +180,7 @@ impl Router {
             return false;
         }
         let query = self.engine.query_english_words();
-        let (preedit, cursor) = marked_parts(&query);
+        let (preedit, cursor) = marked_parts(&query, false);
         self.candidate_weights = query.weights;
         self.stop_rescoring();
         self.show_more = false;
@@ -489,7 +491,81 @@ fn hint_tip(text: &str) -> cloudime_translate::Tip {
 
 /// 一次查询的拼音行分段与光标。
 /// 光标用 Core 的映射：自动补的 `'` 会让显示串比敲的长。
-pub(super) fn marked_parts(query: &Query) -> (Vec<PreeditSegment>, usize) {
-    let preedit = query.marked_segments().iter().map(Into::into).collect();
+pub(super) fn marked_parts(query: &Query, special: bool) -> (Vec<PreeditSegment>, usize) {
+    let mut preedit: Vec<PreeditSegment> = query.marked_segments().iter().map(Into::into).collect();
+    if special
+        && query.typed_display.is_none()
+        && query.correction.is_none()
+        && let Some(first) = query
+            .segmentations
+            .first()
+            .and_then(|segmentation| segmentation.syllables.first())
+    {
+        split_special_rest(&mut preedit, first.text.chars().count());
+    }
     (preedit, query.segments_cursor())
+}
+
+/// 特殊输入模式：把拼音行最后一段（未选拼音）按第一个音节切开，
+/// 第一个音节保持普通拼音色，其余音节标成 `Rest`（角标色）。
+fn split_special_rest(segments: &mut Vec<PreeditSegment>, first_chars: usize) {
+    if first_chars == 0 {
+        return;
+    }
+    let Some(index) = segments
+        .iter()
+        .rposition(|segment| segment.kind == PreeditKind::Typed)
+    else {
+        return;
+    };
+    let text = &segments[index].text;
+    // 最后一段也可能是已选文本（中文）：只切纯拼音段。
+    if !text.chars().all(|c| c.is_ascii_alphabetic() || c == '\'') {
+        return;
+    }
+    let chars: Vec<char> = text.chars().collect();
+    let mut split = first_chars.min(chars.len());
+    if chars.get(split) == Some(&'\'') {
+        split += 1;
+    }
+    if split >= chars.len() {
+        return;
+    }
+    let rest: String = chars[split..].iter().collect();
+    segments[index].text = chars[..split].iter().collect();
+    segments.insert(
+        index + 1,
+        PreeditSegment {
+            text: rest,
+            kind: PreeditKind::Rest,
+        },
+    );
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn special_preedit_marks_the_rest_syllables() {
+        let mut segments = vec![PreeditSegment {
+            text: "yun'duo".to_owned(),
+            kind: PreeditKind::Typed,
+        }];
+        split_special_rest(&mut segments, 3);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].text, "yun'");
+        assert_eq!(segments[0].kind, PreeditKind::Typed);
+        assert_eq!(segments[1].text, "duo");
+        assert_eq!(segments[1].kind, PreeditKind::Rest);
+
+        // 当前已经是最后一个音节：整段保持普通色。
+        let mut segments = vec![PreeditSegment {
+            text: "duo".to_owned(),
+            kind: PreeditKind::Typed,
+        }];
+        split_special_rest(&mut segments, 3);
+        assert_eq!(segments.len(), 1);
+        assert_eq!(segments[0].text, "duo");
+    }
 }

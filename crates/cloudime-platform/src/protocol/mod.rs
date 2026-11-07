@@ -74,7 +74,14 @@ mod session;
 /// v20 给 [`ServerMessage::KeyResult`] 加了 `want_caret`（脚本 `cloudime.caret()` 要光标位置），
 /// 并新增 [`ClientMessage::Caret`]（DLL 量到的插入点屏幕矩形）。老 DLL 读不到 `want_caret`、老 Server
 /// 也不认 `Caret` —— 脚本的「按键后取光标」会拿不到位置，+1 并重装 DLL。
-pub const PROTOCOL_VERSION: u32 = 21;
+///
+/// v22 给 [`InputSettings`] 加了 `smart_symbols`（智能符号，DLL 据此在每个按键前现读光标前文）：
+/// 老 DLL 不带这个字段、读成 `false`，表现成「中文模式下空格不会按前一个字换成标点」——
+/// 静默少一个功能，+1 并重装 DLL。
+///
+/// v23 给 [`ClientMessage::Surrounding`] 加了 `context`（DLL 侧 TSF 文本上下文标识）：
+/// Server 据此在换输入框时丢掉上下文历史；老 DLL 不带、读成 `0`，只会少这个重置，不坏已有输入。
+pub const PROTOCOL_VERSION: u32 = 23;
 
 /// 从哪个协议版本起 DLL 会在 `OpenSession` 后阻塞读一条 [`ServerMessage::SessionOpened`]。
 /// 门槛是固定值而不是当前版本：以后版本再升，没重启的应用里那些旧 DLL 仍在等这条回包，

@@ -1,6 +1,6 @@
 //! 候选窗口 / 状态条 / 脚本窗口共用的渲染设置。
 
-use cloudime_platform::ItemNumberStyle;
+use cloud_ui_types::{ItemNumberStyle, ThemeFile};
 
 /// 窗口的渲染设置。
 #[derive(Debug, Clone, PartialEq)]
@@ -42,5 +42,24 @@ pub struct RenderSettings {
     pub candidate_auxiliary: bool,
 
     /// 当前主题（`Themes\` 里那份的三个窗口配色）；读不到就是缺省主题。
-    pub theme: cloudime_platform::ThemeFile,
+    pub theme: ThemeFile,
+}
+
+impl Default for RenderSettings {
+    fn default() -> Self {
+        Self {
+            pinyin_font: (String::new(), 11.0),
+            candidate_font: (String::new(), 13.0),
+            item_number_font: (String::new(), 11.0),
+            translate_font: (String::new(), 11.0),
+            symbol_font: String::new(),
+            japanese_font: String::new(),
+            min_width_pixels: 0.0,
+            item_number_style: ItemNumberStyle::default(),
+            scale: None,
+            max_cell_width: 0.0,
+            candidate_auxiliary: false,
+            theme: Default::default(),
+        }
+    }
 }

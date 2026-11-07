@@ -10,7 +10,7 @@
 //! - `[general] preedit` → `[candidate] preedit`
 //! - `[general] traditional` → `[input] simp_trad_chinese_chars_toggle`
 //! - `[fuzzy]` 各开关 → `[input] mo_hu_yin_list`（位图，一位一条规则）
-//! - `[model] enabled` → `[candidate] use_local_sentence_organization_model`
+//! - `[model] enabled` → `[candidate] local_model`（开 = basic，关 = off）
 //! - `[status_bar] enabled` → 删（状态条常开）
 //! - `[general] page_keys`、`[shortcut]`（`expression` / `question` / `question_mark` / `delete_candidate`）→ 删
 //!   （翻页键与表达式键已固定，问字与删候选整体下线）
@@ -28,7 +28,10 @@ use toml_edit::{DocumentMut, Item};
 
 use crate::config::write_with_template;
 use crate::phrase::{self, PhraseStore};
-use crate::{Config, LayoutMode, MAX_CANDIDATE_COUNT, MIN_CANDIDATE_COUNT, PreeditMode, SimpTrad};
+use crate::{
+    Config, LayoutMode, LocalModelMode, MAX_CANDIDATE_COUNT, MIN_CANDIDATE_COUNT, PreeditMode,
+    SimpTrad,
+};
 
 /// 旧版数据迁移的结果。
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
@@ -259,7 +262,11 @@ impl Legacy {
         }
         config.input.mo_hu_yin_list = self.fuzzy;
         if let Some(enabled) = self.model_enabled {
-            config.candidate.use_local_sentence_organization_model = enabled;
+            config.candidate.local_model = if enabled {
+                LocalModelMode::Basic
+            } else {
+                LocalModelMode::Off
+            };
         }
     }
 }
@@ -426,7 +433,7 @@ enabled = false
             LayoutMode::Horizontal
         );
         assert_eq!(config.candidate.preedit, PreeditMode::Inline);
-        assert!(!config.candidate.use_local_sentence_organization_model);
+        assert_eq!(config.candidate.resolved_local_model(), LocalModelMode::Off);
         assert_eq!(config.candidate.pinyin_font.family, "LXGW WenKai");
         assert_eq!(config.candidate.candidate_font.family, "LXGW WenKai");
         assert_eq!(

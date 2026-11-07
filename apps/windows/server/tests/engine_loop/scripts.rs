@@ -15,7 +15,7 @@ fn script_dir(name: &str) -> PathBuf {
 }
 
 /// 写一个测试脚本（自动补一份合法清单）：`trigger_condition` 按脚本体挑 —— 登记了 `candidates`
-/// 就给 `candidate_context`，否则给 `combination_key`。**不写 `name`** —— 脚本名取文件名。
+/// 就给 `candidate_context`，否则给 `combination_key`。**不写 `name`** —— 脚本名取文件夹名。
 /// 用例只关心逻辑，不必每个都手写一份清单。
 fn write_script(
     dir: impl AsRef<std::path::Path>,
@@ -42,8 +42,14 @@ fn write_script_with(
     body: impl AsRef<str>,
 ) -> std::io::Result<()> {
     let body = body.as_ref();
+    let stem = std::path::Path::new(name)
+        .file_stem()
+        .map(|stem| stem.to_string_lossy().into_owned())
+        .unwrap_or_else(|| name.to_owned());
+    let folder = dir.as_ref().join(stem);
+    std::fs::create_dir_all(&folder)?;
     std::fs::write(
-        dir.as_ref().join(name),
+        folder.join(name),
         format!(
             "cloudime.script{{ api = 2, {trigger}, \
              budget = 1000000, timeout = 10000, sync = false, handover = 'callback', on_error = false }}\n{body}"
@@ -426,6 +432,7 @@ fn a_script_can_read_the_surrounding_text() {
         session: SESSION,
         text: "已经输入的文字".to_owned(),
         document: None,
+        context: 0,
     });
     press(&mut router, letter('i'));
 
@@ -439,8 +446,10 @@ fn a_script_can_read_the_surrounding_text() {
 fn a_key_script_reads_the_surrounding_text_without_composing() {
     let dir = script_dir("key-context");
     let log = dir.join("context.txt");
+    let folder = dir.join("auto");
+    std::fs::create_dir_all(&folder).unwrap();
     std::fs::write(
-        dir.join("auto.lua"),
+        folder.join("auto.lua"),
         format!(
             "cloudime.script{{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'none', keys = {{ 'enter' }}, needs_context = true, \
              budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }}\n\
@@ -465,6 +474,7 @@ fn a_key_script_reads_the_surrounding_text_without_composing() {
         session: SESSION,
         text: "1.".to_owned(),
         document: None,
+        context: 0,
     });
     // 下一键里脚本就读到刚送来的前文
     press(
@@ -529,6 +539,7 @@ fn a_script_can_read_the_document_text() {
             text: "ab中文cd".to_owned(),
             caret: 2,
         }),
+        context: 0,
     });
     assert!(sync(&mut router), "有脚本就一直请，好让快照跟着文档走");
     // 没请 DLL 读的那段组句送 `None`：不能把上面那份快照抹掉
@@ -536,6 +547,7 @@ fn a_script_can_read_the_document_text() {
         session: SESSION,
         text: "ab".to_owned(),
         document: None,
+        context: 0,
     });
     press(&mut router, letter('i'));
 

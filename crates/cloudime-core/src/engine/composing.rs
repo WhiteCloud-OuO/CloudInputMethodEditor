@@ -74,6 +74,15 @@ impl Engine {
         }
     }
 
+    /// 壳插入了输入法直接生成的符号文本（智能符号等，不在组句里）：与全角标点走同一条记账。
+    pub fn commit_symbol(&mut self, text: &str) {
+        self.history.record(text);
+        self.remember_commit(LastCommit::plain(text));
+        self.passthrough_pending.push_str(text);
+        self.punctuation.note_committed(text);
+        self.chain.reset();
+    }
+
     /// 把攒着的直通字符写成一条输入日志。上屏、上文断开、会话记录前都调，保证日志里的顺序与真实顺序一致。
     pub(super) fn flush_passthrough(&mut self) {
         if self.passthrough_pending.is_empty() {
@@ -97,9 +106,20 @@ impl Engine {
         }
     }
 
-    /// 壳告知正在输入的应用（exe 文件名），写进输入日志；不知道就给 `None`。
+    /// 壳告知正在输入的应用（exe 文件名），写进输入日志与上下文历史；不知道就给 `None`。
     pub fn set_application(&mut self, app: Option<String>) {
+        self.history.set_application(app.as_deref());
         self.application = app;
+    }
+
+    /// 焦点进了一个输入框：之前在这个应用里打的字不再当前文。
+    pub fn enter_input_box(&mut self) {
+        self.history.forget_current();
+    }
+
+    /// 应用读不到光标前文时，本应用多少秒内上屏的字还当前文（0 表示一直算）。
+    pub fn set_context_memory(&mut self, seconds: u64) {
+        self.history.set_fresh_for(seconds);
     }
 
     pub fn application(&self) -> Option<&str> {

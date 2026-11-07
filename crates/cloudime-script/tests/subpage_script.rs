@@ -6,10 +6,11 @@ use cloudime_script::{Runtime, WindowRequest};
 fn subpage_scripts_receive_created_and_instance_events() {
     let root = std::env::temp_dir().join("cloudime-subpage-script");
     let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(root.join("Scripts/layouts")).unwrap();
-    std::fs::create_dir_all(root.join("Scripts/shared")).unwrap();
+    let script = root.join("Scripts/subpage");
+    std::fs::create_dir_all(script.join("layouts")).unwrap();
+    std::fs::create_dir_all(script.join("shared")).unwrap();
     std::fs::write(
-        root.join("main.lua"),
+        script.join("main.lua"),
         r#"
 cloudime.script{
     name = "子页面脚本", description = "subpage script", api = 2,
@@ -31,7 +32,7 @@ end)
     )
     .unwrap();
     std::fs::write(
-        root.join("Scripts/shared/row.lua"),
+        script.join("shared/row.lua"),
         r#"
 return {
     created = function(ctx)
@@ -49,7 +50,7 @@ return {
     )
     .unwrap();
     std::fs::write(
-        root.join("Scripts/layouts/row.json"),
+        script.join("layouts/row.json"),
         r#"{
   "version": 2,
   "page": {
@@ -63,7 +64,7 @@ return {
     )
     .unwrap();
     std::fs::write(
-        root.join("Scripts/layouts/main.json"),
+        script.join("layouts/main.json"),
         r#"{
   "version": 2,
   "page": {
@@ -78,7 +79,7 @@ return {
     )
     .unwrap();
 
-    let runtime = Runtime::load_file(&root.join("main.lua"));
+    let runtime = Runtime::load_file(&script.join("main.lua"));
     runtime.set_install_dir(root.clone());
     let event = runtime.lua().create_table().unwrap();
     runtime.dispatch("manual", event, None);

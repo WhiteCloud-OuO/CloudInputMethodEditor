@@ -67,7 +67,9 @@ impl Renderer {
         let mut cursor_x = x;
         for segment in &preedit.segments {
             let style = match segment.style {
-                PreeditStyle::Typed | PreeditStyle::Rest => m.pinyin_style(m.theme.colors.pinyin),
+                PreeditStyle::Typed => m.pinyin_style(m.theme.colors.pinyin),
+                // 特殊输入模式剩下的音节用角标色（Rest 也用于光标后的拼音，淡一点正合适）。
+                PreeditStyle::Rest => m.pinyin_style(m.theme.colors.badge),
                 PreeditStyle::Struck => m.pinyin_style(m.theme.colors.pinyin).struck(),
             };
             cursor_x += render.text(&segment.text, &style, cursor_x, top);

@@ -63,6 +63,7 @@ impl StatusTip {
             true,
             None,
         )?;
+        template.set_top_most(true);
         let hwnd = template.hwnd();
         Ok(Self {
             hwnd,

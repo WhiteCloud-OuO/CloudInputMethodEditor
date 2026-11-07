@@ -10,6 +10,7 @@
 
 use std::rc::Rc;
 
+use windows::Win32::Foundation::HWND;
 use windows::core::Result;
 
 use cloud_ui::auxiliary::{Asset, Bridge};
@@ -29,9 +30,12 @@ impl KeyMapWindow {
     /// 它是块**纯参考面板**：`able_to_get_focus` 按缺省（`false`）—— 不具备焦点，鼠标一律穿透、点不着。
     /// 将来要它接输入时，把这里的 `false` 改成 `true`，再在宿主那边**指定**焦点给它
     /// （[`cloud_ui::auxiliary::DesignatedAssetToGetFocus`]）。
-    pub(crate) fn new(painter: SharedPainter) -> Result<Self> {
-        let template = Rc::new(AuxiliaryWindowTemplate::new(painter, false)?);
+    ///
+    /// `owner` 是候选窗口的句柄：建出来就是它的 owned window，始终排在候选窗口上层。
+    pub(crate) fn new(painter: SharedPainter, owner: HWND) -> Result<Self> {
+        let template = Rc::new(AuxiliaryWindowTemplate::new(painter, false, Some(owner))?);
         template.attach();
+        template.set_top_most(true);
         Ok(Self { template })
     }
 }

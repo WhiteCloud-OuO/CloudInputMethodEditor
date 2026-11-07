@@ -231,6 +231,11 @@ pub struct InputConfig {
     /// 标点符号全 / 半角。
     pub full_half_punctuation_marks_toggle: FullHalfPunctuation,
 
+    /// 智能符号：中文模式下没在组句时，空格按光标前一个字换成标点
+    /// （单个空格出逗号；1 秒内连按两个空格按前一个字换成 `？` / `！` / `——` / `。`，`说` 后出 `：“`）。
+    /// 缺省关（新用户与老配置都按关处理）。
+    pub smart_symbols: bool,
+
     /// 中文模式下的符号映射：见 [`PUNCTUATION_MAPPING_BITS`]，勾选项数值累加。
     /// 只认表里这 5 项固定映射，配置文件里改不出别的花样。
     /// 缺省来自 [`InputConfig::default`]（结构体级的 `#[serde(default)]`）；这里只负责读到老的表时别报错。
@@ -258,6 +263,7 @@ impl Default for InputConfig {
             simp_trad_chinese_chars_toggle: SimpTrad::Simplified,
             mixture_input: true,
             full_half_punctuation_marks_toggle: FullHalfPunctuation::Follow,
+            smart_symbols: false,
             punctuation_marks_mapping: DEFAULT_PUNCTUATION_MAPPING,
             punctuation_marks_pairwise_completion: 0,
             use_half_wide_punctuation_marks_after_digital: true,

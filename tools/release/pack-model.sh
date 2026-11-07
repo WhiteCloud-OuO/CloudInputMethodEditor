@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 把训练仓库导出到 data/local_models/ 的三件套（model.safetensors / config.json / vocab.json）打成一个 data/local_models/model.qjm。
-# 随包带 data/local_models/ 下的全部 *.qjm（Windows {app}\data\local_models、cloudime-models.tar.gz），这份是其中之一；三件套留在目录里给开发直接加载。
+# 随包带 data/local_models/ 下的全部 *.qjm（Windows 安装包放进 {app}\Models、cloudime-models.tar.gz），这份是其中之一；三件套留在目录里给开发直接加载。
 # 元数据（名称 / 许可 / 署名）只写在这里，data-bundle.sh 见三件套比 .qjm 新就调它重打。
 #
 #   tools/release/pack-model.sh            # 三件套比 .qjm 新（或没有 .qjm）才重打

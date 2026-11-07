@@ -86,6 +86,10 @@ pub struct RouterConfig {
     /// 直通给应用的可打印 ASCII 转全角（状态条上的「全角 / 半角」开关）；同标点，会话内有效、重启回缺省（半角）。
     pub full_width_chars: bool,
 
+    /// 智能符号：中文模式下按空格时按光标前的内容换成标点。
+    /// **暂不接配置文件**，等设置页与配置项补上后再从这里改。
+    pub smart_symbols: bool,
+
     /// 繁体输出（`[input] simp_trad_chinese_chars_toggle`）；状态条「简 / 繁」按钮与设置页共用这一份。
     pub traditional: bool,
 
@@ -132,7 +136,7 @@ pub struct RouterConfig {
     /// 真实的脚本目录。只有 Server 正式跑时经 [`RouterConfig::with_bundled_scripts`] 指过来。
     pub scripts_dir: Option<PathBuf>,
 
-    /// 禁用的脚本文件名（`[script] disabled`，大小写不敏感）：加载时跳过它们。
+    /// 禁用的脚本文件夹名（`[script] disabled`，大小写不敏感）：加载时跳过它们。
     pub script_disabled: Vec<String>,
 
     /// 为脚本提供全局热键（`[script] global_hotkeys`）。
@@ -140,6 +144,10 @@ pub struct RouterConfig {
 
     /// 当前输入方案是不是全拼：全拼直接按 `u` 进 u 模式，别的方案用 `Ctrl+Alt+U`。
     pub full_pinyin: bool,
+
+    /// 当前输入方案支持逐音节特殊输入模式（全拼 / 双拼）：右 Alt 在候选窗口显示时切换；
+    /// 形码等方案的右 Alt 原样交给应用，不吞键。
+    pub special_input: bool,
 
     /// 脚本在本组句里要的候选窗**最小宽度**（`cloudime.candidate.set_min_width`，物理像素）：
     /// `None` = 用配置里的 `min_width_pixels`。**只在本次组句内有效**，组句结束清掉。
@@ -306,6 +314,7 @@ impl From<&Config> for RouterConfig {
             full_width_punctuation: punctuation.full_width(false),
             english_full_width_punctuation: punctuation.full_width(true),
             full_width_chars: false,
+            smart_symbols: input.smart_symbols,
             traditional: input.simp_trad_chinese_chars_toggle == SimpTrad::Traditional,
             punctuation_mapping: input.punctuation_mapping(),
             pairwise_completion: input.punctuation_marks_pairwise_completion,
@@ -327,6 +336,11 @@ impl From<&Config> for RouterConfig {
             script_disabled: config.script.disabled.clone(),
             script_global_hotkeys: config.script.global_hotkeys,
             full_pinyin: input.input_schemes == cloudime_platform::InputScheme::FullPinyin,
+            special_input: matches!(
+                input.input_schemes,
+                cloudime_platform::InputScheme::FullPinyin
+                    | cloudime_platform::InputScheme::DualKeyPinyin
+            ),
             // 脚本设的候选窗尺寸：会话内状态，配置（热）加载时保留，只有 `Router::reset_composition` 清
             script_min_width: None,
             script_page_size: None,

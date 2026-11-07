@@ -29,6 +29,46 @@ fn turning_jian_pin_off_needs_complete_syllables() {
     assert!(texts_of(&engine).contains(&"开发".to_owned()));
 }
 
+/// 特殊输入模式：`yun'duo` 先只出 `yun` 的单字，选完一个字后自动进入 `duo`。
+#[test]
+fn special_input_walks_one_syllable_at_a_time() {
+    let mut engine = Engine::new(
+        Dictionary::parse(
+            "云\tyun\t1000\n运\tyun\t900\n多\tduo\t1000\n朵\tduo\t800\n云朵\tyun duo\t9000\n",
+        )
+        .unwrap(),
+    );
+    engine.set_input("yun'duo");
+    assert_eq!(
+        engine.query().unwrap().candidates.items[0].text,
+        "云朵",
+        "普通模式整段读成一个词"
+    );
+
+    engine.set_special_input(true);
+    let first = engine.query().unwrap().candidates.items;
+    assert!(
+        first.iter().all(|candidate| {
+            candidate.kind == CandidateKind::Chinese
+                && candidate.text.chars().count() == 1
+                && candidate.syllables.len() == 1
+        }),
+        "特殊模式只出单字：{first:?}"
+    );
+    assert!(first.iter().any(|candidate| candidate.text == "云"));
+
+    let committed = engine.commit(&first[0]);
+    assert_eq!(committed, None, "还有 duo 没选，先留在组句里");
+    assert!(engine.special_input(), "模式保持到用户再次切换");
+
+    let second = engine.query().unwrap().candidates.items;
+    let duo = second
+        .iter()
+        .find(|candidate| candidate.text == "多")
+        .expect("下一个音节 duo 的单字候选");
+    assert_eq!(engine.commit(duo).as_deref(), Some("云多"));
+}
+
 /// 中英混输关掉后，中文模式不再掺英文词与英文补全。
 #[test]
 fn turning_mixture_input_off_hides_english_candidates() {

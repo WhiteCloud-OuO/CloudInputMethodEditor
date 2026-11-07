@@ -635,6 +635,73 @@ pub struct AuxiliarySpec {
     pub shadow: bool,
 }
 
+/// 内核对话框（`cloudime.window.create_dialog`）的创建参数。
+///
+/// 正文布局由 Cloud UI 内部生成，脚本只给宿主与蒙版要求。
+#[derive(Debug, Clone)]
+pub struct DialogSpec {
+    /// 日志与事件里的名字。
+    pub name: String,
+
+    /// 宿主（必须是脚本建过的独立窗口）。
+    pub owner: WindowId,
+
+    /// 是否要求宿主开蒙版；对话框销毁时恢复宿主原来的蒙版。
+    pub mask: bool,
+}
+
+/// 对话框实例的外观属性（脚本侧 DTO）。
+///
+/// 与 `cloud-ui` 的 `dialog::DialogStyle` 一一对应；两边都依赖 `cloudime-render`，
+/// 转换只发生在 UI 侧。
+#[derive(Debug, Clone, Default)]
+pub struct DialogStyle {
+    /// 正文 / 标题 / 按钮用的字体槽。
+    pub font: FontSlot,
+    /// 正文与按钮字号；`None` = 主题缺省。
+    pub text_size: Option<f32>,
+    /// 标题字号；`None` = 标题栏缺省。
+    pub title_size: Option<f32>,
+    /// 面板底色；`None` = 主题背景色。
+    pub background: Option<Color>,
+    /// 标题文字颜色；`None` = 主题次要文字色。
+    pub title_color: Option<Color>,
+    /// 正文文字颜色；`None` = 主题正文色。
+    pub text_color: Option<Color>,
+    /// 按钮底色；`None` = 主题强调色。
+    pub button_background: Option<Color>,
+    /// 按钮文字颜色；`None` = 主题强调文字色。
+    pub button_text_color: Option<Color>,
+}
+
+/// 脚本同步消息对话框请求（`cloudime.window.message_dialog`）。
+#[derive(Debug, Clone)]
+pub struct MessageDialogRequest {
+    /// 宿主脚本独立窗口。
+    pub owner: WindowId,
+    pub title: String,
+    pub text: String,
+    pub icon: String,
+    pub buttons: Vec<String>,
+    /// 实例上设过的外观属性。
+    pub style: DialogStyle,
+}
+
+/// 脚本文本输入对话框请求（`cloudime.window.text_input_dialog`）。
+#[derive(Debug, Clone)]
+pub struct TextInputDialogRequest {
+    /// 宿主脚本独立窗口。
+    pub owner: WindowId,
+    pub title: String,
+    pub text: String,
+    /// `true` 用多行 `text_box`，否则单行 `text_edit`。
+    pub allow_multiline: bool,
+    /// 打开时编辑框里的文本；取消时也返回它。
+    pub default_text: String,
+    /// 实例上设过的外观属性。
+    pub style: DialogStyle,
+}
+
 /// 脚本对窗口的一次操作：工人线程产出，UI 线程按顺序执行。
 #[derive(Debug, Clone)]
 pub enum Request {
@@ -643,6 +710,9 @@ pub enum Request {
 
     /// 建一件辅助窗口（宿主名下的一件资产）。
     CreateAuxiliary(WindowId, AuxiliarySpec),
+
+    /// 建一件内置对话框（宿主名下的一件资产，创建即强制模态）。
+    CreateDialog(WindowId, DialogSpec),
 
     /// 换一整份内容（尺寸可以跟着变）。
     SetContent(WindowId, Document),
@@ -665,6 +735,9 @@ pub enum Request {
 
     /// 把逻辑焦点指定给这件辅助窗口 / 交还给宿主；独立窗口则是拿 / 放键盘焦点。
     Focus(WindowId, bool),
+
+    /// 设置 / 取消辅助窗口的**模态**；同一宿主同时只允许一件模态辅助窗口。
+    SetModal(WindowId, bool),
 
     /// 把键盘焦点交给某个 `text_edit` / `text_box` 宿主。
     FocusText { id: WindowId, name: String },
@@ -747,6 +820,7 @@ pub enum Request {
 pub(crate) enum Kind {
     Independent,
     Auxiliary,
+    Dialog,
 }
 
 impl Kind {
@@ -754,6 +828,7 @@ impl Kind {
         match self {
             Self::Independent => "window",
             Self::Auxiliary => "auxiliary",
+            Self::Dialog => "dialog",
         }
     }
 }
@@ -1986,13 +2061,26 @@ pub(crate) fn handle(
 
     // `focus`：独立窗口 = 拿键盘焦点（`key` 载荷里会带 `window`）；辅助窗口 = 把逻辑焦点指定给它 /
     // 交还给宿主（所有权在宿主，资产自己说了不算）。
-    let focus_requests = requests;
+    let focus_requests = requests.clone();
     handle.set(
         "focus",
         lua.create_function(move |_, (_this, focus): (mlua::Table, Option<bool>)| {
             focus_requests
                 .borrow_mut()
                 .push(Request::Focus(id, focus.unwrap_or(true)));
+            Ok(())
+        })?,
+    )?;
+
+    // `set_modal`：只有辅助窗口有模态。宿主同一时刻只允许一件模态辅助窗口；真实仲裁在 UI 线程
+    // （`Assets::set_modal`），这里只排队。
+    let modal_requests = requests.clone();
+    handle.set(
+        "set_modal",
+        lua.create_function(move |_, (_this, modal): (mlua::Table, Option<bool>)| {
+            modal_requests
+                .borrow_mut()
+                .push(Request::SetModal(id, modal.unwrap_or(true)));
             Ok(())
         })?,
     )?;
@@ -2058,6 +2146,410 @@ pub(crate) fn parse_auxiliary(options: &mlua::Table, id: WindowId) -> mlua::Resu
         interactive: options.get::<Option<bool>>("interactive")?.unwrap_or(false),
         shadow: options.get::<Option<bool>>("shadow")?.unwrap_or(true),
     })
+}
+
+/// `create_dialog{…}` 的参数：`owner` 必给，`mask` 可选（默认 false）。
+pub(crate) fn parse_dialog(options: &mlua::Table, id: WindowId) -> mlua::Result<DialogSpec> {
+    let owner = match options.get::<mlua::Value>("owner")? {
+        mlua::Value::Table(handle) => handle.get::<WindowId>("id").map_err(|_| {
+            mlua::Error::RuntimeError(
+                "owner 不是 cloudime.window.create 建出来的窗口句柄".to_owned(),
+            )
+        })?,
+        mlua::Value::Integer(owner) if owner > 0 => owner as WindowId,
+        _ => {
+            return Err(mlua::Error::RuntimeError(
+                "create_dialog 要给 owner（宿主：cloudime.window.create 建出来的那个窗口）"
+                    .to_owned(),
+            ));
+        }
+    };
+    if owner == id {
+        return Err(mlua::Error::RuntimeError(
+            "create_dialog 的 owner 不能是它自己".to_owned(),
+        ));
+    }
+    Ok(DialogSpec {
+        name: options
+            .get::<Option<String>>("name")?
+            .filter(|name| !name.trim().is_empty())
+            .unwrap_or_else(|| "脚本对话框".to_owned()),
+        owner,
+        mask: options.get::<Option<bool>>("mask")?.unwrap_or(false),
+    })
+}
+
+/// `message_dialog{…}` / `text_input_dialog{…}` 共用的 `owner` 解析。
+fn dialog_owner(options: &mlua::Table, function: &str) -> mlua::Result<WindowId> {
+    match options.get::<mlua::Value>("owner")? {
+        mlua::Value::Table(handle) => handle.get::<WindowId>("id").map_err(|_| {
+            mlua::Error::RuntimeError(
+                "owner 不是 cloudime.window.create 建出来的窗口句柄".to_owned(),
+            )
+        }),
+        mlua::Value::Integer(owner) if owner > 0 => Ok(owner as WindowId),
+        _ => Err(mlua::Error::RuntimeError(format!(
+            "{function} 要给 owner（宿主：cloudime.window.create 建出来的那个窗口）"
+        ))),
+    }
+}
+
+/// 对话框实例的公共部分：外观属性 + 「show 之前才能改」的闸门。
+trait DialogInstance {
+    fn dialog_name(&self) -> &'static str;
+    fn style(&self) -> &DialogStyle;
+    fn style_mut(&mut self) -> &mut DialogStyle;
+    fn is_shown(&self) -> bool;
+}
+
+/// 属性只能在 `show` 之前改；`show` 之后再改报 Lua 错误。
+fn ensure_editable<T: DialogInstance>(this: &T) -> mlua::Result<()> {
+    if this.is_shown() {
+        return Err(mlua::Error::RuntimeError(format!(
+            "{} 已经 show 过，属性不能再改",
+            this.dialog_name()
+        )));
+    }
+    Ok(())
+}
+
+fn font_slot_name(slot: FontSlot) -> &'static str {
+    match slot {
+        FontSlot::Candidate => "candidate",
+        FontSlot::Pinyin => "pinyin",
+        FontSlot::ItemNumber => "item_number",
+        FontSlot::Translate => "translate",
+    }
+}
+
+fn color_hex(color: Color) -> String {
+    if color.a == 255 {
+        format!("#{:02X}{:02X}{:02X}", color.r, color.g, color.b)
+    } else {
+        format!(
+            "#{:02X}{:02X}{:02X}{:02X}",
+            color.a, color.r, color.g, color.b
+        )
+    }
+}
+
+fn color_property(name: &str, text: &str) -> mlua::Result<Color> {
+    parse_hex_color(text).ok_or_else(|| {
+        mlua::Error::RuntimeError(format!(
+            "{name} 的颜色写错了：{text}，要 \"#RRGGBB\" 或 \"#AARRGGBB\""
+        ))
+    })
+}
+
+fn size_property(name: &str, size: f32) -> mlua::Result<f32> {
+    if size.is_finite() && size > 0.0 {
+        Ok(size)
+    } else {
+        Err(mlua::Error::RuntimeError(format!(
+            "{name} 要写正数字号，写的是 {size}"
+        )))
+    }
+}
+
+/// 两类对话框共用的外观属性：`font` / `text_size` / `title_size` / 各种颜色。
+fn add_style_fields<T, F>(fields: &mut F)
+where
+    T: DialogInstance + 'static,
+    F: mlua::UserDataFields<T>,
+{
+    fields.add_field_method_get("font", |_, this| Ok(font_slot_name(this.style().font)));
+    fields.add_field_method_set("font", |_, this, name: String| {
+        ensure_editable(this)?;
+        let slot = FontSlot::from_name(&name).ok_or_else(|| {
+            mlua::Error::RuntimeError(format!(
+                "font 只支持 candidate / pinyin / item_number / translate，写的是 {name}"
+            ))
+        })?;
+        this.style_mut().font = slot;
+        Ok(())
+    });
+
+    fields.add_field_method_get("text_size", |_, this| Ok(this.style().text_size));
+    fields.add_field_method_set("text_size", |_, this, size: f32| {
+        ensure_editable(this)?;
+        this.style_mut().text_size = Some(size_property("text_size", size)?);
+        Ok(())
+    });
+
+    fields.add_field_method_get("title_size", |_, this| Ok(this.style().title_size));
+    fields.add_field_method_set("title_size", |_, this, size: f32| {
+        ensure_editable(this)?;
+        this.style_mut().title_size = Some(size_property("title_size", size)?);
+        Ok(())
+    });
+
+    fields.add_field_method_get("background", |_, this| {
+        Ok(this.style().background.map(color_hex))
+    });
+    fields.add_field_method_set("background", |_, this, text: String| {
+        ensure_editable(this)?;
+        this.style_mut().background = Some(color_property("background", &text)?);
+        Ok(())
+    });
+
+    fields.add_field_method_get("title_color", |_, this| {
+        Ok(this.style().title_color.map(color_hex))
+    });
+    fields.add_field_method_set("title_color", |_, this, text: String| {
+        ensure_editable(this)?;
+        this.style_mut().title_color = Some(color_property("title_color", &text)?);
+        Ok(())
+    });
+
+    fields.add_field_method_get("text_color", |_, this| {
+        Ok(this.style().text_color.map(color_hex))
+    });
+    fields.add_field_method_set("text_color", |_, this, text: String| {
+        ensure_editable(this)?;
+        this.style_mut().text_color = Some(color_property("text_color", &text)?);
+        Ok(())
+    });
+
+    fields.add_field_method_get("button_background", |_, this| {
+        Ok(this.style().button_background.map(color_hex))
+    });
+    fields.add_field_method_set("button_background", |_, this, text: String| {
+        ensure_editable(this)?;
+        this.style_mut().button_background = Some(color_property("button_background", &text)?);
+        Ok(())
+    });
+
+    fields.add_field_method_get("button_text_color", |_, this| {
+        Ok(this.style().button_text_color.map(color_hex))
+    });
+    fields.add_field_method_set("button_text_color", |_, this, text: String| {
+        ensure_editable(this)?;
+        this.style_mut().button_text_color = Some(color_property("button_text_color", &text)?);
+        Ok(())
+    });
+}
+
+/// 脚本消息对话框实例：`cloudime.window.message_dialog{…}` 的返回值。
+pub struct MessageDialogHandle {
+    owner: WindowId,
+    title: String,
+    text: String,
+    icon: String,
+    buttons: Vec<String>,
+    style: DialogStyle,
+    hook: Rc<RefCell<Option<crate::runtime::MessageDialogHook>>>,
+    shown: bool,
+}
+
+impl MessageDialogHandle {
+    pub(crate) fn new(
+        options: &mlua::Table,
+        hook: Rc<RefCell<Option<crate::runtime::MessageDialogHook>>>,
+    ) -> mlua::Result<Self> {
+        let buttons = options
+            .get::<mlua::Table>("buttons")
+            .map_err(|_| {
+                mlua::Error::RuntimeError(
+                    "message_dialog 要给 buttons（字符串表，1..=4 个）".to_owned(),
+                )
+            })?
+            .sequence_values::<String>()
+            .collect::<mlua::Result<Vec<_>>>()?;
+        Ok(Self {
+            owner: dialog_owner(options, "message_dialog")?,
+            title: options.get::<Option<String>>("title")?.unwrap_or_default(),
+            text: options.get::<Option<String>>("text")?.unwrap_or_default(),
+            icon: options.get::<Option<String>>("icon")?.unwrap_or_default(),
+            buttons,
+            style: DialogStyle::default(),
+            hook,
+            shown: false,
+        })
+    }
+
+    fn show(&mut self) -> mlua::Result<u8> {
+        if self.shown {
+            return Err(mlua::Error::RuntimeError(
+                "message_dialog 已经 show 过，不能再 show".to_owned(),
+            ));
+        }
+        let hook = self.hook.borrow().clone().ok_or_else(|| {
+            mlua::Error::RuntimeError(
+                "message_dialog 需要 UI 线程（没有安装对话框后端）".to_owned(),
+            )
+        })?;
+        self.shown = true;
+        Ok(hook(&MessageDialogRequest {
+            owner: self.owner,
+            title: self.title.clone(),
+            text: self.text.clone(),
+            icon: self.icon.clone(),
+            buttons: self.buttons.clone(),
+            style: self.style.clone(),
+        }))
+    }
+}
+
+impl DialogInstance for MessageDialogHandle {
+    fn dialog_name(&self) -> &'static str {
+        "message_dialog"
+    }
+
+    fn style(&self) -> &DialogStyle {
+        &self.style
+    }
+
+    fn style_mut(&mut self) -> &mut DialogStyle {
+        &mut self.style
+    }
+
+    fn is_shown(&self) -> bool {
+        self.shown
+    }
+}
+
+impl mlua::UserData for MessageDialogHandle {
+    fn add_fields<F: mlua::UserDataFields<Self>>(fields: &mut F) {
+        add_style_fields(fields);
+        fields.add_field_method_get("owner", |_, this| Ok(this.owner));
+        fields.add_field_method_get("title", |_, this| Ok(this.title.clone()));
+        fields.add_field_method_set("title", |_, this, value: String| {
+            ensure_editable(this)?;
+            this.title = value;
+            Ok(())
+        });
+        fields.add_field_method_get("text", |_, this| Ok(this.text.clone()));
+        fields.add_field_method_set("text", |_, this, value: String| {
+            ensure_editable(this)?;
+            this.text = value;
+            Ok(())
+        });
+        fields.add_field_method_get("icon", |_, this| Ok(this.icon.clone()));
+        fields.add_field_method_set("icon", |_, this, value: String| {
+            ensure_editable(this)?;
+            this.icon = value;
+            Ok(())
+        });
+        fields.add_field_method_get("buttons", |_, this| Ok(this.buttons.clone()));
+        fields.add_field_method_set("buttons", |_, this, value: Vec<String>| {
+            ensure_editable(this)?;
+            this.buttons = value;
+            Ok(())
+        });
+    }
+
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method_mut("show", |_, this, ()| this.show());
+    }
+}
+
+/// 脚本文本输入对话框实例：`cloudime.window.text_input_dialog{…}` 的返回值。
+pub struct TextInputDialogHandle {
+    owner: WindowId,
+    title: String,
+    text: String,
+    allow_multiline: bool,
+    default_text: String,
+    style: DialogStyle,
+    hook: Rc<RefCell<Option<crate::runtime::TextInputDialogHook>>>,
+    shown: bool,
+}
+
+impl TextInputDialogHandle {
+    pub(crate) fn new(
+        options: &mlua::Table,
+        hook: Rc<RefCell<Option<crate::runtime::TextInputDialogHook>>>,
+    ) -> mlua::Result<Self> {
+        Ok(Self {
+            owner: dialog_owner(options, "text_input_dialog")?,
+            title: options.get::<Option<String>>("title")?.unwrap_or_default(),
+            text: options.get::<Option<String>>("text")?.unwrap_or_default(),
+            allow_multiline: options
+                .get::<Option<bool>>("allow_multiline")?
+                .unwrap_or(false),
+            default_text: options
+                .get::<Option<String>>("default_text")?
+                .unwrap_or_default(),
+            style: DialogStyle::default(),
+            hook,
+            shown: false,
+        })
+    }
+
+    fn show(&mut self) -> mlua::Result<String> {
+        if self.shown {
+            return Err(mlua::Error::RuntimeError(
+                "text_input_dialog 已经 show 过，不能再 show".to_owned(),
+            ));
+        }
+        let hook = self.hook.borrow().clone().ok_or_else(|| {
+            mlua::Error::RuntimeError(
+                "text_input_dialog 需要 UI 线程（没有安装对话框后端）".to_owned(),
+            )
+        })?;
+        self.shown = true;
+        Ok(hook(&TextInputDialogRequest {
+            owner: self.owner,
+            title: self.title.clone(),
+            text: self.text.clone(),
+            allow_multiline: self.allow_multiline,
+            default_text: self.default_text.clone(),
+            style: self.style.clone(),
+        }))
+    }
+}
+
+impl DialogInstance for TextInputDialogHandle {
+    fn dialog_name(&self) -> &'static str {
+        "text_input_dialog"
+    }
+
+    fn style(&self) -> &DialogStyle {
+        &self.style
+    }
+
+    fn style_mut(&mut self) -> &mut DialogStyle {
+        &mut self.style
+    }
+
+    fn is_shown(&self) -> bool {
+        self.shown
+    }
+}
+
+impl mlua::UserData for TextInputDialogHandle {
+    fn add_fields<F: mlua::UserDataFields<Self>>(fields: &mut F) {
+        add_style_fields(fields);
+        fields.add_field_method_get("owner", |_, this| Ok(this.owner));
+        fields.add_field_method_get("title", |_, this| Ok(this.title.clone()));
+        fields.add_field_method_set("title", |_, this, value: String| {
+            ensure_editable(this)?;
+            this.title = value;
+            Ok(())
+        });
+        fields.add_field_method_get("text", |_, this| Ok(this.text.clone()));
+        fields.add_field_method_set("text", |_, this, value: String| {
+            ensure_editable(this)?;
+            this.text = value;
+            Ok(())
+        });
+        fields.add_field_method_get("allow_multiline", |_, this| Ok(this.allow_multiline));
+        fields.add_field_method_set("allow_multiline", |_, this, value: bool| {
+            ensure_editable(this)?;
+            this.allow_multiline = value;
+            Ok(())
+        });
+        fields.add_field_method_get("default_text", |_, this| Ok(this.default_text.clone()));
+        fields.add_field_method_set("default_text", |_, this, value: String| {
+            ensure_editable(this)?;
+            this.default_text = value;
+            Ok(())
+        });
+    }
+
+    fn add_methods<M: mlua::UserDataMethods<Self>>(methods: &mut M) {
+        methods.add_method_mut("show", |_, this, ()| this.show());
+    }
 }
 
 /// 句柄表里记着的尺寸（`set_content` 没写 `width` / `height` 时用它）。
@@ -4491,7 +4983,7 @@ mod tests {
     #[test]
     fn bundled_json_layout_parses_into_a_document() {
         let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../Scripts/layouts/test-caret-window.json");
+            .join("../../Scripts/test-caret-window/layouts/test-caret-window.json");
         let lua = mlua::Lua::new();
         let document = load_layout_document(
             &lua,

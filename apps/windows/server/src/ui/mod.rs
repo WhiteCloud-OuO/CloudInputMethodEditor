@@ -191,6 +191,26 @@ impl ScriptWindowSink for UiHandle {
     fn script_window(&self, request: cloudime_script::WindowRequest) {
         self.post(UiCommand::ScriptWindow(Box::new(request)));
     }
+
+    /// 同步消息对话框：投给 UI 线程，阻塞等它返回按钮下标。
+    fn message_dialog(&self, request: &cloudime_script::MessageDialogRequest) -> u8 {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.post(UiCommand::MessageDialog(Box::new((
+            request.clone(),
+            sender,
+        ))));
+        receiver.recv().unwrap_or(0)
+    }
+
+    /// 同步文本输入对话框：投给 UI 线程，阻塞等它返回文本。
+    fn text_input_dialog(&self, request: &cloudime_script::TextInputDialogRequest) -> String {
+        let (sender, receiver) = std::sync::mpsc::channel();
+        self.post(UiCommand::TextInputDialog(Box::new((
+            request.clone(),
+            sender,
+        ))));
+        receiver.recv().unwrap_or_default()
+    }
 }
 
 impl StatusSink for UiHandle {
@@ -386,6 +406,16 @@ fn apply(
             Painter::configure(painter, &settings);
         }
         UiCommand::ScriptWindow(request) => script_windows.apply(*request),
+        UiCommand::MessageDialog(payload) => {
+            let (request, reply) = *payload;
+            let result = script_windows.message_dialog(&request);
+            let _ = reply.send(result);
+        }
+        UiCommand::TextInputDialog(payload) => {
+            let (request, reply) = *payload;
+            let result = script_windows.text_input_dialog(&request);
+            let _ = reply.send(result);
+        }
     }
 }
 

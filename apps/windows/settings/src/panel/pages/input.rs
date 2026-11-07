@@ -511,6 +511,16 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             ),
         ),
         KeyedView::new(
+            "smart-symbols",
+            field(
+                "智能符号（空格）",
+                "中文模式下没在组句时，空格按光标前一个字换成标点：单个空格出逗号；1 秒内连按两个空格出对应的标点（「说」后出「：“」，吗 / 呢 / 嘛出「？」，呀 / 啊 / 哟 / 唷 / 哇 / 哦 / 喔 / 噢出「！」，呜 / 嘶 / 吱 / 嘎出「——」，其他汉字出「。」）。前一个字不是汉字时仍是普通空格。缺省关闭。",
+                ToggleSwitch::new()
+                    .is_on(input.smart_symbols)
+                    .on_toggled(context.callback(Message::SmartSymbols)),
+            ),
+        ),
+        KeyedView::new(
             "punctuation-mapping",
             field_top(
                 "中文模式下符号映射",

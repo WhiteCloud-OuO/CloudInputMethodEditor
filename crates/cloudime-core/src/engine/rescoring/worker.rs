@@ -1,3 +1,4 @@
+use std::cell::Cell;
 use std::sync::mpsc::{Receiver, Sender, channel};
 use std::thread::JoinHandle;
 
@@ -11,6 +12,8 @@ struct Job {
 
 /// 打好的分，与任务一一对应。
 pub(crate) struct Scored {
+    /// 提交序号，用来判断还有没有在算。
+    pub serial: u64,
     pub context: String,
     pub texts: Vec<String>,
     pub scores: Vec<f64>,
@@ -19,21 +22,25 @@ pub(crate) struct Scored {
 /// 后台打分线程：模型前向要几十毫秒，不能放在按键回调里。
 /// 任务排队时只算最新的一条（旧的对应已经过去的输入状态）；线程随本结构一起结束。
 pub(crate) struct RescoreWorker {
-    jobs: Sender<Job>,
+    jobs: Sender<(u64, Job)>,
     results: Receiver<Scored>,
     handle: Option<JoinHandle<()>>,
+
+    /// 最近一次提交的序号；与 `Engine::sentence_done` 比判断还有没有在算。
+    latest: Cell<u64>,
 }
 
 impl RescoreWorker {
     pub fn spawn(scorer: Box<dyn SentenceScorer>) -> Self {
-        let (jobs, job_rx) = channel::<Job>();
+        let (jobs, job_rx) = channel::<(u64, Job)>();
         let (result_tx, results) = channel::<Scored>();
         let handle = std::thread::Builder::new()
             .name("cloudime-rescore".to_owned())
             .spawn(move || {
-                while let Ok(mut job) = job_rx.recv() {
+                while let Ok((mut serial, mut job)) = job_rx.recv() {
                     // 攒了好几条只算最后一条
-                    while let Ok(newer) = job_rx.try_recv() {
+                    while let Ok((newer_serial, newer)) = job_rx.try_recv() {
+                        serial = newer_serial;
                         job = newer;
                     }
                     let texts: Vec<&str> = job.texts.iter().map(String::as_str).collect();
@@ -46,6 +53,7 @@ impl RescoreWorker {
                         "神经重打分完成"
                     );
                     let done = Scored {
+                        serial,
                         context: job.context,
                         texts: job.texts,
                         scores,
@@ -63,6 +71,7 @@ impl RescoreWorker {
             jobs,
             results,
             handle,
+            latest: Cell::new(0),
         }
     }
 
@@ -70,8 +79,14 @@ impl RescoreWorker {
         self.handle.is_some()
     }
 
+    pub fn latest(&self) -> u64 {
+        self.latest.get()
+    }
+
     pub fn submit(&self, context: String, texts: Vec<String>) {
-        if self.jobs.send(Job { context, texts }).is_err() {
+        let serial = self.latest.get() + 1;
+        self.latest.set(serial);
+        if self.jobs.send((serial, Job { context, texts })).is_err() {
             tracing::warn!("神经重打分线程已退出");
         }
     }

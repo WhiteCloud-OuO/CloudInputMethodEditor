@@ -7,14 +7,18 @@ license.workspace = true
 repository.workspace = true
 
 [features]
-default = ["script"]
-# 脚本窗口（`ScriptWindows` / RichEdit / TSF）；独立程序只要通用窗口时可以关掉，免得拖进 LuaJIT。
-script = ["dep:cloudime-script"]
+# 默认只带通用窗口 / 渲染壳；Lua 脚本窗口按需开 `script`（Server 会显式开启）。
+default = []
+# IME 专用窗口（辅助窗口 / 资产 / 键位映射 / 脚本窗口会用到平台输入方案类型）。
+ime = ["dep:cloudime-platform"]
+# 脚本窗口（`ScriptWindows` / RichEdit / TSF）；打开它会拖进 LuaJIT。
+script = ["ime", "dep:cloudime-script"]
 
 [dependencies]
 cloud-ui-core.workspace = true
-cloudime-platform.workspace = true
+cloud-ui-types.workspace = true
 cloudime-render.workspace = true
+cloudime-platform = { workspace = true, optional = true }
 cloudime-script = { workspace = true, optional = true }
 tracing.workspace = true
 
@@ -31,6 +35,7 @@ windows = { workspace = true, features = [
     "Win32_UI_HiDpi",
     "Win32_UI_Input_Ime",
     "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_Shell",
     "Win32_UI_TextServices",
     "Win32_UI_WindowsAndMessaging",
 ] }

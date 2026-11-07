@@ -70,6 +70,11 @@ pub enum ClientMessage {
         /// 里请过一次才带（`want_document`）。`None` = 这次没请求 / 读不到 / 私密输入框。
         #[serde(default)]
         document: Option<DocumentText>,
+
+        /// 聚焦文本上下文的标识（DLL 侧 `ITfContext` 指针）：变了就是换了输入框，
+        /// Server 丢掉本输入框的上下文历史。`0` = 旧 DLL 没带，不据此判断。
+        #[serde(default)]
+        context: u64,
     },
 
     /// 输入框私密与否变了（DLL 起组句时按输入范围判：`IS_PRIVATE` / 密码 / PIN 类算私密，浏览器无痕窗口就是它）。

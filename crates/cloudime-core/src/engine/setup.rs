@@ -218,6 +218,7 @@ impl Engine {
     pub fn set_async_sentence_scorer(&mut self, scorer: Option<Box<dyn SentenceScorer>>) {
         self.sentence_scorer = None;
         self.rescorer = scorer.map(super::rescoring::RescoreWorker::spawn);
+        self.sentence_done.set(0);
         *self.neural_cache.borrow_mut() = super::rescoring::NeuralCache::default();
         self.forget_span_cache();
     }
@@ -378,6 +379,15 @@ impl Engine {
     }
 
     /// 表达式计算面板开着没有（V 模式里按 Tab 进来）：开着时候选只有结果那一条。
+    /// 特殊输入模式：逐音节只出单字候选，选中一个字后自动进入下一个音节。
+    pub fn set_special_input(&mut self, on: bool) {
+        self.special_input = on;
+    }
+
+    pub fn special_input(&self) -> bool {
+        self.special_input
+    }
+
     pub fn calculator(&self) -> bool {
         self.calculator
     }

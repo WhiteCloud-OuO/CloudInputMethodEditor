@@ -29,6 +29,7 @@ impl Router {
     pub(super) fn ensure_focus(&mut self, session: SessionId) {
         if self.focused != Some(session) {
             self.reset_composition();
+            self.input_box = None;
             self.focused = Some(session);
             let app = self.focused_app().map(str::to_owned);
             *self.focused_app_snapshot.borrow_mut() = app.clone();
@@ -79,6 +80,7 @@ impl Router {
     pub(super) fn reset_composition(&mut self) {
         self.engine.break_chain();
         self.engine.clear();
+        self.engine.set_special_input(false);
         self.stop_rescoring();
         if self.u_mode.take().is_some() {
             self.candidates.set_symbol_aux(None);
@@ -92,6 +94,10 @@ impl Router {
         self.show_more = false;
         self.hover_cell = None;
         self.pending_commit = None;
+        // 光标位置 / 焦点变了：智能符号的本地前文与双击空格状态都不能再用
+        self.smart_before = None;
+        self.smart_guard = None;
+        self.smart_space = None;
         self.translate.end_choices();
         // 在线翻译那一行只活在一次组句里（收起时连在跑的请求一起丢）
         self.online.clear();

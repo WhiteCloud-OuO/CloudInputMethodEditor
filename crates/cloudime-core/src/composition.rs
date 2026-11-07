@@ -221,7 +221,12 @@ impl Composition {
     /// 选中作用域前 `consumed` 字节的拼音为文本 `text`：拼音移出缓冲区、记进已选段，
     /// 光标随之落在剩余拼音里。选中只是并进组句，不立刻交给应用（见文件头）。
     pub fn select_prefix(&mut self, text: &str, consumed: usize) {
-        let len = consumed.min(self.buffer.len());
+        let mut len = consumed.min(self.buffer.len());
+        // 选中音节后面的 `'` 跟着一起吃掉：`yun'duo` 选 云 之后剩 `duo`，
+        // 不留下一个空的 `'`（特殊输入逐音节选字时会卡在最后一个 `'` 上）。
+        if consumed > 0 && self.buffer[len..].starts_with('\'') {
+            len += 1;
+        }
         let removed = self.char_index(len);
         let pinyin = self.buffer[..len].to_owned();
         let shifted: Vec<bool> = self.shifted.drain(..removed).collect();

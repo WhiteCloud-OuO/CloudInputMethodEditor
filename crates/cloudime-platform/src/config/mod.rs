@@ -23,8 +23,8 @@ use crate::error::ConfigError;
 
 pub use candidate::{
     CandidateConfig, DEFAULT_CANDIDATE_BOX_MINIMUM_WIDTH, DEFAULT_FAMILY, FontChoice,
-    ItemNumberStyle, MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MIN_ASSOCIATION_COUNTS,
-    MIN_CANDIDATE_COUNT, MouseWordSelection,
+    ItemNumberStyle, LocalModelMode, MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT,
+    MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MouseWordSelection,
 };
 pub use debugging::DebuggingConfig;
 pub use general::{GeneralConfig, MAX_PAGE_SIZE};
@@ -113,13 +113,20 @@ show_status_change_tip = true
 # （） 16、【】 32、｛｝ 64、《》 128、“” 256、‘‘ 512；0 为关闭
 punctuation_marks_pairwise_completion = 0
 
+# 智能符号：中文模式下没在组句时，空格按光标前一个字换成标点。
+# 单个空格出逗号；1 秒内连按两个空格换成对应标点（「说」后出「：“」，吗 / 呢 / 嘛出「？」，呀 / 啊等出「！」，
+# 呜 / 嘶 / 吱 / 嘎出「——」，其他汉字出「。」）；光标前不是汉字时仍是普通空格。
+smart_symbols = false
+
 # 中文模式下的符号映射：勾选项数值相加，只做单键替换（敲下来的是这个键，就换成右边那个上屏）。
 # / → 、 1；小键盘 / → ÷ 2；小键盘 * → × 4；~ → ～ 8；· → ` 16。0 为全关（缺省全关）
 punctuation_marks_mapping = 0
 
 [candidate]
-# 使用本地整句模型（输入法内置）：消耗一点处理器与内存换更准的整句输入；关掉只用词库与短语匹配
-use_local_sentence_organization_model = true
+# 本地模型：off 关闭 / basic 基本（含章整句模型）/ enhanced 增强（知意：候选重排 + 按音节出字）/ hybrid 混合（含章+知意）
+local_model = "basic"
+# 应用读不到光标前文时，这个应用里多少秒内上屏的字还给模型当前文；0 表示一直算
+context_memory_seconds = 60
 # 候选项排布方向：vertical 竖排 / horizontal 横排（横排只给高亮候选显示译文）
 candidate_arrangement_direction = "vertical"
 # 候选项个数（5–9）
@@ -224,8 +231,8 @@ need_times = 3
 reset_counter = 0
 
 [script]
-# 禁用的用户脚本（安装目录 Scripts\ 下的文件名，大小写不敏感）：设置页的「启用 / 禁用」开关写这里。
-# Server 启动时按它跳过（改完要重启 Server）。每个脚本必须在文件最前面声明清单，见安装目录的 Scripts\template.lua
+# 禁用的用户脚本（安装目录 Scripts\<脚本文件夹>\ 的文件夹名，大小写不敏感）：设置页的「启用 / 禁用」开关写这里。
+# Server 启动时按它跳过（改完要重启 Server）。每个脚本必须在入口文件最前面声明清单，见安装目录的 Scripts\template.lua
 disabled = []
 # 为脚本提供全局热键：通过 TSF 注册脚本的组合快捷键，只在中文输入状态抢占，英文 / 禁用时放行。
 global_hotkeys = false
@@ -434,17 +441,35 @@ mod tests {
     fn script_disabled_reads_from_toml_and_defaults_empty() {
         assert!(Config::default().script.disabled.is_empty());
         let config: Config =
-            toml::from_str("[script]\ndisabled = [\"a.lua\", \"B.LUA\"]\n").unwrap();
-        assert_eq!(config.script.disabled, ["a.lua", "B.LUA"]);
+            toml::from_str("[script]\ndisabled = [\"niutrans-window\", \"ONLINE-SEARCH\"]\n")
+                .unwrap();
+        assert_eq!(config.script.disabled, ["niutrans-window", "ONLINE-SEARCH"]);
         // 模板里带着这一节（新装的用户不用手加）
         assert!(TEMPLATE.contains("[script]\n"));
     }
 
     #[test]
     fn partial_file_keeps_other_defaults() {
-        let config: Config =
+        let config: Config = toml::from_str("[candidate]\nlocal_model = \"enhanced\"\n").unwrap();
+        assert_eq!(config.candidate.local_model, LocalModelMode::Enhanced);
+        let hybrid: Config = toml::from_str("[candidate]\nlocal_model = \"hybrid\"\n").unwrap();
+        assert_eq!(
+            hybrid.candidate.resolved_local_model(),
+            LocalModelMode::Hybrid
+        );
+        // 显式的新档位优先于旧布尔键。
+        let hybrid: Config = toml::from_str(
+            "[candidate]\nlocal_model = \"hybrid\"\nuse_local_sentence_organization_model = false\n",
+        )
+        .unwrap();
+        assert_eq!(
+            hybrid.candidate.resolved_local_model(),
+            LocalModelMode::Hybrid
+        );
+        // 旧配置的布尔值仍能读：true = 基本，false = 关闭。
+        let legacy: Config =
             toml::from_str("[candidate]\nuse_local_sentence_organization_model = false\n").unwrap();
-        assert!(!config.candidate.use_local_sentence_organization_model);
+        assert_eq!(legacy.candidate.resolved_local_model(), LocalModelMode::Off);
         assert_eq!(config.candidate.candidate_count, 9);
         assert_eq!(config.general.log_level, LogLevel::Info);
     }
@@ -606,13 +631,7 @@ mod tests {
         )
         .unwrap();
         Config::set_bool(&path, "input", "use_jian_pin", true).unwrap();
-        Config::set_bool(
-            &path,
-            "candidate",
-            "use_local_sentence_organization_model",
-            false,
-        )
-        .unwrap();
+        Config::set_bool(&path, "candidate", "show_more_candidate_items", true).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(
             text.starts_with(
@@ -622,7 +641,7 @@ mod tests {
         );
         let config = Config::load(&path).unwrap();
         assert!(config.input.use_jian_pin && config.input.mo_hu_yin_list == 2);
-        assert!(!config.candidate.use_local_sentence_organization_model);
+        assert!(config.candidate.show_more_candidate_items);
         let _ = std::fs::remove_file(&path);
     }
 
@@ -636,18 +655,12 @@ mod tests {
         assert_eq!(std::fs::read_to_string(&path).unwrap(), TEMPLATE);
         // 没有模板直接保存也行
         std::fs::remove_dir_all(&dir).unwrap();
-        Config::set_bool(
-            &path,
-            "candidate",
-            "use_local_sentence_organization_model",
-            false,
-        )
-        .unwrap();
+        Config::set_bool(&path, "candidate", "show_more_candidate_items", true).unwrap();
         assert!(
-            !Config::load(&path)
+            Config::load(&path)
                 .unwrap()
                 .candidate
-                .use_local_sentence_organization_model
+                .show_more_candidate_items
         );
         std::fs::remove_dir_all(&dir).unwrap();
     }
@@ -656,20 +669,14 @@ mod tests {
     fn set_bool_starts_from_template_when_missing() {
         let path = std::env::temp_dir().join("cloudime-config-set-bool-missing-test.toml");
         let _ = std::fs::remove_file(&path);
-        Config::set_bool(
-            &path,
-            "candidate",
-            "use_local_sentence_organization_model",
-            false,
-        )
-        .unwrap();
+        Config::set_bool(&path, "candidate", "show_more_candidate_items", true).unwrap();
         let text = std::fs::read_to_string(&path).unwrap();
         assert!(text.contains("# 云朵输入法配置"));
         assert!(
-            !Config::load(&path)
+            Config::load(&path)
                 .unwrap()
                 .candidate
-                .use_local_sentence_organization_model
+                .show_more_candidate_items
         );
         let _ = std::fs::remove_file(&path);
     }

@@ -116,10 +116,10 @@ fn intrinsic_size(
 
     let content_width = width
         .map(|width| node.content_width(width))
-        .unwrap_or(constraints.max_width);
+        .unwrap_or((constraints.max_width - node.padding.horizontal()).max(0.0));
     let content_height = height
         .map(|height| node.content_height(height))
-        .unwrap_or(constraints.max_height);
+        .unwrap_or((constraints.max_height - node.padding.vertical()).max(0.0));
     let mut temp = vec![None; tree.nodes.len()];
     let used = layout_children(
         tree,
@@ -773,6 +773,13 @@ mod tests {
         }
     }
 
+    struct FillMeasure;
+    impl Measure for FillMeasure {
+        fn measure(&mut self, _node: usize, constraints: Constraints) -> Size {
+            Size::new(constraints.max_width, 20.0)
+        }
+    }
+
     fn fixed(width: f32, height: f32) -> Node {
         let mut node = Node::new(NodeKind::Control);
         node.width = SizeSpec::Fixed(width);
@@ -800,6 +807,41 @@ mod tests {
         );
         assert_eq!(rect(&result, first), Rect::new(0.0, 0.0, 20.0, 10.0));
         assert_eq!(rect(&result, second), Rect::new(24.0, 0.0, 30.0, 12.0));
+    }
+
+    #[test]
+    fn padded_container_gives_children_the_inset_width() {
+        let mut tree = PageTree::new(Node::new(NodeKind::Page));
+        tree.nodes[0].width = SizeSpec::Fixed(100.0);
+        tree.nodes[0].height = SizeSpec::Fixed(60.0);
+        tree.nodes[0].layout = LayoutSpec::Flex {
+            direction: Axis::Column,
+            wrap: false,
+            justify: Justify::Start,
+            align: Align::Start,
+            gap: 0.0,
+        };
+        let mut column = Node::new(NodeKind::Stem);
+        column.padding = crate::page::Edges::all(20.0);
+        column.layout = LayoutSpec::Flex {
+            direction: Axis::Column,
+            wrap: false,
+            justify: Justify::Start,
+            align: Align::Start,
+            gap: 0.0,
+        };
+        let column = tree.push(column);
+        let inner = tree.push(Node::new(NodeKind::Control));
+        tree.nodes[column].children = vec![inner];
+        tree.nodes[0].children = vec![column];
+        let result = layout(
+            &tree,
+            Constraints::tight(Size::new(100.0, 60.0)),
+            &mut FillMeasure,
+        );
+        // 内边距 20 两侧：子节点最多 60 宽，自己 60 + 40 = 100，不会溢出页面。
+        assert_eq!(rect(&result, column), Rect::new(0.0, 0.0, 100.0, 60.0));
+        assert_eq!(rect(&result, inner), Rect::new(20.0, 20.0, 60.0, 20.0));
     }
 
     #[test]

@@ -83,6 +83,7 @@ impl Engine {
     /// 选上之后接着组句；见 [`Composition::scope`]。
     pub fn query(&self) -> Result<Query, ParseError> {
         self.last_rescored.set(false);
+        self.forget_stale_compose();
         let mut query = match self.query_inner() {
             Ok(query) => query,
             Err(error) => {
@@ -104,6 +105,22 @@ impl Engine {
         // 已选文本显示在未选拼音之前；候选与光标只对未选拼音算。
         query.selected = self.composition.selected_text();
         self.insert_custom_phrases(&mut query.candidates.items);
+        // 特殊输入模式：只留当前（第一个）音节的单字候选，选完一个字后剩余的拼音留给下一次查询。
+        if self.special_input {
+            let first = query
+                .segmentations
+                .first()
+                .and_then(|segmentation| segmentation.syllables.first())
+                .map(|syllable| (syllable.text.clone(), syllable.complete));
+            keep_single_characters(
+                &mut query.candidates.items,
+                first
+                    .as_ref()
+                    .map(|(text, complete)| (text.as_str(), *complete)),
+            );
+        }
+        // 选词模型重排完只留前 SENTENCE_CANDIDATES 条整句，别把第一页的词挤走。
+        trim_sentence_alternates(&mut query.candidates.items);
         // 给输入日志留个摘要：上屏时才知道选了什么，这里才知道看到了什么
         let pinyin = match &query.correction {
             Some(correction) => correction.segmentation.joined("'"),
@@ -662,6 +679,8 @@ impl Engine {
         if allow_extras {
             self.insert_shortcuts(&mut items, keys);
         }
+        // 选词模型：把前几条里盖住整段输入的候选按前文重排（没分就记下，停顿后后台算）。
+        self.rerank_choices(&mut items);
 
         // 按头段算时英文尾段不参与拼音候选，显示上跟在切分后面：`wo'xiang'xue'hao'rust`
         let tail = english_tail
@@ -790,7 +809,7 @@ impl Engine {
     /// 英文模式：敲的字母原样显示，候选是英文词表的精确词与前缀补全（见 [`english::suggest`]，**不做拼错纠正**），
     /// 词表没装就没有候选。
     pub(super) fn query_english(&self, scope: &str, rest: String, start: Instant) -> Query {
-        let items: Vec<Candidate> = english::suggest(
+        let mut items: Vec<Candidate> = english::suggest(
             &self.english_lists(),
             scope,
             |text| self.learner.weight(text),
@@ -807,6 +826,7 @@ impl Engine {
             auxiliary_typed: None,
         })
         .collect();
+        self.rerank_choices(&mut items);
         Query {
             segmentations: Vec::new(),
             candidates: CandidateList { items },
@@ -857,13 +877,16 @@ impl Engine {
                 }
                 if tail.competes
                     && let Some(full_seg) = first_segmentation(keys)
-                    && let Some((plain, weight)) = self.plain_sentence(pool, &full_seg)
                 {
-                    push_sentence(pool, plain, sentence_rank(weight));
+                    let sentences = self.plain_sentence(pool, &full_seg);
+                    for (plain, weight) in sentences {
+                        push_sentence(pool, plain, sentence_rank(weight));
+                    }
                 }
             }
             _ => {
-                if let Some((plain, weight)) = self.plain_sentence(pool, best) {
+                let sentences = self.plain_sentence(pool, best);
+                for (plain, weight) in sentences {
                     push_sentence(pool, plain, sentence_rank(weight));
                 }
             }
@@ -871,50 +894,89 @@ impl Engine {
     }
 
     /// 整段拼音的整句候选：最优切分至少两个音节、且最优路径不止一个词时才有。
-    /// 整段本身就是词库里的词时不重复；有音节没转成字的不算句子。返回候选与它的权重。
+    /// 整段本身就是词库里的词时不重复；有音节没转成字的不算句子。
+    /// 接了选词模型且输入够长时给 16 条备选，否则最多 3 条；短输入只给第一条。
     pub(super) fn plain_sentence(
         &self,
         pool: &[(Candidate, PoolRank)],
         best: &Segmentation,
-    ) -> Option<(Candidate, f64)> {
+    ) -> Vec<(Candidate, f64)> {
         if best.syllables.len() < 2 {
-            return None;
+            return Vec::new();
         }
-        let conversion = self.convert_sentence(&best.patterns())?;
+        let wanted = if best.syllables.len() >= ALTERNATE_MIN_SYLLABLES {
+            if self.has_choice_model() {
+                CHOICE_SENTENCE_CANDIDATES
+            } else {
+                SENTENCE_CANDIDATES
+            }
+        } else {
+            1
+        };
+        let conversions = self.sentence_paths(&best.patterns(), false, wanted);
+        let Some(first) = conversions.first() else {
+            return Vec::new();
+        };
         // 不按原样读的路径（模糊音）不许压过「敲的拼音本身就是一个词」
-        if conversion.altered() {
+        if first.altered() {
             let letters = best.joined("");
             let spelled_exactly = pool
                 .iter()
                 .any(|(c, _)| c.kind == CandidateKind::Chinese && c.syllables.concat() == letters);
             if spelled_exactly {
-                return None;
+                return Vec::new();
             }
         }
-        if conversion.has_placeholder() {
-            return None;
+        if first.has_placeholder() {
+            return Vec::new();
         }
-        // 整段本来就是一个词时不出整句；只读了一部分（末尾没打完的音节没算进去）的不插
-        let kind = if conversion.word_count() >= 2 {
-            CandidateKind::Sentence
-        } else if conversion.altered() && conversion.syllables.len() == best.syllables.len() {
-            CandidateKind::Chinese
-        } else {
-            return None;
-        };
-        let weight = conversion.weight();
-        Some((
-            Candidate {
-                text: conversion.text,
-                display: None,
-                kind,
-                syllables: conversion.syllables,
-                reading: None,
-                auxiliary: None,
-                auxiliary_typed: None,
-            },
-            weight,
-        ))
+        let mut out = Vec::new();
+        for (rank, conversion) in conversions.into_iter().enumerate() {
+            if out.len() >= wanted {
+                break;
+            }
+            let first = rank == 0;
+            if conversion.has_placeholder() {
+                if first {
+                    return Vec::new();
+                }
+                continue;
+            }
+            // 整段本来就是一个词时不出整句；只读了一部分（末尾没打完的音节没算进去）的不插。
+            // 备选只收真整句，单个词的后续路径是噪声。
+            let kind = if conversion.word_count() >= 2 {
+                CandidateKind::Sentence
+            } else if first
+                && conversion.altered()
+                && conversion.syllables.len() == best.syllables.len()
+            {
+                CandidateKind::Chinese
+            } else if first {
+                return Vec::new();
+            } else {
+                continue;
+            };
+            if out
+                .iter()
+                .any(|(candidate, _): &(Candidate, f64)| candidate.text == conversion.text)
+            {
+                continue;
+            }
+            let weight = conversion.weight();
+            out.push((
+                Candidate {
+                    text: conversion.text,
+                    display: None,
+                    kind,
+                    syllables: conversion.syllables,
+                    reading: None,
+                    auxiliary: None,
+                    auxiliary_typed: None,
+                },
+                weight,
+            ));
+        }
+        out
     }
 
     /// 跑一次整句转换：主词库 + 用户词（含模糊音写法，命中的按代价扣分），静态语言模型与个人 n-gram 插值。
@@ -933,14 +995,32 @@ impl Engine {
         patterns: &[cloudime_dictionary::SyllablePattern<'_>],
         whole: bool,
     ) -> Option<Conversion> {
+        self.sentence_paths(patterns, whole, 1).into_iter().next()
+    }
+
+    /// 整句词图的多条路径（重排后按得分降序）。`want` 是要交给选词模型的条数：
+    /// 只取第一条时仍按 [`RESCORE_PATHS`] 取几条给神经重打分挑；要 16 条时按 16 条生成。
+    pub(super) fn sentence_paths(
+        &self,
+        patterns: &[cloudime_dictionary::SyllablePattern<'_>],
+        whole: bool,
+        want: usize,
+    ) -> Vec<Conversion> {
         let dictionaries = self.all_dictionaries();
         let expanded = self.expand_positions(patterns);
-        let k = if self.has_sentence_scorer() {
+        // 选词模型的按音节字分布：本次没有就先记下，后台算好后重查时再用。
+        let table = self.char_table(patterns);
+        // 混合档：短输入只走知意，不跑整句打分器。
+        let use_sentence_scorer = self.sentence_scorer_applies(patterns.len());
+        let rescored = use_sentence_scorer || table.is_some();
+        let k = if want > 1 {
+            want
+        } else if rescored {
             RESCORE_PATHS
         } else {
             1
         };
-        let mut paths = sentence::convert_paths(
+        let mut paths = sentence::convert_paths_with_emission(
             &dictionaries,
             &expanded.positions(),
             whole,
@@ -949,15 +1029,22 @@ impl Engine {
             self.personal(),
             |text| self.learner.weight(text),
             |index, syllable| expanded.cost(index, syllable),
+            |start, text, syllables| {
+                table.as_deref().map_or(0.0, |table| {
+                    super::choice::char_emission(table, patterns, start, text, syllables)
+                })
+            },
             &mut self.span_cache.borrow_mut(),
         );
         // 与最优路径差得太远的不参与：那种差距多半是个人 n-gram 拉开的
         if paths.len() > 1 {
             let floor = paths[0].score - self.neural_margin;
             paths.retain(|p| p.score >= floor);
-            self.rescore_paths(&mut paths);
+            if use_sentence_scorer {
+                self.rescore_paths(&mut paths);
+            }
         }
-        paths.into_iter().next()
+        paths
     }
 
     /// 一个位置的写法：敲的原样、模糊音扩展（配置的模糊音规则），再给每个完整音节补上
@@ -1187,6 +1274,43 @@ fn rank_pool(mut pool: Vec<(Candidate, PoolRank)>) -> Vec<(Candidate, f64)> {
         .filter(|(candidate, _)| seen.insert(candidate.text.clone()))
         .map(|(candidate, rank)| (candidate, rank.5))
         .collect()
+}
+
+/// 特殊输入模式只留「一个汉字、一个音节」的候选；没有单字候选时退回原列表，避免死路。
+/// 正常候选池里本来就有输入前缀的单字（`yun'duo` 会有 `云`），这里只做筛选，不改排序。
+fn keep_single_characters(items: &mut Vec<Candidate>, first: Option<(&str, bool)>) {
+    let Some((first_text, complete)) = first else {
+        return;
+    };
+    let matches_first = |candidate: &Candidate| {
+        candidate.kind == CandidateKind::Chinese
+            && candidate.text.chars().count() == 1
+            && candidate.syllables.len() == 1
+            && candidate.syllables.first().is_some_and(|syllable| {
+                if complete {
+                    syllable == first_text
+                } else {
+                    syllable.starts_with(first_text)
+                }
+            })
+    };
+    if !items.iter().any(&matches_first) {
+        return;
+    }
+    items.retain(&matches_first);
+}
+
+/// 选词模型重排完只留前 [`SENTENCE_CANDIDATES`] 条整句：交给模型的备选多半只差一两个字，
+/// 全显示会把第一页的词挤走。
+fn trim_sentence_alternates(items: &mut Vec<Candidate>) {
+    let mut kept = 0;
+    items.retain(|candidate| {
+        if candidate.kind != CandidateKind::Sentence {
+            return true;
+        }
+        kept += 1;
+        kept <= SENTENCE_CANDIDATES
+    });
 }
 
 /// 候选池里的排名权重按文本记一份（给平台层看 Core 的排序依据）。

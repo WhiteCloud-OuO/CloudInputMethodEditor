@@ -20,8 +20,9 @@
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, WPARAM};
 use windows::Win32::UI::WindowsAndMessaging::{
-    CreateWindowExW, DestroyWindow, HCURSOR, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
-    WS_EX_TOOLWINDOW, WS_EX_TOPMOST, WS_EX_TRANSPARENT, WS_POPUP,
+    CreateWindowExW, DestroyWindow, HCURSOR, HWND_NOTOPMOST, HWND_TOPMOST, SWP_NOACTIVATE,
+    SWP_NOMOVE, SWP_NOSIZE, SetWindowPos, WNDCLASSEXW, WS_EX_LAYERED, WS_EX_NOACTIVATE,
+    WS_EX_TOOLWINDOW, WS_EX_TRANSPARENT, WS_POPUP,
 };
 use windows::core::{PCWSTR, Result};
 
@@ -60,7 +61,7 @@ impl IndependentWindowTemplate {
             lpszClassName: class_name,
             ..Default::default()
         })?;
-        let mut style = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_TOPMOST | WS_EX_NOACTIVATE;
+        let mut style = WS_EX_LAYERED | WS_EX_TOOLWINDOW | WS_EX_NOACTIVATE;
         if transparent {
             style |= WS_EX_TRANSPARENT;
         }
@@ -91,6 +92,32 @@ impl IndependentWindowTemplate {
         self.hwnd
     }
 
+    /// 置顶开关；缺省不置顶（`new` 不写 `WS_EX_TOPMOST`）。
+    pub fn set_top_most(&self, top_most: bool) {
+        let insert_after = if top_most {
+            Some(HWND_TOPMOST)
+        } else {
+            Some(HWND_NOTOPMOST)
+        };
+        unsafe {
+            let _ = SetWindowPos(
+                self.hwnd,
+                insert_after,
+                0,
+                0,
+                0,
+                0,
+                SWP_NOMOVE | SWP_NOSIZE | SWP_NOACTIVATE,
+            );
+        }
+    }
+
+    /// 建好后链式设置置顶。
+    pub fn with_top_most(self, top_most: bool) -> Self {
+        self.set_top_most(top_most);
+        self
+    }
+
     /// 名下的资产（辅助窗口）：**建好自己这块窗之后**往里加。
     pub fn assets_mut(&mut self) -> &mut Assets {
         &mut self.assets
@@ -107,6 +134,31 @@ impl IndependentWindowTemplate {
         self.assets.focus() == Focus::Owner
     }
 
+    /// 自己这会儿接不接受输入：焦点在自己身上，而且名下**没有模态资产**。
+    ///
+    /// 模态辅助窗口打开时，所有者整块让开（鼠标穿透、不接键盘），但仍然活着 ——
+    /// 桥接、`sync`、内容更新照旧（见 [`Assets::set_modal`]）。
+    pub fn accepts_input(&self) -> bool {
+        self.focused() && self.assets.modal().is_none()
+    }
+
+    /// 名下的模态资产名字；`None` = 没有模态。
+    pub fn modal_asset(&self) -> Option<&str> {
+        self.assets.modal()
+    }
+
+    /// 设置 / 取消名下叫 `name` 的资产的**模态**（同一所有者名下只允许一件）。
+    ///
+    /// `false` = 没动：没这件资产、状态本来就是这样、或者另一件资产已经是模态。
+    pub fn set_asset_modal(&self, name: &str, modal: bool) -> bool {
+        let changed = self.assets.set_modal(name, modal);
+        if changed {
+            // 模态开 / 关都直接影响所有者接不接输入
+            self.sync_input();
+        }
+        changed
+    }
+
     /// 收起名下的资产（宿主收起时调）：资产表会先**自动归还焦点**（§4），之后自己这块窗的鼠标开关
     /// 也跟着回位 —— 否则会留下一块「看不见的窗还占着鼠标穿透」的状态。
     pub fn hide_assets(&self) {
@@ -114,10 +166,10 @@ impl IndependentWindowTemplate {
         self.focusing();
     }
 
-    /// 自己那块窗的**鼠标开关**跟当前焦点对齐：焦点不在自己身上时整块让开（鼠标穿透到下面的窗口）。
-    /// 焦点换人（[`DesignatedAssetToGetFocus`]）与资产收起之后都要调一遍。
+    /// 自己那块窗的**鼠标开关**跟当前状态对齐：焦点不在自己身上、或者有模态资产时整块让开
+    /// （鼠标穿透到下面的窗口）。焦点换人（[`DesignatedAssetToGetFocus`]）、模态开 / 关之后都要调一遍。
     fn sync_input(&self) {
-        set_mouse_transparent(self.hwnd, !self.focused());
+        set_mouse_transparent(self.hwnd, !self.accepts_input());
     }
 }
 

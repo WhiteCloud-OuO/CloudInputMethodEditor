@@ -1,0 +1,15 @@
+[package]
+name = "cloud-ui-types"
+description = "cloud-ui 与 cloudime-platform 共用的轻量 UI 数据类型：排布、序号样式、主题"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true

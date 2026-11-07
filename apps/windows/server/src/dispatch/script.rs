@@ -45,8 +45,11 @@
 
 use cloudime_core::{Candidate, CandidateKind, CandidateLayout};
 use cloudime_platform::Config;
-use cloudime_platform::protocol::{InputMode, KeyEvent, OnlineLine, OnlineState, ScreenRect};
+use cloudime_platform::protocol::{
+    InputMode, KeyEvent, KeyModifiers, OnlineLine, OnlineState, ScreenRect,
+};
 use cloudime_script::SizeRequest;
+use cloudime_script::TriggerCondition;
 use cloudime_script::mlua;
 use windows::Win32::Foundation::POINT;
 
@@ -62,6 +65,16 @@ use super::composed::Composed;
 pub trait ScriptWindowSink: Send {
     /// 执行一次脚本窗口操作（按脚本产出的顺序）。
     fn script_window(&self, request: cloudime_script::WindowRequest);
+
+    /// 同步显示脚本消息对话框，返回按钮下标。没有 UI 后端时返回 0。
+    fn message_dialog(&self, _request: &cloudime_script::MessageDialogRequest) -> u8 {
+        0
+    }
+
+    /// 同步显示脚本文本输入对话框，返回确认内容 / 取消时的缺省文本。没有 UI 后端时返回空串。
+    fn text_input_dialog(&self, _request: &cloudime_script::TextInputDialogRequest) -> String {
+        String::new()
+    }
 }
 
 /// 什么都不做的窗口输出端（测试 / UI 没起来）。
@@ -456,19 +469,66 @@ impl Router {
         actions
     }
 
-    /// i 模式运行一个脚本的 `manual` 处理函数；返回值里的 `commit` 交给调用方上屏。
+    /// i 模式运行一个脚本；返回值里的 `commit` 交给调用方上屏。
+    ///
+    /// `manual` 脚本收 `manual` 事件；带修饰键的组合键脚本（清单 `show_in_i_mode = true`）
+    /// 按它声明的第一组键合成一次 `key` 事件，让原来的键处理函数直接跑一遍。
     ///
     /// 只在主脚本运行时上同步执行；脚本期间产生的窗口 / 主题 / 提示等动作按普通规则落地。
-    pub(super) fn run_manual_script(&mut self, file: &str) -> Option<String> {
-        let payload = match self.manual_payload(file) {
-            Ok(payload) => payload,
-            Err(error) => {
-                tracing::warn!(%error, file, "拼 i 模式脚本载荷失败");
+    pub(super) fn run_manual_script(&mut self, id: &str) -> Option<String> {
+        let Some(info) = self
+            .scripts
+            .script_infos()
+            .iter()
+            .find(|info| info.id.eq_ignore_ascii_case(id))
+            .cloned()
+        else {
+            tracing::warn!(id, "找不到这个脚本");
+            return None;
+        };
+        let (event, payload) = match info.trigger {
+            TriggerCondition::Manual => {
+                let payload = match self.manual_payload(id) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        tracing::warn!(%error, id, "拼 i 模式脚本载荷失败");
+                        return None;
+                    }
+                };
+                ("manual", payload)
+            }
+            TriggerCondition::CombinationKey => {
+                let Some(vk) = info.wanted_keys.first().copied() else {
+                    tracing::warn!(id, "组合键脚本没有声明 keys，i 模式无法运行");
+                    return None;
+                };
+                let mask = info.combination_modifiers;
+                let modifiers = modifiers_from_mask(mask);
+                let event = KeyEvent::new(vk, None, modifiers);
+                let payload = match key_payload(
+                    self.scripts.lua(),
+                    self.focused_app(),
+                    self.mode,
+                    false,
+                    "",
+                    &event,
+                    self.focused_script_window.as_ref(),
+                ) {
+                    Ok(payload) => payload,
+                    Err(error) => {
+                        tracing::warn!(%error, id, "拼 i 模式组合键载荷失败");
+                        return None;
+                    }
+                };
+                ("key", payload)
+            }
+            _ => {
+                tracing::warn!(id, "自动触发脚本不会在 i 模式里运行");
                 return None;
             }
         };
         let app = self.focused_app().map(str::to_owned);
-        let actions = self.with_script_actions_for("manual", payload, app.as_deref(), Some(file));
+        let actions = self.with_script_actions_for(event, payload, app.as_deref(), Some(id));
         self.apply_manual_actions(&actions);
         self.flush_script_windows();
         actions.commit
@@ -477,13 +537,31 @@ impl Router {
     /// Shift+数字：在新的线程里用新的脚本运行时跑这个脚本，允许多开。
     ///
     /// 独立线程起一个新的 Lua 运行时；跑完把动作和窗口请求送回工人线程，窗口编号抬到高位。
-    pub(super) fn spawn_manual_script(&self, file: &str) {
+    pub(super) fn spawn_manual_script(&self, id: &str) {
         let Some(dir) = &self.config.scripts_dir else {
-            tracing::warn!(file, "没有脚本目录，i 模式无法后台运行");
+            tracing::warn!(id, "没有脚本目录，i 模式无法后台运行");
             return;
         };
-        let path = dir.join(file);
-        let file = file.to_owned();
+        let Some(info) = self
+            .scripts
+            .script_infos()
+            .iter()
+            .find(|info| info.id.eq_ignore_ascii_case(id))
+        else {
+            tracing::warn!(id, "找不到这个脚本的入口文件");
+            return;
+        };
+        let path = dir.join(&info.id).join(&info.file);
+        if !info.i_mode {
+            tracing::warn!(id, "自动触发脚本不会在 i 模式里运行");
+            return;
+        }
+        let id = info.id.clone();
+        let entry = info.file.clone();
+        let trigger = info.trigger;
+        let mask = info.combination_modifiers;
+        let first_key = info.wanted_keys.first().copied();
+        let mode = self.mode;
         let app = self.focused_app().map(str::to_owned);
         let surrounding = self.surrounding.clone();
         let sender = self.background_sender.clone();
@@ -492,24 +570,43 @@ impl Router {
             let runtime = cloudime_script::Runtime::load_file(&path);
             runtime.set_context(&surrounding);
             runtime.set_window_id_base(window_base);
-            let payload = match runtime.lua().create_table() {
-                Ok(table) => table,
-                Err(error) => {
-                    tracing::warn!(%error, file, "后台脚本载荷创建失败");
+            let responses = if trigger == TriggerCondition::CombinationKey {
+                let Some(vk) = first_key else {
+                    tracing::warn!(id, "组合键脚本没有声明 keys，i 模式无法后台运行");
                     return;
-                }
+                };
+                let event = KeyEvent::new(vk, None, modifiers_from_mask(mask));
+                let payload =
+                    match key_payload(runtime.lua(), app.as_deref(), mode, false, "", &event, None)
+                    {
+                        Ok(payload) => payload,
+                        Err(error) => {
+                            tracing::warn!(%error, id, "后台脚本组合键载荷创建失败");
+                            return;
+                        }
+                    };
+                runtime.dispatch_to_script(&id, "key", payload, app.as_deref())
+            } else {
+                let payload = match runtime.lua().create_table() {
+                    Ok(table) => table,
+                    Err(error) => {
+                        tracing::warn!(%error, id, "后台脚本载荷创建失败");
+                        return;
+                    }
+                };
+                let _ = payload.set("app", app.as_deref());
+                let _ = payload.set("file", id.as_str());
+                let _ = payload.set("entry", entry.as_str());
+                let _ = payload.set("source", "i_mode");
+                runtime.dispatch_to_script(&id, "manual", payload, app.as_deref())
             };
-            let _ = payload.set("app", app.as_deref());
-            let _ = payload.set("file", file.as_str());
-            let _ = payload.set("source", "i_mode");
-            let responses = runtime.dispatch_to_script(&file, "manual", payload, app.as_deref());
             let mut actions = ScriptActions::default();
             for response in &responses {
                 actions.merge(response);
             }
             let windows = runtime.take_window_requests();
             tracing::info!(
-                script = %file,
+                script = %id,
                 responses = responses.len(),
                 windows = windows.len(),
                 "i 模式后台脚本结束"
@@ -518,11 +615,19 @@ impl Router {
         });
     }
 
-    /// i 模式 `manual` 事件的载荷：应用名 / 文件名 / 来源。
-    fn manual_payload(&self, file: &str) -> mlua::Result<mlua::Table> {
+    /// i 模式 `manual` 事件的载荷：应用名 / 脚本文件夹 id / 入口文件 / 来源。
+    fn manual_payload(&self, id: &str) -> mlua::Result<mlua::Table> {
         let payload = self.scripts.lua().create_table()?;
         payload.set("app", self.focused_app())?;
-        payload.set("file", file)?;
+        payload.set("file", id)?;
+        if let Some(info) = self
+            .scripts
+            .script_infos()
+            .iter()
+            .find(|info| info.id.eq_ignore_ascii_case(id))
+        {
+            payload.set("entry", info.file.as_str())?;
+        }
         payload.set("source", "i_mode")?;
         Ok(payload)
     }
@@ -889,7 +994,7 @@ impl Router {
             self.apply_manual_actions(&result.actions);
             for request in result.windows {
                 if self.script_windows_ready {
-                    self.script_windows.script_window(request);
+                    self.script_windows.borrow().script_window(request);
                 } else {
                     self.pending_script_windows.push(request);
                 }
@@ -1038,7 +1143,7 @@ impl Router {
     fn flush_script_windows(&mut self) {
         for request in self.scripts.take_window_requests() {
             if self.script_windows_ready {
-                self.script_windows.script_window(request);
+                self.script_windows.borrow().script_window(request);
             } else {
                 self.pending_script_windows.push(request);
             }
@@ -1070,6 +1175,17 @@ fn position(index: u32, count: usize) -> Option<usize> {
         .ok()
         .and_then(|index| index.checked_sub(1))
         .filter(|index| *index < count)
+}
+
+/// 清单的修饰键位图（bit0 ctrl / bit1 alt / bit2 shift / bit3 win）→ 协议里的修饰键。
+fn modifiers_from_mask(mask: u8) -> KeyModifiers {
+    KeyModifiers {
+        ctrl: mask & 0b0001 != 0,
+        alt: mask & 0b0010 != 0,
+        shift: mask & 0b0100 != 0,
+        win: mask & 0b1000 != 0,
+        ..KeyModifiers::default()
+    }
 }
 
 /// 一次按键在脚本那边的样子（`app` 是宿主应用名 —— 脚本据此按应用分支，比如游戏里放行按键；

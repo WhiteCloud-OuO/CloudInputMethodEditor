@@ -117,6 +117,7 @@ impl StatusBar {
             false,
             Some(unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default()),
         )?;
+        template.set_top_most(true);
         let hwnd = template.hwnd();
         let dpi = unsafe { GetDpiForSystem() }.max(96);
         let placement = Rc::new(Placement::new(hwnd, layered::shadow_margin(dpi), events));

@@ -125,11 +125,12 @@ pub(crate) fn apply(
         private,
         before,
         document,
+        id,
     }) = input
     {
         report_privacy(engine, private);
         if before.is_some() || document.is_some() {
-            report_surrounding(engine, before.unwrap_or_default(), document);
+            report_surrounding(engine, before.unwrap_or_default(), document, id);
         }
     }
     report_caret(shared, engine, context, ec);
@@ -152,13 +153,14 @@ pub(crate) fn report_surrounding(
     engine: &SharedClient,
     before: String,
     document: Option<cloudime_platform::protocol::DocumentText>,
+    context: u64,
 ) {
     let chars = before.chars().count();
     let document_chars = document.as_ref().map_or(0, |doc| doc.text.chars().count());
     if let Ok(mut guard) = engine.try_borrow_mut()
         && let Some(client) = guard.as_mut()
     {
-        match client.surrounding(before, document) {
+        match client.surrounding(before, document, context) {
             Ok(()) => super::log::log(&format!("送光标前文 {chars} 字、整篇 {document_chars} 字")),
             Err(error) => super::log::log(&format!("送光标前文失败: {error}")),
         }
@@ -206,8 +208,19 @@ fn commit_text(
             shared.set_composition(None);
         }
         None => {
-            if delete_before > 0 {
-                delete_before_caret(shared, context, ec, delete_before)?;
+            let deleted = if delete_before > 0 {
+                delete_before_caret(shared, context, ec, delete_before)?
+            } else {
+                DeleteBefore::Range
+            };
+            // 宿主把 TSF 上下文收成 `0..0`（Windows 11 记事本等），范围删不动、已经补发了退格键：
+            // 替换文本也得跟着走 `SendInput`，排在退格之后。否则 TSF 先插新符号、应用再处理退格，
+            // 删掉的是刚插入的新符号，原来那个标点反而留着（真机踩过）。
+            if deleted == DeleteBefore::Injected {
+                if !inject_text(text, caret_shift) {
+                    super::log::log("补发替换文本失败：退格已送出，文本没上屏");
+                }
+                return Ok(());
             }
             let insert: ITfInsertAtSelection = context.cast()?;
             // 标志不能用 NOQUERY：它不回传 range，windows-rs 会把 NULL 当失败。
@@ -321,14 +334,88 @@ fn inject_key(shared: &Shared, key: VIRTUAL_KEY) -> bool {
     }
 }
 
+/// 把替换文本补发给应用，排在刚才补发的退格键之后（同一个消息队列里按顺序处理）。
+///
+/// 只在 TSF 范围删不动、`delete_before_caret` 已经走 `SendInput` 退格时用：这时不能在编辑会话里
+/// 用 TSF 插文本，否则应用先看到新符号、再处理退格，删掉的是新符号。
+fn inject_text(text: &str, caret_shift: i16) -> bool {
+    use windows::Win32::UI::Input::KeyboardAndMouse::{
+        INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP,
+        KEYEVENTF_UNICODE, SendInput, VK_LEFT, VK_RIGHT,
+    };
+    // 注入 Unicode 字符时 wVk 必须是 0，字符放 wScan；每个字符一按一放。UTF-16 代理对按两个单元发。
+    let mut inputs = Vec::with_capacity(
+        text.encode_utf16().count() * 2 + caret_shift.unsigned_abs() as usize * 2,
+    );
+    for unit in text.encode_utf16() {
+        for flags in [KEYEVENTF_UNICODE, KEYEVENTF_UNICODE | KEYEVENTF_KEYUP] {
+            inputs.push(INPUT {
+                r#type: INPUT_KEYBOARD,
+                Anonymous: INPUT_0 {
+                    ki: KEYBDINPUT {
+                        wVk: VIRTUAL_KEY(0),
+                        wScan: unit,
+                        dwFlags: flags,
+                        ..Default::default()
+                    },
+                },
+            });
+        }
+    }
+    // 成对补全 / 跳过右半边要挪的光标：应用按顺序先收到文本，再收到方向键。
+    if caret_shift != 0 {
+        let key = if caret_shift < 0 { VK_LEFT } else { VK_RIGHT };
+        for _ in 0..caret_shift.unsigned_abs() {
+            for flags in [KEYBD_EVENT_FLAGS(0), KEYEVENTF_KEYUP] {
+                inputs.push(INPUT {
+                    r#type: INPUT_KEYBOARD,
+                    Anonymous: INPUT_0 {
+                        ki: KEYBDINPUT {
+                            wVk: key,
+                            dwFlags: flags,
+                            ..Default::default()
+                        },
+                    },
+                });
+            }
+        }
+    }
+    let sent = unsafe { SendInput(&inputs, std::mem::size_of::<INPUT>() as i32) };
+    let ok = sent == inputs.len() as u32;
+    if !ok {
+        super::log::log(&format!(
+            "补发替换文本失败（只送进 {sent} / {} 个输入）",
+            inputs.len()
+        ));
+    }
+    ok
+}
+
+/// 光标前删字实际是怎么完成的。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum DeleteBefore {
+    /// TSF 范围 / ACP 直接删掉了。
+    Range,
+    /// 范围删不动，已经补发退格键，交给应用按顺序处理。
+    Injected,
+    /// 两条路都失败，什么也没删。
+    Failed,
+}
+
 /// 删掉光标前 `count` 个字符（符号映射的两键规则把上一个键的输出换掉，`~=` → `≈`）。
 ///
 /// 真机上发现：TSF 只在「收成哪一端就挪哪一端」时才真正拉开范围。原来的写法收成**末尾**再
 /// `ShiftStart`，范围不动，于是两键规则只上屏后一个符号、前一个留在原地（`！≠`）。
 /// 改成收成**起点**再 `ShiftStart`（与 `surrounding.rs` 往左读前文同款），真拉开了才 `SetText`；
 /// 拉不开再按 ACP 位置直接圈 `[光标-count, 光标]`；宿主上下文太窄（Windows 11 记事本在符号上屏后只剩
-/// `0..0`）就补发一个退格键给应用自己删。
-fn delete_before_caret(shared: &Shared, context: &ITfContext, ec: u32, count: u16) -> Result<()> {
+/// `0..0`）就补发一个退格键给应用自己删。调用方拿到 [`DeleteBefore::Injected`] 时，替换文本也必须
+/// 走 `SendInput` 排在退格之后。
+fn delete_before_caret(
+    shared: &Shared,
+    context: &ITfContext,
+    ec: u32,
+    count: u16,
+) -> Result<DeleteBefore> {
     let mut selections = [TF_SELECTION::default()];
     let mut fetched = 0;
     unsafe { context.GetSelection(ec, TF_DEFAULT_SELECTION, &mut selections, &mut fetched)? };
@@ -345,22 +432,22 @@ fn delete_before_caret(shared: &Shared, context: &ITfContext, ec: u32, count: u1
             continue;
         }
         if pull_start_back(&selected, ec, count) {
-            return Ok(());
+            return Ok(DeleteBefore::Range);
         }
         if delete_by_acp(&by_acp, ec, count) {
             super::log::log(&format!("删光标前 {count} 个字符：按 ACP 位置圈"));
-            return Ok(());
+            return Ok(DeleteBefore::Range);
         }
         if inject_key(shared, VK_BACK) {
             super::log::log(&format!(
                 "删光标前 {count} 个字符：TSF 范围动不了，补发退格键"
             ));
-            return Ok(());
+            return Ok(DeleteBefore::Injected);
         }
         super::log::log(&format!("删光标前 {count} 个字符失败：范围拉不开"));
         break;
     }
-    Ok(())
+    Ok(DeleteBefore::Failed)
 }
 
 /// 收成**起点**再把起点往回挪 `count` 格（`surrounding.rs` 往左读前文同款），真挪动了就删掉整段。

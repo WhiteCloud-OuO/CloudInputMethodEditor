@@ -81,6 +81,63 @@ pub struct MappedSymbol {
     pub delete_before: u16,
 }
 
+/// 智能符号：中文模式下，光标前一个字符决定按空格时上屏什么。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum SmartSymbol {
+    /// 单个空格：全角逗号。
+    Comma,
+    /// 双击空格：`说` 后面的冒号与开引号。
+    OpeningQuote,
+    /// 双击空格：问号。
+    Question,
+    /// 双击空格：叹号。
+    Exclamation,
+    /// 双击空格：破折号。
+    Dash,
+    /// 双击空格：句号。
+    FullStop,
+}
+
+impl SmartSymbol {
+    /// 上屏的文本（成对补全的右半边由壳按配置再补）。
+    pub fn text(self) -> &'static str {
+        match self {
+            Self::Comma => "，",
+            Self::OpeningQuote => "：“",
+            Self::Question => "？",
+            Self::Exclamation => "！",
+            Self::Dash => "——",
+            Self::FullStop => "。",
+        }
+    }
+
+    /// 是不是「说」后面那个开引号：成对补全开着时要连右半边一起上屏、光标停在中间。
+    pub fn opens_quote(self) -> bool {
+        self == Self::OpeningQuote
+    }
+}
+
+/// 单个空格：光标前是汉字时换成全角逗号；不是汉字就交还应用。
+pub fn smart_space_single(before: Option<char>) -> Option<SmartSymbol> {
+    before
+        .filter(|c| crate::sentence::is_han(*c))
+        .map(|_| SmartSymbol::Comma)
+}
+
+/// 连按两个空格：按光标前那个汉字选标点。不是汉字就交还应用（两次空格都不动）。
+pub fn smart_space_double(before: Option<char>) -> Option<SmartSymbol> {
+    let before = before.filter(|c| crate::sentence::is_han(*c))?;
+    Some(match before {
+        '说' | '說' => SmartSymbol::OpeningQuote,
+        '吗' | '嗎' | '呢' | '嘛' => SmartSymbol::Question,
+        '呀' | '啊' | '哟' | '喲' | '唷' | '哇' | '哦' | '喔' | '噢' => {
+            SmartSymbol::Exclamation
+        }
+        '呜' | '嗚' | '嘶' | '吱' | '嘎' => SmartSymbol::Dash,
+        _ => SmartSymbol::FullStop,
+    })
+}
+
 /// 引号成对切换与「上一个按键」的状态。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Punctuation {
@@ -298,6 +355,81 @@ mod tests {
         p.note_passthrough('!');
         p.note_committed("开发");
         assert_eq!(p.symbol('=', false), None);
+    }
+
+    #[test]
+    fn smart_space_single_only_fires_after_han() {
+        assert_eq!(smart_space_single(Some('说')), Some(SmartSymbol::Comma));
+        assert_eq!(smart_space_single(Some('說')), Some(SmartSymbol::Comma));
+        assert_eq!(smart_space_single(Some('a')), None);
+        assert_eq!(smart_space_single(Some('，')), None);
+        assert_eq!(smart_space_single(None), None);
+    }
+
+    #[test]
+    fn smart_space_double_picks_the_symbol_from_the_last_han() {
+        assert_eq!(
+            smart_space_double(Some('说')),
+            Some(SmartSymbol::OpeningQuote)
+        );
+        assert_eq!(
+            smart_space_double(Some('說')),
+            Some(SmartSymbol::OpeningQuote)
+        );
+        assert_eq!(smart_space_double(Some('吗')), Some(SmartSymbol::Question));
+        assert_eq!(smart_space_double(Some('呢')), Some(SmartSymbol::Question));
+        assert_eq!(smart_space_double(Some('嘛')), Some(SmartSymbol::Question));
+        assert_eq!(
+            smart_space_double(Some('呀')),
+            Some(SmartSymbol::Exclamation)
+        );
+        assert_eq!(
+            smart_space_double(Some('啊')),
+            Some(SmartSymbol::Exclamation)
+        );
+        assert_eq!(
+            smart_space_double(Some('哟')),
+            Some(SmartSymbol::Exclamation)
+        );
+        assert_eq!(
+            smart_space_double(Some('唷')),
+            Some(SmartSymbol::Exclamation)
+        );
+        assert_eq!(
+            smart_space_double(Some('哇')),
+            Some(SmartSymbol::Exclamation)
+        );
+        assert_eq!(
+            smart_space_double(Some('哦')),
+            Some(SmartSymbol::Exclamation)
+        );
+        assert_eq!(
+            smart_space_double(Some('喔')),
+            Some(SmartSymbol::Exclamation)
+        );
+        assert_eq!(
+            smart_space_double(Some('噢')),
+            Some(SmartSymbol::Exclamation)
+        );
+        assert_eq!(smart_space_double(Some('呜')), Some(SmartSymbol::Dash));
+        assert_eq!(smart_space_double(Some('嘶')), Some(SmartSymbol::Dash));
+        assert_eq!(smart_space_double(Some('吱')), Some(SmartSymbol::Dash));
+        assert_eq!(smart_space_double(Some('嘎')), Some(SmartSymbol::Dash));
+        assert_eq!(smart_space_double(Some('好')), Some(SmartSymbol::FullStop));
+        assert_eq!(smart_space_double(Some('a')), None);
+        assert_eq!(smart_space_double(None), None);
+    }
+
+    #[test]
+    fn smart_symbol_text_matches_the_rules() {
+        assert_eq!(SmartSymbol::Comma.text(), "，");
+        assert_eq!(SmartSymbol::OpeningQuote.text(), "：“");
+        assert_eq!(SmartSymbol::Question.text(), "？");
+        assert_eq!(SmartSymbol::Exclamation.text(), "！");
+        assert_eq!(SmartSymbol::Dash.text(), "——");
+        assert_eq!(SmartSymbol::FullStop.text(), "。");
+        assert!(SmartSymbol::OpeningQuote.opens_quote());
+        assert!(!SmartSymbol::Comma.opens_quote());
     }
 
     #[test]

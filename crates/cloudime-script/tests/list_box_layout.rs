@@ -26,9 +26,10 @@ fn document_of(requests: &[WindowRequest]) -> &Document {
 fn list_box_expands_the_first_subpage_for_every_item() {
     let root = std::env::temp_dir().join("cloudime-script-list-box-layout");
     let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(root.join("Scripts/layouts")).unwrap();
+    let script = root.join("Scripts/list-box");
+    std::fs::create_dir_all(script.join("layouts")).unwrap();
     std::fs::write(
-        root.join("list-box.lua"),
+        script.join("list-box.lua"),
         r#"
 cloudime.script{
     name = "列表盒测试",
@@ -67,7 +68,7 @@ end)
     )
     .unwrap();
     std::fs::write(
-        root.join("Scripts/layouts/row.json"),
+        script.join("layouts/row.json"),
         r##"{
   "version": 2,
   "page": {
@@ -104,7 +105,7 @@ end)
     )
     .unwrap();
     std::fs::write(
-        root.join("Scripts/layouts/list-box.json"),
+        script.join("layouts/list-box.json"),
         r##"{
   "version": 2,
   "page": {
@@ -136,7 +137,7 @@ end)
     )
     .unwrap();
 
-    let runtime = Runtime::load_file(&root.join("list-box.lua"));
+    let runtime = Runtime::load_file(&script.join("list-box.lua"));
     runtime.set_install_dir(root.clone());
     runtime.dispatch("manual", event(&runtime, &[]), None);
     assert_eq!(
@@ -279,9 +280,10 @@ end)
 fn fixed_height_list_box_only_instantiates_the_visible_window() {
     let root = std::env::temp_dir().join("cloudime-script-list-box-virtual");
     let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(root.join("Scripts/layouts")).unwrap();
+    let script = root.join("Scripts/virtual");
+    std::fs::create_dir_all(script.join("layouts")).unwrap();
     std::fs::write(
-        root.join("virtual.lua"),
+        script.join("virtual.lua"),
         r#"
 cloudime.script{
     name = "列表盒虚拟化",
@@ -309,7 +311,7 @@ end)
     )
     .unwrap();
     std::fs::write(
-        root.join("Scripts/layouts/row.json"),
+        script.join("layouts/row.json"),
         r##"{
   "version": 2,
   "page": {
@@ -346,12 +348,12 @@ end)
         }
     });
     std::fs::write(
-        root.join("Scripts/layouts/virtual.json"),
+        script.join("layouts/virtual.json"),
         serde_json::to_vec(&layout).unwrap(),
     )
     .unwrap();
 
-    let runtime = Runtime::load_file(&root.join("virtual.lua"));
+    let runtime = Runtime::load_file(&script.join("virtual.lua"));
     runtime.set_install_dir(root.clone());
     runtime.dispatch("manual", event(&runtime, &[]), None);
     let requests = runtime.take_window_requests();
@@ -440,9 +442,10 @@ end)
 fn auto_height_list_box_measures_only_the_visible_window() {
     let root = std::env::temp_dir().join("cloudime-script-list-box-auto-virtual");
     let _ = std::fs::remove_dir_all(&root);
-    std::fs::create_dir_all(root.join("Scripts/layouts")).unwrap();
+    let script = root.join("Scripts/auto");
+    std::fs::create_dir_all(script.join("layouts")).unwrap();
     std::fs::write(
-        root.join("auto.lua"),
+        script.join("auto.lua"),
         r#"
 cloudime.script{
     name = "列表盒自动行高",
@@ -466,7 +469,7 @@ end)
     )
     .unwrap();
     std::fs::write(
-        root.join("Scripts/layouts/row.json"),
+        script.join("layouts/row.json"),
         r##"{
   "version": 2,
   "page": {
@@ -502,12 +505,12 @@ end)
         }
     });
     std::fs::write(
-        root.join("Scripts/layouts/auto.json"),
+        script.join("layouts/auto.json"),
         serde_json::to_vec(&layout).unwrap(),
     )
     .unwrap();
 
-    let runtime = Runtime::load_file(&root.join("auto.lua"));
+    let runtime = Runtime::load_file(&script.join("auto.lua"));
     runtime.set_install_dir(root.clone());
     runtime.dispatch("manual", event(&runtime, &[]), None);
     let requests = runtime.take_window_requests();

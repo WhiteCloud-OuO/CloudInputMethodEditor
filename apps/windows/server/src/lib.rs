@@ -4,6 +4,8 @@ pub mod assembly;
 pub mod dispatch;
 pub mod error;
 pub mod ipc;
+/// MCP Client sidecar 代理（`cloudime.mcp.*` 的传输层）。
+pub mod mcp;
 /// 系统语音（SAPI）：`Shift + 反引号` 念候选的译文。
 pub mod speech;
 /// 候选窗口 / 状态条的自绘线程；仅 Windows。

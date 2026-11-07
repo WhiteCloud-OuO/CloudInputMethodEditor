@@ -3,6 +3,7 @@
 pub(super) mod codes;
 mod effect;
 pub(super) mod input;
+pub(super) mod smart_symbol;
 
 pub(super) use self::effect::Effect;
 

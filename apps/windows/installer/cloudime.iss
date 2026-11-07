@@ -113,9 +113,8 @@ Source: "{#Repo}\data\generated\lm.qj";          DestDir: "{app}\data\generated"
 ; Excludes 挡掉开发机自己的 UserWordBank.db（用户自造词库，运行时生成，绝不能进包）。
 Source: "{#Repo}\WordBank\*.db";   DestDir: "{app}\WordBank"; Flags: ignoreversion; Excludes: "UserWordBank.db"
 ; —— 短语库：安装目录 Phrases\Phrase.db（user 与 cloudime_default 两张表）——
-; 用户脚本目录：只装「新建脚本」用的模板（用户在设置页里建的脚本不随包走；升级会覆盖模板）。
-; 实际脚本放 Scripts\ 根部；共享 Lua / JSON 布局 / DLL / 数据分别放
-; Scripts\shared / Scripts\layouts / Scripts\dlls / Scripts\saved（目录由 [Dirs] 建出来）。
+; 用户脚本目录：只装清单骨架参考 template.lua（用户自己的脚本不随包走；升级会覆盖模板）。
+; 每个脚本一个文件夹：Scripts\<脚本名>\ 下放入口 .lua 与 shared / layouts / dlls / saved 子目录。
 Source: "{#Repo}\Scripts\template.lua"; DestDir: "{app}\Scripts"; Flags: ignoreversion
 
 ; —— 主题：安装目录 Themes\ 只放**随包默认**主题（只读）；用户自己编辑 / 新建的主题在
@@ -128,9 +127,11 @@ Source: "{#Repo}\Phrases\Phrase.db"; DestDir: "{app}\Phrases"; Flags: onlyifdoes
 ; 内置短语的同步源：同一份文件换个名字装进 data\，每次升级都覆盖；Server 启动时把它的 cloudime_default
 ; 同步进 Phrases\Phrase.db（只在不同时替换，user 表不动），升级也能拿到新的内置短语。
 Source: "{#Repo}\Phrases\Phrase.db"; DestDir: "{app}\data"; DestName: "phrase-default.db"; Flags: ignoreversion
-; —— 本地整句模型（data\local_models\ 下的 *.qjm；没有就不装，Server 不重排）——
+; —— 本地模型统一装在 {app}\Models\：知意（增强档）随包，不需要用户再下载 ——
+Source: "{#Repo}\Models\laya-zhen-long-l12-int8g\*"; DestDir: "{app}\Models\laya-zhen-long-l12-int8g"; Flags: ignoreversion recursesubdirs createallsubdirs
+; —— 含章基本模型（仓库 data\local_models\ 下的 *.qjm；没有就不装，Server 不重排）——
 ; 目录里可以有多份（不同用途），Server 自己优先词表含汉字的字级模型（见 cloudime-neural 的 find_model），所以整目录带上。
-Source: "{#Repo}\data\local_models\*.qjm"; DestDir: "{app}\data\local_models"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#Repo}\data\local_models\*.qjm"; DestDir: "{app}\Models"; Flags: ignoreversion skipifsourcedoesntexist
 ; —— 随 git 的资源 ——
 Source: "{#Repo}\tutorial.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Repo}\lua.md"; DestDir: "{app}"; Flags: ignoreversion
@@ -143,18 +144,21 @@ Source: "{#Repo}\apps\windows\server\src\ui\status\icons-arrangement.cfg"; DestD
 Source: "{#Repo}\apps\windows\server\src\ui\status\icons\*.svg";           DestDir: "{app}\data\icons"; Flags: ignoreversion
 ; —— Server 放最后：它一落地，旧版 DLL 就能把它拉起来并占住数据文件（见文件头）——
 Source: "{#Repo}\target\release\cloudime-server.exe";   DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Repo}\target\installer\onnxruntime\onnxruntime.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#Repo}\target\installer\onnxruntime\onnxruntime-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#Repo}\target\installer\onnxruntime\onnxruntime-ThirdPartyNotices.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+; 只读 MCP Server：给外部 AI 客户端按需拉起，不注册服务、不开机启动。
+Source: "{#Repo}\target\release\cloudime-mcp-server.exe"; DestDir: "{app}"; Flags: ignoreversion
+; MCP Client sidecar：由 Server 在第一次 cloudime.mcp.* 调用时懒启动，同样不注册服务、不开机启动。
+Source: "{#Repo}\target\release\cloudime-mcp-client.exe"; DestDir: "{app}"; Flags: ignoreversion
 
 [Dirs]
 ; 双键拼音方案目录：**安装目录**下的 `InputSchemes\`（里面是各方案的 .toml / .ini 与 AuxiliaryCodes\ 辅助码表）。
 ; 用户在设置页要能改方案文件、程序要能写 use_input_scheme.cfg 与首次运行样例，所以 [Run] ①.8 会给它授
 ; 「普通用户可写」。目录先建出来；随包不放方案文件（样例由程序首次运行写出）。
 Name: "{app}\InputSchemes"
-; 脚本目录约定：shared（共享 Lua）、layouts（JSON 界面）、dlls（动态链接库）、saved（脚本数据）。
+; 脚本目录由模板文件铺出来（Scripts\template.lua）；每个脚本自己带 shared / layouts / dlls / saved。
 ; [Run] ①.7 已经把整个 Scripts\ 递归授给普通用户可写。
-Name: "{app}\Scripts\shared"
-Name: "{app}\Scripts\layouts"
-Name: "{app}\Scripts\dlls"
-Name: "{app}\Scripts\saved"
 
 [Icons]
 Name: "{group}\云朵输入法 设置"; Filename: "{app}\cloudime-settings.exe"; IconFilename: "{app}\cloudime.ico"
@@ -220,8 +224,11 @@ Type: files; Name: "{commonprograms}\CloudIME\设置 云朵输入法.lnk"
 Type: files; Name: "{userprograms}\CloudIME\设置 云朵输入法.lnk"
 Type: files; Name: "{commonprograms}\CloudIME\卸载 云朵输入法.lnk"
 Type: files; Name: "{userprograms}\CloudIME\卸载 云朵输入法.lnk"
-; 更早版本把模型装在 data\model\（三件套或单个 model.qjm）：现在搬到 data\local_models\，旧目录整棵清掉，免得多占几十 MB。
+; 更早版本把模型装在 data\model\（三件套或单个 model.qjm）：现在搬到 Models\，旧目录整棵清掉，免得多占几十 MB。
 Type: filesandordirs; Name: "{app}\data\model"
+; 知意与基本模型统一搬到 Models\：旧的 Model\ 与 data\local_models\ 都整棵删掉。
+Type: filesandordirs; Name: "{app}\Model"
+Type: filesandordirs; Name: "{app}\data\local_models"
 ; 0.0.1 开发版的随包码表旧位置
 Type: filesandordirs; Name: "{app}\codes"
 ; 词库搬进 WordBank\ 之前的旧位置（主词库与领域词库）
@@ -315,6 +322,7 @@ function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
   RetireServerExe;
   KillProcess('cloudime-server.exe');
+  KillProcess('cloudime-mcp-client.exe');
   KillProcess('cloudime-settings.exe');
   RetireLoadedDll('{#TsfDll}');
   RetireLoadedDll('{#TsfDll32}');

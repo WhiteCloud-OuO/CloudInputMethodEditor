@@ -11,7 +11,7 @@ use crate::dispatch::Router;
 use crate::dispatch::translate::TranslateAction;
 
 /// 成对补全里右半边对应键盘上的哪个键：`）` → `)`、`”` → `"`；本来就是半角（或没有对应）的原样返回。
-fn keyboard_close(close: char) -> char {
+pub(super) fn keyboard_close(close: char) -> char {
     match close {
         '”' => '"',
         '’' => '\'',
@@ -71,6 +71,9 @@ impl Router {
         if self.translate.choices().is_some() {
             return self.apply_choice_key(event);
         }
+        if let Some(effect) = self.special_input_key(event) {
+            return effect;
+        }
         // 成对补全：上一键补上的右半边，紧接着又敲了一次就跳过去（不再插一个）。别的键也会把它作废。
         if let Some(close) = self.pending_close.take()
             && event.character == Some(close)
@@ -129,6 +132,22 @@ impl Router {
         } else {
             self.apply_chinese(c, event)
         }
+    }
+
+    /// 右 Alt（Alt Gr）：中文状态下切换特殊输入模式。模式本身由 Engine 记着，下次查询就只出单字。
+    fn special_input_key(&mut self, event: &KeyEvent) -> Option<Effect> {
+        if event.virtual_key != codes::RIGHT_ALT
+            || event.modifiers.english_mode
+            || !self.composing()
+            || !self.config.special_input
+        {
+            return None;
+        }
+        let on = !self.engine.special_input();
+        self.engine.set_special_input(on);
+        tracing::info!(on, "切换特殊输入模式");
+        // 正在组句时立刻按新模式重查一遍（`Changed` 会触发 `recompose`）；没组句就是空操作。
+        Some(Effect::Changed(None))
     }
 
     /// Ctrl + 候选数字：用户短语直接上屏（短语没有可杀的学习）；其余中文 / 英文候选「杀掉」——
@@ -453,6 +472,12 @@ impl Router {
             return with_prefix(raw, self.passthrough(c), c);
         }
         if !self.composing() {
+            // 智能符号：中文模式下，空格按光标前的内容换成标点（单空格逗号、双击按前一个字选符号）。
+            if c == ' '
+                && let Some(effect) = self.apply_smart_space()
+            {
+                return effect;
+            }
             return self.apply_punctuation(c, event);
         }
         self.apply_printable(c, event)

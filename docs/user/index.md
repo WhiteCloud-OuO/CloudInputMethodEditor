@@ -14,6 +14,7 @@ Windows 版为测试版，按键见 [按键与快捷键](getting-started/keys.md
 - 已安装：[第一次输入](getting-started/first-input.md)，介绍中英切换、选词、翻页与选错后的退回。
 - 查某个键的作用：[按键与快捷键](getting-started/keys.md)。
 - 云朵输入法在本机保存了哪些文件：[数据与日志](help/data-and-logs.md)。
+- 让外部 AI 查词库 / 让脚本调用外部工具：[MCP](help/mcp.md)。
 
 ## 两条原则
 

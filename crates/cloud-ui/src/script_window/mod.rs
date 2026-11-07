@@ -27,39 +27,38 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_RETURN, VK_SHIFT, VK_UP,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    DefWindowProcW, GetCursorPos, GetSystemMetrics, HTCLIENT, HTTRANSPARENT, IDC_ARROW, IDC_IBEAM,
-    KillTimer, LoadCursorW, MA_NOACTIVATE, SM_CXDOUBLECLK, SM_CYDOUBLECLK, SW_HIDE, SW_SHOWNA,
-    SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetTimer, SetWindowPos, ShowWindow,
-    WM_CAPTURECHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_RBUTTONUP, WM_SETCURSOR,
-    WM_TIMER,
+    DefWindowProcW, GetCursorPos, GetSystemMetrics, GetWindowRect, HTCLIENT, HTTRANSPARENT,
+    IDC_ARROW, IDC_IBEAM, KillTimer, LoadCursorW, MA_NOACTIVATE, SM_CXDOUBLECLK, SM_CYDOUBLECLK,
+    SW_HIDE, SW_SHOWNA, SWP_NOACTIVATE, SWP_NOSIZE, SWP_NOZORDER, SetCursor, SetTimer,
+    SetWindowPos, ShowWindow, WM_CAPTURECHANGED, WM_KEYDOWN, WM_LBUTTONDBLCLK, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCHITTEST,
+    WM_RBUTTONUP, WM_SETCURSOR, WM_TIMER,
 };
 use windows::core::{PCWSTR, Result, w};
 
-use crate::auxiliary::{Asset, Bridge, DesignatedAssetToGetFocus, Focus, Host};
-use crate::auxiliary_window_template::{AuxiliaryWindowSpec, AuxiliaryWindowTemplate, PanelAction};
+use crate::auxiliary::{Asset, AssetKind, Bridge, DesignatedAssetToGetFocus, Focus, Host};
+use crate::auxiliary_window_template::{
+    AuxiliaryWindowSpec, AuxiliaryWindowTemplate, DialogOptions, PanelAction,
+};
 use crate::independent_window_template::IndependentWindowTemplate;
 use crate::layered;
+use crate::mask::{MaskWindow, WindowMask};
 use crate::monitor;
 use crate::painter::SharedPainter;
+use crate::text_edit::{
+    ScrollInfo, TextHostWindow, WM_TEXT_CHANGED, WM_TEXT_FOCUS, WM_TEXT_KEY, WM_TEXT_SCROLL,
+    WM_TEXT_TRIPLE_CLICK, WM_TEXT_WHEEL,
+};
 use crate::window::mouse_transparent;
 use crate::window_class::WindowClass;
-use cloudime_platform::LayoutMode;
+use cloud_ui_types::LayoutMode;
 use cloudime_render::{
     ButtonState, Color, DefaultButton, Document, Element, FontSlot, HitShape, InstanceInfo,
     ListBoxWindow, Region, ScrollAxis, StaticTextContent, TextBoxScroll,
 };
 use cloudime_script::{
-    AuxiliarySpec, ScriptWindowEvent, WindowAction, WindowId, WindowRequest, WindowSpec,
+    AuxiliarySpec, DialogSpec, ScriptWindowEvent, WindowAction, WindowId, WindowRequest, WindowSpec,
 };
-use text_host::{
-    ScrollInfo, TextHostWindow, WM_TEXT_CHANGED, WM_TEXT_FOCUS, WM_TEXT_KEY, WM_TEXT_SCROLL,
-    WM_TEXT_TRIPLE_CLICK, WM_TEXT_WHEEL,
-};
-
-mod text_host;
-mod text_store;
-mod tsf;
 
 /// 脚本独立窗口的窗口类（所有脚本窗口共用）。
 const CLASS_NAME: PCWSTR = w!("CloudIMEScriptWindow");
@@ -100,10 +99,15 @@ impl ScriptWindows {
         match request {
             WindowRequest::Create(id, spec) => self.create(id, spec),
             WindowRequest::CreateAuxiliary(id, spec) => self.create_auxiliary(id, spec),
+            WindowRequest::CreateDialog(id, spec) => self.create_dialog(id, spec),
             WindowRequest::SetContent(id, document) => {
                 if let Some(window) = self.windows.get(&id) {
                     window.set_content(document);
                 } else if let Some(aux) = self.auxiliaries.get(&id).cloned() {
+                    if aux.kind == AssetKind::Dialog {
+                        tracing::warn!(id, name = %aux.name, "脚本对话框的正文由 Cloud UI 生成，不能 set_content");
+                        return;
+                    }
                     aux.set_content(document);
                     self.sync_owner(&aux);
                 } else {
@@ -132,6 +136,11 @@ impl ScriptWindows {
                 if let Some(window) = self.windows.get(&id) {
                     window.hide();
                 } else if let Some(aux) = self.auxiliaries.get(&id).cloned() {
+                    if aux.kind == AssetKind::Dialog {
+                        // 隐藏的模态窗口会挡住所有者却看不见：dialog 只能 close，不能 hide。
+                        tracing::warn!(id, name = %aux.name, "脚本对话框不能 hide；请用 close");
+                        return;
+                    }
                     if let Some(owner) = self.windows.get(&aux.owner) {
                         // §4 规则 7：焦点先归还，再收起这件资产
                         owner.release_focus(&aux.name);
@@ -144,6 +153,7 @@ impl ScriptWindows {
             }
             WindowRequest::Close(id) => self.close(id),
             WindowRequest::Focus(id, focus) => self.focus(id, focus),
+            WindowRequest::SetModal(id, modal) => self.set_modal(id, modal),
             WindowRequest::FocusText { id, name } => {
                 if let Some(window) = self.windows.get(&id) {
                     window.focus_text(&name);
@@ -300,7 +310,13 @@ impl ScriptWindows {
             );
             return;
         };
-        match ScriptAuxiliary::new(id, spec.clone(), self.painter.clone(), self.events.clone()) {
+        match ScriptAuxiliary::new(
+            id,
+            spec.clone(),
+            self.painter.clone(),
+            self.events.clone(),
+            owner.hwnd(),
+        ) {
             Ok(aux) => {
                 let aux = Rc::new(aux);
                 tracing::info!(id, name = %spec.name, owner = spec.owner, interactive = spec.interactive,
@@ -309,6 +325,40 @@ impl ScriptWindows {
                 self.auxiliaries.insert(id, aux);
             }
             Err(error) => tracing::warn!(%error, id, "建脚本辅助窗口失败"),
+        }
+    }
+
+    fn create_dialog(&mut self, id: WindowId, spec: DialogSpec) {
+        if self.auxiliaries.contains_key(&id) || self.windows.contains_key(&id) {
+            tracing::warn!(id, "脚本窗口：编号重复，忽略这次对话框创建");
+            return;
+        }
+        let Some(owner) = self.windows.get(&spec.owner).cloned() else {
+            tracing::warn!(
+                id,
+                owner = spec.owner,
+                "脚本对话框：宿主不存在（独立窗口要先建）"
+            );
+            return;
+        };
+        match ScriptAuxiliary::new_dialog(
+            id,
+            spec.clone(),
+            self.painter.clone(),
+            self.events.clone(),
+            owner.hwnd(),
+        ) {
+            Ok(aux) => {
+                let aux = Rc::new(aux);
+                tracing::info!(id, name = %spec.name, owner = spec.owner, mask = spec.mask,
+                    "脚本对话框已建（创建即模态）");
+                // `Assets::add` 会把它压到模态栈顶、转移焦点；随后 sync 一次让它显示并开蒙版。
+                owner.add_asset(Box::new(AssetHandle(aux.clone())));
+                self.auxiliaries.insert(id, aux);
+                owner.apply_modal_block();
+                owner.sync_assets();
+            }
+            Err(error) => tracing::warn!(%error, id, "建脚本对话框失败"),
         }
     }
 
@@ -399,11 +449,98 @@ impl ScriptWindows {
         }
     }
 
+    /// 辅助窗口的**模态**（`aux:set_modal`）：只对辅助窗口有效，且同一宿主同时只能有一件模态。
+    fn set_modal(&self, id: WindowId, modal: bool) {
+        let Some(aux) = self.auxiliaries.get(&id) else {
+            tracing::warn!(id, modal, "脚本窗口：只有辅助窗口能设模态");
+            return;
+        };
+        let Some(owner) = self.windows.get(&aux.owner) else {
+            tracing::warn!(id, owner = aux.owner, "脚本辅助窗口：宿主不存在，模态没设");
+            return;
+        };
+        if !owner.set_asset_modal(&aux.name, modal) {
+            tracing::warn!(
+                id,
+                name = %aux.name,
+                owner = aux.owner,
+                modal,
+                "脚本辅助窗口：模态没变（另一件资产已经模态 / 状态本来如此）"
+            );
+        }
+    }
+
     /// 宿主收起 / 显示 / 换内容之后，把它名下的资产驱动一遍。
     fn sync_owner(&self, aux: &Rc<ScriptAuxiliary>) {
         if let Some(owner) = self.windows.get(&aux.owner) {
             owner.sync_assets();
         }
+    }
+
+    /// 脚本同步消息对话框：找宿主窗口，进入它的线程本地上下文，再构造实例并 `show`。
+    ///
+    /// 这个函数在 UI 线程上调用；`show` 内部的嵌套消息循环会一直跑到用户点按钮。
+    pub fn message_dialog(&self, request: &cloudime_script::MessageDialogRequest) -> u8 {
+        let Some(owner) = self.windows.get(&request.owner) else {
+            tracing::warn!(owner = request.owner, "脚本消息对话框：宿主窗口不存在");
+            return 0;
+        };
+        let background = owner
+            .painter
+            .borrow()
+            .as_ref()
+            .map(|painter| painter.palette().background);
+        crate::current::set_background(background);
+        let _current = crate::current::enter(
+            owner.hwnd(),
+            owner.painter.clone(),
+            true,
+            owner.edit_hosts(),
+            Vec::new(),
+        );
+        let result = crate::MessageDialog {
+            title: request.title.clone(),
+            text: request.text.clone(),
+            icon: request.icon.clone(),
+            buttons: request.buttons.clone(),
+            style: (&request.style).into(),
+        }
+        .show();
+        owner.apply_modal_block();
+        result
+    }
+
+    /// 脚本同步文本输入对话框：找宿主窗口，进入它的线程本地上下文，再构造实例并 `show`。
+    ///
+    /// 这个函数在 UI 线程上调用；`show` 内部的嵌套消息循环会一直跑到用户点按钮。
+    pub fn text_input_dialog(&self, request: &cloudime_script::TextInputDialogRequest) -> String {
+        let Some(owner) = self.windows.get(&request.owner) else {
+            tracing::warn!(owner = request.owner, "脚本文本输入对话框：宿主窗口不存在");
+            return request.default_text.clone();
+        };
+        let background = owner
+            .painter
+            .borrow()
+            .as_ref()
+            .map(|painter| painter.palette().background);
+        crate::current::set_background(background);
+        let _current = crate::current::enter(
+            owner.hwnd(),
+            owner.painter.clone(),
+            true,
+            owner.edit_hosts(),
+            Vec::new(),
+        );
+        let result = crate::TextInputDialog {
+            title: request.title.clone(),
+            text: request.text.clone(),
+            allow_multiline: request.allow_multiline,
+            default_text: request.default_text.clone(),
+            style: (&request.style).into(),
+        }
+        .show();
+        owner.apply_modal_block();
+        result
     }
 }
 
@@ -644,6 +781,12 @@ pub(super) struct ScriptWindow {
     scale: Cell<f32>,
     margin: Cell<i32>,
 
+    /// 当前蒙版；对话框要求时由所有者打开，销毁后恢复原值。
+    mask: Cell<Option<WindowMask>>,
+
+    /// 蒙版窗口；有蒙版才建。
+    mask_window: RefCell<Option<MaskWindow>>,
+
     /// 最近一次渲染用的 DPI。
     dpi: Cell<u32>,
 }
@@ -666,6 +809,7 @@ impl ScriptWindow {
             !spec.interactive,
             cursor,
         )?;
+        template.set_top_most(true);
         let window = Rc::new(Self {
             id,
             name: spec.name.clone(),
@@ -705,6 +849,8 @@ impl ScriptWindow {
             last: Cell::new((0, 0)),
             scale: Cell::new(1.0),
             margin: Cell::new(0),
+            mask: Cell::new(None),
+            mask_window: RefCell::new(None),
             dpi: Cell::new(system_dpi()),
         });
         REGISTRY.with(|map| {
@@ -1040,6 +1186,7 @@ impl ScriptWindow {
                 true,
                 job.auto_wrap,
                 job.line_spacing,
+                true,
                 self.dpi.get(),
             );
             match host {
@@ -1061,6 +1208,7 @@ impl ScriptWindow {
                                 0,
                                 (width * scale).round().max(1.0) as i32,
                                 (height * scale).round().max(1.0) as i32,
+                                true,
                             );
                         }
                         host.ensure_layout();
@@ -1119,6 +1267,7 @@ impl ScriptWindow {
         };
         let scale = self.scale.get().max(0.01);
         let shown = self.shown.get();
+        let modal = self.modal_blocked();
         let document = self.document.borrow();
         let placements: Vec<_> = document
             .text_edits()
@@ -1126,7 +1275,9 @@ impl ScriptWindow {
             .chain(document.text_boxes())
             .collect();
         let mut edits = self.text_edits.borrow_mut();
+        let mut changed_any = false;
         for edit in edits.iter_mut() {
+            edit.host.set_input_blocked(modal);
             let Some(placement) = placements.iter().find(|item| item.path == edit.path) else {
                 // 行已经滚出当前窗口：宿主先藏起来，等重建时再删。
                 edit.host.show(false);
@@ -1165,12 +1316,20 @@ impl ScriptWindow {
             let y = position.1 + (top * scale).round() as i32;
             let width = ((right - left) * scale).round().max(1.0) as i32;
             let height = ((bottom - top) * scale).round().max(1.0) as i32;
-            let mut changed = edit.host.set_bounds(x, y, width, height);
+            let mut changed = edit.host.set_bounds(x, y, width, height, !modal);
             changed |= edit.host.show(shown);
             if changed {
                 edit.host.refresh();
             }
-            edit.host.raise();
+            changed_any |= changed;
+            // 模态窗口必须留在宿主上面：这一帧不再把 RichEdit 抬到最前。
+            if !modal {
+                edit.host.raise();
+            }
+        }
+        if modal && changed_any {
+            // 只有宿主真的动了才抬一次，避免每帧 SetWindowPos 造成 z-order 抖动。
+            self.template.borrow().assets().raise_modal();
         }
     }
 
@@ -3136,6 +3295,7 @@ impl ScriptWindow {
         self.render_and_present(position);
         let first = !self.shown.replace(true);
         self.sync_text_edits();
+        self.sync_mask();
         if first {
             tracing::info!(id = self.id, name = %self.name, x = position.0, y = position.1, dpi,
                 "脚本独立窗口已显示");
@@ -3208,6 +3368,9 @@ impl ScriptWindow {
         if !self.shown.get() {
             // 已经可见的窗口每帧再 ShowWindow 一次没有意义，反而可能触发一次重绘。
             let _ = unsafe { ShowWindow(self.hwnd(), SW_SHOWNA) };
+        } else {
+            // 内容尺寸 / 位置变了：蒙版跟着内容区走（首次显示由 `show` 统一处理）。
+            self.sync_mask();
         }
     }
 
@@ -3228,6 +3391,95 @@ impl ScriptWindow {
         self.dpi.set(dpi);
         self.render_and_present(position);
         self.sync_assets();
+    }
+
+    /// 窗口被外部挪动（模态 dialog 拖拽带着所有者走）后，把缓存位置与各层宿主对齐。
+    fn external_move(&self, hwnd: HWND) {
+        if !self.shown.get() {
+            return;
+        }
+        let mut rect = RECT::default();
+        unsafe {
+            let _ = GetWindowRect(hwnd, &mut rect);
+        }
+        let margin = self.margin.get();
+        let position = (rect.left + margin, rect.top + margin);
+        if self.position.get() == Some(position) {
+            return;
+        }
+        self.position.set(Some(position));
+        self.sync_text_edits();
+        self.sync_mask();
+        self.sync_assets();
+    }
+
+    /// 当前蒙版（对话框要求时由所有者打开）。
+    fn mask_value(&self) -> Option<WindowMask> {
+        self.mask.get()
+    }
+
+    /// 设置蒙版；下一帧 `sync_mask` 会按内容区摆放。
+    fn set_mask_value(&self, mask: Option<WindowMask>) {
+        if self.mask.replace(mask) == mask {
+            return;
+        }
+        self.sync_mask();
+    }
+
+    /// 把蒙版摆到内容区（和窗口背景同一套圆角），并保证模态 dialog 仍在它上面。
+    fn sync_mask(&self) {
+        let mask = self.mask.get().filter(|mask| mask.color.a > 0);
+        let Some(mask) = mask else {
+            if let Some(window) = self.mask_window.borrow().as_ref() {
+                window.show(false);
+            }
+            return;
+        };
+        let Some((x, y)) = self.position.get() else {
+            if let Some(window) = self.mask_window.borrow().as_ref() {
+                window.show(false);
+            }
+            return;
+        };
+        let (width, height) = self.content_size.get();
+        if width <= 0 || height <= 0 {
+            if let Some(window) = self.mask_window.borrow().as_ref() {
+                window.show(false);
+            }
+            return;
+        }
+        if self.mask_window.borrow().is_none() {
+            match MaskWindow::new(self.hwnd(), true, mask.color) {
+                Ok(window) => *self.mask_window.borrow_mut() = Some(window),
+                Err(error) => {
+                    tracing::warn!(
+                        %error,
+                        id = self.id,
+                        name = %self.name,
+                        "脚本窗口：创建蒙版失败"
+                    );
+                    self.mask.set(None);
+                    return;
+                }
+            }
+        }
+        let radius = self
+            .painter
+            .borrow()
+            .as_ref()
+            .map_or(8.0, |painter| painter.corner_radius())
+            * self.dpi.get() as f32
+            / 96.0;
+        if let Some(window) = self.mask_window.borrow_mut().as_mut() {
+            window.set_color(mask.color);
+            window.set_bounds(x, y, width, height, radius);
+            window.show(self.shown.get());
+            if self.shown.get() {
+                window.raise(true);
+            }
+        }
+        // 蒙版抬到最前之后，模态 dialog 必须重新压回去。
+        self.template.borrow().assets().raise_modal();
     }
 
     fn hide(&self) {
@@ -3253,6 +3505,7 @@ impl ScriptWindow {
             let _ = unsafe { ShowWindow(self.hwnd(), SW_HIDE) };
             tracing::info!(id = self.id, name = %self.name, "脚本独立窗口已收起");
         }
+        self.sync_mask();
         // 收起时键盘焦点也放掉（焦点不留在看不见的窗口上）
         self.notify_blur();
         // 收起时焦点先回到自己身上（§4 规则 7：焦点不留在看不见的资产上），再收起名下的资产
@@ -3265,7 +3518,13 @@ impl ScriptWindow {
     }
 
     fn retire_asset(&self, name: &str) {
+        // 对话框销毁前恢复所有者原来的蒙版（需要桥接，所以放在 Assets 外面做）。
+        if let Some(asset) = self.template.borrow().assets().get(name) {
+            asset.detach(self);
+        }
         self.template.borrow_mut().assets_mut().retire_named(name);
+        // 对话框销毁后模态可能解除（或恢复成上一件），RichEdit 宿主的输入屏蔽跟着更新。
+        self.apply_modal_block();
         // 焦点可能刚回到自己身上（关掉的那件正拿着焦点）：鼠标开关跟着对齐
         self.template.borrow().focusing();
         self.sync_assets();
@@ -3281,6 +3540,44 @@ impl ScriptWindow {
 
     fn sync_assets(&self) {
         self.template.borrow().assets().sync(self);
+    }
+
+    /// 设置 / 取消名下资产的**模态**；`false` = 没动（没这件 / 另一件已经模态 / 状态本来如此）。
+    ///
+    /// 模态期间自己这块窗整块让开（模板的 `sync_input`），RichEdit 宿主也跟着屏蔽输入；
+    /// 但 `sync_assets` / 桥接照旧，脚本仍能换内容、取文本。
+    fn set_asset_modal(&self, name: &str, modal: bool) -> bool {
+        let changed = self.template.borrow().set_asset_modal(name, modal);
+        if changed {
+            self.apply_modal_block();
+        }
+        changed
+    }
+
+    /// 当前有没有模态资产（由宿主决定是否屏蔽自己名下的 RichEdit 宿主）。
+    fn modal_blocked(&self) -> bool {
+        self.template.borrow().modal_asset().is_some()
+    }
+
+    /// 把模态状态同步到名下的 RichEdit 宿主：模态时整块鼠标穿透、放掉键盘焦点。
+    fn apply_modal_block(&self) {
+        self.set_text_input_blocked(self.modal_blocked());
+    }
+
+    /// 统一开关名下 RichEdit 宿主的输入（消息对话框同步阻塞时也用它）。
+    fn set_text_input_blocked(&self, blocked: bool) {
+        for edit in self.text_edits.borrow().iter() {
+            edit.host.set_input_blocked(blocked);
+        }
+    }
+
+    /// 名下 RichEdit 宿主的句柄列表：交给对话框在打开期间直接挡住。
+    fn edit_hosts(&self) -> Vec<Rc<TextHostWindow>> {
+        self.text_edits
+            .borrow()
+            .iter()
+            .map(|edit| edit.host.clone())
+            .collect()
     }
 
     /// 客户区坐标 → 内容区坐标（点）+ 命中的元素（1 起）。
@@ -3600,6 +3897,7 @@ impl ScriptWindow {
         let margin = self.margin.get();
         self.position.set(Some((x + margin, y + margin)));
         self.sync_text_edits();
+        self.sync_mask();
         self.sync_assets();
     }
 
@@ -3647,6 +3945,14 @@ impl Bridge for ScriptWindow {
     fn return_focus_to_owner(&self) {
         self.template.borrow().return_focus_to_owner();
     }
+
+    fn mask(&self) -> Option<WindowMask> {
+        self.mask_value()
+    }
+
+    fn set_mask(&self, mask: Option<WindowMask>) {
+        self.set_mask_value(mask);
+    }
 }
 
 impl Drop for ScriptWindow {
@@ -3690,6 +3996,9 @@ pub(super) struct ScriptAuxiliary {
     spec: AuxiliarySpec,
     template: Rc<AuxiliaryWindowTemplate>,
 
+    /// 普通辅助窗口 / 内置对话框。
+    kind: AssetKind,
+
     /// 脚本让它显示着没有（`aux:show()` / `aux:hide()`）。
     shown: Cell<bool>,
 }
@@ -3700,10 +4009,63 @@ impl ScriptAuxiliary {
         spec: AuxiliarySpec,
         painter: SharedPainter,
         events: ScriptWindowEvents,
+        owner: HWND,
+    ) -> Result<Self> {
+        Self::build(id, spec, painter, events, owner, None)
+    }
+
+    fn new_dialog(
+        id: WindowId,
+        spec: DialogSpec,
+        painter: SharedPainter,
+        events: ScriptWindowEvents,
+        owner: HWND,
+    ) -> Result<Self> {
+        // dialog 的正文由 cloud-ui 生成；传输层仍用同一套 AuxiliarySpec 描述宿主关系。
+        let auxiliary = AuxiliarySpec {
+            name: spec.name.clone(),
+            owner: spec.owner,
+            width: None,
+            height: None,
+            gap: None,
+            interactive: true,
+            shadow: true,
+        };
+        Self::build(
+            id,
+            auxiliary,
+            painter,
+            events,
+            owner,
+            Some(DialogOptions { mask: spec.mask }),
+        )
+        .inspect(|aux| {
+            // dialog 创建即显示：隐藏的模态窗口会挡住所有者却看不见，必须避免。
+            aux.shown.set(true);
+        })
+    }
+
+    fn build(
+        id: WindowId,
+        spec: AuxiliarySpec,
+        painter: SharedPainter,
+        events: ScriptWindowEvents,
+        owner: HWND,
+        dialog: Option<DialogOptions>,
     ) -> Result<Self> {
         let name = format!("script-{id}");
-        let template = Rc::new(AuxiliaryWindowTemplate::new(painter, spec.interactive)?);
+        let kind = if dialog.is_some() {
+            AssetKind::Dialog
+        } else {
+            AssetKind::Auxiliary
+        };
+        let template = match dialog {
+            Some(options) => AuxiliaryWindowTemplate::dialog(painter, owner, options)?,
+            None => AuxiliaryWindowTemplate::new(painter, spec.interactive, Some(owner))?,
+        };
+        let template = Rc::new(template);
         template.attach();
+        template.set_top_most(true);
         template.set_shadow(spec.shadow);
         if let Some(gap) = spec.gap {
             // 间隙按点给；具体像素在 `sync` 里按宿主所在显示器的 DPI 算（这里先记一个缺省）
@@ -3754,6 +4116,7 @@ impl ScriptAuxiliary {
             owner: spec.owner,
             spec,
             template,
+            kind,
             shown: Cell::new(false),
         })
     }
@@ -3793,6 +4156,17 @@ impl ScriptAuxiliary {
         self.template.set_focused(focused);
     }
 
+    /// 模态开 / 关：由宿主（所有者）的 [`ScriptWindow::set_asset_modal`] 驱动，
+    /// 模板负责 z-order 与自身的模态状态。
+    fn set_modal(&self, modal: bool) {
+        self.template.set_modal(modal);
+    }
+
+    /// 所有者又抬了别的窗口（比如 RichEdit 宿主）之后，把模态窗口重新提到最前。
+    fn raise(&self) {
+        self.template.raise();
+    }
+
     fn sync(&self, owner: &dyn Bridge) {
         if !self.shown.get() {
             self.template.hide();
@@ -3803,6 +4177,8 @@ impl ScriptAuxiliary {
             self.template.hide();
             return;
         };
+        // 对话框要求开蒙版：第一次真正显示时切过去，销毁时由 `detach` 恢复。
+        self.template.apply_mask(owner);
         // 间隙（点）按宿主所在显示器的 DPI 折成像素
         if let Some(gap) = self.spec.gap {
             let dpi = monitor::dpi_near(POINT {
@@ -3829,6 +4205,14 @@ impl Asset for AssetHandle {
         &self.0.name
     }
 
+    fn kind(&self) -> AssetKind {
+        self.0.kind
+    }
+
+    fn detach(&self, owner: &dyn Bridge) {
+        self.0.template.restore_mask(owner);
+    }
+
     fn sync(&self, owner: &dyn Bridge) {
         self.0.sync(owner);
     }
@@ -3839,6 +4223,14 @@ impl Asset for AssetHandle {
 
     fn able_to_get_focus(&self) -> bool {
         self.0.template.focusable()
+    }
+
+    fn set_modal(&self, modal: bool) {
+        self.0.set_modal(modal);
+    }
+
+    fn raise(&self) {
+        self.0.raise();
     }
 
     fn focusing(&self) {
@@ -4030,6 +4422,11 @@ fn with_window(hwnd: HWND, act: impl FnOnce(&ScriptWindow)) {
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
+        // 外部挪动（模态 dialog 拖拽时会带着所有者一起走）：把缓存位置与各层宿主对齐。
+        WM_MOVE => {
+            with_window(hwnd, |window| window.external_move(hwnd));
+            LRESULT(0)
+        }
         // 不接鼠标的脚本窗口带 `WS_EX_TRANSPARENT`：命中测试照那个位回答（与模板同一个来源）。
         WM_NCHITTEST => {
             let transparent = mouse_transparent(hwnd);

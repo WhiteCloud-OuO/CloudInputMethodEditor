@@ -110,12 +110,18 @@ fn data_lines(settings: &Settings) -> Vec<String> {
         ),
         format!("用户短语：{phrases} 条。"),
         format!(
-            "随包数据：主词库{} · 语言模型{} · 本地整句模型{}。",
+            "随包数据：主词库{} · 语言模型{} · 基本模型{} · 知意模型{}。",
             yes_no(bank.path().is_file()),
             yes_no(root.join("data/generated/lm.qj").is_file()),
             yes_no(
-                has_files(&root.join("data/local_models"))
+                has_files(&root.join("Models"))
+                    || has_files(&root.join("data/local_models"))
                     || has_files(&data_dir.join("local_models"))
+            ),
+            yes_no(
+                root.join("Models/laya-zhen-long-l12-int8g/laya.int8g.onnx")
+                    .is_file()
+                    || data_dir.join("models/zhiyi-onnx/laya.int8g.onnx").is_file()
             ),
         ),
         format!(

@@ -2,6 +2,9 @@
 
 use cloudime_platform::protocol::KeyEvent;
 
+/// 右 Alt（Alt Gr）：中文状态下切换特殊输入模式。
+pub(crate) const RIGHT_ALT: u32 = 0xA5;
+
 pub(crate) const BACK: u32 = 0x08;
 pub(crate) const TAB: u32 = 0x09;
 pub(crate) const RETURN: u32 = 0x0D;

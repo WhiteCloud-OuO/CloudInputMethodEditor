@@ -22,11 +22,12 @@
 签名、表单编码、抠 `tgtText`、写 `online` 都写好了，按文本里有没有中文字符自动中译英 / 英译中；
 两个文件夹各自带一份 `md5.lua`（纯 Lua MD5）供签名用。窗口版 `niutrans-window.lua` 用 `Ctrl+Alt+Y`
 复制选中文本、在光标旁开多行翻译窗口，静态布局是同目录的 `niutrans-window.json`。
-下载后拷到安装目录 `Scripts\` 根部、填自己的 appId / apikey、重启输入法服务就生效。
+在「设置 → 脚本 → 在线获取脚本」里点「获取」，会装进 `Scripts\niutrans-candidate\` /
+`Scripts\niutrans-window\`；填自己的 appId / apikey、重启输入法服务就生效。
 
 安装包只装 `Scripts\template.lua`，不再带示例、共享工具或这两份小牛翻译脚本；
-它们也都不会自动加载：实际脚本放 `Scripts\` 根部，共享 Lua 放 `Scripts\shared\`，
-JSON 布局放 `Scripts\layouts\`。
+它们也都不会自动加载：每个实际脚本单独一个文件夹（例如 `Scripts\niutrans-window\`），入口 `.lua` 在
+文件夹根部，共享 Lua / JSON 布局分别在它自己的 `shared\` / `layouts\` 里。
 
 示例拿到译文后还会**按候选窗现在的宽度折行**：`cloudime.candidate.width()` 拿到窗口内容区宽度（点），
 扣掉左右内边距（各 8 点）与「在线 」前缀，用 `cloudime.ui.truncate(译文, 行宽, { mode = "wrap",
@@ -51,7 +52,7 @@ max_lines = 5, font = "translate" })` 折成最多 5 行（超出的在末行补
 - **厂商 / 端点 / 参数 / 语向 / 组合键 / 结果怎么用**，全是脚本里几行；换服务商只改脚本，输入法不动。
 - 输入法侧不留厂商相关代码：没有 HTTP 之外的接口面，也没有随之而来的配置与设置页。
 - 要签名的接口（比如小牛）需要 MD5：Lua 标准库没有，所以随包给一份**纯 Lua MD5**
-  （源码仓库的 `Scripts\shared\md5.lua`，只依赖 LuaJIT 的 `bit` 库）。它拿 RFC 1321 的标准向量与小牛文档里的例子
+  （源码仓库的 `Scripts\examples\md5\md5.lua`，只依赖 LuaJIT 的 `bit` 库）。它拿 RFC 1321 的标准向量与小牛文档里的例子
   当回归用例（`crates/cloudime-script` 的 `the_shipped_lua_md5_matches_the_known_vectors`）——
   这份文件写错，所有签名就都错了。
 
@@ -88,7 +89,8 @@ cloudime.http_post(url, body, { timeout_ms = 6000, headers = { ["Content-Type"] 
 `Ctrl+字母` / `Ctrl+标点` / `Ctrl+Shift+…` / `Ctrl+功能键` —— 但**只在组句里**（候选窗显示着）：没在组句时这些键一律归应用，`Ctrl+A` / `Ctrl+C` 这类快捷键不能被输入法吃掉。
 DLL 先把它们送进 Server 问一趟，脚本想接管就接管，没人接管就回 `Passthrough`、按键照旧交给应用。
 `Alt` / `Win` 组合不碰：AltGr 就是 `Ctrl+Alt`（打字用）、`Win` 是系统键，而且 `Alt+Tab` / `Alt+F4` /
-`Win+L` / `Ctrl+Alt+Del` 这类本来就在系统 / 外壳那一层被处理掉了，输入法拦不到。
+`Win+L` / `Ctrl+Alt+Del` 这类本来就在系统 / 外壳那一层被处理掉了，输入法拦不到。右 Alt 是例外：
+中文状态下它被特殊输入模式占用，不交给脚本。
 
 代价（用户接受这份责任）：每个 `Ctrl` 组合都多一趟 IPC —— 没有脚本时那趟几乎为零（Server 见到没有
 `key` 处理函数就直接放行），有脚本时按脚本的活算；脚本卡住时这些键会跟着等（与拼音字母同一条已知风险）。

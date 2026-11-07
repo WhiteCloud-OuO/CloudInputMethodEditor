@@ -72,75 +72,8 @@ fn default_japanese_font() -> String {
     DEFAULT_JAPANESE_FONT.to_owned()
 }
 
-/// 候选词序号的样式。
-#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "snake_case")]
-pub enum ItemNumberStyle {
-    /// `1.` 到 `9.`（缺省）。
-    #[default]
-    Decimal,
-
-    /// `①` 到 `⑨`。
-    Circled,
-
-    /// `Ⅰ` 到 `Ⅸ`。
-    Roman,
-
-    /// `❶` 到 `❾`。
-    Dingbat,
-
-    /// `⑴` 到 `⑼`。
-    Parenthesized,
-}
-
-impl ItemNumberStyle {
-    /// 全部取值，设置界面按这个顺序列出。
-    pub const ALL: [Self; 5] = [
-        Self::Decimal,
-        Self::Circled,
-        Self::Roman,
-        Self::Dingbat,
-        Self::Parenthesized,
-    ];
-
-    /// 配置文件里的写法。
-    pub fn key(self) -> &'static str {
-        match self {
-            Self::Decimal => "decimal",
-            Self::Circled => "circled",
-            Self::Roman => "roman",
-            Self::Dingbat => "dingbat",
-            Self::Parenthesized => "parenthesized",
-        }
-    }
-
-    /// 界面上的名字（CSV 里那五行写法）。
-    pub fn label(self) -> &'static str {
-        match self {
-            Self::Decimal => "1.~9.",
-            Self::Circled => "①~⑨",
-            Self::Roman => "Ⅰ~Ⅸ",
-            Self::Dingbat => "❶~❾",
-            Self::Parenthesized => "⑴~⑼",
-        }
-    }
-
-    /// 第 `digit`（1–9）个序号的写法。
-    pub fn format(self, digit: usize) -> String {
-        // 1–9 的几种序号都是连着的码点，按 digit 偏移取
-        let offset = digit.saturating_sub(1) as u32;
-        let codepoint = match self {
-            Self::Decimal => return format!("{digit}."),
-            Self::Circled => 0x2460,
-            Self::Roman => 0x2160,
-            Self::Dingbat => 0x2776,
-            Self::Parenthesized => 0x2474,
-        };
-        char::from_u32(codepoint + offset)
-            .map(|c| c.to_string())
-            .unwrap_or_else(|| format!("{digit}."))
-    }
-}
+/// 候选词序号的样式；类型在 `cloud-ui-types`，这里 re-export 给配置与设置页。
+pub use cloud_ui_types::ItemNumberStyle;
 
 /// 「使用鼠标选词」：鼠标能不能点候选窗里的候选来选词 / 上屏。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
@@ -180,12 +113,67 @@ impl MouseWordSelection {
     }
 }
 
+/// 本地整句 / 智能补全模型：关闭 / 基本（含章）/ 增强（知意）/ 混合（含章+知意）。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum LocalModelMode {
+    /// 全部不使用，只按词库与短语匹配。
+    Off,
+
+    /// 含章·知微本地整句模型。
+    #[default]
+    Basic,
+
+    /// 知意：候选页重排 + 按音节出字。
+    Enhanced,
+
+    /// 含章 + 知意同时加载：短输入只走知意，长输入两个模型一起用。
+    Hybrid,
+}
+
+impl LocalModelMode {
+    /// 设置界面的顺序。
+    pub const ALL: [Self; 4] = [Self::Off, Self::Basic, Self::Enhanced, Self::Hybrid];
+
+    /// 配置文件里的写法。
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Basic => "basic",
+            Self::Enhanced => "enhanced",
+            Self::Hybrid => "hybrid",
+        }
+    }
+
+    /// 界面 / 日志里的名字。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "关闭",
+            Self::Basic => "基本（含章）",
+            Self::Enhanced => "增强（知意）",
+            Self::Hybrid => "混合（含章+知意）",
+        }
+    }
+}
+
 /// `[candidate]` 分节。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
 pub struct CandidateConfig {
-    /// 使用本地整句模型（输入法内置，`.qjm`）：消耗一点处理器与内存换更准的整句输入；关掉只用词库与短语匹配。
-    pub use_local_sentence_organization_model: bool,
+    /// 本地模型模式：关闭 / 基本（含章）/ 增强（知意）/ 混合（含章+知意）。
+    pub local_model: LocalModelMode,
+
+    /// 旧配置里的布尔开关（`use_local_sentence_organization_model`）：只读兼容，不再写回。
+    /// `local_model` 不是「基本」时以它为准；是「基本」时旧值 `false` 仍按「关闭」读。
+    #[serde(
+        default,
+        rename = "use_local_sentence_organization_model",
+        skip_serializing
+    )]
+    legacy_local_model_enabled: Option<bool>,
+
+    /// 应用读不到光标前文时，这个应用里多少秒内上屏的字还给模型当前文；0 表示一直算。
+    pub context_memory_seconds: u64,
 
     /// 候选项排布方向。
     pub candidate_arrangement_direction: LayoutMode,
@@ -245,7 +233,9 @@ pub struct CandidateConfig {
 impl Default for CandidateConfig {
     fn default() -> Self {
         Self {
-            use_local_sentence_organization_model: true,
+            local_model: LocalModelMode::default(),
+            legacy_local_model_enabled: None,
+            context_memory_seconds: cloudime_core::DEFAULT_FRESH_SECONDS,
             candidate_arrangement_direction: LayoutMode::default(),
             candidate_count: MAX_CANDIDATE_COUNT,
             candidate_association_counts: 2,
@@ -267,6 +257,18 @@ impl Default for CandidateConfig {
 }
 
 impl CandidateConfig {
+    /// 实际生效的本地模型模式：新的 `local_model` 不是「基本」时以它为准，
+    /// 否则兼容旧配置的布尔值（`false` = 关闭）。
+    pub fn resolved_local_model(&self) -> LocalModelMode {
+        if self.local_model != LocalModelMode::Basic {
+            return self.local_model;
+        }
+        match self.legacy_local_model_enabled {
+            Some(true) | None => LocalModelMode::Basic,
+            Some(false) => LocalModelMode::Off,
+        }
+    }
+
     /// 夹到合法范围的候选项个数。
     pub fn candidate_count(&self) -> usize {
         self.candidate_count
@@ -302,6 +304,15 @@ mod tests {
         assert_eq!(ItemNumberStyle::Roman.format(4), "Ⅳ");
         assert_eq!(ItemNumberStyle::Dingbat.format(7), "❼");
         assert_eq!(ItemNumberStyle::Parenthesized.format(9), "⑼");
+    }
+
+    #[test]
+    fn local_model_modes_have_the_settings_labels() {
+        assert_eq!(LocalModelMode::ALL.len(), 4);
+        assert_eq!(LocalModelMode::default(), LocalModelMode::Basic);
+        assert_eq!(LocalModelMode::Basic.label(), "基本（含章）");
+        assert_eq!(LocalModelMode::Hybrid.key(), "hybrid");
+        assert_eq!(LocalModelMode::Hybrid.label(), "混合（含章+知意）");
     }
 
     #[test]

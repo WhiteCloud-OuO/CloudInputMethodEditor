@@ -1,13 +1,45 @@
 //! 模型的后台加载：加载并预热要几百毫秒到几秒，不能挡住按键；加载完由 Router 在下一次消息时接上。
 
 use std::path::{Path, PathBuf};
+use std::sync::Arc;
 use std::sync::mpsc::{Receiver, TryRecvError, channel};
 
+use cloudime_core::ChoiceModel;
+use cloudime_neural::zhiyi::ChoiceScorer;
 use cloudime_neural::{CharScorer, NeuralError};
+
+/// 知意用几个线程：多了发热，两个线程一次也只要几十毫秒。
+const ZHIYI_THREADS: usize = 2;
+
+/// 这次要加载哪个模型。
+pub(super) enum ModelFiles {
+    /// 基本：含章·知微整句模型。
+    Sentence(PathBuf),
+
+    /// 增强：知意的 int8 ONNX 模型目录与运行库。
+    Zhiyi { dir: PathBuf, runtime: PathBuf },
+
+    /// 混合：基本 + 知意一起加载。
+    Both {
+        sentence: PathBuf,
+        dir: PathBuf,
+        runtime: PathBuf,
+    },
+}
+
+/// 加载好的模型。
+pub(super) enum LoadedModel {
+    Sentence(Box<CharScorer>),
+    Choice(Arc<dyn ChoiceModel>),
+    Both {
+        sentence: Box<CharScorer>,
+        choice: Arc<dyn ChoiceModel>,
+    },
+}
 
 /// 一次进行中的加载。
 pub(crate) struct ModelLoader {
-    result: Receiver<Result<CharScorer, NeuralError>>,
+    result: Receiver<Result<LoadedModel, NeuralError>>,
 }
 
 /// 一次加载的结局。
@@ -15,39 +47,59 @@ pub(super) enum Loaded {
     /// 还在加载。
     Pending,
 
-    /// 加载好了（或失败了，`Err`）。装箱：模型结构体比另两个变体大得多。
-    Done(Box<Result<CharScorer, NeuralError>>),
+    /// 加载好了（或失败了）。
+    Done(Box<Result<LoadedModel, NeuralError>>),
 
     /// 加载线程没了（起不来 / panic）。
     Gone,
 }
 
 impl ModelLoader {
-    /// 起线程加载 `path`（`.qjm` 或三件套目录）并预热一次；线程起不来返回 `None`。
-    pub(super) fn spawn(path: &Path) -> Option<Self> {
-        let path: PathBuf = path.to_path_buf();
+    /// 起线程加载并预热一次；线程起不来返回 `None`。
+    pub(super) fn spawn(files: ModelFiles) -> Option<Self> {
         let (tx, result) = channel();
         let spawned = std::thread::Builder::new()
             .name("cloudime-model-load".to_owned())
             .spawn(move || {
                 let started = std::time::Instant::now();
-                let loaded = CharScorer::load(&path).and_then(|scorer| {
-                    scorer.score("", &["的"])?;
-                    Ok(scorer)
-                });
+                let loaded = match &files {
+                    ModelFiles::Sentence(path) => load_sentence(path).map(LoadedModel::Sentence),
+                    ModelFiles::Zhiyi { dir, runtime } => {
+                        load_zhiyi(dir, runtime).map(LoadedModel::Choice)
+                    }
+                    ModelFiles::Both {
+                        sentence,
+                        dir,
+                        runtime,
+                    } => load_both(sentence, dir, runtime),
+                };
                 if loaded.is_ok() {
-                    tracing::info!(
-                        path = %path.display(),
-                        total_ms = started.elapsed().as_millis(),
-                        "本地整句模型已加载并预热"
-                    );
+                    let total_ms = started.elapsed().as_millis();
+                    match &files {
+                        ModelFiles::Sentence(path) => tracing::info!(
+                            path = %path.display(),
+                            total_ms,
+                            "本地模型已加载并预热"
+                        ),
+                        ModelFiles::Zhiyi { dir, .. } => tracing::info!(
+                            path = %dir.display(),
+                            total_ms,
+                            "本地模型已加载并预热"
+                        ),
+                        ModelFiles::Both { sentence, dir, .. } => tracing::info!(
+                            path = %sentence.display(),
+                            zhiyi = %dir.display(),
+                            total_ms,
+                            "本地模型已加载并预热"
+                        ),
+                    }
                 }
                 let _ = tx.send(loaded);
             });
         match spawned {
             Ok(_) => Some(Self { result }),
             Err(error) => {
-                tracing::warn!(%error, "起不了模型加载线程，本地整句模型不用");
+                tracing::warn!(%error, "起不了模型加载线程，本地模型不用");
                 None
             }
         }
@@ -61,4 +113,24 @@ impl ModelLoader {
             Err(TryRecvError::Disconnected) => Loaded::Gone,
         }
     }
+}
+
+fn load_sentence(path: &Path) -> Result<Box<CharScorer>, NeuralError> {
+    let scorer = CharScorer::load(path)?;
+    scorer.score("", &["的"])?;
+    Ok(Box::new(scorer))
+}
+
+fn load_zhiyi(dir: &Path, runtime: &Path) -> Result<Arc<dyn ChoiceModel>, NeuralError> {
+    let scorer = ChoiceScorer::load_onnx(dir, runtime, ZHIYI_THREADS)?;
+    // 预热：第一次前向要做图优化。
+    let typed = scorer.letter_units("ni");
+    scorer.score("", &typed, &["ni", "nin"])?;
+    Ok(Arc::new(scorer))
+}
+
+fn load_both(sentence: &Path, dir: &Path, runtime: &Path) -> Result<LoadedModel, NeuralError> {
+    let sentence = load_sentence(sentence)?;
+    let choice = load_zhiyi(dir, runtime)?;
+    Ok(LoadedModel::Both { sentence, choice })
 }

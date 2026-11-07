@@ -1178,7 +1178,7 @@ fn measure_virtual_row(
     )
 }
 
-/// 子页面脚本固定放在布局目录旁边的 `shared/`，不能借脚本路径越界。
+/// 子页面脚本固定在脚本文件夹的 `shared/`，不能借脚本路径越界。
 fn shared_script_path(base: &Path, name: &str) -> Option<String> {
     let relative = Path::new(name);
     if relative.is_absolute()
@@ -1188,11 +1188,13 @@ fn shared_script_path(base: &Path, name: &str) -> Option<String> {
     {
         tracing::warn!(
             script = name,
-            "子页面脚本路径必须是 Scripts/shared 下的相对路径"
+            "子页面脚本路径必须是脚本文件夹 shared\\ 下的相对路径"
         );
         return None;
     }
-    let path = base.parent()?.join("shared").join(relative);
+    // base 是 `<脚本文件夹>/layouts`：往上一级就是脚本文件夹。
+    let script_dir = base.parent()?;
+    let path = script_dir.join("shared").join(relative);
     if !path.is_file() {
         tracing::warn!(script = %path.display(), "子页面脚本不存在");
         return None;

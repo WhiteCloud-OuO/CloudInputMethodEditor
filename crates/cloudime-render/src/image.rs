@@ -154,6 +154,19 @@ pub fn mask_image(image: &Pixmap, commands: &[PathCommand]) -> Result<Pixmap, Re
 ///
 /// 缩放用双线性（`FilterQuality::Bilinear`）：界面里的图多是缩放显示的，最近邻会出锯齿。
 pub fn draw_image(target: &mut Pixmap, image: &Pixmap, x: f32, y: f32, width: f32, height: f32) {
+    draw_image_masked(target, image, x, y, width, height, None);
+}
+
+/// [`draw_image`] 的带裁剪版本：`mask` 是调用方画布的内容裁剪遮罩。
+pub(crate) fn draw_image_masked(
+    target: &mut Pixmap,
+    image: &Pixmap,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    mask: Option<&Mask>,
+) {
     let (source_width, source_height) = (image.width() as f32, image.height() as f32);
     if source_width <= 0.0 || source_height <= 0.0 || width <= 0.0 || height <= 0.0 {
         return;
@@ -165,7 +178,7 @@ pub fn draw_image(target: &mut Pixmap, image: &Pixmap, x: f32, y: f32, width: f3
         blend_mode: BlendMode::SourceOver,
         ..PixmapPaint::default()
     };
-    target.draw_pixmap(0, 0, image.as_ref(), &paint, transform, None);
+    target.draw_pixmap(0, 0, image.as_ref(), &paint, transform, mask);
 }
 
 /// 读图的上限（防一份坏文件把内存吃光）。

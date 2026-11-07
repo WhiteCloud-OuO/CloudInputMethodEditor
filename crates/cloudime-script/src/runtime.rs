@@ -1,6 +1,7 @@
 //! 脚本的加载与事件派发。
 //!
-//! 脚本文件放数据目录的 `scripts\` 下（[`DIRECTORY`]），按文件名排序依次执行一遍。**每个脚本必须
+//! 脚本放安装目录的 `Scripts\` 下（[`DIRECTORY`]）：**一个脚本一个文件夹**，只扫一级子文件夹，
+//! 按文件夹名排序；每个文件夹根部必须正好一个 `.lua`（入口），执行一遍。**每个脚本必须
 //! 最先**调一次 `cloudime.script{…}` 声明清单（字段语义见 `docs/design/script.md`）：缺清单、字段
 //! 缺失 / 类型不对、`api` 不认识、`sync` 与 `handover` 对不上 —— 那个脚本**判无效**（跳过 + 日志写明原因）。
 //!
@@ -26,7 +27,7 @@
 //!（先调脚本清单里的 `on_error`，再跳过），按键照旧走引擎。
 
 use std::cell::{Cell, RefCell};
-use std::collections::HashMap;
+use std::collections::{BTreeSet, HashMap};
 use std::path::{Path, PathBuf};
 use std::rc::Rc;
 use std::sync::mpsc;
@@ -34,14 +35,17 @@ use std::time::{Duration, Instant};
 
 use mlua::{Function, Lua, Table};
 
+use cloudime_mcp_client::{McpRequest, RequestAction, ResponseBody, ServerSummary};
+
 use crate::http;
 use crate::install;
+use crate::mcp;
 use crate::window;
 
 /// 脚本目录名：**安装目录**（与 `Phrases\`、`WordBank\` 同级）下的这个子目录。
 pub const DIRECTORY: &str = "Scripts";
 
-/// 「新建脚本」用的模板：放在脚本目录里，但**不是**真脚本 —— 设置页不列它、加载器不执行它。
+/// 随包的清单骨架参考：放在脚本目录里，但**不是**真脚本 —— 设置页不列它、加载器不执行它。
 pub const TEMPLATE_FILE: &str = "template.lua";
 
 /// 脚本面向的 API 版本：清单里的 `api` 必须是它，否则那个脚本判无效。
@@ -397,31 +401,50 @@ fn parse_time_range(range: &Table) -> mlua::Result<TimeRange> {
     Ok(TimeRange { from, to })
 }
 
-/// 一个已加载脚本的公开信息：i 模式按文件顺序列脚本、显示名称与介绍。
+/// 一个已加载脚本的公开信息：i 模式按文件夹顺序列脚本、显示名称与介绍。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScriptInfo {
+    /// 脚本文件夹名（`Scripts\<id>\`），i 模式与启用 / 禁用用它定位。
+    pub id: String,
+
     /// 清单里 `cloudime.script{ name = ... }` 的名字。
     pub name: String,
 
     /// 清单里的 `description`；没写为 `None`。
     pub description: Option<String>,
 
-    /// 脚本文件名（含 `.lua`），i 模式按它排序与定位。
+    /// 脚本入口文件名（含 `.lua`），日志 / 「编辑此脚本」用。
     pub file: String,
 
-    /// 清单 `trigger_condition = "manual"`：只有这类脚本会进 i 模式候选。
-    pub manual: bool,
+    /// 清单的触发方式：i 模式按它决定运行哪个事件（`manual` / `key`）。
+    pub trigger: TriggerCondition,
+
+    /// `combination_key` 的修饰键位图（`none` = 0）。
+    pub combination_modifiers: u8,
+
+    /// `combination_key` 声明的那几个键（虚拟键码）；i 模式运行组合键脚本时取第一个。
+    pub wanted_keys: Vec<u32>,
+
+    /// 会不会出现在 i 模式：`manual` 脚本恒为真；组合键脚本看 `show_in_i_mode`；
+    /// 自动触发脚本恒为假。
+    pub i_mode: bool,
 }
 
 /// 一个脚本的清单（`cloudime.script{…}`）：每个脚本必须**最先**声明一次。
 struct Manifest {
-    /// 脚本文件名（含 `.lua`）；清单没写 `name` 时也拿它当名字。
+    /// 脚本文件夹名：设置页的启用 / 禁用、i 模式定位都用它。
+    id: String,
+
+    /// 脚本入口文件名（含 `.lua`）；清单没写 `name` 时也拿它当名字。
     file: String,
 
-    /// 日志里点名用；缺省 = 文件名。
+    /// 脚本文件夹的绝对 / 相对路径：`cloudime.shared_path` 这一组 API 按它解析。
+    dir: PathBuf,
+
+    /// 日志里点名用；缺省 = 文件夹名。
     name: String,
 
-    /// 设置页列表里的一句话介绍；缺省 `None`（那边取文件名）。
+    /// 设置页列表里的一句话介绍；缺省 `None`（那边取文件夹名）。
     description: Option<String>,
 
     /// 单次调用的指令数上限；`None` = 用全局缺省。只能收窄（钳到 [`INSTRUCTION_BUDGET`]）。
@@ -459,6 +482,24 @@ struct Manifest {
 
     /// 要不要每次派发前刷新 `cloudime.context`（按键路径上 DLL 会多读一次光标前文）。
     needs_context: bool,
+
+    /// 手动触发脚本要不要同时列进 i 模式（`show_in_i_mode`，缺省 false）。
+    show_in_i_mode: bool,
+}
+
+impl Manifest {
+    /// **自动触发脚本**：没有用户明确的「运行这个脚本」动作就会被派发 ——
+    /// 时间段 / 候选拼音 / 焦点程序，以及不带修饰键的单键组合（例如自动序号的 Enter）。
+    /// 这类脚本即使写了 `show_in_i_mode` 也不进 i 模式。
+    fn auto_trigger(&self) -> bool {
+        match self.trigger {
+            TriggerCondition::TimeRange
+            | TriggerCondition::CandidateContext
+            | TriggerCondition::FocusApp => true,
+            TriggerCondition::CombinationKey => self.combination_modifiers == 0,
+            TriggerCondition::Manual => false,
+        }
+    }
 }
 
 impl Manifest {
@@ -533,10 +574,13 @@ struct Handler {
     seq: u64,
 }
 
-/// 一次挂着的异步请求（`cloudime.http_get` 与 `cloudime.http_post` 共用这套管线）。
+/// 一次挂着的异步请求（`cloudime.http_get` / `cloudime.http_post` / `cloudime.mcp.*` 共用这套管线）。
 struct Pending {
-    /// 请求地址（日志与结果表里用）。
-    url: String,
+    /// 日志里用的名字（HTTP 地址，或 `server/tool`）。
+    label: String,
+
+    /// 请求类型：决定结果怎么拼成给脚本的表。
+    kind: PendingKind,
 
     /// 脚本给的响应时间限制：超过它才回来的结果一律丢掉。
     deadline: Instant,
@@ -546,6 +590,22 @@ struct Pending {
 
     /// 发请求那个脚本的清单（回调的限额与 `on_error` 按它来）。
     manifest: Rc<Manifest>,
+}
+
+/// 挂着的请求是 HTTP 还是 MCP。
+enum PendingKind {
+    /// `http_get` / `http_post`。
+    Http { url: String },
+
+    /// `cloudime.mcp.tools` / `cloudime.mcp.call`。
+    Mcp { server: String, tool: String },
+}
+
+/// 一个脚本这一轮 MCP 任务链里显式启动过的外部 Server。
+#[derive(Default)]
+struct McpScope {
+    /// 由这个脚本 `cloudime.mcp.start` 启动、尚未 `stop` 的 Server。
+    servers: BTreeSet<String>,
 }
 
 /// 量一段文字要用哪个字体（`cloudime.ui.measure` 的第二个参数）。
@@ -628,6 +688,14 @@ pub type ConfigHook = Rc<dyn Fn(&Lua) -> mlua::Result<Table>>;
 /// 返回当前聚焦的宿主程序 exe 名；没聚焦任何程序时给 `None`（脚本那边是 `nil`）。
 pub type AppHook = Rc<dyn Fn() -> Option<String>>;
 
+/// `cloudime.window.message_dialog` 背后的实现：由 Server 装（[`Runtime::set_message_dialog_hook`]）。
+/// 工人线程在这里阻塞，等 UI 线程同步返回按钮下标。
+pub type MessageDialogHook = Rc<dyn Fn(&window::MessageDialogRequest) -> u8>;
+
+/// `cloudime.window.text_input_dialog` 背后的实现：由 Server 装
+/// （[`Runtime::set_text_input_dialog_hook`]）。工人线程在这里阻塞，等 UI 线程同步返回文本。
+pub type TextInputDialogHook = Rc<dyn Fn(&window::TextInputDialogRequest) -> String>;
+
 /// 脚本要的候选窗尺寸（`cloudime.candidate.set_*`）。
 ///
 /// 每一项都是「这次有没有提 / 提了什么」：`None` = 没提，`Some(None)` = 恢复默认（配置 / 滚轮），
@@ -668,21 +736,30 @@ struct Requests {
     /// 下一个请求号。
     next_request: Cell<u64>,
 
-    /// 工作线程发回的结果；[`Runtime::poll_requests`] 收。
+    /// HTTP 工作线程发回的结果；[`Runtime::poll_requests`] 收。
     results: RefCell<mpsc::Receiver<(u64, http::Outcome)>>,
 
     /// 上面那个通道的发送端（clone 进工作线程）。
     tx: mpsc::Sender<(u64, http::Outcome)>,
+
+    /// MCP 代理线程发回的结果；[`Runtime::poll_requests`] 收。
+    mcp_results: RefCell<mpsc::Receiver<(u64, ResponseBody)>>,
+
+    /// 上面那个通道的发送端（交给 Server 的 MCP 代理线程）。
+    mcp_tx: mpsc::Sender<(u64, ResponseBody)>,
 }
 
 impl Requests {
     fn new() -> Self {
         let (tx, results) = mpsc::channel();
+        let (mcp_tx, mcp_results) = mpsc::channel();
         Self {
             pending: RefCell::new(HashMap::new()),
             next_request: Cell::new(0),
             results: RefCell::new(results),
             tx,
+            mcp_results: RefCell::new(mcp_results),
+            mcp_tx,
         }
     }
 }
@@ -697,6 +774,10 @@ pub struct Runtime {
 
     /// 正在执行 / 正在登记的那个脚本（`on` 记名、加载完取清单用）。
     current: Rc<RefCell<String>>,
+
+    /// 正在执行的那个脚本所在的文件夹：`cloudime.shared_path` / `layout_path` / `dll_path` /
+    /// `saved_path` 都按它解析。不在脚本里调用时是 `None`。
+    script_dir: Rc<RefCell<Option<PathBuf>>>,
 
     /// 正在加载的那个脚本的清单（`cloudime.script` 里设、`cloudime.on` 里要求已有；
     /// 派发时按「正在跑的那个脚本」重设 —— 脚本里的 `log` / `http_get` 靠它认脚本）。
@@ -713,6 +794,18 @@ pub struct Runtime {
 
     /// 异步请求那套共享状态（`http_get` / `http_post`）。
     requests: Rc<Requests>,
+
+    /// `mcp.toml` 里的 Server（`cloudime.mcp.servers()` 与白名单校验用）。
+    mcp_servers: Rc<RefCell<Vec<ServerSummary>>>,
+
+    /// 发往 MCP 代理线程的请求通道；Server 没接 MCP 时是 `None`。
+    mcp_requests: Rc<RefCell<Option<mpsc::Sender<McpRequest>>>>,
+
+    /// 这一轮 MCP 任务链里各脚本显式启动的 Server；链尾自动 stop。
+    mcp_scope: Rc<RefCell<HashMap<String, McpScope>>>,
+
+    /// sidecar 是不是由 Lua 的 `cloudime.mcp.start` 拉起的；链尾要把它关掉。
+    mcp_client_lua_owned: Rc<Cell<bool>>,
 
     /// 脚本调过 `cloudime.candidate.redraw()`：请 Server 把当前这一屏重算一遍再重画。
     /// 就是一个「脏」标记 —— 派发/回调结束后 Server 取一次（取了就清）。
@@ -759,6 +852,12 @@ pub struct Runtime {
 
     /// 当前前台程序名（`cloudime.foreground_app`）：Server 用 [`Runtime::set_app_hook`] 装进来。
     app_hook: Rc<RefCell<Option<AppHook>>>,
+
+    /// 同步消息对话框（`cloudime.window.message_dialog`）：Server 装进来。
+    message_dialog_hook: Rc<RefCell<Option<MessageDialogHook>>>,
+
+    /// 同步文本输入对话框（`cloudime.window.text_input_dialog`）：Server 装进来。
+    text_input_dialog_hook: Rc<RefCell<Option<TextInputDialogHook>>>,
 
     /// `cloudime` 表本体：脚本只拿到只读代理，运行时自己写 `context` 这类刷新值。
     host: Rc<RefCell<Option<Table>>>,
@@ -807,11 +906,16 @@ impl Runtime {
             lua: Lua::new(),
             handlers: Rc::new(RefCell::new(HashMap::new())),
             current: Rc::new(RefCell::new(String::new())),
+            script_dir: Rc::new(RefCell::new(None)),
             manifest: Rc::new(RefCell::new(None)),
             loading: Rc::new(Cell::new(false)),
             limits: Rc::new(Cell::new((0, INSTRUCTION_BUDGET, Instant::now()))),
             seq: Rc::new(Cell::new(0)),
             requests: Rc::new(Requests::new()),
+            mcp_servers: Rc::new(RefCell::new(Vec::new())),
+            mcp_requests: Rc::new(RefCell::new(None)),
+            mcp_scope: Rc::new(RefCell::new(HashMap::new())),
+            mcp_client_lua_owned: Rc::new(Cell::new(false)),
             redraw: Rc::new(Cell::new(false)),
             caret: Rc::new(Cell::new(false)),
             install: Rc::new(install::InstallDir::default()),
@@ -827,6 +931,8 @@ impl Runtime {
             keyboard: Rc::new(RefCell::new(None)),
             config_hook: Rc::new(RefCell::new(None)),
             app_hook: Rc::new(RefCell::new(None)),
+            message_dialog_hook: Rc::new(RefCell::new(None)),
+            text_input_dialog_hook: Rc::new(RefCell::new(None)),
             host: Rc::new(RefCell::new(None)),
             scripts: Vec::new(),
             script_infos: Vec::new(),
@@ -856,10 +962,11 @@ impl Runtime {
         ));
     }
 
-    /// 读 `dir` 下的 `*.lua`（按文件名排序）依次执行。目录不在 / 读不了就什么都不加载。
+    /// 读 `dir` 下的脚本文件夹（按文件夹名排序）依次执行。目录不在 / 读不了就什么都不加载。
     ///
-    /// 跳过 [`TEMPLATE_FILE`]（「新建脚本」的模板，不是真脚本）与 `disabled` 里列到的文件名
-    ///（大小写不敏感；来自 `[script] disabled` —— 设置页的「启用 / 禁用」开关写它）。
+    /// 每个文件夹就是一个脚本：根部必须**正好有一个** `.lua`（入口）；`shared` / `layouts` /
+    /// `dlls` / `saved` 子目录不参与启动加载。跳过根部的 [`TEMPLATE_FILE`]（随包的清单骨架）
+    /// 与 `disabled` 里列到的**文件夹名**（大小写不敏感；来自 `[script] disabled`）。
     pub fn load(dir: &Path, disabled: &[String]) -> Self {
         let mut runtime = Self::none();
         // 脚本目录的上一级就是安装目录：加载期就能用 `cloudime.install_dir()` / `install_path()`
@@ -867,9 +974,44 @@ impl Runtime {
         if let Some(root) = dir.parent().filter(|parent| !parent.as_os_str().is_empty()) {
             runtime.set_install_dir(root.to_path_buf());
         }
-        match std::fs::read_dir(dir) {
-            Ok(entries) => {
-                let mut files: Vec<PathBuf> = entries
+        let entries = match std::fs::read_dir(dir) {
+            Ok(entries) => entries,
+            Err(error) => {
+                tracing::debug!(%error, dir = %dir.display(), "脚本目录读不了，这次不加载脚本");
+                return runtime;
+            }
+        };
+        let mut folders = Vec::new();
+        let mut flat = Vec::new();
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                folders.push(path);
+            } else if path
+                .extension()
+                .is_some_and(|extension| extension.eq_ignore_ascii_case("lua"))
+                && !path
+                    .file_name()
+                    .is_some_and(|name| name.eq_ignore_ascii_case(TEMPLATE_FILE))
+            {
+                flat.push(
+                    path.file_name()
+                        .map(|name| name.to_string_lossy().into_owned())
+                        .unwrap_or_default(),
+                );
+            }
+        }
+        folders.sort();
+        for folder in folders {
+            let Some(id) = folder.file_name().and_then(|name| name.to_str()) else {
+                continue;
+            };
+            if is_disabled(id, disabled) {
+                tracing::debug!(folder = id, "跳过（已禁用）");
+                continue;
+            }
+            let mut entries: Vec<PathBuf> = match std::fs::read_dir(&folder) {
+                Ok(entries) => entries
                     .flatten()
                     .map(|entry| entry.path())
                     .filter(|path| {
@@ -878,19 +1020,28 @@ impl Runtime {
                                 .extension()
                                 .is_some_and(|extension| extension.eq_ignore_ascii_case("lua"))
                     })
-                    .collect();
-                files.sort();
-                for file in files {
-                    if skipped(&file, disabled) {
-                        tracing::debug!(file = %file.display(), "跳过（模板或已禁用）");
-                        continue;
-                    }
-                    runtime.run(&file);
+                    .collect(),
+                Err(error) => {
+                    tracing::warn!(%error, folder = %folder.display(), "脚本文件夹读不了，跳过");
+                    continue;
                 }
+            };
+            entries.sort();
+            match entries.as_slice() {
+                [entry] => runtime.run(entry, &folder),
+                [] => tracing::debug!(folder = id, "脚本文件夹里没有 .lua，跳过"),
+                _ => tracing::warn!(
+                    folder = id,
+                    count = entries.len(),
+                    "脚本文件夹根部只能有一个 .lua（入口），这个文件夹不加载"
+                ),
             }
-            Err(error) => {
-                tracing::debug!(%error, dir = %dir.display(), "脚本目录读不了，这次不加载脚本");
-            }
+        }
+        if !flat.is_empty() {
+            tracing::warn!(
+                files = ?flat,
+                "Scripts 根部的 .lua 不再加载；请为每个脚本建一个文件夹，把入口 .lua 放进去"
+            );
         }
         tracing::info!(
             dir = %dir.display(),
@@ -901,25 +1052,29 @@ impl Runtime {
         runtime
     }
 
-    /// 只加载一个脚本文件（i 模式的 Shift+数字在独立线程里跑脚本时用）：不读同目录其它脚本。
+    /// 只加载一个脚本文件夹里的入口文件（i 模式的 Shift+数字在独立线程里跑脚本时用）：
+    /// 不读同目录其它脚本。
     ///
-    /// 安装目录按「脚本目录的上一级」推；和 [`Self::load`] 的规则一致。
+    /// 安装目录按「脚本文件夹 → `Scripts` → 安装目录」推；和 [`Self::load`] 的规则一致。
     pub fn load_file(path: &Path) -> Self {
         let mut runtime = Self::none();
-        if let Some(root) = path
+        if let Some(folder) = path
             .parent()
-            .and_then(Path::parent)
             .filter(|parent| !parent.as_os_str().is_empty())
         {
-            runtime.set_install_dir(root.to_path_buf());
+            if let Some(root) = folder.parent().and_then(Path::parent)
+                && !root.as_os_str().is_empty()
+            {
+                runtime.set_install_dir(root.to_path_buf());
+            }
+            runtime.run(path, folder);
         }
-        runtime.run(path);
         runtime
     }
 
-    /// 执行一个脚本文件。**加载期出错（含清单不合法）= 这个脚本无效**：记一条日志、继续下一个；
-    /// 它注册过一半的处理函数也一并撤掉（不然「无效」的脚本还会被派发到）。
-    fn run(&mut self, path: &Path) {
+    /// 执行一个脚本文件夹里的入口文件。**加载期出错（含清单不合法）= 这个脚本无效**：记一条日志、
+    /// 继续下一个；它注册过一半的处理函数也一并撤掉（不然「无效」的脚本还会被派发到）。
+    fn run(&mut self, path: &Path, folder: &Path) {
         let name = path
             .file_name()
             .map(|name| name.to_string_lossy().into_owned())
@@ -933,6 +1088,7 @@ impl Runtime {
         };
         let first_new_seq = self.seq.get() + 1;
         *self.current.borrow_mut() = name.clone();
+        *self.script_dir.borrow_mut() = Some(folder.to_path_buf());
         *self.manifest.borrow_mut() = None;
         self.loading.set(true);
         // 清单还没读出来，先用全局上限与 `LOAD_TIMEOUT` 兜住加载期
@@ -945,6 +1101,7 @@ impl Runtime {
             .exec();
         self.loading.set(false);
         self.current.borrow_mut().clear();
+        self.script_dir.borrow_mut().take();
         let (executed_ok, manifest) = match executed {
             Ok(()) => (true, self.manifest.borrow_mut().take()),
             Err(error) => {
@@ -964,16 +1121,34 @@ impl Runtime {
         };
         tracing::info!(
             script = %manifest.name,
+            folder = %manifest.id,
             description = manifest.description.as_deref().unwrap_or("-"),
             file = %name,
             "脚本已加载"
         );
+        let auto = manifest.auto_trigger();
+        if auto && manifest.show_in_i_mode {
+            tracing::warn!(
+                script = %manifest.name,
+                folder = %manifest.id,
+                "自动触发脚本的 show_in_i_mode 已忽略（不会出现在 i 模式）"
+            );
+        }
+        let i_mode = match manifest.trigger {
+            TriggerCondition::Manual => true,
+            TriggerCondition::CombinationKey => !auto && manifest.show_in_i_mode,
+            _ => false,
+        };
         self.scripts.push(manifest.name.clone());
         self.script_infos.push(ScriptInfo {
+            id: manifest.id.clone(),
             name: manifest.name.clone(),
             description: manifest.description.clone(),
             file: manifest.file.clone(),
-            manual: manifest.trigger == TriggerCondition::Manual,
+            trigger: manifest.trigger,
+            combination_modifiers: manifest.combination_modifiers,
+            wanted_keys: manifest.wanted_keys.clone(),
+            i_mode,
         });
         self.triggers.push(manifest.trigger);
         self.needs_context |= manifest.needs_context;
@@ -1009,15 +1184,15 @@ impl Runtime {
         self.dispatch_filtered(event, payload, app, None)
     }
 
-    /// 只把事件派给 `file` 这个脚本（i 模式按数字运行指定脚本）。
+    /// 只把事件派给 `id` 这个脚本文件夹（i 模式按数字运行指定脚本）。
     pub fn dispatch_to_script(
         &self,
-        file: &str,
+        id: &str,
         event: &str,
         payload: Table,
         app: Option<&str>,
     ) -> Vec<Table> {
-        self.dispatch_filtered(event, payload, app, Some(file))
+        self.dispatch_filtered(event, payload, app, Some(id))
     }
 
     fn dispatch_filtered(
@@ -1025,7 +1200,7 @@ impl Runtime {
         event: &str,
         payload: Table,
         app: Option<&str>,
-        only_file: Option<&str>,
+        only_id: Option<&str>,
     ) -> Vec<Table> {
         // UI 线程的编辑框文本变化先落进脚本侧缓存，`win:get_text` 不用等下一个来回。
         if event == "window" {
@@ -1045,7 +1220,10 @@ impl Runtime {
                 tracing::warn!(%error, "list_box 虚拟窗口刷新失败");
             }
             match crate::window::dispatch_subpage_event(self.lua(), &payload) {
-                Ok(true) => return Vec::new(),
+                Ok(true) => {
+                    self.finish_mcp_scopes();
+                    return Vec::new();
+                }
                 Ok(false) => {}
                 Err(error) => tracing::warn!(%error, "子页面脚本事件处理失败"),
             }
@@ -1074,8 +1252,7 @@ impl Runtime {
             .map(|list| {
                 list.iter()
                     .filter(|handler| {
-                        only_file
-                            .is_none_or(|file| handler.manifest.file.eq_ignore_ascii_case(file))
+                        only_id.is_none_or(|id| handler.manifest.id.eq_ignore_ascii_case(id))
                     })
                     .filter(|handler| app.is_none_or(|app| handler.manifest.runs_in(app)))
                     .filter(|handler| handler.manifest.accepts(event, key, pinyin.as_deref()))
@@ -1085,8 +1262,10 @@ impl Runtime {
             .unwrap_or_default();
         let mut responses = Vec::new();
         for (manifest, function) in &handlers {
-            // 让脚本里的 `log` / `http_get` 认得出「现在跑的是哪个脚本」（限额与出错回调也按它）
+            // 让脚本里的 `log` / `http_get` / `*_path` 认得出「现在跑的是哪个脚本」
+            //（限额与出错回调也按它）
             *self.current.borrow_mut() = manifest.name.clone();
+            *self.script_dir.borrow_mut() = Some(manifest.dir.clone());
             *self.manifest.borrow_mut() = Some(manifest.clone());
             // 这一次调用按这个脚本的清单上紧限额（budget / timeout）
             self.arm(manifest);
@@ -1105,6 +1284,8 @@ impl Runtime {
                 }
             }
         }
+        self.finish_mcp_scopes();
+        self.script_dir.borrow_mut().take();
         responses
     }
 
@@ -1114,6 +1295,7 @@ impl Runtime {
         let Some(on_error) = &manifest.on_error else {
             return;
         };
+        *self.script_dir.borrow_mut() = Some(manifest.dir.clone());
         self.arm(manifest);
         if let Err(error) = on_error.call::<()>((event, message)) {
             tracing::warn!(%error, script = %manifest.name, "脚本的 on_error 回调也出错，忽略");
@@ -1130,7 +1312,7 @@ impl Runtime {
         &self.scripts
     }
 
-    /// 加载成功的脚本信息，顺序与 [`Self::scripts`] 一致（按脚本文件名排序）。
+    /// 加载成功的脚本信息，顺序与 [`Self::scripts`] 一致（按脚本文件夹名排序）。
     pub fn script_infos(&self) -> &[ScriptInfo] {
         &self.script_infos
     }
@@ -1300,6 +1482,16 @@ impl Runtime {
         *self.app_hook.borrow_mut() = Some(hook);
     }
 
+    /// 装同步消息对话框的实现（`cloudime.window.message_dialog`）。没有 UI 线程时不装。
+    pub fn set_message_dialog_hook(&self, hook: MessageDialogHook) {
+        *self.message_dialog_hook.borrow_mut() = Some(hook);
+    }
+
+    /// 装同步文本输入对话框的实现（`cloudime.window.text_input_dialog`）。没有 UI 线程时不装。
+    pub fn set_text_input_dialog_hook(&self, hook: TextInputDialogHook) {
+        *self.text_input_dialog_hook.borrow_mut() = Some(hook);
+    }
+
     /// 装一个量尺：脚本调 `cloudime.ui.measure` / `measure_tip` 时用它量文字宽度（单位点）。
     /// 由 Server 在 [`Runtime::load`] / [`Runtime::none`] 之后调（拿不到渲染器时可以一直不装，
     /// 那时脚本调 measure 会报「量不了」）。
@@ -1318,7 +1510,104 @@ impl Runtime {
         *self.theme_hook.borrow_mut() = Some(hook);
     }
 
-    /// 有没有挂着的异步请求（HTTP）。调用方据此决定要不要收结果、要不要拼候选载荷。
+    /// 接上 MCP 代理：记下 `mcp.toml` 里的 Server，并给出请求通道。
+    ///
+    /// 返回结果通道的发送端，由 Server 的代理线程把 `(请求号, 响应)` 送回来；脚本侧在
+    /// [`Runtime::poll_requests`] 里收。没调用它时 `cloudime.mcp.*` 报「没有配置」。
+    pub fn attach_mcp(
+        &self,
+        servers: Vec<ServerSummary>,
+        requests: mpsc::Sender<McpRequest>,
+    ) -> mpsc::Sender<(u64, ResponseBody)> {
+        *self.mcp_servers.borrow_mut() = servers;
+        *self.mcp_requests.borrow_mut() = Some(requests);
+        self.requests.mcp_tx.clone()
+    }
+
+    /// 这轮 MCP 任务链结束的脚本：关掉它启动的 Server；sidecar 是 Lua 拉起的且没人再用时也关掉。
+    ///
+    /// 在事件处理函数和每个异步回调返回后调用，所以进程不会活过脚本这一轮异步任务链。
+    pub fn finish_mcp_scopes(&self) {
+        let finished = self.take_finished_mcp_scopes();
+        if finished.is_empty() {
+            return;
+        }
+        let Some(channel) = self.mcp_requests.borrow().clone() else {
+            return;
+        };
+        if self.mcp_client_lua_owned.get() && self.mcp_scope.borrow().is_empty() {
+            self.mcp_client_lua_owned.set(false);
+            let _ = channel.send(McpRequest {
+                id: next_request_id(&self.requests),
+                action: RequestAction::Shutdown,
+            });
+            return;
+        }
+        for (_, servers) in finished {
+            for server in servers {
+                let _ = channel.send(McpRequest {
+                    id: next_request_id(&self.requests),
+                    action: RequestAction::StopServer { server },
+                });
+            }
+        }
+    }
+
+    /// 任何 MCP 响应都要看一眼：如果 sidecar 是 Lua 拉起的，链已经结束时立刻关掉它。
+    fn observe_mcp_ownership(&self, body: &ResponseBody) {
+        let owned = matches!(
+            body,
+            ResponseBody::Started {
+                client_owned: true,
+                ..
+            } | ResponseBody::Error {
+                client_owned: true,
+                ..
+            }
+        );
+        if !owned {
+            return;
+        }
+        let was_owned = self.mcp_client_lua_owned.replace(true);
+        if was_owned || !self.mcp_scope.borrow().is_empty() {
+            return;
+        }
+        self.mcp_client_lua_owned.set(false);
+        let Some(channel) = self.mcp_requests.borrow().clone() else {
+            return;
+        };
+        let _ = channel.send(McpRequest {
+            id: next_request_id(&self.requests),
+            action: RequestAction::Shutdown,
+        });
+    }
+
+    fn take_finished_mcp_scopes(&self) -> Vec<(String, BTreeSet<String>)> {
+        let pending = self.requests.pending.borrow();
+        let mut scopes = self.mcp_scope.borrow_mut();
+        let finished: Vec<String> = scopes
+            .iter()
+            .filter(|(script, _)| {
+                !pending.values().any(|request| {
+                    matches!(request.kind, PendingKind::Mcp { .. })
+                        && &request.manifest.name == *script
+                })
+            })
+            .map(|(script, _)| script.clone())
+            .collect();
+        finished
+            .into_iter()
+            .map(|script| {
+                let servers = scopes
+                    .remove(&script)
+                    .map(|scope| scope.servers)
+                    .unwrap_or_default();
+                (script, servers)
+            })
+            .collect()
+    }
+
+    /// 有没有挂着的异步请求（HTTP 或 MCP）。调用方据此决定要不要收结果、要不要拼候选载荷。
     pub fn has_pending_requests(&self) -> bool {
         !self.requests.pending.borrow().is_empty()
     }
@@ -1329,35 +1618,69 @@ impl Runtime {
     /// `candidates` 是这一刻那一屏候选，回调的第二个参数就是它 —— 这样回调不必依赖发请求时那份
     /// 已经可能过期的候选下标。
     pub fn poll_requests(&self, candidates: Table) -> Vec<Table> {
+        /// 工作线程送回来的东西。
+        enum Reply {
+            Http(http::Outcome),
+            Mcp(ResponseBody),
+        }
+
         // 先把结果摘出来（回调里可能再发请求，不能握着 `pending` 的借用）
         let mut ready = Vec::new();
         {
             let mut pending = self.requests.pending.borrow_mut();
-            loop {
-                let Ok((id, outcome)) = self.requests.results.borrow_mut().try_recv() else {
-                    break;
-                };
-                let Some(request) = pending.remove(&id) else {
-                    continue;
-                };
-                if Instant::now() > request.deadline {
-                    tracing::warn!(url = %request.url, "脚本的 HTTP 结果超过了它给的时限，丢掉");
-                    continue;
+            {
+                let results = self.requests.results.borrow_mut();
+                while let Ok((id, outcome)) = results.try_recv() {
+                    let Some(request) = pending.remove(&id) else {
+                        continue;
+                    };
+                    if !matches!(request.kind, PendingKind::Http { .. }) {
+                        tracing::warn!(label = %request.label, "HTTP 结果对不上挂着的请求，丢掉");
+                        continue;
+                    }
+                    ready.push((request, Reply::Http(outcome)));
                 }
-                ready.push((request, outcome));
+            }
+            {
+                let results = self.requests.mcp_results.borrow_mut();
+                while let Ok((id, body)) = results.try_recv() {
+                    self.observe_mcp_ownership(&body);
+                    let Some(request) = pending.remove(&id) else {
+                        continue;
+                    };
+                    if !matches!(request.kind, PendingKind::Mcp { .. }) {
+                        tracing::warn!(label = %request.label, "MCP 结果对不上挂着的请求，丢掉");
+                        continue;
+                    }
+                    ready.push((request, Reply::Mcp(body)));
+                }
             }
         }
         let mut responses = Vec::new();
-        for (request, outcome) in ready {
-            let payload = match http_payload(self.lua(), &request.url, outcome) {
+        for (request, reply) in ready {
+            if Instant::now() > request.deadline {
+                tracing::warn!(label = %request.label, "脚本的异步结果超过了它给的时限，丢掉");
+                continue;
+            }
+            let payload = match (&request.kind, reply) {
+                (PendingKind::Http { url }, Reply::Http(outcome)) => {
+                    http_payload(self.lua(), url, outcome)
+                }
+                (PendingKind::Mcp { server, tool }, Reply::Mcp(body)) => {
+                    mcp::response_payload(self.lua(), server, tool, body)
+                }
+                _ => continue,
+            };
+            let payload = match payload {
                 Ok(payload) => payload,
                 Err(error) => {
-                    tracing::warn!(%error, "拼 HTTP 结果给脚本失败");
+                    tracing::warn!(%error, "拼异步结果给脚本失败");
                     continue;
                 }
             };
             self.arm(&request.manifest);
             *self.current.borrow_mut() = request.manifest.name.clone();
+            *self.script_dir.borrow_mut() = Some(request.manifest.dir.clone());
             *self.manifest.borrow_mut() = Some(request.manifest.clone());
             match request
                 .callback
@@ -1368,14 +1691,20 @@ impl Runtime {
                 Err(error) => {
                     tracing::warn!(
                         %error,
-                        url = %request.url,
+                        label = %request.label,
                         script = %request.manifest.name,
-                        "脚本的 HTTP 回调出错，中止这一次"
+                        "脚本的异步回调出错，中止这一次"
                     );
-                    self.report_error(&request.manifest, "http", &error.to_string());
+                    let tool = match &request.kind {
+                        PendingKind::Http { .. } => "http",
+                        PendingKind::Mcp { .. } => "mcp",
+                    };
+                    self.report_error(&request.manifest, tool, &error.to_string());
                 }
             }
         }
+        self.finish_mcp_scopes();
+        self.script_dir.borrow_mut().take();
         responses
     }
 
@@ -1430,6 +1759,15 @@ impl Runtime {
 
 /// 装宿主 API：`cloudime` 表（`script` / `on` / `log` / `context` / `http_get` / `run`）+ 几处刻意改动
 /// （`os.exit` / `os.execute` / `io.popen` / `io.stdin` / `coroutine`）+ 指令预算钩子 + 锁住 `cloudime`。
+/// 取当前脚本文件夹；`*_path` 这几只 API 只能从脚本里调（加载期与处理函数里都一定有）。
+fn require_script_dir(state: &Rc<RefCell<Option<PathBuf>>>, api: &str) -> mlua::Result<PathBuf> {
+    state.borrow().clone().ok_or_else(|| {
+        mlua::Error::RuntimeError(format!(
+            "cloudime.{api} 只能在脚本里调用（找不到当前脚本文件夹）"
+        ))
+    })
+}
+
 fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     let lua = &runtime.lua;
     let handlers = &runtime.handlers;
@@ -1442,6 +1780,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     let redraw = &runtime.redraw;
     let caret = &runtime.caret;
     let install = &runtime.install;
+    let script_dir = &runtime.script_dir;
     let size = &runtime.size;
     let theme = &runtime.theme;
     let viewport = &runtime.viewport;
@@ -1494,22 +1833,26 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
         ("dll_path", "dlls"),
     ] {
         let state = install.clone();
+        let script = script_dir.clone();
         table.set(
             name,
             lua.create_function(move |_, relative: String| -> mlua::Result<Option<String>> {
+                let folder = require_script_dir(&script, name)?;
                 state
-                    .resolve_script(kind, &relative)
+                    .resolve_script(&folder, kind, &relative)
                     .map_err(mlua::Error::RuntimeError)
             })?,
         )?;
     }
     let saved_state = install.clone();
+    let saved_script = script_dir.clone();
     table.set(
         "saved_path",
         lua.create_function(
             move |_, relative: Option<String>| -> mlua::Result<Option<String>> {
+                let folder = require_script_dir(&saved_script, "saved_path")?;
                 saved_state
-                    .saved(relative.as_deref())
+                    .saved(&folder, relative.as_deref())
                     .map_err(mlua::Error::RuntimeError)
             },
         )?,
@@ -1527,6 +1870,7 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     // 对不上 → 这里直接报错 → 加载失败 → 这个脚本判无效（见 `Runtime::run`）。
     let script_current = current.clone();
     let script_manifest = manifest.clone();
+    let script_folder = script_dir.clone();
     table.set(
         "script",
         lua.create_function(move |_, options: Table| {
@@ -1535,7 +1879,8 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                     "清单（cloudime.script{…}）只能声明一次".to_owned(),
                 ));
             }
-            let parsed = parse_manifest(&options, &script_current.borrow())?;
+            let folder = script_folder.borrow().clone();
+            let parsed = parse_manifest(&options, &script_current.borrow(), folder.as_deref())?;
             *script_manifest.borrow_mut() = Some(Rc::new(parsed));
             Ok(())
         })?,
@@ -1722,6 +2067,8 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     // 在它名下挂一件辅助窗口（资产）。这里只产出请求（见 `window` 模块），窗口在 UI 线程上建；
     // 句柄上的方法把后续操作推进同一条队列，Server 每次派发结束后 `take_window_requests` 取走。
     let window_table = lua.create_table()?;
+    let message_dialog_state = runtime.message_dialog_hook.clone();
+    let text_input_dialog_state = runtime.text_input_dialog_hook.clone();
     let create_requests = runtime.window_requests.clone();
     let create_seq = runtime.window_seq.clone();
     let create_images = runtime.image_cache.clone();
@@ -1787,6 +2134,11 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
     let auxiliary_images = runtime.image_cache.clone();
     let auxiliary_texts = runtime.window_texts.clone();
     let auxiliary_layout_measure = runtime.layout_measure.clone();
+    let dialog_requests = runtime.window_requests.clone();
+    let dialog_seq = runtime.window_seq.clone();
+    let dialog_images = runtime.image_cache.clone();
+    let dialog_texts = runtime.window_texts.clone();
+    let dialog_layout_measure = runtime.layout_measure.clone();
     window_table.set(
         "create_auxiliary",
         lua.create_function(move |lua, options: mlua::Table| {
@@ -1840,6 +2192,49 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 layout.as_ref().map(PathBuf::from),
                 data,
             )
+        })?,
+    )?;
+    window_table.set(
+        "create_dialog",
+        lua.create_function(move |lua, options: mlua::Table| {
+            let layout_measure = dialog_layout_measure.borrow().clone();
+            let id = next_window_id(&dialog_seq);
+            let spec = window::parse_dialog(&options, id)?;
+            dialog_requests
+                .borrow_mut()
+                .push(window::Request::CreateDialog(id, spec.clone()));
+            window::handle(
+                lua,
+                window::Kind::Dialog,
+                id,
+                &spec.name,
+                (None, None),
+                dialog_requests.clone(),
+                dialog_images.clone(),
+                dialog_texts.clone(),
+                layout_measure,
+                None,
+                None,
+                serde_json::Value::Null,
+            )
+        })?,
+    )?;
+    window_table.set(
+        "message_dialog",
+        lua.create_function(move |lua, options: mlua::Table| {
+            lua.create_userdata(window::MessageDialogHandle::new(
+                &options,
+                message_dialog_state.clone(),
+            )?)
+        })?,
+    )?;
+    window_table.set(
+        "text_input_dialog",
+        lua.create_function(move |lua, options: mlua::Table| {
+            lua.create_userdata(window::TextInputDialogHandle::new(
+                &options,
+                text_input_dialog_state.clone(),
+            )?)
         })?,
     )?;
     table.set("window", window_table)?;
@@ -2000,7 +2395,8 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 let id = start_request(
                     &requests_state,
                     Pending {
-                        url: url.clone(),
+                        label: url.clone(),
+                        kind: PendingKind::Http { url: url.clone() },
                         deadline: Instant::now() + timeout,
                         callback,
                         manifest,
@@ -2058,7 +2454,8 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
                 let id = start_request(
                     &post_state,
                     Pending {
-                        url: url.clone(),
+                        label: url.clone(),
+                        kind: PendingKind::Http { url: url.clone() },
                         deadline: Instant::now() + timeout,
                         callback,
                         manifest,
@@ -2080,6 +2477,213 @@ fn install_host_api(runtime: &Runtime) -> mlua::Result<()> {
             },
         )?,
     )?;
+    // MCP Client（`cloudime.mcp.*`）：必须由脚本显式 `start`；请求交给 sidecar 代理线程，
+    // 结果同样在 `poll_requests` 里回给回调。
+    let mcp_table = lua.create_table()?;
+    let mcp_servers_state = runtime.mcp_servers.clone();
+    mcp_table.set(
+        "servers",
+        lua.create_function(move |lua, ()| {
+            let names = lua.create_table()?;
+            for (index, server) in mcp_servers_state.borrow().iter().enumerate() {
+                names.set(index + 1, server.name.clone())?;
+            }
+            Ok(names)
+        })?,
+    )?;
+    let tools_requests = requests.clone();
+    let tools_servers = runtime.mcp_servers.clone();
+    let tools_channel = runtime.mcp_requests.clone();
+    let tools_manifest = manifest.clone();
+    let tools_current = current.clone();
+    let tools_scope = runtime.mcp_scope.clone();
+    mcp_table.set(
+        "tools",
+        lua.create_function(
+            move |_, (server, timeout_ms, callback): (String, u64, Function)| {
+                if !tools_servers
+                    .borrow()
+                    .iter()
+                    .any(|configured| configured.name == server)
+                {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "没有配置名为 {server} 的 MCP Server"
+                    )));
+                }
+                let id = enqueue_mcp(
+                    &tools_requests,
+                    &tools_channel,
+                    &tools_manifest,
+                    "cloudime.mcp.tools",
+                    server.clone(),
+                    "tools".to_owned(),
+                    RequestAction::ListTools {
+                        server: server.clone(),
+                    },
+                    timeout_ms,
+                    callback,
+                )?;
+                let script = tools_current.borrow().clone();
+                tools_scope.borrow_mut().entry(script).or_default();
+                tracing::debug!(server = %server, id, "脚本请求 MCP 工具列表");
+                Ok(())
+            },
+        )?,
+    )?;
+    let call_requests = requests.clone();
+    let call_servers = runtime.mcp_servers.clone();
+    let call_channel = runtime.mcp_requests.clone();
+    let call_manifest = manifest.clone();
+    let call_current = current.clone();
+    let call_scope = runtime.mcp_scope.clone();
+    mcp_table.set(
+        "call",
+        lua.create_function(
+            move |_,
+                  (server, tool, arguments, timeout_ms, callback): (
+                String,
+                String,
+                mlua::Value,
+                u64,
+                Function,
+            )| {
+                let allowed = call_servers
+                    .borrow()
+                    .iter()
+                    .find(|configured| configured.name == server)
+                    .map(|configured| configured.allowed_tools.iter().any(|name| name == &tool));
+                match allowed {
+                    Some(true) => {}
+                    Some(false) => {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "工具 {server}/{tool} 不在 mcp.toml 的 allowed_tools 里"
+                        )));
+                    }
+                    None => {
+                        return Err(mlua::Error::RuntimeError(format!(
+                            "没有配置名为 {server} 的 MCP Server"
+                        )));
+                    }
+                }
+                let arguments = match mcp::lua_to_json(arguments)? {
+                    serde_json::Value::Null => serde_json::Value::Object(Default::default()),
+                    serde_json::Value::Object(arguments) => serde_json::Value::Object(arguments),
+                    _ => {
+                        return Err(mlua::Error::RuntimeError(
+                            "cloudime.mcp.call 的 arguments 必须是 table".to_owned(),
+                        ));
+                    }
+                };
+                let id = enqueue_mcp(
+                    &call_requests,
+                    &call_channel,
+                    &call_manifest,
+                    "cloudime.mcp.call",
+                    server.clone(),
+                    tool.clone(),
+                    RequestAction::Call {
+                        server: server.clone(),
+                        tool: tool.clone(),
+                        arguments,
+                        timeout_ms,
+                    },
+                    timeout_ms,
+                    callback,
+                )?;
+                let script = call_current.borrow().clone();
+                call_scope.borrow_mut().entry(script).or_default();
+                tracing::debug!(server = %server, tool = %tool, id, "脚本调用 MCP 工具");
+                Ok(())
+            },
+        )?,
+    )?;
+    let start_requests = requests.clone();
+    let start_servers = runtime.mcp_servers.clone();
+    let start_channel = runtime.mcp_requests.clone();
+    let start_manifest = manifest.clone();
+    let start_current = current.clone();
+    let start_scope = runtime.mcp_scope.clone();
+    mcp_table.set(
+        "start",
+        lua.create_function(
+            move |_, (server, timeout_ms, callback): (String, u64, Function)| {
+                if !start_servers
+                    .borrow()
+                    .iter()
+                    .any(|configured| configured.name == server)
+                {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "没有配置名为 {server} 的 MCP Server"
+                    )));
+                }
+                let id = enqueue_mcp(
+                    &start_requests,
+                    &start_channel,
+                    &start_manifest,
+                    "cloudime.mcp.start",
+                    server.clone(),
+                    "start".to_owned(),
+                    RequestAction::StartServer {
+                        server: server.clone(),
+                    },
+                    timeout_ms,
+                    callback,
+                )?;
+                let script = start_current.borrow().clone();
+                start_scope
+                    .borrow_mut()
+                    .entry(script)
+                    .or_default()
+                    .servers
+                    .insert(server.clone());
+                tracing::debug!(server = %server, id, "脚本启动 MCP Server");
+                Ok(())
+            },
+        )?,
+    )?;
+    let stop_requests = requests.clone();
+    let stop_servers = runtime.mcp_servers.clone();
+    let stop_channel = runtime.mcp_requests.clone();
+    let stop_manifest = manifest.clone();
+    let stop_current = current.clone();
+    let stop_scope = runtime.mcp_scope.clone();
+    mcp_table.set(
+        "stop",
+        lua.create_function(
+            move |_, (server, timeout_ms, callback): (String, u64, Function)| {
+                if !stop_servers
+                    .borrow()
+                    .iter()
+                    .any(|configured| configured.name == server)
+                {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "没有配置名为 {server} 的 MCP Server"
+                    )));
+                }
+                let id = enqueue_mcp(
+                    &stop_requests,
+                    &stop_channel,
+                    &stop_manifest,
+                    "cloudime.mcp.stop",
+                    server.clone(),
+                    "stop".to_owned(),
+                    RequestAction::StopServer {
+                        server: server.clone(),
+                    },
+                    timeout_ms,
+                    callback,
+                )?;
+                let script = stop_current.borrow().clone();
+                if let Some(scope) = stop_scope.borrow_mut().get_mut(&script) {
+                    scope.servers.remove(&server);
+                }
+                tracing::debug!(server = %server, id, "脚本停止 MCP Server");
+                Ok(())
+            },
+        )?,
+    )?;
+    table.set("mcp", mcp_table)?;
+
     // 启动外部程序：**启动就返回、不等**子进程（同步等一样会堵住工人线程）。
     // 脚本那边是 `os.execute(...)`，转发到这里；`cmd /c start ""` 让子进程自己独立在窗口 / 控制台里跑。
     let run_current = current.clone();
@@ -2268,7 +2872,21 @@ fn time_table(lua: &Lua) -> mlua::Result<Table> {
     Ok(fields)
 }
 
-fn parse_manifest(options: &Table, default_name: &str) -> mlua::Result<Manifest> {
+fn parse_manifest(
+    options: &Table,
+    default_name: &str,
+    folder: Option<&Path>,
+) -> mlua::Result<Manifest> {
+    let folder = folder.ok_or_else(|| {
+        mlua::Error::RuntimeError(
+            "清单只能在脚本文件夹里的入口脚本中声明（找不到当前脚本文件夹）".to_owned(),
+        )
+    })?;
+    let id = folder
+        .file_name()
+        .and_then(|name| name.to_str())
+        .ok_or_else(|| mlua::Error::RuntimeError("脚本文件夹没有合法名字".to_owned()))?
+        .to_owned();
     let api = options.get::<Option<u32>>("api")?.ok_or_else(|| {
         mlua::Error::RuntimeError(format!("清单必须写 api（当前只有 {API_VERSION}）"))
     })?;
@@ -2425,16 +3043,21 @@ fn parse_manifest(options: &Table, default_name: &str) -> mlua::Result<Manifest>
     let needs_context = options
         .get::<Option<bool>>("needs_context")?
         .unwrap_or(false);
+    let show_in_i_mode = options
+        .get::<Option<bool>>("show_in_i_mode")?
+        .unwrap_or(false);
     let priority = options.get::<Option<i32>>("priority")?.unwrap_or(0);
     let name = options
         .get::<Option<String>>("name")?
         .filter(|name| !name.trim().is_empty())
-        .unwrap_or_else(|| default_name.to_owned());
+        .unwrap_or_else(|| id.clone());
     let description = options
         .get::<Option<String>>("description")?
         .filter(|description| !description.trim().is_empty());
     Ok(Manifest {
+        id,
         file: default_name.to_owned(),
+        dir: folder.to_path_buf(),
         name,
         description,
         budget,
@@ -2448,19 +3071,20 @@ fn parse_manifest(options: &Table, default_name: &str) -> mlua::Result<Manifest>
         wanted_keys,
         candidate_pinyin,
         needs_context,
+        show_in_i_mode,
         priority,
     })
 }
 
-/// 这个文件要不要跳过：模板，或在禁用名单里（按文件名，大小写不敏感）。
-fn skipped(path: &Path, disabled: &[String]) -> bool {
-    let Some(name) = path.file_name().and_then(|name| name.to_str()) else {
-        return true;
-    };
-    name.eq_ignore_ascii_case(TEMPLATE_FILE)
-        || disabled
-            .iter()
-            .any(|disabled| disabled.trim().eq_ignore_ascii_case(name))
+/// 这个文件夹在禁用名单里没有：名单写的是文件夹名，旧配置里可能还带着 `.lua`。
+fn is_disabled(id: &str, disabled: &[String]) -> bool {
+    disabled.iter().any(|entry| {
+        let entry = entry.trim();
+        entry.eq_ignore_ascii_case(id)
+            || entry.rsplit_once('.').is_some_and(|(stem, extension)| {
+                extension.eq_ignore_ascii_case("lua") && stem.eq_ignore_ascii_case(id)
+            })
+    })
 }
 
 /// 量一段文字，拼成脚本要的表 `{ width, height }`（单位点）；没装量尺 / 量不了就报错。
@@ -2710,6 +3334,47 @@ fn text_table(
 ///
 /// 返回「时限 + 发请求那个脚本的清单」：回调属于发请求那个脚本，限额与 `on_error` 都按它的清单来
 ///（这两个 API 只能在处理函数里调，那会儿清单必然在）。
+#[allow(clippy::too_many_arguments)]
+fn enqueue_mcp(
+    requests: &Rc<Requests>,
+    channel: &Rc<RefCell<Option<mpsc::Sender<McpRequest>>>>,
+    manifest: &Rc<RefCell<Option<Rc<Manifest>>>>,
+    tool_name: &str,
+    server: String,
+    pending_tool: String,
+    action: RequestAction,
+    timeout_ms: u64,
+    callback: Function,
+) -> mlua::Result<u64> {
+    let (timeout, manifest) = check_timeout(tool_name, timeout_ms, manifest)?;
+    let Some(channel) = channel.borrow().clone() else {
+        return Err(mlua::Error::RuntimeError(
+            "这次运行没有接 MCP Client（没有 mcp.toml）".to_owned(),
+        ));
+    };
+    let label = format!("{server}/{pending_tool}");
+    let id = start_request(
+        requests,
+        Pending {
+            label,
+            kind: PendingKind::Mcp {
+                server,
+                tool: pending_tool,
+            },
+            deadline: Instant::now() + timeout,
+            callback,
+            manifest,
+        },
+    );
+    if let Err(error) = channel.send(McpRequest { id, action }) {
+        cancel_request(requests, id);
+        return Err(mlua::Error::RuntimeError(format!(
+            "MCP 代理不可用：{error}"
+        )));
+    }
+    Ok(id)
+}
+
 fn check_timeout(
     tool: &str,
     timeout_ms: u64,
@@ -2735,11 +3400,21 @@ fn check_timeout(
 }
 
 /// 挂上一次异步请求，返回它的请求号（工作线程回来时按这个号找回调）。
-fn start_request(requests: &Rc<Requests>, pending: Pending) -> u64 {
+fn next_request_id(requests: &Rc<Requests>) -> u64 {
     let id = requests.next_request.get().wrapping_add(1);
     requests.next_request.set(id);
+    id
+}
+
+fn start_request(requests: &Rc<Requests>, pending: Pending) -> u64 {
+    let id = next_request_id(requests);
     requests.pending.borrow_mut().insert(id, pending);
     id
+}
+
+/// 请求送不进代理线程时把它从挂着的那张表里撤掉，免得永远占着 `has_pending_requests`。
+fn cancel_request(requests: &Rc<Requests>, id: u64) {
+    requests.pending.borrow_mut().remove(&id);
 }
 
 fn http_payload(lua: &Lua, url: &str, outcome: http::Outcome) -> mlua::Result<Table> {
@@ -2821,73 +3496,86 @@ mod tests {
         let _ = std::fs::remove_file(outside);
     }
 
-    /// `shared_path` / `layout_path` / `dll_path` 只认各自的子目录；`saved_path` 会建可写目录。
+    /// `shared_path` / `layout_path` / `dll_path` 只认**当前脚本文件夹**的对应子目录；
+    /// `saved_path` 会建该脚本的可写目录。
     #[test]
     fn script_subdirectory_paths_and_saved_data_are_scoped() {
-        let dir = script_dir("script-paths");
+        let install = script_dir("script-paths");
+        let scripts = install.join("Scripts");
+        let folder = scripts.join("demo");
         for (kind, file) in [
             ("shared", "helpers.lua"),
             ("layouts", "main.json"),
             ("dlls", "helper.dll"),
         ] {
-            let folder = dir.join("Scripts").join(kind);
-            std::fs::create_dir_all(&folder).unwrap();
-            std::fs::write(folder.join(file), "x").unwrap();
+            let base = folder.join(kind);
+            std::fs::create_dir_all(&base).unwrap();
+            std::fs::write(base.join(file), "x").unwrap();
         }
-        let runtime = Runtime::none();
-        runtime.set_install_dir(dir.clone());
-        for (api, file) in [
-            ("shared_path", "helpers.lua"),
-            ("layout_path", "main.json"),
-            ("dll_path", "helper.dll"),
+        write_raw_script(
+            &scripts,
+            "demo.lua",
+            &format!(
+                "{MANIFEST}\
+                 got_shared = cloudime.shared_path('helpers.lua')\n\
+                 got_layout = cloudime.layout_path('main.json')\n\
+                 got_dll = cloudime.dll_path('helper.dll')\n\
+                 got_saved = cloudime.saved_path('test_saved/data.txt')\n\
+                 local ok, err = pcall(function() return cloudime.saved_path('../outside.txt') end)\n\
+                 saved_error = tostring(err)\n"
+            ),
+        );
+        let runtime = Runtime::load(&scripts, &[]);
+        let folder = folder.canonicalize().unwrap();
+        for (global, file) in [
+            ("got_shared", "helpers.lua"),
+            ("got_layout", "main.json"),
+            ("got_dll", "helper.dll"),
         ] {
-            let found: String = runtime
-                .lua()
-                .load(format!(r#"return cloudime.{api}("{file}")"#))
-                .eval()
-                .unwrap();
+            let found: String = runtime.lua().globals().get(global).unwrap();
             assert!(Path::new(&found).is_absolute());
             assert_eq!(Path::new(&found).file_name().unwrap(), file);
+            assert!(
+                Path::new(&found).starts_with(&folder),
+                "{global} 应锁在当前脚本文件夹里"
+            );
         }
-        let saved: String = runtime
-            .lua()
-            .load(r#"return cloudime.saved_path("test_saved/data.txt")"#)
-            .eval()
-            .unwrap();
+        let saved: String = runtime.lua().globals().get("got_saved").unwrap();
         let saved = PathBuf::from(saved);
         assert_eq!(saved.file_name().unwrap(), "data.txt");
         assert!(
             saved.parent().unwrap().is_dir(),
             "saved_path 要把子目录建出来"
         );
-        let saved_root = dir.join("Scripts").join("saved").canonicalize().unwrap();
+        let saved_root = folder.join("saved").canonicalize().unwrap();
         assert!(
             saved.starts_with(&saved_root),
-            "数据只能落在 Scripts\\saved 下"
+            "数据只能落在当前脚本的 saved 目录下"
         );
-        let error = runtime
-            .lua()
-            .load(r#"return cloudime.saved_path("../outside.txt")"#)
-            .eval::<Option<String>>()
-            .unwrap_err()
-            .to_string();
+        let error: String = runtime.lua().globals().get("saved_error").unwrap();
         assert!(error.contains("相对路径"), "{error}");
-        let _ = std::fs::remove_dir_all(dir);
+        let _ = std::fs::remove_dir_all(install);
     }
 
     /// 一个合法清单：测试脚本都用它（`write_script` 自动加在最前面）。
-    /// **不写 `name`** —— 于是脚本名取文件名，`scripts()` 的断言还能一眼看出是哪个脚本。
+    /// **不写 `name`** —— 于是脚本名取文件夹名，`scripts()` 的断言还能一眼看出是哪个脚本。
     const MANIFEST: &str = "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'none', keys = { 'a', 'b' }, budget = 1000000, timeout = 10000, \
                              sync = false, handover = 'callback', on_error = false }\n";
 
-    /// 写一个脚本文件（自动在最前面补一份合法清单）。
+    /// 写一个脚本文件（自动在最前面补一份合法清单）。脚本放进 `<dir>/<文件名去后缀>/` 文件夹。
     fn write_script(dir: &Path, name: &str, source: &str) {
-        std::fs::write(dir.join(name), format!("{MANIFEST}{source}")).unwrap();
+        write_raw_script(dir, name, &format!("{MANIFEST}{source}"));
     }
 
     /// 写一个**原样**的脚本文件（自己带清单，或者故意不带 —— 测「判无效」用）。
     fn write_raw_script(dir: &Path, name: &str, source: &str) {
-        std::fs::write(dir.join(name), source).unwrap();
+        let stem = Path::new(name)
+            .file_stem()
+            .map(|stem| stem.to_string_lossy().into_owned())
+            .unwrap_or_else(|| name.to_owned());
+        let folder = dir.join(stem);
+        std::fs::create_dir_all(&folder).unwrap();
+        std::fs::write(folder.join(name), source).unwrap();
     }
 
     /// 载荷：一个空表 + 可选的 `vk`；不给 `vk` 时用测试清单里声明的那个键（`0x41` = `a`，
@@ -2932,7 +3620,7 @@ mod tests {
              cloudime.on('key', function() hits = hits + 100 return {} end)\n",
         );
         let runtime = Runtime::load(&dir, &[]);
-        assert_eq!(runtime.scripts().to_vec(), ["counter.lua"]);
+        assert_eq!(runtime.scripts().to_vec(), ["counter"]);
 
         // 没人登记的事件：一个都不调。
         assert_eq!(
@@ -2987,7 +3675,7 @@ mod tests {
         write_script(&dir, "b-fine.lua", "loaded = 1\n");
         let runtime = Runtime::load(&dir, &[]);
         // 只有后面那个进了脚本表，前面那个跳过了
-        assert_eq!(runtime.scripts().to_vec(), ["b-fine.lua"]);
+        assert_eq!(runtime.scripts().to_vec(), ["b-fine"]);
         assert_eq!(runtime.lua().globals().get::<i64>("loaded").unwrap(), 1);
     }
 
@@ -3032,7 +3720,7 @@ mod tests {
         write_script(&dir, "keep.lua", "kept = 1\n");
         write_script(&dir, "notes.txt", "不是脚本\n");
         let runtime = Runtime::load(&dir, &[]);
-        assert_eq!(runtime.scripts().to_vec(), ["keep.lua"]);
+        assert_eq!(runtime.scripts().to_vec(), ["keep"]);
     }
 
     /// 派发方能先问「有没有人关心这类事件」，也不用拼载荷；`cloudime.context` 是每次都刷新的光标前文。
@@ -3129,6 +3817,107 @@ mod tests {
                 .unwrap()
                 .is_none(),
             "超时的结果不该调回调"
+        );
+    }
+
+    /// MCP 调用必须显式 `start`；结果回来后链尾自动关掉 Lua 拉起的 sidecar。
+    #[test]
+    fn mcp_start_call_and_chain_cleanup() {
+        let dir = script_dir("mcp");
+        write_script(
+            &dir,
+            "mcp.lua",
+            "cloudime.on('startup', function()\n\
+                 names = table.concat(cloudime.mcp.servers(), ',')\n\
+                 cloudime.mcp.start('search', 5000, function(started)\n\
+                     start_flag = started.started\n\
+                     owned = started.client_owned\n\
+                     cloudime.mcp.call('search', 'find', { q = '云朵' }, 5000, function(result)\n\
+                         answer = result.content[1].text\n\
+                         hits = result.structured.hits\n\
+                         return {}\n\
+                     end)\n\
+                 end)\n\
+             end)\n",
+        );
+        let runtime = Runtime::load(&dir, &[]);
+        let (requests, incoming) = mpsc::channel();
+        let results = runtime.attach_mcp(
+            vec![ServerSummary {
+                name: "search".to_owned(),
+                allowed_tools: vec!["find".to_owned()],
+            }],
+            requests,
+        );
+        let payload = runtime.lua().create_table().unwrap();
+        runtime.dispatch("startup", payload, None);
+
+        let start = incoming.recv_timeout(Duration::from_secs(1)).unwrap();
+        match start.action {
+            RequestAction::StartServer { server } => assert_eq!(server, "search"),
+            other => panic!("应为 StartServer：{other:?}"),
+        }
+        results
+            .send((
+                start.id,
+                ResponseBody::Started {
+                    server: "search".to_owned(),
+                    client_owned: true,
+                },
+            ))
+            .unwrap();
+
+        let candidates = runtime.lua().create_table().unwrap();
+        assert!(runtime.poll_requests(candidates).is_empty());
+        assert!(runtime.lua().globals().get::<bool>("start_flag").unwrap());
+        assert!(runtime.lua().globals().get::<bool>("owned").unwrap());
+
+        let call = incoming.recv_timeout(Duration::from_secs(1)).unwrap();
+        match call.action {
+            RequestAction::Call {
+                server,
+                tool,
+                arguments,
+                ..
+            } => {
+                assert_eq!(server, "search");
+                assert_eq!(tool, "find");
+                assert_eq!(arguments.get("q"), Some(&serde_json::json!("云朵")));
+            }
+            other => panic!("应为 Call：{other:?}"),
+        }
+
+        results
+            .send((
+                call.id,
+                ResponseBody::Call(cloudime_mcp_client::CallOutcome {
+                    content: vec![serde_json::json!({ "type": "text", "text": "找到" })],
+                    structured: Some(serde_json::json!({ "hits": 3 })),
+                    is_error: false,
+                    error: None,
+                }),
+            ))
+            .unwrap();
+
+        let candidates = runtime.lua().create_table().unwrap();
+        assert_eq!(runtime.poll_requests(candidates).len(), 1);
+        assert_eq!(
+            runtime.lua().globals().get::<String>("names").unwrap(),
+            "search"
+        );
+        assert_eq!(
+            runtime.lua().globals().get::<String>("answer").unwrap(),
+            "找到"
+        );
+        assert_eq!(runtime.lua().globals().get::<i64>("hits").unwrap(), 3);
+        assert!(!runtime.has_pending_requests());
+
+        // 链尾：sidecar 是 Lua 拉起的，最后一个回调结束后收到 Shutdown。
+        let shutdown = incoming.recv_timeout(Duration::from_secs(1)).unwrap();
+        assert!(
+            matches!(shutdown.action, RequestAction::Shutdown),
+            "{:?}",
+            shutdown.action
         );
     }
 
@@ -3272,13 +4061,16 @@ mod tests {
         assert!(request.contains(r#"{"a":1}"#), "POST 体要发出去：{request}");
     }
 
-    /// 随包的 `Scripts/shared/md5.lua`（用户脚本拿它算签名）：拿 RFC 1321 的向量与小牛翻译文档里的例子回归。
+    /// 随包的 `Scripts/examples/md5/md5.lua`（用户脚本拿它算签名）：拿 RFC 1321 的向量与小牛翻译文档里的例子回归。
     /// 这份文件随包发布、用户直接 `dofile` 它 —— 写错了签名就全错，所以放在这儿当用例。
     #[test]
     fn the_shipped_lua_md5_matches_the_known_vectors() {
         let dir = script_dir("md5-lib");
-        // 装到用户机器上时它在安装目录的 `Scripts\shared\`；这里指仓库里那份随包文件
-        let path = concat!(env!("CARGO_MANIFEST_DIR"), "/../../Scripts/shared/md5.lua");
+        // 装到用户机器上时它在脚本文件夹的 `shared\`；这里指仓库里的示例文件。
+        let path = concat!(
+            env!("CARGO_MANIFEST_DIR"),
+            "/../../Scripts/examples/md5/md5.lua"
+        );
         // 80 位数字（RFC 1321 的向量之一，跨 55 / 56 / 64 字节的填充边界）
         const DIGITS: &str =
             "12345678901234567890123456789012345678901234567890123456789012345678901234567890";
@@ -3501,13 +4293,13 @@ mod tests {
     #[test]
     fn combination_keys_are_collected_for_the_dll() {
         let dir = script_dir("keys-trigger");
-        std::fs::write(
-            dir.join("auto-number.lua"),
+        write_raw_script(
+            &dir,
+            "auto-number.lua",
             "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'none', keys = { 'Enter', 'tab' }, needs_context = true, \
              budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
              cloudime.on('key', function(event) return {} end)\n",
-        )
-        .unwrap();
+        );
         let runtime = Runtime::load(&dir, &[]);
         assert_eq!(runtime.wanted_keys(), vec![0x09, 0x0D], "键名 → 虚拟键码");
         assert!(
@@ -3518,12 +4310,12 @@ mod tests {
 
         // 键名不认识 → 判无效
         let dir = script_dir("keys-bad");
-        std::fs::write(
-            dir.join("bad.lua"),
+        write_raw_script(
+            &dir,
+            "bad.lua",
             "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'none', keys = { 'nope' }, \
              budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n",
-        )
-        .unwrap();
+        );
         let runtime = Runtime::load(&dir, &[]);
         assert!(runtime.scripts().is_empty(), "键名不认识应该判无效");
         assert!(runtime.wanted_keys().is_empty());
@@ -3537,13 +4329,13 @@ mod tests {
     #[test]
     fn a_combination_trigger_only_receives_its_own_keys() {
         let dir = script_dir("key-filter");
-        std::fs::write(
-            dir.join("only-enter.lua"),
+        write_raw_script(
+            &dir,
+            "only-enter.lua",
             "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'none', keys = { 'enter' }, \
              budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
              cloudime.on('key', function() return {} end)\n",
-        )
-        .unwrap();
+        );
         let runtime = Runtime::load(&dir, &[]);
 
         // Enter 派得到（`payload` 的第一个参数就是 `vk`）
@@ -4034,7 +4826,8 @@ mod tests {
         assert_eq!(responses.len(), 1);
     }
 
-    /// 模板与禁用的脚本都不加载：`template.lua` 按文件名跳过，`disabled` 里的按名跳过（大小写不敏感）。
+    /// 模板与禁用的脚本都不加载：`template.lua` 按文件名跳过，`disabled` 里的按**文件夹名**跳过
+    ///（大小写不敏感）。
     #[test]
     fn template_and_disabled_scripts_are_skipped() {
         let dir = script_dir("disabled");
@@ -4055,8 +4848,9 @@ mod tests {
         )
         .unwrap();
 
+        // 旧配置里的 `off.lua` 也要能禁用 `off` 文件夹（升级前的禁用名单存的是文件名）。
         let runtime = Runtime::load(&dir, &["OFF.LUA".to_owned()]);
-        assert_eq!(runtime.scripts().to_vec(), ["keep.lua"]);
+        assert_eq!(runtime.scripts().to_vec(), ["keep"]);
         assert_eq!(
             runtime.dispatch("key", payload(&runtime, None), None).len(),
             1
@@ -4090,7 +4884,7 @@ mod tests {
              error('加载到一半就炸')\n",
         );
         let runtime = Runtime::load(&dir, &[]);
-        assert_eq!(runtime.scripts().to_vec(), ["a-good.lua"]);
+        assert_eq!(runtime.scripts().to_vec(), ["a-good"]);
         // a-good 的处理函数还在（b-bad 自己那个被撤掉了）
         assert_eq!(
             runtime.dispatch("key", payload(&runtime, None), None).len(),
@@ -4159,6 +4953,7 @@ mod tests {
             aux:set_content{ { type = "rect", x = 0, y = 0, w = 120, h = 60, color = "#FFFFFFFF" } }
             aux:show()
             aux:focus(true)
+            aux:set_modal(true)
             win:hide()
             win:close()
             "##,
@@ -4169,8 +4964,8 @@ mod tests {
         assert!(!runtime.has_window_requests(), "取了就清");
         assert_eq!(
             requests.len(),
-            9,
-            "建 / 内容 / 显示 / 建辅助 / 内容 / 显示 / 焦点 / 收起 / 关"
+            10,
+            "建 / 内容 / 显示 / 建辅助 / 内容 / 显示 / 焦点 / 模态 / 收起 / 关"
         );
         match &requests[0] {
             window::Request::Create(id, spec) => {
@@ -4203,8 +4998,180 @@ mod tests {
         assert!(matches!(&requests[4], window::Request::SetContent(2, _)));
         assert!(matches!(&requests[5], window::Request::Show(2, None)));
         assert!(matches!(&requests[6], window::Request::Focus(2, true)));
-        assert!(matches!(&requests[7], window::Request::Hide(1)));
-        assert!(matches!(&requests[8], window::Request::Close(1)));
+        assert!(matches!(&requests[7], window::Request::SetModal(2, true)));
+        assert!(matches!(&requests[8], window::Request::Hide(1)));
+        assert!(matches!(&requests[9], window::Request::Close(1)));
+    }
+
+    /// 脚本创建内置对话框：只排队 CreateDialog，正文由 Cloud UI 生成，不走 JSON。
+    #[test]
+    fn dialog_requests_are_queued_with_mask() {
+        let dir = script_dir("dialog-api");
+        write_script(
+            &dir,
+            "dialog.lua",
+            r##"
+            local win = cloudime.window.create{ name = "宿主", width = 200, height = 80 }
+            local dlg = cloudime.window.create_dialog{ owner = win, name = "确认", mask = true }
+            dlg:close()
+            "##,
+        );
+        let runtime = Runtime::load(&dir, &[]);
+        let requests = runtime.take_window_requests();
+        assert_eq!(requests.len(), 3, "建宿主 / 建对话框 / 关对话框");
+        assert!(matches!(&requests[0], window::Request::Create(1, _)));
+        match &requests[1] {
+            window::Request::CreateDialog(id, spec) => {
+                assert_eq!(*id, 2);
+                assert_eq!(spec.owner, 1);
+                assert_eq!(spec.name, "确认");
+                assert!(spec.mask);
+            }
+            other => panic!("第二条该是建对话框：{other:?}"),
+        }
+        assert!(matches!(&requests[2], window::Request::Close(2)));
+    }
+
+    /// `cloudime.window.message_dialog`：建实例、改属性，再同步调用 UI 钩子并返回结果。
+    #[test]
+    fn message_dialog_calls_the_hook_and_returns_its_value() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let dir = script_dir("message-dialog-hook");
+        let runtime = Runtime::load(&dir, &[]);
+        let seen = Rc::new(RefCell::new(None));
+        runtime.set_message_dialog_hook(Rc::new({
+            let seen = seen.clone();
+            move |request| {
+                *seen.borrow_mut() = Some(request.clone());
+                1
+            }
+        }));
+        let value: u8 = runtime
+            .lua()
+            .load(
+                r##"
+                local dialog = cloudime.window.message_dialog{
+                    owner = 3,
+                    title = "标题",
+                    text = "第一行\n第二行",
+                    icon = "info",
+                    buttons = { "是", "否", "取消" },
+                }
+                dialog.text_color = "#123456"
+                dialog.text_size = 15
+                return dialog:show()
+                "##,
+            )
+            .eval()
+            .expect("消息对话框调用");
+        assert_eq!(value, 1);
+        let request = seen.borrow().clone().expect("钩子收到请求");
+        assert_eq!(request.owner, 3);
+        assert_eq!(request.title, "标题");
+        assert_eq!(request.text, "第一行\n第二行");
+        assert_eq!(request.icon, "info");
+        assert_eq!(request.buttons, ["是", "否", "取消"]);
+        assert_eq!(
+            request.style.text_color,
+            Some(cloudime_render::Color::rgb(0x12, 0x34, 0x56))
+        );
+        assert_eq!(request.style.text_size, Some(15.0));
+    }
+
+    /// `cloudime.window.text_input_dialog`：建实例、改属性，再同步调用 UI 钩子并返回字符串。
+    #[test]
+    fn text_input_dialog_calls_the_hook_and_returns_its_value() {
+        use std::cell::RefCell;
+        use std::rc::Rc;
+
+        let dir = script_dir("text-input-dialog-hook");
+        let runtime = Runtime::load(&dir, &[]);
+        let seen = Rc::new(RefCell::new(None));
+        runtime.set_text_input_dialog_hook(Rc::new({
+            let seen = seen.clone();
+            move |request| {
+                *seen.borrow_mut() = Some(request.clone());
+                "改过的文本".to_owned()
+            }
+        }));
+        let value: String = runtime
+            .lua()
+            .load(
+                r##"
+                local dialog = cloudime.window.text_input_dialog{
+                    owner = 3,
+                    title = "改名",
+                    text = "输入新名字：",
+                    allow_multiline = true,
+                    default_text = "旧名字",
+                }
+                dialog.button_background = "#112233"
+                return dialog:show()
+                "##,
+            )
+            .eval()
+            .expect("文本输入对话框调用");
+        assert_eq!(value, "改过的文本");
+        let request = seen.borrow().clone().expect("钩子收到请求");
+        assert_eq!(request.owner, 3);
+        assert_eq!(request.title, "改名");
+        assert_eq!(request.text, "输入新名字：");
+        assert!(request.allow_multiline);
+        assert_eq!(request.default_text, "旧名字");
+        assert_eq!(
+            request.style.button_background,
+            Some(cloudime_render::Color::rgb(0x11, 0x22, 0x33))
+        );
+    }
+
+    /// 对话框属性只在 `show` 之前有效：之后赋值报 Lua 错误，`show` 也不能重来。
+    #[test]
+    fn dialog_properties_are_locked_after_show() {
+        use std::rc::Rc;
+
+        let dir = script_dir("dialog-properties-locked");
+        let runtime = Runtime::load(&dir, &[]);
+        runtime.set_message_dialog_hook(Rc::new(|_| 0));
+
+        let error = runtime
+            .lua()
+            .load(
+                r##"
+                local dialog = cloudime.window.message_dialog{
+                    owner = 3,
+                    buttons = { "好" },
+                }
+                dialog:show()
+                dialog.text_color = "#FFFFFF"
+                "##,
+            )
+            .exec()
+            .expect_err("show 之后改属性应该报错");
+        assert!(
+            error.to_string().contains("已经 show 过"),
+            "错误信息：{error}"
+        );
+
+        let error = runtime
+            .lua()
+            .load(
+                r#"
+                local dialog = cloudime.window.message_dialog{
+                    owner = 3,
+                    buttons = { "好" },
+                }
+                dialog:show()
+                dialog:show()
+                "#,
+            )
+            .exec()
+            .expect_err("重复 show 应该报错");
+        assert!(
+            error.to_string().contains("不能再 show"),
+            "错误信息：{error}"
+        );
     }
 
     /// `win:load_layout(path)`：运行中换布局，句柄尺寸跟着文件更新。
@@ -4328,7 +5295,7 @@ mod tests {
         );
         write_script(&dir, "fine.lua", "loaded = 1\n");
         let runtime = Runtime::load(&dir, &[]);
-        assert_eq!(runtime.scripts().to_vec(), ["fine.lua"]);
+        assert_eq!(runtime.scripts().to_vec(), ["fine"]);
     }
 
     /// `combine_region` / `prune_region`：各排一条 `EditRegion` 请求（合并 / 剪除）。
@@ -4407,13 +5374,13 @@ mod tests {
     #[test]
     fn candidate_context_needs_the_declared_pinyin() {
         let dir = script_dir("candidate-pinyin");
-        std::fs::write(
-            dir.join("pinyin.lua"),
+        write_raw_script(
+            &dir,
+            "pinyin.lua",
             "cloudime.script{ api = 2, trigger_condition = 'candidate_context', candidate_pinyin = 'Ni Hao', \
              budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
              cloudime.on('candidates', function() return {} end)\n",
-        )
-        .unwrap();
+        );
         let runtime = Runtime::load(&dir, &[]);
         let with_pinyin = |text: &str| {
             let payload = runtime.lua().create_table().unwrap();
@@ -4446,13 +5413,13 @@ mod tests {
     #[test]
     fn focus_app_matches_the_declared_programs() {
         let dir = script_dir("focus-app");
-        std::fs::write(
-            dir.join("focus.lua"),
+        write_raw_script(
+            &dir,
+            "focus.lua",
             "cloudime.script{ api = 2, trigger_condition = 'focus_app', apps = { 'NotePad.EXE' }, \
              budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
              cloudime.on('focus', function(event) return { notice = event.app } end)\n",
-        )
-        .unwrap();
+        );
         let runtime = Runtime::load(&dir, &[]);
         let payload = runtime.lua().create_table().unwrap();
         payload.set("app", "notepad.exe").unwrap();
@@ -4467,18 +5434,71 @@ mod tests {
         );
     }
 
+    /// `show_in_i_mode` 只对手动触发脚本生效：`manual` 恒进 i 模式；
+    /// 带修饰键的组合键脚本看字段；单键 / 时间 / 候选 / 焦点这类自动脚本一律不进。
+    #[test]
+    fn show_in_i_mode_only_applies_to_manual_trigger_scripts() {
+        let dir = script_dir("show-in-i-mode");
+        let base = "cloudime.script{ api = 2, name = '脚本', timeout = 100, sync = true, handover = 'return', on_error = false, ";
+        write_raw_script(
+            &dir,
+            "combo.lua",
+            &format!(
+                "{base}trigger_condition = 'combination_key', combination_modifiers = 'ctrl+alt', keys = {{ 'y' }}, show_in_i_mode = true }}\n\
+                 cloudime.on('key', function() return {{}} end)\n"
+            ),
+        );
+        write_raw_script(
+            &dir,
+            "combo-off.lua",
+            &format!(
+                "{base}trigger_condition = 'combination_key', combination_modifiers = 'ctrl+alt', keys = {{ 'y' }} }}\n\
+                 cloudime.on('key', function() return {{}} end)\n"
+            ),
+        );
+        write_raw_script(
+            &dir,
+            "auto.lua",
+            &format!(
+                "{base}trigger_condition = 'combination_key', combination_modifiers = 'none', keys = {{ 'enter' }}, show_in_i_mode = true }}\n\
+                 cloudime.on('key', function() return {{}} end)\n"
+            ),
+        );
+        write_raw_script(
+            &dir,
+            "manual.lua",
+            &format!(
+                "{base}trigger_condition = 'manual' }}\n\
+                 cloudime.on('manual', function() return {{}} end)\n"
+            ),
+        );
+        let runtime = Runtime::load(&dir, &[]);
+        let i_mode = |id: &str| {
+            runtime
+                .script_infos()
+                .iter()
+                .find(|info| info.id == id)
+                .unwrap_or_else(|| panic!("{id} 没加载"))
+                .i_mode
+        };
+        assert!(i_mode("combo"), "组合键脚本写了 show_in_i_mode 要进 i 模式");
+        assert!(!i_mode("combo-off"), "缺省 false");
+        assert!(!i_mode("auto"), "自动触发脚本即使写了也不进");
+        assert!(i_mode("manual"), "manual 脚本本来就进 i 模式");
+    }
+
     /// `manual`（i 模式预留）：不自动派发任何事件，但 `startup` 照旧。
     #[test]
     fn a_manual_trigger_never_fires_on_its_own() {
         let dir = script_dir("manual");
-        std::fs::write(
-            dir.join("manual.lua"),
+        write_raw_script(
+            &dir,
+            "manual.lua",
             "cloudime.script{ api = 2, trigger_condition = 'manual', budget = 1000000, timeout = 10000, \
              sync = true, handover = 'return', on_error = false }\n\
              cloudime.on('key', function() return {} end)\n\
              cloudime.on('startup', function() return {} end)\n",
-        )
-        .unwrap();
+        );
         let runtime = Runtime::load(&dir, &[]);
         assert_eq!(
             runtime
@@ -4499,13 +5519,13 @@ mod tests {
     #[test]
     fn a_combination_requires_the_exact_modifiers() {
         let dir = script_dir("combo-mask");
-        std::fs::write(
-            dir.join("ctrl-a.lua"),
+        write_raw_script(
+            &dir,
+            "ctrl-a.lua",
             "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'ctrl', keys = { 'a' }, \
              budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
              cloudime.on('key', function() return {} end)\n",
-        )
-        .unwrap();
+        );
         let runtime = Runtime::load(&dir, &[]);
         let press = |ctrl: bool, shift: bool| {
             let payload = runtime.lua().create_table().unwrap();
@@ -4540,7 +5560,7 @@ mod tests {
             "cloudime.script{ api = 1, trigger_condition = 'manual', timeout = 100, sync = true, handover = 'return', on_error = false }\n",
         ] {
             let dir = script_dir("trigger-required");
-            std::fs::write(dir.join("bad.lua"), source).unwrap();
+            write_raw_script(&dir, "bad.lua", source);
             let runtime = Runtime::load(&dir, &[]);
             assert!(runtime.scripts().is_empty(), "应判无效：{source}");
         }
@@ -4577,26 +5597,26 @@ mod tests {
 
         // 清单里写 Ctrl+Alt+V → 判无效
         let dir = script_dir("reserved-combo");
-        std::fs::write(
-            dir.join("bad.lua"),
+        write_raw_script(
+            &dir,
+            "bad.lua",
             "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'ctrl+alt', keys = { 'v' }, \
              budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
              cloudime.on('key', function() return {} end)\n",
-        )
-        .unwrap();
+        );
         let runtime = Runtime::load(&dir, &[]);
         assert!(runtime.scripts().is_empty(), "Ctrl+Alt+V 预留给 v 模式");
 
         // 换成 Ctrl+Alt+W 就有效
         let dir = script_dir("reserved-combo-ok");
-        std::fs::write(
-            dir.join("good.lua"),
+        write_raw_script(
+            &dir,
+            "good.lua",
             "cloudime.script{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'ctrl+alt', keys = { 'w' }, \
              budget = 1000000, timeout = 10000, sync = true, handover = 'return', on_error = false }\n\
              cloudime.on('key', function() return {} end)\n",
-        )
-        .unwrap();
+        );
         let runtime = Runtime::load(&dir, &[]);
-        assert_eq!(runtime.scripts().to_vec(), ["good.lua"]);
+        assert_eq!(runtime.scripts().to_vec(), ["good"]);
     }
 }

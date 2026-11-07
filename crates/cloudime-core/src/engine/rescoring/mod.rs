@@ -24,6 +24,24 @@ impl Engine {
             || self.rescorer.as_ref().is_some_and(RescoreWorker::is_alive)
     }
 
+    /// 整句打分器只在这么多音节以上的输入才用；`0` = 一直用。
+    /// 混合档把它设成 9：短输入只走知意，长输入才两个模型一起用。
+    pub fn set_sentence_scorer_min_syllables(&mut self, syllables: usize) {
+        self.sentence_scorer_min_syllables = syllables;
+    }
+
+    /// 这次输入要不要跑整句打分器（接了，且音节数够）。
+    pub(super) fn sentence_scorer_applies(&self, syllables: usize) -> bool {
+        self.has_sentence_scorer() && syllables >= self.sentence_scorer_min_syllables
+    }
+
+    /// 整句后台线程还有任务没收回。
+    fn sentence_in_flight(&self) -> bool {
+        self.rescorer
+            .as_ref()
+            .is_some_and(|worker| worker.latest() > self.sentence_done.get())
+    }
+
     /// 给模型看的前文：壳给了应用里的光标前文就用它（[`Self::set_rescoring_context`]），
     /// 否则用本会话最近上屏的字符；长度按 `neural_context` 截。
     pub(super) fn rescoring_context(&self) -> String {
@@ -91,20 +109,26 @@ impl Engine {
         self.last_rescored.set(true);
     }
 
-    /// 最近一次查询里有整句路径还没拿到神经分：壳该在用户停顿后调 [`Self::request_rescoring`]。
+    /// 还有新路径要打、有字要出（不含已经在后台算的）。
     pub fn rescoring_pending(&self) -> bool {
-        self.rescorer.is_some() && self.neural_cache.borrow().has_wanted()
+        self.choice_pending() || self.rescorer.is_some() && self.neural_cache.borrow().has_wanted()
+    }
+
+    /// 后台线程还有任务没收回。混合档两个线程可能先后回来，壳要等两边都收完再停轮询。
+    pub fn rescoring_in_flight(&self) -> bool {
+        self.choice_in_flight() || self.sentence_in_flight()
     }
 
     /// 把攒着的文本送去后台打分。没接异步打分器或没什么要打的返回 `false`。
     pub fn request_rescoring(&mut self) -> bool {
+        let chose = self.request_choice();
         let Some(worker) = &self.rescorer else {
-            return false;
+            return chose;
         };
         let mut cache = self.neural_cache.borrow_mut();
         let wanted = cache.take_wanted();
         if wanted.is_empty() {
-            return false;
+            return chose;
         }
         tracing::debug!(texts = wanted.len(), "神经重打分请求");
         worker.submit(cache.context().to_owned(), wanted);
@@ -113,11 +137,14 @@ impl Engine {
 
     /// 收后台打好的分。有新分进了缓存返回 `true`，壳该重新 [`Self::query`] 一次；前文已经变了的结果丢掉。
     pub fn poll_rescoring(&mut self) -> bool {
+        let mut updated = self.poll_choice();
         let Some(worker) = &self.rescorer else {
-            return false;
+            return updated;
         };
-        let mut updated = false;
         while let Some(scored) = worker.poll() {
+            // 先记收到的序号：就算前文变了、这份结果作废，这个任务也算收过了。
+            self.sentence_done
+                .set(self.sentence_done.get().max(scored.serial));
             let mut cache = self.neural_cache.borrow_mut();
             if scored.context != cache.context() || scored.scores.len() != scored.texts.len() {
                 continue;

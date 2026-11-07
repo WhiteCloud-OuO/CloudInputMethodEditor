@@ -154,6 +154,8 @@ impl Router {
             config.input.simp_trad_chinese_chars_toggle == cloudime_platform::SimpTrad::Traditional,
         );
         self.engine.set_learning(config.general.learning);
+        self.engine
+            .set_context_memory(config.candidate.context_memory_seconds);
         if config.word_bank.rare_items {
             self.load_rare_if_needed();
         } else {
@@ -171,6 +173,10 @@ impl Router {
         // 脚本换的主题也是会话内状态（这次运行一直有效），别被热加载抹掉
         let script_theme = self.config.script_theme.clone();
         self.config = RouterConfig::from(config);
+        // 换成不支持特殊输入模式的方案（形码等）时，把已经开着的模式关掉。
+        if !self.config.special_input {
+            self.engine.set_special_input(false);
+        }
         // 本地词典 / 学习状态跟着配置走：换词典、重置学习内容都在这里落地
         self.translate.configure(
             &self.config.translate_dictionary,
@@ -197,7 +203,7 @@ impl Router {
         // 脚本的量尺也跟上：字体设置变了它自己会重建渲染器
         self.measure.borrow_mut().0 = settings;
         self.reconcile_status();
-        self.apply_model_config(config.candidate.use_local_sentence_organization_model);
+        self.apply_model_config(config.candidate.resolved_local_model());
 
         let Some(reload) = &mut self.reload else {
             return;

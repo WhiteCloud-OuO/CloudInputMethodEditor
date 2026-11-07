@@ -33,4 +33,7 @@ pub enum NeuralError {
 
     #[error("corrupt model: {0}")]
     Corrupt(&'static str),
+
+    #[error("ONNX Runtime error: {0}")]
+    Onnx(String),
 }

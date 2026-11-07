@@ -9,12 +9,15 @@ members = [
     "crates/cloudime-format",
     "crates/cloudime-translate",
     "crates/cloudime-script",
+    "crates/cloudime-script-store",
     "crates/cloudime-neural",
     "crates/cloudime-render",
     "crates/cloud-ui-core",
+    "crates/cloud-ui-types",
     "crates/cloud-ui",
     "crates/cloudime-update",
-    "apps/cli", "apps/windows/server", "apps/windows/tsf", "apps/windows/settings", "tools/dict-convert", "tools/release-sign", "apps/windows/tools/cloudime-wordbank-transformer",
+    "crates/cloudime-mcp-client",
+    "apps/cli", "apps/mcp", "apps/mcp-client", "apps/cloud-ui-demo", "apps/windows/server", "apps/windows/tsf", "apps/windows/settings", "tools/dict-convert", "tools/release-sign", "apps/windows/tools/cloudime-wordbank-transformer",
 ]
 
 [workspace.package]
@@ -36,11 +39,14 @@ cloudime-lm = { path = "crates/cloudime-lm" }
 cloudime-format = { path = "crates/cloudime-format" }
 cloudime-translate = { path = "crates/cloudime-translate" }
 cloudime-script = { path = "crates/cloudime-script" }
+cloudime-script-store = { path = "crates/cloudime-script-store" }
 cloudime-neural = { path = "crates/cloudime-neural" }
 cloudime-render = { path = "crates/cloudime-render" }
 cloud-ui-core = { path = "crates/cloud-ui-core" }
-cloud-ui = { path = "crates/cloud-ui" }
+cloud-ui-types = { path = "crates/cloud-ui-types" }
+cloud-ui = { path = "crates/cloud-ui", default-features = false }
 cloudime-update = { path = "crates/cloudime-update" }
+cloudime-mcp-client = { path = "crates/cloudime-mcp-client" }
 
 # 外部依赖统一在这里定版本，子 crate 一律 `xxx.workspace = true`
 serde = { version = "1.0.229", features = ["derive"] }
@@ -71,6 +77,11 @@ mlua = { version = "0.12.2", features = ["luajit", "vendored"] }
 # 本地神经语言模型推理（字级 Transformer，权重 safetensors）
 candle-core = "0.11.0"
 candle-nn = "0.11.0"
+ort = { version = "=2.0.0-rc.13", default-features = false, features = ["load-dynamic", "api-24"] }
+
+# 外部 AI 客户端的 Model Context Protocol：stdio server + 工具 schema
+rmcp = { version = "3.8.0", default-features = false, features = ["server", "macros", "transport-io"] }
+schemars = "1.0"
 
 # 检查更新与网络读 releases.json 的异步 HTTP 客户端
 reqwest = { version = "0.13", default-features = false }
@@ -92,6 +103,7 @@ png = "0.18.1"
 
 # Windows 平台层
 embed-manifest = "1.4.0"
+winresource = "0.1.31"
 windows-registry = "0.6.1"
 windows = "0.62.2"
 windows-core = "0.62.2"

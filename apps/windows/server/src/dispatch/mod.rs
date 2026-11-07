@@ -27,23 +27,24 @@ use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
 use cloudime_core::Engine;
-use cloudime_platform::SwitchKeys;
 use cloudime_platform::input_schemes::KeyMapReference;
 use cloudime_platform::protocol::{
     ClientMessage, Frame, IndicatorState, InputMode, InputSettings, ScreenRect, ServerMessage,
     SessionId,
 };
+use cloudime_platform::{LocalModelMode, SwitchKeys};
 
 use crate::ui::SharedMeasurer;
 use document::Document;
+use key::smart_symbol::Pending as SmartSpacePending;
 
 pub use self::candidates::{CandidateEvent, CandidateSink, NoopSink, RenderSettings};
 use self::composed::Composed;
 pub use self::config::RouterConfig;
 use self::reload::ConfigReload;
 pub use self::reload::DataDirs;
-pub use self::rescore::find_model;
 use self::rescore::{ModelLoader, RescoreState};
+pub use self::rescore::{find_model, find_zhiyi};
 use self::script::BackgroundScript;
 pub use self::script::{NoopScriptWindowSink, ScriptWindowSink};
 use self::session::SessionInfo;
@@ -84,6 +85,9 @@ pub struct Router {
     /// 给脚本看：`cloudime.context`。
     surrounding: String,
 
+    /// 当前聚焦输入框的 TSF 上下文标识（`ClientMessage::Surrounding.context`）：变了就清本输入框历史。
+    input_box: Option<u64>,
+
     /// 候选文本 → Core 的排名权重（`Query::weights`）：给脚本看 Core 的排序依据（`candidates` 载荷里的
     /// `weight`）。按文本存，所以脚本重排 / 改显示都不影响它。
     candidate_weights: HashMap<String, f64>,
@@ -114,7 +118,7 @@ pub struct Router {
     status: Box<dyn StatusSink>,
 
     /// 脚本窗口输出端（`cloudime.window.*`）；Windows 上由 [`crate::ui`] 注入，测试里是空实现。
-    script_windows: Box<dyn ScriptWindowSink>,
+    script_windows: Rc<RefCell<Box<dyn ScriptWindowSink>>>,
 
     /// 脚本窗口输出端装好了没有：`startup` 早于 `set_script_window_sink`，那会儿产出的窗口操作
     /// 先攒在 [`Self::pending_script_windows`] 里，装好再补发。
@@ -156,14 +160,17 @@ pub struct Router {
     /// 上次真正显示的帧与位置：没变就不重画（组字期间的空转 Poll 很多）。
     last_shown: Option<(Frame, Vec<Option<char>>, ScreenRect)>,
 
-    /// 本地整句模型（`.qjm` 或三件套目录）；没有模型文件为 `None`。
+    /// 基本本地模型（`.qjm` 或三件套目录）；没有模型文件为 `None`。
     model_path: Option<PathBuf>,
+
+    /// 知意模型目录与 ONNX Runtime；没有为 `None`。
+    zhiyi_model: Option<(PathBuf, PathBuf)>,
 
     /// 进行中的模型加载；加载完接到 Engine 上就清掉。
     model_loader: Option<ModelLoader>,
 
-    /// 本地整句模型开没开（`[candidate] use_local_sentence_organization_model`）；变了才重载 / 卸载。
-    applied_model: bool,
+    /// `[candidate] local_model`；变了才重载 / 卸载。
+    applied_model: LocalModelMode,
 
     /// 重排的防抖 / 轮询进行态。
     rescore: RescoreState,
@@ -179,6 +186,15 @@ pub struct Router {
 
     /// 上一键成对补全补上的右半边（用户敲的那个键）；紧接着又敲它一下就是「跳过」。
     pending_close: Option<char>,
+
+    /// 光标前一个字符（智能符号用）：DLL 送来的前文，或本进程刚上屏的文本。
+    smart_before: Option<char>,
+
+    /// 刚上屏文本对应的「光标前一个字符」：DLL 前文若对不上，说明它是上屏**之前**读的，先忽略一次。
+    smart_guard: Option<char>,
+
+    /// 上一次空格是智能符号的第一击；紧接着再按空格就换成双击规则。
+    smart_space: Option<SmartSpacePending>,
 
     /// 任务栏菜单点了「重启输入法服务」：`serve_pipe` 回完这条消息就退出，让新起的实例接管。
     restart_pending: bool,
@@ -238,6 +254,8 @@ impl Router {
         if let Some(root) = cloudime_platform::resources::bundled_root() {
             scripts.set_install_dir(root);
         }
+        // `cloudime.mcp.*`：有 mcp.toml 才接 sidecar 代理；没有就保持不可用。
+        crate::mcp::attach(&scripts);
         // 脚本的量尺（`cloudime.ui.measure`）：懒加载的渲染器 + 当前字体设置（`apply_config` 会刷新），
         // 装进脚本运行时 —— 量出来的点宽与候选窗画出来的一致。
         let measure = Rc::new(RefCell::new((
@@ -299,6 +317,7 @@ impl Router {
             i_mode: false,
             notice: None,
             surrounding: String::new(),
+            input_box: None,
             candidate_weights: HashMap::new(),
             highlight: 0,
             show_more: false,
@@ -308,7 +327,7 @@ impl Router {
             reload: None,
             candidates: Box::new(NoopSink),
             status: Box::new(NoopStatusSink),
-            script_windows: Box::new(NoopScriptWindowSink),
+            script_windows: Rc::new(RefCell::new(Box::new(NoopScriptWindowSink))),
             script_windows_ready: false,
             pending_script_windows: Vec::new(),
             focused_script_window: None,
@@ -322,13 +341,17 @@ impl Router {
             last_rect: None,
             last_shown: None,
             model_path: None,
+            zhiyi_model: None,
             model_loader: None,
-            applied_model: false,
+            applied_model: LocalModelMode::Off,
             rescore: RescoreState::default(),
             caret_shift: 0,
             delete_before: 0,
             delete_after: 0,
             pending_close: None,
+            smart_before: None,
+            smart_guard: None,
+            smart_space: None,
             restart_pending: false,
             pending_commit: None,
             // 测试里不碰用户目录里的 `translate.db`：学习库不开，Tip 一律按「没学会」上色
@@ -396,7 +419,10 @@ impl Router {
             switch_mode: SwitchKeys::default(),
             english_mode: true,
             shift_letter_compose: true,
+            // 特殊输入模式只认全拼 / 双拼：形码等方案下 DLL 的右 Alt 原样归应用。
+            special_input: self.config.special_input,
             full_width_chars: self.config.full_width_chars,
+            smart_symbols: self.config.smart_symbols,
             raw_input,
             auto_disable_without_text_input: self.config.auto_disable_without_text_input,
             // 组合键脚本在清单里声明的那几套修饰键（`combination_modifiers`）的并集：DLL 据此把命中的
@@ -463,10 +489,22 @@ impl Router {
     /// 装上脚本窗口的输出端（`cloudime.window.*`）：Windows 上由 `ui::UiHandle` 注入，
     /// 测试 / 非 Windows 下不装（请求丢掉，输入照常）。装好时补发 `startup` 那一拍攒下的操作。
     pub fn set_script_window_sink(&mut self, sink: Box<dyn ScriptWindowSink>) {
-        self.script_windows = sink;
+        let sink = Rc::new(RefCell::new(sink));
+        self.script_windows = sink.clone();
         self.script_windows_ready = true;
+        // 同步消息对话框：Lua 工人线程调用时，经同一个 sink 等 UI 线程返回按钮下标。
+        let dialog_sink = sink.clone();
+        self.scripts
+            .set_message_dialog_hook(Rc::new(move |request| {
+                dialog_sink.borrow().message_dialog(request)
+            }));
+        // 同步文本输入对话框：同一条通道，UI 线程同步返回字符串。
+        self.scripts
+            .set_text_input_dialog_hook(Rc::new(move |request| {
+                sink.borrow().text_input_dialog(request)
+            }));
         for request in std::mem::take(&mut self.pending_script_windows) {
-            self.script_windows.script_window(request);
+            self.script_windows.borrow().script_window(request);
         }
     }
 

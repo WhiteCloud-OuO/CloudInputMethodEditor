@@ -22,10 +22,12 @@
 
 ## i 模式：脚本启动器
 
-`i` 模式的候选窗口列脚本。脚本名取清单 `cloudime.script{ name = … }` 的 `name`，顺序按脚本文件名，
+`i` 模式的候选窗口列脚本。脚本名取清单 `cloudime.script{ name = … }` 的 `name`，顺序按脚本文件夹名，
 即设置页「脚本」页的顺序；候选不显示来源角标。
 
-- 缓冲区只有 `i` 时列 `trigger_condition = "manual"` 的脚本；其它触发方式的脚本不出现。
+- 缓冲区只有 `i` 时列**手动触发脚本**：`trigger_condition = "manual"` 的，以及带修饰键的组合键脚本里
+  清单写了 `show_in_i_mode = true` 的；**自动触发脚本**（`time_range` / `candidate_context` /
+  `focus_app` / 不带修饰键的单键）不出现，写了 `show_in_i_mode` 也只会记一条警告。
 - 开了中英混输、且缓冲区长度大于 1 时，候选只匹配英文单词（与普通英文候选同一条前缀匹配）。
 - 没开中英混输时，进入 i 模式后字母键、`Backspace` / `Delete` 全部吞掉；数字、方向键、空格、回车、Esc、
   `[` / `]`、PageUp / PageDown、Ctrl / Alt / Shift 仍可用。

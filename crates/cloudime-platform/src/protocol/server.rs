@@ -38,10 +38,20 @@ pub struct InputSettings {
     #[serde(default)]
     pub shift_letter_compose: bool,
 
+    /// 当前输入方案支持逐音节特殊输入模式（全拼 / 双拼）。DLL 据此决定右 Alt（Alt Gr）在
+    /// 组句中吃不吃：形码等方案下右 Alt 原样交给应用，不吞键。
+    #[serde(default)]
+    pub special_input: bool,
+
     /// 全角字符（状态条上的「全角 / 半角」开关）。开着时可打印 ASCII 要转全角，而英文模式本来是纯直通、
     /// 字母根本到不了 Server，所以 DLL 得先把这类按键吃掉送来（`eats_key`）；半角时照旧不吃。
     #[serde(default)]
     pub full_width_chars: bool,
+
+    /// 智能符号（中文模式下按空格按光标前的内容换标点）：DLL 要在**每个按键之前**现读一份光标前文，
+    /// 否则 Server 不知道空格前一个字是什么。与 [`Self::script_wants_text`] 是同一份前文、同一个时机。
+    #[serde(default)]
+    pub smart_symbols: bool,
 
     /// 这个程序在「不显示候选框」名单里（`[candidate] program_list_of_hiding_candidate`）：输入法完全不接管，
     /// 所有按键原样交给应用（应用自己的补全列表照旧），也不出候选与拼音行。
@@ -99,7 +109,9 @@ impl Default for InputSettings {
             switch_mode: SwitchKeys::default(),
             english_mode: true,
             shift_letter_compose: false,
+            special_input: false,
             full_width_chars: false,
+            smart_symbols: false,
             raw_input: false,
             auto_disable_without_text_input: false,
             script_key_modifiers: 0,

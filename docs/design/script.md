@@ -13,6 +13,72 @@
 - 引擎跑在** Server 进程**里（`crates/cloudime-script`，mlua + LuaJIT，源码随包编）。
   **不进 TSF DLL**：DLL 被加载进每个应用、脚本 JIT 在开了 ACG 的宿主里会失败、脚本崩了会连累宿主应用。
 
+## 在线获取脚本
+
+设置页「脚本」页底部可以从官方脚本仓库取脚本，不用再手动下载、自己摆文件。
+
+- 仓库是 `https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse`，根目录的 `index.json` 是索引；
+  设置页点「在线获取脚本」拉索引，列表里每行一个「获取」，点了才下载那一个脚本的文件。
+- 索引（`version = 2`）列出每个脚本的 `id` / `name` / `description` 与要装的文件：
+
+```json
+{
+  "version": 2,
+  "scripts": [
+    {
+      "id": "niutrans-candidate",
+      "name": "小牛候选翻译",
+      "description": "……",
+      "files": [
+        { "path": "src/小牛候选翻译/example-niutrans.lua", "target": "script" },
+        { "path": "src/小牛候选翻译/md5.lua", "target": "shared" }
+      ]
+    }
+  ]
+}
+```
+
+- `target` 四选一，决定文件装到 `Scripts\<脚本 id>\` 的哪里：`script` → 文件夹根部（入口，必须是
+  `.lua`）、`shared` → `shared\`、`layout` → `layouts\`、`dll` → `dlls\`。每个脚本的 `files` 里
+  **必须正好有一个** `target = script`；`id` 同时是文件夹名，不能带路径分隔符 / `..` / Windows 保留名。
+  写盘时**只取文件名**（目录结构只用于仓库里组织源码），同一脚本里两个文件落到同一位置按索引错误处理。
+- 下载先全部收进内存再写盘：索引 1 MB、单文件 4 MB、单个脚本合计 16 MB 封顶。
+  写盘前查冲突：**目标已存在且内容相同的跳过，内容不同的整份不装**，提示用户先删掉旧文件；
+  写文件先写 `*.part` 再改名，装到一半失败不会留下半个文件。
+- 信任边界：索引与文件都从 `raw.githubusercontent.com` 走 HTTPS，**没有单独的签名**，官方仓库就是信任根。
+  装脚本等于获得远程 Lua 的执行能力，所以这里只从官方仓库取；页面顶上的风险声明同样适用。
+  索引地址可以用环境变量 `CLOUDIME_SCRIPT_INDEX` 覆盖（调试或镜像用，不写进配置）。
+- 装完只是把文件放到位：脚本由 Server 启动时按正常规则加载，**不立刻执行**；默认就是启用的
+  （要停就加进 `[script] disabled`）。设置页提示用户点「重启输入法服务」。
+
+## 脚本目录：一个脚本一个文件夹
+
+安装目录的 `Scripts\` 下，**每个脚本单独占一个文件夹**，文件夹名就是脚本 id（设置页的启用 / 禁用、
+i 模式与在线安装都用它）：
+
+```text
+Scripts\
+  template.lua              # 随包的清单骨架参考；不加载
+  niutrans-window\          # 一个脚本 = 一个文件夹
+    niutrans-window.lua     # 入口：根部必须正好有一个 .lua（名字不必与文件夹同名）
+    shared\                 # 这个脚本的共享 Lua（不自动加载）
+    layouts\                # 这个脚本的 JSON 布局
+    dlls\                   # 这个脚本的动态库
+    saved\                  # 这个脚本的数据（cloudime.saved_path 自动创建）
+```
+
+- 加载器只扫 `Scripts\` 的**一级子文件夹**；文件夹根部必须是**正好一个** `.lua`（入口）。
+  0 个 / 多个 → 这个文件夹不加载并记一条日志；`shared` / `layouts` / `dlls` / `saved` 里的 `.lua`
+  不参与启动加载（子页面脚本例外，见「窗口」一节）。
+- 旧版直接放在 `Scripts\` 根部的 `.lua` **不再加载**；日志与设置页都会提示把它移进文件夹。
+- `[script] disabled` 记的是**文件夹名**（大小写不敏感），不再带 `.lua`；旧配置里写成 `x.lua` 的条目仍按
+  文件夹 `x` 理解（只读兼容，设置页开关会写回文件夹名）。
+- `cloudime.shared_path` / `layout_path` / `dll_path` / `saved_path` 都相对**当前脚本文件夹**解析；
+  `cloudime.install_dir` / `install_path` 仍是整个安装目录。
+- 子页面 JSON 的 `script`（如 `"script": "row.lua"`）固定从**当前脚本文件夹的 `shared\`** 解析。
+- `Scripts\template.lua` 是唯一留在根部的文件；`Scripts\examples\` 是仓库里的示例，不是脚本文件夹
+  （它下面没有直接放 `.lua`，所以不会加载）。
+
 ## 脚本清单（manifest）：每个脚本必须声明
 
 文件**最前面**、加载期调用一次 `cloudime.script{…}`。**缺清单、字段缺失 / 类型不对、`api` 不认识、
@@ -20,7 +86,7 @@
 
 ```lua
 cloudime.script{
-    name     = "我的文本扩展",      -- 日志里点名用；缺省用文件名
+    name     = "我的文本扩展",      -- 日志里点名用；缺省用文件夹名
     api      = 2,                   -- 面向哪版脚本 API；不认识的版本判无效
     -- 必写：由什么触发（五选一，见下表）
     trigger_condition = "combination_key",
@@ -32,10 +98,11 @@ cloudime.script{
     budget   = 200000,              -- 单次调用的指令数上限（只能 ≤ 全局 1 亿，不能放宽）
     timeout  = 50,                  -- 单次调用的墙钟上限（毫秒）
     needs_context = false,          -- 可选：每次派发前刷新 cloudime.context（按键前多读一次光标前文）
+    show_in_i_mode = false,         -- 可选：手动触发脚本也列进 i 模式；自动触发脚本写了会忽略并警告
     sync     = true,                -- 必写：处理函数当场算完就返回（false = 只用异步回调）
     handover = "return",            -- 必写：必须与 sync 一致（true↔return、false↔callback）
     on_error = function(event, message) end,  -- 必写：错误处理回调；写 false = 不处理
-    priority = 10,                  -- 多个脚本都改同一项时大的盖小的；缺省 0、同值按文件名
+    priority = 10,                  -- 多个脚本都改同一项时大的盖小的；缺省 0、同值按加载顺序（文件夹名）
 }
 ```
 
@@ -46,28 +113,40 @@ cloudime.script{
 | `keys` | `combination_key` 时**是** | 要哪几个键：`"enter"` / `"tab"` / `"space"` / `"backspace"` / `"delete"` / `"esc"` / `"left"` / `"up"` / `"right"` / `"down"` / `"home"` / `"end"` / `"pageup"` / `"pagedown"` / `"f1"`…`"f12"`，或单个字母 / 数字 / 标点（`"a"`–`"z"`、`"0"`–`"9"`、`` "`" `` `"-"` `"="` `"["` `"]"` `"\\"` `";"` `"'"` `","` `"."` `"/"`）。可写多个、自动去重；有一个不认识判无效 |
 | `time_range` | `time_range` 时**是** | `{ from = "20:00", to = "06:00" }`（本地时间，左闭右开；`from > to` 表示跨夜）。**每个时间段窗口只触发一次**（例如 20:00 开的那一晚到次日 06:00 只派一次） |
 | `candidate_pinyin` | `candidate_context` 时**是** | 候选窗口出现且拼音串等于它才触发；比较时去掉 `'` 与空白、忽略大小写（`Ni'Hao` 与 `nihao` 相同） |
-| `name` | 否 | 日志（以后还有设置页）里点名；缺省 = 文件名 |
+| `name` | 否 | 日志（以后还有设置页）里点名；缺省 = 文件夹名 |
 | `api` | **是** | 脚本面向的 API 版本，现在只有 `2`。不认识 → 无效（`1` 是触发条件改版前的旧版，已不再接受） |
 | `budget` | 否 | 单次调用允许的**指令数**上限；缺省 = 全局 1 亿。**只能收窄不能放宽**。超了中止这一次 —— 这一次当没做（脚本的全局变量可能只改了一半，脚本自己要能接受） |
 | `timeout` | **是** | 单次调用允许的**墙钟**上限（毫秒）：同步处理函数与异步回调都按它算，到点中止这一次 |
 | `needs_context` | 否 | `true` = 每次派发前刷新 `cloudime.context`（DLL 会在按键前多读一次光标前文）。读前文的脚本（自动序号之类）要写它 |
+| `show_in_i_mode` | 否 | 手动触发脚本要不要同时列进 **i 模式**；缺省 `false`，不写不报错。只对带修饰键的组合键脚本有意义（`manual` 脚本本来就在 i 模式里）；自动触发脚本写了会**忽略并记一条警告** |
 | `apps` | 否（`focus_app` 时**是**） | 只在哪些应用里跑（**exe 文件名，大小写不敏感**，与「不显示候选框的程序名单」同一套口径）。空 / 不写 = 所有应用。**`startup` 与异步回调不按它过滤**：前者早于任何应用，后者在请求发出时已经判过 |
 | `sync` | **是** | `true` = 同步：处理函数当场算完就返回；`false` = 只用 `cloudime.http_get` 的异步回调 |
 | `handover` | **是** | `"return"` = 算完返回就交回控制权；`"callback"` = 回调返回时交回。**必须与 `sync` 一致**，对不上判无效 |
 | `on_error` | **是** | 形式为 `function(event, message)` 的函数：这个脚本的处理函数出错时调它（`event` 是事件名、`message` 是错误）。写 `false` = 不处理，运行时**直接中止这一次**、把控制权交回 Server |
-| `priority` | 否 | 多个脚本都要改同一项时的合并顺序：大的盖小的；同值按文件名 |
+| `priority` | 否 | 多个脚本都要改同一项时的合并顺序：大的盖小的；同值按加载顺序（文件夹名） |
 
 **铁律**：Server **从不等待脚本** —— 处理函数返回（或被中止）的那一刻，控制权就回到 Server。
 
+### 自动触发脚本 / 手动触发脚本
+
+| 类别 | 怎么判定 | i 模式 |
+|---|---|---|
+| **自动触发** | `time_range` / `candidate_context` / `focus_app`；或 `combination_key` 且 `combination_modifiers = "none"`（单键，如自动序号的 `Enter`） | **绝不出现**；写了 `show_in_i_mode` 也只是记一条警告 |
+| **手动触发** | `trigger_condition = "manual"`；或 `combination_key` 且带修饰键（`ctrl` / `alt` / `shift` / `win` 的任一组合） | `manual` 恒出现；组合键脚本看 `show_in_i_mode`（缺省 `false`） |
+
+i 模式运行带修饰键的组合键脚本时，会按清单里**第一个** `keys` 与那套修饰键合成一次 `key` 事件，
+脚本原来的 `cloudime.on("key", …)` 照常跑；`event.highlight` 此时是空串（i 模式没有候选高亮）。
+
 ### 其余硬规则
 
-- **一个文件一个脚本、UTF-8 编码**，清单必须在最前面（在清单之前调 `cloudime.on` 也算无效）。
+- **一个文件夹一个脚本、UTF-8 编码**，清单必须在最前面（在清单之前调 `cloudime.on` 也算无效）。
 - **不许改 `cloudime` 表**（及其上的宿主函数）：运行时把它锁成**只读代理**（`__index` 指向本体、`__newindex` 报错）。
   `rawset` 能绕过这道锁，但那只**改到脚本自己看到的那一份** —— 运行时手里握着函数本体，脚本怎么改都影响不到它。
-- **持久状态写 `Scripts\saved\`**（用 `cloudime.saved_path` 拿路径，自动建子目录）；
+- **持久状态写当前脚本文件夹的 `saved\`**（用 `cloudime.saved_path` 拿路径，自动建子目录）；
   **别写安装目录其它位置**：卸载会删整棵目录。
-- **不许长时间占住工人线程**：允许的「等」只有两个**异步** API —— `cloudime.http_get` 与
-  `cloudime.http_post`（都在自己的线程上跑、时限必给）；同步处理函数里自己等 = 卡住所有应用。
+- **不许长时间占住工人线程**：允许的「等」只有异步 API —— `cloudime.http_get`、`cloudime.http_post`
+  与 `cloudime.mcp.tools` / `cloudime.mcp.call`（HTTP 在自己的线程上跑，MCP 走独立 sidecar；时限必给）；
+  同步处理函数里自己等 = 卡住所有应用。
 - 加载期违规只进日志（「哪个脚本无效、为什么」）—— 以后设置页的「脚本」页要把它显示出来。
 
 ## 稳定性闸门（脚本卡住堵的是「所有应用」）
@@ -96,7 +175,7 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
 
 ## 规则一：没有任何脚本 → 走老路
 
-「没有任何脚本」= 安装目录的 `Scripts\` 不存在，或里面一个真脚本都没有（`template.lua` 不算 —— 它是「新建脚本」的模板，加载器按文件名跳过）。
+「没有任何脚本」= 安装目录的 `Scripts\` 不存在，或里面一个**含入口 `.lua` 的脚本文件夹**都没有（根部的 `template.lua` 不算 —— 它只是清单骨架参考，加载器按文件名跳过；根部的其它旧版平铺 `.lua` 也不再加载）。
 这时**按键路径上一点额外工作都没有**：
 
 | 位置 | 没脚本时 |
@@ -113,7 +192,7 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
 
 ## 规则二：有脚本 → 在固定四个位置运行
 
-脚本在**加载时**执行一遍（按文件名排序），用 `cloudime.on(事件名, 处理函数)` 登记；之后由 Server 在
+脚本在**加载时**执行一遍（按脚本文件夹名排序），用 `cloudime.on(事件名, 处理函数)` 登记；之后由 Server 在
 下面几处派发。每个位置为什么在那儿，与它能改什么：
 
 | 时机 | 位置 | 脚本能做什么 |
@@ -125,7 +204,7 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
 | `caret` | 脚本调过 `cloudime.caret()`，DLL 量到插入点之后（`ClientMessage::Caret`） | 同「没有按键的那一拍」；载荷是插入点矩形 + 所在显示器工作区（屏幕坐标 / **点**）。不受 `trigger_condition` 限制 |
 | 异步回调 | 结果回来那一拍 `tick`（`http_get` / `http_post`） | 同 `candidates`：`order` / `display` / `notice` / `adjust` / `online` / `theme`；`passthrough` / `commit` 不认 |
 | `time` | 本地时间**第一次**落进清单 `time_range` 那个时间段（跨夜按「昨晚开的窗口」算） | 同「没有按键的那一拍」：`notice` / `adjust` / `online` / `theme`；载荷同 `cloudime.get_time()` 另加 `app`。**每个时间段窗口只派一次** |
-| `manual` | i 模式在候选里选中脚本后 | 只派给选中的那一个脚本；载荷 `{ app, file, source = "i_mode" }`；`commit` 直接上屏并结束 i 模式，`notice` / `online` / `theme` / 窗口请求照常生效 |
+| `manual` | i 模式在候选里选中脚本后 | 只派给选中的那一个脚本；载荷 `{ app, file = 脚本文件夹名, entry = 入口文件名, source = "i_mode" }`；`commit` 直接上屏并结束 i 模式，`notice` / `online` / `theme` / 窗口请求照常生效 |
 
 - 多个脚本按登记顺序合并，**后面的盖前面的**；返回值类型严格匹配（写错记一条日志当没写）。
 - **只有触发条件对上的事件才派**：清单的 `trigger_condition` 决定收哪种（`combination_key` → `key`、
@@ -191,8 +270,8 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
   work_bottom, scale }`。在 `key` 处理函数里调用时量的是这一键处理完之后的位置。
 - **安装目录**：`cloudime.install_dir()` → 安装目录绝对路径；`cloudime.install_path("Images/SVG/…")`
   → 目录里文件的绝对路径（`canonicalize` 后必须仍在安装目录内，越界报错、不存在给 `nil`）。
-  `cloudime.shared_path` / `layout_path` / `dll_path` 分别只解析 `Scripts\shared` /
-  `Scripts\layouts` / `Scripts\dlls`；`cloudime.saved_path` 在 `Scripts\saved` 下建可写子目录，
+  `cloudime.shared_path` / `layout_path` / `dll_path` 分别只解析**当前脚本文件夹**的
+  `shared` / `layouts` / `dlls` 子目录；`cloudime.saved_path` 在该脚本的 `saved\` 下建可写子目录，
   供脚本持久化。`svg` 元素因此可以写 `path` 直接读文件（见元素表），不必让脚本把 SVG 文本抄进 Lua。
   `Runtime::load` 从脚本目录的上一级取安装目录，加载期就能用；Server 建 Router 时再用
   `bundled_root()` 校正一次。
@@ -236,9 +315,35 @@ Server 是一个进程、一条工人线程服务所有应用，所以脚本卡�
 - 脚本能看到 `cloudime.context`（光标前文 —— 应用里已经输入、不在候选窗口里的那段文本）。
 - `key` 的载荷里另有 **`highlight`**：这一刻高亮候选的文本（没有候选时是空串）—— 想自己翻它就用它
   （`cloudime.http_post(event.highlight, "……", { timeout_ms = 6000 }, …)`，见 `docs/design/online-translate.md`）。
-- 脚本能看到的 `cloudime.http_get` / `cloudime.http_post` 都是异步、时限必给（见「其余硬规则」）；
-  改脚本本身要**重启 Server**（托盘右键「重启输入法服务」）才生效：不做热重载。
+- 脚本能看到的 `cloudime.http_get` / `cloudime.http_post` 都是异步、时限必给（见「其余硬规则」）。
+- 脚本能看到的 `cloudime.mcp.*` 也是异步（`servers()` 除外），经独立 sidecar 调外部 MCP Server。
 - 改脚本要**重启 Server**（托盘右键「重启输入法服务」）才生效：不做热重载。
+
+## MCP Client（2026-10-28）
+
+脚本要调用外部工具时，不把 MCP 客户端塞进输入工人线程，也不让脚本直接管子进程：
+
+```text
+Lua（cloudime.mcp.*）
+  → cloudime-server（只把请求塞进 mpsc，立刻返回）
+  → 命名管道 \\.\pipe\cloudime-mcp-client
+  → cloudime-mcp-client.exe（独立 sidecar）
+  → 外部 MCP Server（stdio 子进程）
+```
+
+- 配置是 `%APPDATA%\CloudIME\mcp.toml`：`name` / `command` / `args` / `env` / `timeout_ms` /
+  `allowed_tools`；没有这个文件时 `cloudime.mcp` 存在但不可用。
+- 脚本只能调用配置里的 Server 和白名单里的工具，不能动态新增 Server。
+- **不随输入法启动**：sidecar 和外部 MCP Server 都只能由用户手动启动，或由脚本
+  `cloudime.mcp.start(server, …)` 显式启动；`tools` / `call` 不会隐式拉起。
+- **脚本拉起的进程在链尾关闭**：从 `start` 到最后一条 `call` 回调结束（没有挂起的 MCP 请求）时，
+  运行时自动 `stop` 该脚本启动的 Server；sidecar 若是 Lua 拉起的，也一并 `Shutdown`。
+  用户自己启动的 sidecar 不会被关。链是**按脚本**算的，不要跨脚本共享同一个 Server。
+- 每个外部 Server 一个 session，同一个 Server 的调用串行，不同 Server 可并行；
+  调用有硬超时、结果上限 256 KB，失败只回当前回调的 `error`。
+- 第一版只做 `tools`：不做 resources / prompts / sampling / roots / elicitation，不做 Streamable HTTP。
+- 正常输入路径不经过 sidecar；外部 Server 崩溃或卡住不影响按键。
+- 外部返回内容按不可信文本处理：只交给 Lua 回调，不自动上屏、不当代码执行。
 
 ## 脚本窗口：`cloudime.window`（2026-10-17）
 
@@ -265,7 +370,7 @@ local win = cloudime.window.create{
     width = 240,          -- 内容区宽（点，8–2048；缺省 240）
     height = 120,         -- 内容区高（点，8–2048；缺省 120）
     interactive = true,   -- 接不接鼠标（缺省 false = 鼠标穿透，纯展示）
-    layout = cloudime.layout_path("main.json"), -- 布局放 Scripts\layouts；尺寸以布局文件为准
+    layout = cloudime.layout_path("main.json"), -- 布局放当前脚本文件夹的 layouts；尺寸以布局文件为准
     shadow = true,        -- 要不要与候选窗同源的那层阴影（缺省 true）
     background = true,    -- 要不要输入法画的面板底色 / 圆角（缺省 true）；false = 全由元素表自己画
 }
@@ -278,6 +383,34 @@ local aux = cloudime.window.create_auxiliary{
     interactive = false,
     shadow = true,
 }
+
+local dialog = cloudime.window.create_dialog{
+    owner = win,          -- 必给：宿主独立窗口
+    name = "确认",        -- 日志 / 事件里的名字；缺省「脚本对话框」
+    mask = true,          -- 要不要要求宿主开蒙版（缺省 false）；销毁时恢复原蒙版
+}
+
+-- 对话框架：建实例 → 改属性 → :show() 同步阻塞
+local dialog = cloudime.window.message_dialog{
+    owner = win,
+    title = "删除确认",
+    text = "要删除这条记录吗？\n删除后无法恢复。",
+    icon = "warning",     -- "" / failure / success / query / warning；空串不画图
+    buttons = { "删除", "取消" },
+}
+dialog.text_size = 15            -- 属性只在 show 之前有效
+dialog.button_background = "#C42B1C"
+local choice = dialog:show()     -- 返回下标（0..=3）
+
+local input = cloudime.window.text_input_dialog{
+    owner = win,
+    title = "重命名",
+    text = "输入新名字：",
+    allow_multiline = false, -- true 用多行 text_box，false 用单行 text_edit
+    default_text = "旧名字",  -- 打开时显示在编辑框里；取消时原样返回
+}
+input.title_color = "#6E6E76"
+local name = input:show()        -- 返回字符串
 ```
 
 句柄上的方法（两类窗口一套；`version: 2` 页面树是实验路径，契约见 `docs/design/ui-layout.md`）：
@@ -300,9 +433,10 @@ local aux = cloudime.window.create_auxiliary{
 | `win:replace(name, find, text)` | 把 `find` 的全部出现替换为 `text` |
 | `win:clear(name)` | 清空编辑框 |
 | `win:show{ x = …, y = … }` | 显示；`x` / `y` 是内容区左上角的**屏幕坐标（点）**，不写 = 上次的位置 / 光标右下 16 点 |
-| `win:hide()` | 收起（不销毁；内容留着，再 `show` 原样回来） |
-| `win:close()` | 销毁；独立窗口连名下资产一起放掉 |
+| `win:hide()` | 收起（不销毁；内容留着，再 `show` 原样回来）；**dialog 不允许 hide**，会记警告并忽略 |
+| `win:close()` | 销毁；独立窗口连名下资产一起放掉；dialog 销毁时自动解除模态、恢复上一件模态与宿主蒙版 |
 | `win:focus(true/false)` | 独立窗口：拿 / 放**键盘焦点**（`key` 载荷里会带 `window`）；辅助窗口：把逻辑焦点指定给它 / 交还给宿主 |
+| `win:set_modal(true/false)` | 辅助窗口：设置 / 取消**模态**；模态期间宿主暂时不响应鼠标 / 键盘但仍可桥接；同一宿主同时只能有一件生效模态；**dialog 上 `set_modal(false)` 会异常终止程序** |
 | `win:focus_text(name)` | 把键盘焦点交给某个 `text_edit` / `text_box` 宿主（面板打开后自动聚焦输入框用） |
 | `win:combine_region(name, 形状)` | 把形状并进已有区域（只改命中、不重画） |
 | `win:prune_region(name, 形状)` | 从已有区域里挖掉形状（只改命中、不重画） |
@@ -311,6 +445,23 @@ local aux = cloudime.window.create_auxiliary{
 
 - 辅助窗口**默认不接鼠标**：`interactive = true` 只是「能」拿焦点，真要它接还得 `aux:focus(true)`
   （§4 的规矩：只有所有者能指定）。宿主被收起时名下资产跟着收起，`win:show()` 时自己回来。
+- **dialog** 用 `create_dialog` 创建：不需要 JSON 布局，正文由 Cloud UI 内部生成（当前先留空），创建即自动显示、
+  自动压到模态栈顶；宿主已有模态资产时先临时挂起它，dialog 销毁后再恢复。`mask = true` 时由宿主开蒙版，
+  销毁前恢复原蒙版。dialog 不能用 `set_modal(false)` 取消模态（会异常终止），也不能 `hide`，只能 `close`。
+- **对话框都是类**：`message_dialog{…}` / `text_input_dialog{…}` 返回实例；属性（`font`、`text_size`、
+  `title_size`、`background`、`title_color`、`text_color`、`button_background`、`button_text_color`）
+  与内容字段在 `:show()` 之前改才有效，之后赋值会抛 Lua 错误；`:show()` 也只能调一次。
+- **消息对话框**用 `cloudime.window.message_dialog{…}`（不是 `create_*`）：`:show()` 同步阻塞，返回被点按钮的
+  下标 0–3。布局由 Cloud UI 生成（标题栏 / 内容区 / 按钮组，标题栏与 demo 主窗口同款且没有关闭按钮），
+  `icon` 取 `""` / `failure` / `success` / `query` / `warning`（空串不画图），`buttons` 必须 1–4 个，
+  空表或超过 4 个会异常终止程序。
+- **文本输入对话框**用 `cloudime.window.text_input_dialog{…}`：`:show()` 同步阻塞，返回字符串。
+  `allow_multiline = true` 用多行 `text_box`，否则单行 `text_edit`；确定返回编辑框内容，
+  取消返回 `default_text`（为空则空字符串）；单行模式把 `default_text` 的换行显示成字面量 `\n`。
+- 辅助窗口可以 `aux:set_modal(true)` 进入**模态**：宿主暂时不响应鼠标 / 键盘，但脚本仍能通过桥接换内容、
+  取文本、`close` 它；模态窗口始终排在宿主上面，同一宿主同时只能有一件生效的普通模态辅助窗口
+  （dialog 会压栈，见 `docs/design/windows.md` §4.1）。
+  规范顺序是「先给宿主开蒙版 → 建辅助窗口 → `show` 后 `set_modal(true)` → 辅助窗口销毁后关宿主蒙版」。
 - 窗口都是置顶、不抢系统焦点（`WS_EX_NOACTIVATE`）；`interactive = false` 的整块鼠标穿透。
 - 建窗口 / 换内容 / 显示只是**记一个请求**：脚本不会等 UI 线程，UI 线程按顺序执行。
 
@@ -326,7 +477,7 @@ win:set_content{
       thickness = 1, color = "#22000000" },
     { type = "circle", cx = 220, cy = 16, radius = 8, color = "#FF66AAFF" },
     { type = "svg",    x = 8, y = 8, size = 20, path = cloudime.install_path("Images/SVG/打叉.svg"), tint = "#FF888888" },
-    { type = "img",    x = 0, y = 0, w = 64, h = 64, path = "Scripts/layouts/icon.png" },
+    { type = "img",    x = 0, y = 0, w = 64, h = 64, path = "Scripts/<脚本>/layouts/icon.png" },
     { type = "path",   color = "#FF0000FF",
       commands = { { "M", 0, 0 }, { "L", 10, 0 }, { "C", 12, 0, 12, 10, 0, 10 }, { "Z" } } },
 }
@@ -397,7 +548,7 @@ win:set_content{
 
   没声明 `events` 时仍按 `event.region` / `event.element` + `event.action` 分发，完全兼容旧脚本。
 - **路径**：JSON 里的 `svg_path` / `img.path` 先按布局文件所在目录找，再逐级向上找；放在
-  `Scripts/layouts/` 的布局可以直接引用安装根目录的 `Images/...`，也可以把素材放在布局旁边。
+  `Scripts/<脚本>/layouts/` 的布局可以直接引用安装根目录的 `Images/...`，也可以把素材放在布局旁边。
 - **限额**：布局文件最大 **4 MB**；控件沿用内容限额（512 个元素、文字 4096 字符等）。
   改文件后要再 `load_layout` 或重启 Server，不监听文件变化。
 
@@ -437,7 +588,7 @@ win:set_content{
   RichEdit 字体缺省用候选词字体（`font` 可换槽位），字号缺省取主题里该槽位的字号（`size` 可覆盖）；
   宿主窗底色 / 文字色跟随候选窗主题；`selection_background` / `selection_color` / `caret_color` /
   `svg_color` 不写时分别跟主题高亮背景 / 高亮文字 / 正文颜色 / SVG 原色。自动区域与按钮同一套（`drag = false`）。
-  TSF 输入由 `crates/cloud-ui/src/script_window/tsf.rs` + `text_store.rs` 接管：每个宿主窗建一个 `ITfContext`，
+  TSF 输入由 `crates/cloud-ui/src/text_edit/tsf.rs` + `text_store.rs` 接管：每个宿主窗建一个 `ITfContext`，
   `ITextStoreACP` 把文本、选区、光标矩形桥到 RichEdit；键盘先给 `ITfKeystrokeMgr`，被输入法吃掉
   就不再交给 RichEdit。CloudIME 的中文组合、候选窗和提交都走这条路。焦点进入时按 windowless
   RichEdit 的约定依次 `OnTxInPlaceActivate` / `OnTxUIActivate`，再以 `wParam = NULL` 发
@@ -590,7 +741,7 @@ DLL（应用进程）                     Server 工人线程（独占 Router + 
 两个钩子**夹住引擎**：`key` 在引擎处理之前、`candidates` 在引擎排序之后。
 
 **启动**（在 `Router::new` 里，工人线程上）：建 Lua 状态 → 装 `cloudime` 表与几处补丁 → 装预算钩子 →
-读 `scripts\*.lua`（按文件名排序）逐个执行（每个脚本在加载时跑一遍、用 `cloudime.on` 登记）→ 全部加载完
+读 `Scripts\` 下的脚本文件夹（按文件夹名排序），每个文件夹执行根部的入口 `.lua`（每个脚本在加载时跑一遍、用 `cloudime.on` 登记）→ 全部加载完
 派一次 `startup`。目录不存在或一个 `.lua` 都没有 → 不读盘，之后所有钩子点直接返回（见规则一）。
 
 **每次按键**：`key` 是「引擎处理之前」那一拍，所以载荷里的 `composing` 反映的是**上一拍**的状态。返回的动作
@@ -628,34 +779,28 @@ DLL（应用进程）                     Server 工人线程（独占 Router + 
 
 | 列 | 内容 |
 |---|---|
-| 一 | 脚本文件名（`Scripts\` 下的） |
-| 二 | 脚本介绍：清单里的 `description`（从文件里扫出来，不执行脚本）；没写就是文件名 |
+| 一 | 脚本名称：入口文件里清单的 `name`（从文件里文本扫出来，不执行脚本）；没写就是文件夹名 |
+| 二 | 脚本介绍：清单的 `description`；没写就显示名称 |
 | 三 | `ToggleSwitch`（启用 / 禁用）+ 「删除此脚本」按钮 + 「编辑此脚本」按钮 |
 
-- 「编辑此脚本」：用**记事本**打开那个文件（`notepad.exe <文件>`）。
-- 「删除此脚本」：删文件；删之前确认一次。
-- 列表**不显示 `template.lua`**。
+- 「编辑此脚本」：用**记事本**打开文件夹根部的入口 `.lua`（`notepad.exe <文件>`）；根部没有 / 多于一个
+  `.lua` 时只提示，不打开。
+- 「删除此脚本」：删整个脚本文件夹（脚本、布局、`saved\` 数据一起）；删之前确认一次。
+- 列表**不显示根部的 `template.lua`**；根部如果还有旧版平铺 `.lua`，列表上方会给一条红色提示。
 
-**③ 新建脚本**：一个按钮。流程：
+**③ 打开脚本目录**：一个按钮，用资源管理器打开安装目录的 `Scripts\`（目录不存在就先建出来）。
+用户自己建文件夹、放入口 `.lua`；这个按钮就是「打开脚本目录」。`Scripts\template.lua` 仍然随包安装，
+可以拷一份当清单骨架。
 
-1. 在 `Scripts\` 下取一个不重名的文件名（`script.lua` → `script-2.lua` …），写入模板的内容（模板**编进设置程序**：
-   `include_str!` 仓库 / 安装目录里那份 `Scripts\template.lua`，模板文件被删也建得出来）；
-2. 用记事本打开它（`notepad.exe <文件>`）；
-3. **再**把同一份内容用 `WM_SETTEXT` 塞进记事本的编辑控件：`EnumWindows` 找主窗口（**先按我们刚起的进程号**，
-   机器上本来就开着别的记事本时才按类名 `Notepad` 兜底）→ `FindWindowExW(hwnd, None, "Edit", None)` →
-   `SendMessageW(edit, WM_SETTEXT, 0, …)`。等窗口与填字都在后台线程做（轮询上限 4 秒），不卡界面。
-
-第 1 步保证「用户直接关掉记事本」时文件已经存在、内容就是模板；第 3 步保证「记事本里显示的一定是模板」，
-不看记事本读盘的时序。第 3 步只对**经典记事本**有效：Windows 11 商店版记事本是 WinUI 应用、没有 `Edit`
-子控件，塞不进去 —— 记一条日志，文件里已经写好模板，用户看到的不会受影响。
+「在线获取脚本」「打开脚本目录」「重启输入法服务」三个按钮在同一行。
 
 **列表本身的实现要点**（`apps/windows/settings/src/panel/pages/scripts.rs`）：
 
-- 介绍是**文本扫**出来的（`describe_in`）：认 `description = "…"` / `'…'`、跳过 `--` 注释行 ——
+- 名称与介绍都是**文本扫**出来的（`field_in`）：认 `name = "…"` / `description = '…'`、跳过 `--` 注释行 ——
   设置程序里**不执行脚本**（Lua 运行时只在 Server）。
 - 「删除此脚本」先用 `rfd` 确认一次；删完顺手把它从 `[script] disabled` 里去掉（不留永远不起作用的条目）。
 - 开关写 `[script] disabled`（`Config::set_array`，配置里缺 `[script]` 分节会补出来）。
-- 「新建脚本」下面有「为脚本提供全局热键」开关（`[script] global_hotkeys`）：打开后 Server 把组合键脚本的
+- 「打开脚本目录」下面有「为脚本提供全局热键」开关（`[script] global_hotkeys`）：打开后 Server 把组合键脚本的
   「修饰键 + 键」列表随 `InputSettings` 下发，TSF 用 `ITfKeystrokeMgr::PreserveKey` 逐个注册（每个槽位一个 GUID）。
   `OnPreservedKey` 只在中文状态把键送回 Server；英文 / 禁用 / 键盘禁用时返回 `FALSE` 放行。
   只注册带修饰键的组合，`combination_modifiers = "none"` 的单键不注册；改完要重启输入法服务。
@@ -667,22 +812,23 @@ DLL（应用进程）                     Server 工人线程（独占 Router + 
 
 **目录与 `template.lua`**
 
-- 脚本放**安装目录的 `Scripts\`**（与 `Phrases\`、`WordBank\` 同级）。安装包要把这个目录设成**普通用户可写**，否则设置页建不了新文件、用户也存不了盘。
-- `template.lua` 是「新建」用的模板：**不进列表、也不执行**（加载器按文件名跳过它）。
-- 加载器只认 `.lua`；判无效的脚本不加载（见「脚本清单」）；**禁用**的脚本也不加载（见「决定」第 2 条）。
+- 脚本放**安装目录的 `Scripts\`**（与 `Phrases\`、`WordBank\` 同级），每个脚本一个文件夹；安装包要把这个目录设成**普通用户可写**，否则设置页建不了新文件、用户也存不了盘。
+- `template.lua` 是清单骨架参考：**不进列表、也不执行**（加载器按文件名跳过它）。
+- 加载器只认 `Scripts\` 一级子文件夹里**正好一个**根部 `.lua`；判无效的脚本不加载（见「脚本清单」）；**禁用**的脚本文件夹也不加载（见「决定」第 2 条）。
 - 卸载会删掉 `{app}` 整棵 —— 用户的脚本会跟着没（与 `Phrases\Phrase.db`、`WordBank\` 里导入的词库同一个路子，安装器 README 里已经写明）。
 
-### 决定（2026-10-07）
+### 决定（2026-10-07，2026-11-05 改为文件夹结构）
 
-1. **脚本介绍**：清单里的可选字段 `description = '一句话介绍'`（写法见 `Scripts\template.lua`）；不写就显示文件名。
-2. **启用 / 禁用**：配置文件 `[script] disabled = ["a.lua"]`（`config.toml` 里，与别的开关同一份）；Server **启动时**按它跳过。
-3. **脚本目录**：安装目录的 `Scripts\`（不是数据目录）；安装包给这个目录授权，卸载会连它一起删（与 `Phrases\`、`WordBank\` 同一个路子）。
+1. **脚本名称 / 介绍**：清单里的可选字段 `name = '显示名'` 与 `description = '一句话介绍'`（写法见 `Scripts\template.lua`）；没写就显示文件夹名。设置列表显示 `name`，不显示文件夹名。
+2. **启用 / 禁用**：配置文件 `[script] disabled = ["niutrans-window"]`（文件夹名，**不带 `.lua`**；`config.toml` 里，与别的开关同一份）；Server **启动时**按它跳过。
+3. **脚本目录**：安装目录的 `Scripts\`（不是数据目录），一个脚本一个文件夹；安装包给这个目录授权，卸载会连它一起删（与 `Phrases\`、`WordBank\` 同一个路子）。
 
 ### 状态
 
-全部实现：`[script] disabled` 分节、运行时 `Runtime::load(dir, disabled)`（跳过 `template.lua` 与禁用名单，
-大小写不敏感）、清单的 `description`、Server 从**安装目录**取 `Scripts\`、安装包装 `Scripts\template.lua`
-并给目录授权；设置页的三块（声明 / 列表 / 新建脚本）与上面第 ③ 条的流程。
+全部实现：`[script] disabled` 分节（按文件夹名）、运行时 `Runtime::load(dir, disabled)`（只扫一级脚本文件夹，
+根部必须正好一个入口 `.lua`；跳过 `template.lua` 与禁用文件夹，大小写不敏感）、清单的 `description`、
+Server 从**安装目录**取 `Scripts\`、安装包装 `Scripts\template.lua` 并给目录授权；设置页的三块
+（声明 / 列表 / 打开脚本目录）。
 
 ## 出错与风险怎么兜
 
@@ -695,6 +841,6 @@ DLL（应用进程）                     Server 工人线程（独占 Router + 
 
 ## 还没做
 
-- **惰性 Lua 状态**：现在 Server 启动就建一个空状态（见规则一）。改成「扫描到 `*.lua` 才建」能让
+- **惰性 Lua 状态**：现在 Server 启动就建一个空状态（见规则一）。改成「扫描到脚本文件夹才建」能让
   「没脚本」彻底零残留。
 - **组句内部「已选文本」的改写**：Engine 没有「改组句内容」的入口，暂时不做。

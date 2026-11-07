@@ -66,9 +66,10 @@ mod tests {
     fn script_dir(name: &str, body: &str) -> PathBuf {
         let dir = std::env::temp_dir().join(format!("cloudime-online-line-{name}"));
         let _ = std::fs::remove_dir_all(&dir);
-        std::fs::create_dir_all(&dir).unwrap();
+        let script = dir.join("line");
+        std::fs::create_dir_all(&script).unwrap();
         std::fs::write(
-            dir.join("line.lua"),
+            script.join("line.lua"),
             format!(
                 "cloudime.script{{ api = 2, trigger_condition = 'combination_key', combination_modifiers = 'none', keys = {{ 'w', 'c' }}, budget = 1000000, timeout = 10000, \
                  sync = false, handover = 'callback', on_error = false }}\n{body}"

@@ -31,12 +31,15 @@ pub use cloudime_dictionary as dictionary;
 pub use composition::Composition;
 pub use correction::Correction;
 pub use engine::{
-    CommitEntry, Engine, EngineSession, Forgotten, INPUT_LOG_VERSION, InputLogEntry, InputLogger,
-    InputSource, Learner, MarkedKind, MarkedSegment, NEURAL_MARGIN, NEURAL_WEIGHT, NoInputLogger,
-    NoLearner, NoUsageMeter, NoVocabularyTracker, Query, RESCORE_CONTEXT_CHARS, RawPreedit,
-    Timings, Usage, UsageMeter, UsageSummary, VocabularySummary, VocabularyTracker,
+    CharTable, ChoiceModel, ChoiceTier, CommitEntry, Engine, EngineSession, Forgotten,
+    INPUT_LOG_VERSION, InputLogEntry, InputLogger, InputSource, Learner, MarkedKind, MarkedSegment,
+    NEURAL_MARGIN, NEURAL_WEIGHT, NoInputLogger, NoLearner, NoUsageMeter, NoVocabularyTracker,
+    Query, RESCORE_CONTEXT_CHARS, RawPreedit, Timings, Usage, UsageMeter, UsageSummary,
+    VocabularySummary, VocabularyTracker,
 };
 pub use fuzzy::FuzzyRules;
-pub use history::InputHistory;
+pub use history::{DEFAULT_FRESH_SECONDS, InputHistory};
 pub use parser::{ParseError, Segmentation};
-pub use punctuation::{MappedSymbol, Mapping, Punctuation};
+pub use punctuation::{
+    MappedSymbol, Mapping, Punctuation, SmartSymbol, smart_space_double, smart_space_single,
+};

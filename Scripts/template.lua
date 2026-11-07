@@ -1,8 +1,9 @@
 -- 云朵输入法 脚本模板
 --
--- 用法：「设置 → 脚本 → 新建脚本」会用这份模板在安装目录的 Scripts\ 下建一个新文件、并打开记事本，
--- 改完按 Ctrl + S 保存。**改脚本要重启输入法服务**才生效（「设置 → 脚本」页里那个
--- 「重启输入法服务」按钮，或任务栏「中 / 英」图标右键的那一项）。
+-- 用法：「设置 → 脚本 → 打开脚本目录」后，在安装目录的 Scripts\ 下建一个脚本文件夹
+--（例如 Scripts\script\），把这份模板拷成 script\script.lua 再改；改完按 Ctrl + S 保存。
+-- **改脚本要重启输入法服务**才生效（「设置 → 脚本」页里那个「重启输入法服务」按钮，
+-- 或任务栏「中 / 英」图标右键的那一项）。
 --
 -- 完整说明（清单每个字段、事件与载荷、能返回的动作、cloudime 表的全部方法、闸门与例子）见
 -- 安装目录下的 **lua.md**（仓库根目录同名文件）。下面这份是能直接跑的骨架，照着改。
@@ -12,21 +13,22 @@
 --   2. cloudime.on 只能在加载期调，运行期再登记会被拒绝。
 --   3. 清单里 api / trigger_condition / sync / handover / timeout / on_error 必写；budget 只能比全局上限小。
 --   4. 不许改 cloudime 表；脚本自己的持久状态用 cloudime.saved_path(...) 写到
---      Scripts\saved\ 下（可再建子目录），不要写安装目录其它位置。
+--      当前脚本文件夹的 saved\ 下（可再建子目录），不要写安装目录其它位置。
 --   5. 唯一允许的「等」是 cloudime.http_get 与 cloudime.http_post（异步；时限必给，且不能超过清单里的 timeout）。
---   6. 建脚本窗口时默认把控件布局写进 JSON 布局文件（放 Scripts\layouts\，用 cloudime.layout_path）；
+--   6. 建脚本窗口时默认把控件布局写进 JSON 布局文件（放当前脚本文件夹的 layouts\，用 cloudime.layout_path）；
 --      只有确需运行时动态生成大量控件或整份布局频繁变化时，才用 set_content 内联元素表。
 --
--- 目录约定（都在安装目录 \Scripts\ 下）：
---   根部 *.lua  = 可加载、可在设置页看到的实际脚本；
---   shared\    = 共享 Lua（dofile(cloudime.shared_path("md5.lua"))）；
---   layouts\   = JSON 界面布局（cloudime.layout_path("main.json")）；
---   dlls\      = 动态链接库（cloudime.dll_path("helper.dll")）；
---   saved\     = 脚本数据（cloudime.saved_path("test_saved/data.txt")，会自动建子目录）。
+-- 目录约定（都在安装目录 \Scripts\ 下；一个脚本一个文件夹，文件夹名就是脚本名）：
+--   <脚本名>\<脚本名>.lua = 入口（根部只能有一个 .lua，可加载、可在设置页看到）；
+--   <脚本名>\shared\      = 共享 Lua（dofile(cloudime.shared_path("md5.lua"))）；
+--   <脚本名>\layouts\     = JSON 界面布局（cloudime.layout_path("main.json")）；
+--   <脚本名>\dlls\        = 动态链接库（cloudime.dll_path("helper.dll")）；
+--   <脚本名>\saved\       = 脚本数据（cloudime.saved_path("test_saved/data.txt")，会自动建子目录）。
+--   根部 template.lua 只是这份模板，不加载。
 
 cloudime.script{
-    name        = "我的脚本",           -- 日志里点名用；不写就用文件名
-    description = "一句话介绍",         -- 设置页列表里显示；不写就显示文件名
+    name        = "我的脚本",           -- 日志 / 设置页点名用；不写就用文件夹名
+    description = "一句话介绍",         -- 设置页列表里显示；不写就显示名称
     api         = 2,                    -- 面向的脚本 API 版本（现在只有 2）
 
     -- ① 由什么触发（必写，五选一）。下面默认是「组合键」：
@@ -35,6 +37,8 @@ cloudime.script{
     --    candidate_context 候选窗口出现、拼音串等于指定内容 → 还要写 candidate_pinyin，收 candidates 事件
     --    focus_app         编辑光标位于指定程序            → 还要写 apps，收 focus 事件
     --    manual            手动触发：i 模式选中脚本时收 manual 事件
+    -- 自动触发脚本（时间段 / 候选拼音 / 焦点程序 / "none" 单键）不会进 i 模式；
+    -- 手动触发脚本（manual / 带修饰键的组合键）里，manual 恒在 i 模式，组合键看 show_in_i_mode。
     trigger_condition     = "combination_key",
 
     -- ② 组合键（trigger_condition = "combination_key" 时必写）：
@@ -57,12 +61,13 @@ cloudime.script{
     budget        = 200000,             -- 单次调用的指令数上限（不写 = 全局上限；只能更小）
     timeout       = 200,                -- 单次调用的墙钟上限（毫秒，1–60000）
     needs_context = false,              -- true = 每次派发前刷新 cloudime.context（按键前多读一次光标前文）
+    show_in_i_mode = false,             -- true = 手动触发脚本也列进 i 模式（自动触发脚本写了会忽略并警告）
     sync          = true,               -- 同步：处理函数算完就返回
     handover      = "return",           -- 必须与 sync 一致：true 配 "return"、false 配 "callback"
     on_error      = function(event, message)  -- 处理函数出错时调它；写 false = 不处理（直接中止这一次）
         cloudime.log("出错：" .. event .. " → " .. message)
     end,
-    priority      = 0,                  -- 多个脚本都要改同一项时，大的盖小的（同值按文件名）
+    priority      = 0,                  -- 多个脚本都要改同一项时，大的盖小的（同值按文件夹名）
 }
 
 -- ⑤ 处理函数：事件名必须与触发条件对上

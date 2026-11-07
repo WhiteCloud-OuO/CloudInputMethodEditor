@@ -234,6 +234,7 @@ fn main() {
         config.input.simp_trad_chinese_chars_toggle == cloudime_platform::SimpTrad::Traditional,
     );
     engine.set_learning(config.general.learning);
+    engine.set_context_memory(config.candidate.context_memory_seconds);
     // 生僻项（词库稀有组）缺省不查，由 [word_bank] rare_items 决定；热加载同款
     engine.set_rare_enabled(config.word_bank.rare_items);
     // 短语库固定在安装目录的 Phrases\Phrase.db；软件自带短语是否参与看 [phrase] use_default_phrases。
@@ -260,9 +261,11 @@ fn main() {
     // 脚本的 `cloudime.get_curr_config()` 从这里拿到第一份配置（之后热加载会刷新）
     router.set_script_config(&config);
     let model_path = dispatch::find_model(user_dir().as_deref(), &root);
+    let zhiyi_model = dispatch::find_zhiyi(user_dir().as_deref(), &root);
     router.configure_local_model(
         model_path.clone(),
-        config.candidate.use_local_sentence_organization_model,
+        zhiyi_model.clone(),
+        config.candidate.resolved_local_model(),
     );
     if let Some(path) = config_path() {
         let user = user_dir();
@@ -284,7 +287,7 @@ fn main() {
         layout = router_config.layout.key(),
         fuzzy = config.input.fuzzy_rules().any(),
         model = model_path.as_deref().map(|p| p.display().to_string()).unwrap_or_default(),
-        model_enabled = config.candidate.use_local_sentence_organization_model,
+        model_mode = ?config.candidate.resolved_local_model(),
         sessions = router.session_count(),
         "云朵 Windows Server 就绪"
     );

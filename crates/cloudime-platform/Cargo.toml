@@ -10,6 +10,7 @@ repository.workspace = true
 workspace = true
 
 [dependencies]
+cloud-ui-types.workspace = true
 cloudime-core.workspace = true
 cloudime-dictionary.workspace = true
 cloudime-translate.workspace = true

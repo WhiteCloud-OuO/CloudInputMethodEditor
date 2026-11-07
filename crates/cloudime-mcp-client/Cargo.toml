@@ -1,0 +1,17 @@
+[package]
+name = "cloudime-mcp-client"
+description = "MCP Client 的本地协议、配置与 sidecar 代理"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[lints]
+workspace = true
+
+[dependencies]
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+toml.workspace = true
+tracing.workspace = true

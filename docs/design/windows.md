@@ -6,6 +6,8 @@
   只有本进程配合 uiAccess 签名才能盖过）。本文规定窗口之间的关系（§1–§5）、画法（§6 渲染）与
   实现落点（§7），不管画成什么样。
 - 实现落在 `apps/windows/server/src/ui/`：两类窗口各有一个**模板**（见 §7）。
+- **置顶**（`top_most`）是模板的窗口属性，缺省 **false**；Server 建好候选窗、状态条、状态提示与脚本窗口后
+  显式 `set_top_most(true)`，需要回落时传 `false`（内部 `SetWindowPos(HWND_TOPMOST / HWND_NOTOPMOST)`）。
 
 ## 1. 两类窗口
 
@@ -102,20 +104,209 @@ pub(super) trait DesignatedAssetToGetFocus {
 }
 ```
 
+## 4.1 模态（modal，2026-11-02）
+
+**模态**只属于**辅助窗口**（以及辅助窗口模板）：把它设成模态时，它的所有者**暂时不再响应鼠标 / 键盘**，
+但所有者**不会被关闭**，桥接、`sync`、内容更新、取文本照旧。和焦点是两件事：模态管「挡住所有者」，
+焦点管「这一组里由谁接受输入」；模态不自动改焦点，要模态窗口接输入还是由所有者**指定**（§4）。
+
+规则：
+
+1. **API**：辅助窗口实现 `Asset::set_modal(true/false)`；所有者一侧统一走
+   `Assets::set_modal(name, modal)`（独立窗口模板暴露成 `set_asset_modal`）。
+2. **同一所有者同时只有一个生效模态**：普通模态资产只允许一件；已经有模态（包括 dialog）时，再设另一件
+   普通资产返回 `false`。**dialog 是例外**：创建 dialog 时把原来的模态栈顶**临时挂起**（不销毁、不丢失，
+   `set_modal(false)` 只是暂时收起），把 dialog 压到栈顶；dialog 销毁后原来的模态自动恢复。
+   多个 dialog 可以嵌套成栈，内层销毁后外层 dialog 恢复。
+3. **始终在所有者上层**：辅助窗口建出来就是所有者的 **owned window**（`CreateWindowExW` 的 owner），
+   Windows 保证 owned window 排在自己的所有者上面；设模态 / 每次显示时再 `HWND_TOP` 抬一次，
+   免得刚显示 / 刚抬起的 RichEdit 宿主盖住它。所有者那侧在模态期间**不再把 RichEdit 宿主抬到最前**。
+4. **所有者让开**：模态期间所有者整块窗鼠标穿透（`WS_EX_TRANSPARENT` + `WM_NCHITTEST -> HTTRANSPARENT`），
+   名下的 RichEdit 宿主也跟着屏蔽（鼠标穿透 + 放掉键盘焦点）。这部分只走窗口输入，不影响
+   [`Bridge`]（桥接仍是每次 `sync` 借出去的那个引用）。
+5. **自动取消**：模态资产走到生命周期末（`Assets::retire` / `Assets::retire_named`）时**先取消模态再销毁**；
+   只**收起**（`hide`）不取消 —— 再显示时模态还在。dialog 只能 `close`，不能 `hide`（否则会留下
+   「挡着所有者但看不见」的窗口）；dialog 在生命周期内也**不能** `set_modal(false)`。
+6. **dialog 的非法取消**：对 dialog 调 `set_modal(false)` 会**异常终止程序**（`std::process::abort`，
+   不是 unwind panic），并在终止前写一条 `tracing::error!`。这是硬规则：dialog 的模态无法手动解除。
+
+形状：
+
+```rust
+pub enum AssetKind { Auxiliary, Dialog }
+
+pub(super) trait Asset {
+    // ……
+    fn kind(&self) -> AssetKind { AssetKind::Auxiliary }
+    fn set_modal(&self, modal: bool) {}
+    fn raise(&self) {}
+    fn detach(&self, owner: &dyn Bridge) {}
+}
+
+impl Assets {
+    /// 普通资产：同时只允许一件；已有模态时返回 false。
+    /// dialog：由 add 自动压栈，set_modal(false) 直接 abort。
+    fn set_modal(&self, name: &str, modal: bool) -> bool;
+    fn modal(&self) -> Option<&str>;
+    fn modal_is_dialog(&self) -> bool;
+}
+```
+
+**规范用法**（独立窗口开一个模态辅助窗口）：
+
+1. 先给独立窗口开**蒙版**（`WindowOptions::mask` / `Context::set_mask`，见 `docs/design/cloud-ui-app.md`）；
+2. 再创建辅助窗口；
+3. 辅助窗口建出来（并 `show`）之后调 `set_modal(true)`；
+4. 辅助窗口销毁时，先取消模态 / 关闭辅助窗口，再关独立窗口的蒙版。
+
+蒙版与模态**不自动联动**：蒙版是视觉上的「变暗」，模态是输入上的「挡住所有者」，
+调用方按上面的顺序自己配。这样也能做「只蒙版不模态」或「模态但自绘遮罩」的变体。
+
+### 4.1.1 内置对话框（dialog，2026-11-03）
+
+**dialog 是辅助窗口模板的一种内置种类**（`AssetKind::Dialog`），正文布局由 Cloud UI 内部代码生成，
+用户不需要写 JSON。`dialog` 只是统称；目前提供消息对话框（`MessageDialog`）和文本输入对话框
+（`TextInputDialog`），两者共用 `dialog::layout` 的尺寸 / 排版、`dialog::DialogStyle` 的属性与
+`dialog::blocking` 的同步模态宿主。
+
+**所有对话框都是类**：`new(...)` 建实例 → 改属性 → `show(self)`。属性只在 `show` 之前有效：
+Rust 的 `show(self)` 吃掉实例，编译期就挡住之后再改；脚本侧 `dlg:show()` 之后再赋值属性会抛 Lua 错误。
+
+**属性（Rust `DialogStyle` / 脚本同名）**：
+
+| 属性 | 缺省 | 意思 |
+|---|---|---|
+| `font` | `candidate` | 正文 / 标题 / 按钮字体槽：`candidate` / `pinyin` / `item_number` / `translate` |
+| `text_size` | 14 | 正文与按钮字号（点） |
+| `title_size` | 标题栏缺省（13） | 标题字号（点） |
+| `background` | 主题背景色 | 面板底色 |
+| `title_color` | 主题次要文字色 | 标题颜色 |
+| `text_color` | 主题正文色 | 正文 / 编辑框文字颜色 |
+| `button_background` | 主题强调色 | 按钮底色 |
+| `button_text_color` | 主题强调文字色 | 按钮文字颜色 |
+
+颜色都是 `Color`（脚本写 `"#RRGGBB"` / `"#AARRGGBB"`）；字号必须是正数，否则脚本侧报错。
+
+- **创建即模态**：`Assets::add` 看到 `AssetKind::Dialog` 就自动把它压到模态栈顶；不需要、也不允许调用方再
+  手动 `set_modal(true)`。
+- **临时挂起原模态**：栈顶原来有普通模态（或外层 dialog）时，先 `set_modal(false)` 挂起，不销毁；
+  dialog 销毁时 `retire_named` 弹出栈顶并恢复下一个。嵌套 dialog 同理。
+- **位于最顶层**：dialog 建出来就 `set_top_most(true)`，并且是宿主的 owned window；每次 `show` / 开蒙版后
+  再 `HWND_TOP`，不会被所有者或它的 RichEdit 宿主盖住。
+- **自动转移焦点**：创建时如果焦点在别的资产上，先经桥接让那件资产 `unfocusing` / 把焦点交还所有者，
+  再由所有者指定给 dialog（dialog 默认 `able_to_get_focus = true`）。
+- **可选蒙版**：`DialogOptions::mask = true` / 脚本 `mask = true` 时，dialog 在第一次显示时记录所有者原来的
+  蒙版并切到 `WindowMask::dim(0.35)`；销毁前 `Asset::detach` 通过 `Bridge::set_mask` 恢复原值。
+- **不可取消**：生命周期内 `set_modal(false)` → `std::process::abort()`；`hide` 也不允许（脚本侧会被拒绝并记警告）。
+- **可拖拽（带着所有者一起走）**：在 dialog 面板上按下左键并拖动（按钮区域除外；编辑框由它自己的宿主接鼠标），
+  对话框和所有者按**同样的位移**一起移动。所有者仍是模态状态：`EnableWindow` 保持禁用，拖拽只是挪窗口位置，
+  不恢复鼠标 / 键盘输入。拖动超过 4 像素才算拖拽；拖拽后的左键抬起不再当成按钮点击。
+  所有者的 **RichEdit 宿主**和**蒙版**都是独立顶层窗口，不会跟着窗口移动，dialog 拖拽时由
+  `AuxiliaryWindowTemplate` 按相同位移一起搬（`follow_edit_host` / `follow_windows`）；文本输入对话框
+  自己的编辑框宿主也登记为 follower。脚本所有者另外由 `ScriptWindow` 的 `WM_MOVE` 重新对齐缓存位置、
+  RichEdit 宿主、蒙版与资产。
+- **脚本入口**：`cloudime.window.create_dialog{ owner = win, mask = true }`，返回和普通窗口一样的句柄；
+  `win:close()` 销毁，`win:set_modal(false)` 会触发异常终止。
+
+#### 消息对话框（message dialog）
+
+```rust
+let mut dialog = MessageDialog::new(title, text, icon, &["确定", "取消"]);
+dialog.style.text_size = Some(15.0);   // 属性只在 show 之前改
+let index = dialog.show();             // u8：被点按钮的下标 0..=3
+```
+
+- **布局**：从上到下三段 —— 标题栏（只有标题文字，**没有关闭按钮**；高度 / 字号 / 颜色 / 左留白与
+  `cloud-ui-demo` 主窗口标题栏一致，标题栏下**不画分隔线**）、内容区（左 SVG + 右 `TextBlock`）、
+  按钮组（文字按钮，1–4 个）。
+- **结果**：返回被点按钮的下标 `0..=3`。没有关闭按钮，必须点一个按钮；`buttons` 为空或超过 4 个时
+  **异常终止程序**（`std::process::abort()`，不是 panic）。
+- **同步**：`show` 在当前独立窗口的 UI 上下文里创建 owned window，跑一个嵌套消息循环；
+  期间所有者窗口 `EnableWindow(FALSE)`，返回前恢复。所有者来自线程本地当前窗口
+  （`crate::current`，由独立窗口的 UI 回调设置）；没有当前窗口也异常终止。
+  所有者名下的 RichEdit 宿主是**独立顶层窗口**，`EnableWindow` 管不到：`BlockingPanel` 在打开前
+  通过 `current::CurrentWindow.edit_hosts` 逐个 `set_input_blocked(true)`（鼠标穿透 + 放掉键盘焦点），
+  关闭后取消并恢复原焦点。
+  背景由消息对话框自己的整块 `Element::Rect` 画，模板底色关掉，避免深色模式下两套圆角底色在边缘叠出浅色亮边。
+- **文本**：`\n` 换行，`\\` 表示反斜杠；按内容区宽度自动折行，左图标和按钮组固定尺寸。
+- **图标**：`icon` 取值 `""`（缺省，不画图）/ `failure` / `success` / `query` / `warning`；
+  四张 SVG 直接作为 `&str` 常量内嵌在 `cloud-ui`（`dialog/message.rs`），
+  保留源文件颜色，不跟随主题染色。
+- **脚本**：
+
+  ```lua
+  local dialog = cloudime.window.message_dialog{
+      owner = win,
+      title = "删除确认",
+      text = "要删除这条记录吗？\n删除后无法恢复。",
+      icon = "warning",
+      buttons = { "删除", "取消" },
+  }
+  dialog.text_size = 15
+  dialog.button_background = "#C42B1C"
+  local index = dialog:show()          -- 同步阻塞，返回 0..=3
+  ```
+
+  实例上可直接改 `title` / `text` / `icon` / `buttons` 与上表属性；`show` 之后再改报 Lua 错误。
+
+#### 文本输入对话框（text input dialog）
+
+```rust
+let mut dialog = TextInputDialog::new(title, text, allow_multiline, default_text);
+dialog.style.title_color = Some(Color::rgb(150, 150, 162));
+let value = dialog.show();             // String
+```
+
+- **布局**：标题栏（与 demo 主窗口同款，无关闭按钮、无分隔线）/ 内容区（说明 `TextBlock` + 编辑框）/
+  按钮组（确定 / 取消）。尺寸与按钮绘制与消息对话框共用 `dialog::layout`。
+- **编辑框**：`allow_multiline = true` 用多行 `text_box`，否则用单行 `text_edit`；背景 / 边框由
+  `Element::TextEdit` / `Element::TextBox` 画，真正的输入由 `TextHostWindow` 盖在 `edit_rect` 上。
+  打开即把焦点交给编辑框并**全选缺省文本**，直接输入就是替换。
+- **返回**：
+  - 确定 → 编辑框当前内容；
+  - 取消 → `default_text`；`default_text` 为空时返回空字符串。
+- **单行换行**：`allow_multiline = false` 时，`default_text` 里的真实换行在编辑框里显示为字面量 `\n`，
+  确定后原样返回。
+- **同步 / 所有者 / 背景**：与消息对话框相同，走 `dialog::blocking` 的同一个嵌套消息循环、
+  `current` 当前窗口和模板背景关闭逻辑。
+- **脚本**：
+
+  ```lua
+  local dialog = cloudime.window.text_input_dialog{
+      owner = win,
+      title = "重命名",
+      text = "输入新名字：",
+      allow_multiline = false,
+      default_text = "旧名字",
+  }
+  dialog.font = "candidate"
+  local value = dialog:show()          -- 同步阻塞，返回字符串
+  ```
+
+  实例上可直接改 `title` / `text` / `allow_multiline` / `default_text` 与上表属性；
+  `show` 之后再改报 Lua 错误。底层是同一个 `TextInputDialog` 的 `show`。
+
 ## 5. 资产克隆与资产窃取
 
-> 本输入法暂时用不上这两条，但先把规则定下来（写死了才好照着实现）。
+> 本输入法暂时用不上这两条，但规则和**来源侧入口**先定下来（`Assets::clone_asset` / `Assets::steal_asset`）；
+> 具体资产要额外实现 `Clonable` 才允许被克隆。
+
+**模态资产禁止离开它的所有者**：如果 **B1 正被 B 设为模态**，A **不能**克隆或窃取它 —— 这是硬规则，
+来源侧入口会**直接 panic**，不会返回 `None`。理由：模态窗口的 z-order、输入屏蔽、蒙版配合都绑在 B 上，
+复制一份到 A 会出现两个「模态」而只有一个所有者，规则立刻自相矛盾。检查顺序固定为
+「先查模态 → 再查 `Clonable`」，所以模态资产不会因为没实现 `Clonable` 而绕过 panic。
 
 ### 5.1 资产克隆（asset cloning）
 
-独立窗口 **A** 想拿到另一个独立窗口 **B** 的资产 **B1**，要**同时**满足三条：
+独立窗口 **A** 想拿到另一个独立窗口 **B** 的资产 **B1**，要**同时**满足四条：
 
 1. **B1 在生命周期之内**（B 还没把它放掉）；
 2. **B1 具备允许克隆的特性** —— 它除了实现「资产」那个 trait，还要额外实现一个**可克隆** trait
    （下称 `Clonable`）；
-3. **B 收到来自 A 的克隆请求**（独立窗口之间可以直接通讯，请求走它们自己那条路）。
+3. **B 收到来自 A 的克隆请求**（独立窗口之间可以直接通讯，请求走它们自己那条路）；
+4. **B1 不是模态资产** —— 模态窗口不能离开它的所有者（见 §5 开头），来源侧入口直接 panic。
 
-三条都满足时：
+四条都满足时：
 
 - **A 添加一件 A1**：**除所有者以外**，其余内容与 B1 一样（连 [`Asset::name`] 一起照抄 —— 名字只要求
   在同一所有者的名下唯一；要放进一个已经有同名资产的所有者名下，得另起一个名字，`Assets::add` 的
@@ -126,13 +317,30 @@ pub(super) trait DesignatedAssetToGetFocus {
 - **焦点不跟着走**（§4 规则 8）：A1 进来时 A 那一组的焦点**不动**，还在 A 自己、或它的某件姊妹资产身上 ——
   A1 能不能获得焦点照旧（`able_to_get_focus` 是资产自己的特性，克隆件自然带着），但要拿到还是得 A **指定**。
 
-形状上大致是这样（**尚未实现**，先把语义写死）：
+形状（来源侧入口已实现；具体资产还没实现 `Clonable`）：
 
 ```rust
+pub trait Asset {
+    // ……
+    /// 允许被克隆时返回自己；缺省 None（不可克隆）。实现 Clonable 的类型覆盖它。
+    fn as_clonable(&self) -> Option<&dyn Clonable> { None }
+}
+
 /// 允许被别的独立窗口克隆的资产额外实现它。
-pub(super) trait Clonable: Asset {
+pub trait Clonable: Asset {
     /// 克隆一份「除所有者以外」都一样的自己；克隆件由**请求方**持有、所有者是请求方。
     fn clone_asset(&self) -> Box<dyn Asset>;
+}
+
+impl Assets {
+    /// 克隆 / 窃取前的硬检查：name 是当前模态资产时 panic。
+    fn ensure_cloneable(&self, name: &str);
+
+    /// 来源侧克隆：原件不动。没这件 / 不可克隆 → None；模态 → panic。
+    fn clone_asset(&self, name: &str) -> Option<Box<dyn Asset>>;
+
+    /// 来源侧窃取：先克隆、再 retire_named 原件。模态 → panic。
+    fn steal_asset(&mut self, name: &str) -> Option<Box<dyn Asset>>;
 }
 ```
 
@@ -140,6 +348,8 @@ pub(super) trait Clonable: Asset {
 
 **A 从 B 克隆 B1 成 A1，且 B1 在克隆之后被立即销毁** —— 这整个过程叫**资产窃取**。
 
+- **B1 正模态时禁止窃取**：和克隆同一条硬规则，来源侧 `Assets::steal_asset` 在销毁原件**之前**
+  就先 panic，不会出现「原件已经没了、副本没拿到」的半截状态；
 - 之后 A 名下的资产是 **A1**，**不再是 B1**；**B1 已经被抹去**；
 - 克隆件是**新的**资产（不是引用、也不是句柄），所以 B1 被销毁不影响 A1，反过来也一样；
 - **焦点两边都不跟着走**：A 那一组按 §4 规则 8 不动（还在 A 或它的姊妹资产身上）；B 那边在 B1 被抹去**之前**
@@ -156,16 +366,20 @@ pub(super) trait Clonable: Asset {
   `InvalidateRect` —— 没有「画布被系统擦掉」这种时机；
 - 一块内存区域 = **一帧**：内容变了（新候选、翻页、高亮滑动、换 DPI、换主题）才重新出图再贴；没变就不贴。
   贴上去的那一帧一直留在窗口上 —— 这就是渲染的**持续性**；
+- **超出窗口内容区的部分不显示**：`Canvas::set_clip` 把后续内容裁到内容区（不含阴影留白），
+  阴影 / 背景在设置裁剪前画，所以不受影响；文字、路径、SVG、图像都走同一个裁剪。行 / 容器排不下时
+  不会把内容画到窗口外面。
 - 要「擦掉」只有两条路：**贴一帧新的**（覆盖），或者**销毁窗口**。不存在「刷新之后要重画一遍」这回事；
 - 为什么只能是它：**逐像素 alpha**（透明边、柔和阴影、抗锯齿圆角）只有带 alpha 的位图能做；候选窗每帧都在动，
   贴整块才不会闪。
 
-**能画的元素**（七类）：
+**能画的元素**（八类）：
 
 | 元素 | 是什么 | 落在哪儿（实现） |
 |---|---|---|
 | `text` | 文本 | 字形管线：cosmic-text 选字体 / 整形 / 回退，swash 栅格；彩色 emoji 直通 RGBA（`cloudime-render` 的 `text`） |
 | `svg` | SVG 图形 | `usvg` 解析 + `resvg` 光栅化成一整张带 alpha 的位图再叠上，可按 alpha 染色（`svg.rs`） |
+| `window_icon` | 窗口字形（最小化 / 最大化 / 还原） | 按当前 DPI 取整图标盒与线宽（`round(1.2×DPI/96)`），同一 DPI 下三个字形线宽一致；不经过 SVG 缩放、不走 AA（`renderer::draw_window_icon`） |
 | `img` | 图像（来自**文件**或**文件句柄**） | PNG 解码成预乘 RGBA 位图（`image::decode_image` / `load_image` / `read_image`），按目标矩形双线性缩放画上（`draw_image`） |
 | `line` | 线条 | 细矩形（水平 / 垂直）或细长的**填充路径**（任意角度，带抗锯齿）—— 画布的 `fill_rect` / `fill_path`。**眼下没有窗口用**：光标是 `rect` 的细条，下划线 / 删除线在文字管线里画 |
 | `rect` | 矩形（含**圆角矩形**与**圆形**） | `fill_rect` / `fill_round_rect`：圆角用三次贝塞尔近似四分之一圆；**圆** = 边长相等、半径取半边长（**眼下没有窗口用**） |
@@ -223,8 +437,8 @@ pub(super) trait Clonable: Asset {
 
 ## 7. 实现落点
 
-- **独立窗口模板**（`crates/cloud-ui/src/independent_window_template/`）：注册窗口类 + 建一块**分层、置顶、不抢焦点**的弹出窗
-  （纯展示的再加 `TRANSPARENT` 让鼠标穿透），并**管名下的资产** —— `Assets` 的 `add` / `sync` / `hide` /
+- **独立窗口模板**（`crates/cloud-ui/src/independent_window_template/`）：注册窗口类 + 建一块**分层、不抢焦点**的弹出窗
+  （纯展示的再加 `TRANSPARENT` 让鼠标穿透；置顶缺省关，`set_top_most(true)` 才进 topmost band），并**管名下的资产** —— `Assets` 的 `add` / `sync` / `hide` /
   `set_lines` / `retire`，`Drop` 里**先 `retire` 再 `DestroyWindow` 自己**（§1 的寿命规矩由模板保证）。
   候选窗口、悬浮工具栏、状态切换提示与脚本独立窗口都用它建窗（候选 / 脚本窗口再往里挂资产）。
   **焦点**也由它兜着（§4）：焦点状态在资产表里，模板实现 `DesignatedAssetToGetFocus` —— 指定 / 收回时自己
@@ -233,20 +447,33 @@ pub(super) trait Clonable: Asset {
   窗口过程的 `WM_NCHITTEST` 也按 `focused()` 回 `HTTRANSPARENT`。
   - **辅助窗口模板**（`crates/cloud-ui/src/auxiliary_window_template/`）：资产用的那块**分层面板**（主题背景 + 圆角 + 阴影
     都出一张预乘 RGBA 位图里；宽 / 高 / 间隙三个属性，没设过按宿主形状算默认；`show(宿主内容区矩形, 排布方向)`
-    摆位 —— 宿主右边 / 下边放不下就换左边 / 上边）。画什么三选一：**空面板** / **键位映射参考** / **脚本文档**
-    （`Document`，`set_document`）；出图 `Painter::render_panel` / `render_key_map` / `render_document`，
+    摆位 —— 宿主右边 / 下边放不下就换左边 / 上边；置顶缺省关，`set_top_most` 显式开）。画什么三选一：**空面板** / **键位映射参考** / **脚本文档**
+    （`Document`，`set_document`；dialog 目前先用空面板）；出图 `Painter::render_panel` / `render_key_map` / `render_document`，
     `layered::present` 一次贴上；窗口过程**不处理 `WM_PAINT`**。`show` 按「位置 / 尺寸 / 版面版本 / 渲染器
     代号」判重，没变就不重贴。**焦点**：`new` 收一个 `able_to_get_focus`，`set_focused` 开关鼠标穿透
     （`WS_EX_TRANSPARENT` 与命中测试读同一个位，两边不会打架）。**鼠标**：`set_events` 装一个出口，
     点击 / 悬停 / 离开变成内容区坐标 + 命中元素（脚本辅助窗口用；键位映射参考不装，一律穿透）。
-- **资产这层**（`crates/cloud-ui/src/auxiliary/`）：`Asset`（资产：`name`、声明 `able_to_get_focus`、收 `focusing` / `unfocusing`）、  `Assets`（宿主名下的资产表 + 这一组的**焦点**；`add` 收资产时**不动焦点**，§4 规则 8；`retire_named`
-  放掉指定的一件——脚本 `close` 用）、`Bridge`（桥：
-  `designate_focus(name)` 是同一所有者的两件资产之间转手的路，`return_focus_to_owner()` 是把焦点交回去）、
+    `new` 还收宿主的 `HWND`：辅助窗口建出来就是宿主的 **owned window**（排所有者上面），模态靠这条关系；
+    `set_modal` / `raise` 再 `HWND_TOP` 兜底，`show` 时如果正模态也抬一次。
+    另一种内置种类是 **dialog**：`AuxiliaryWindowTemplate::dialog(painter, owner, DialogOptions { mask })`，
+    `AssetKind::Dialog`、默认可获取焦点、创建即置顶；正文当前先留空（`Content::Empty`），之后按具体种类补。
+    `mask = true` 时 `apply_mask` 通过 `Bridge` 记下原蒙版并切到 `WindowMask::dim(0.35)`，`restore_mask` 恢复。
+- **资产这层**（`crates/cloud-ui/src/auxiliary/`）：`Asset`（资产：`name`、`kind`（普通 / dialog）、声明 `able_to_get_focus`、
+  收 `focusing` / `unfocusing`、`set_modal` / `raise`、生命周期末的 `detach`）、
+  `Assets`（宿主名下的资产表 + 这一组的**焦点**与**模态栈**；`add` 普通资产**不动焦点**，§4 规则 8；
+  `add` dialog 自动压栈并转移焦点；`retire_named` 放掉指定的一件——脚本 `close` 用；`set_modal(name, modal)`
+  仲裁普通模态，dialog 上取消会 abort，模态资产销毁时先取消再放掉）、`Bridge`（桥：
+  `designate_focus(name)` 是同一所有者的两件资产之间转手的路，`return_focus_to_owner()` 是把焦点交回去，
+  `mask()` / `set_mask()` 给 dialog 开关蒙版）、
   `Host`（宿主喂给资产的形状：内容区矩形 / 排布方向 / 是不是展开着）、`Focus`（焦点在谁身上，§4）、
-  `DesignatedAssetToGetFocus`（指定资产获取焦点）。
+  `DesignatedAssetToGetFocus`（指定资产获取焦点）、`IndependentWindowTemplate::set_asset_modal`（所有者一侧的模态开关，
+  开 / 关都同步自身的鼠标穿透）。
 - **脚本窗口**（`crates/cloud-ui/src/script_window/`，2026-10-17）：Lua（`cloudime.window.*`）建出来的两类窗口。管理器
   `ScriptWindows` 拿脚本请求（`WindowRequest`，经 `UiCommand::ScriptWindow` 从工人线程过来）建 / 改 / 收；
-  `ScriptWindow` 用**独立窗口模板**、`ScriptAuxiliary` 用**辅助窗口模板**并作为宿主资产（`Assets::add`）。
+  `ScriptWindow` 用**独立窗口模板**、`ScriptAuxiliary` 用**辅助窗口模板**并作为宿主资产（`Assets::add`）；
+  `WindowRequest::CreateDialog` 建内置 dialog，`ScriptAuxiliary` 的 `kind = Dialog`。
+  脚本窗口自己实现 `Bridge::mask` / `set_mask`：`sync_mask` 用共享 `mask::MaskWindow` 按内容区和主题圆角摆放，
+  dialog 要求蒙版时由它开、销毁时恢复。
   内容是一份声明式 `Document`，经 `Painter::render_document` 一次出图；命中按形状（`HitShape`：圆角 / 圆 /
   线段 / 路径填充）；鼠标、滚轮、拖动（整块窗）、键盘焦点（`key` 载荷带 `window`）都在这层。
   新建脚本窗口默认用 JSON 布局文件描述控件，Lua 只做交互；只有动态整份变化的场景才内联 `set_content`。

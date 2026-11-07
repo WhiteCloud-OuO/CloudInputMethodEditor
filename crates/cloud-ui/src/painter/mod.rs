@@ -5,10 +5,11 @@ use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::atomic::{AtomicU64, Ordering};
 
-use cloudime_platform::LayoutMode;
+use cloud_ui_types::LayoutMode;
 use cloudime_render::{
-    CandidateView, Color, Document, Element, FontLibrary, FontSlot, Layout, Preedit, Rendered,
-    RenderedStatus, Renderer, Row, Shadow, StatusCell, Theme, UiFont, system_fonts,
+    CandidateView, Color, Document, Element, FontLibrary, FontSlot, FontSpec, Layout, Palette,
+    Preedit, Rendered, RenderedStatus, Renderer, Row, Shadow, StatusCell, Theme, UiFont,
+    system_fonts,
 };
 
 use cloud_ui_core::{
@@ -193,6 +194,16 @@ impl Painter {
         (self.theme.colors.background, self.theme.colors.text)
     }
 
+    /// 面板圆角（逻辑点）；脚本窗口的蒙版要跟窗口背景用同一套几何。
+    pub fn corner_radius(&self) -> f32 {
+        self.theme.corner_radius
+    }
+
+    /// 当前主题的配色（消息对话框等内置面板用）。
+    pub fn palette(&self) -> Palette {
+        self.theme.colors
+    }
+
     /// `text_edit` 选中文字的背景 / 文字色：跟随候选窗高亮色。
     pub fn text_edit_selection_colors(&self) -> (Color, Color) {
         (
@@ -215,6 +226,18 @@ impl Painter {
                 self.theme.translate_font.size,
             ),
         }
+    }
+
+    /// 量一段文字（点）：给独立应用 / view 布局用。
+    pub fn measure_text(&mut self, text: &str, slot: FontSlot, size: f32) -> (f32, f32) {
+        let (family, _) = self.text_font(slot);
+        let font = FontSpec::with_size(size);
+        self.renderer.measure_font(text, &font, family.as_ref())
+    }
+
+    /// 改窗口 / 面板的圆角半径（点）；无边框窗口用。
+    pub fn set_corner_radius(&mut self, radius: f32) {
+        self.theme.corner_radius = radius.max(0.0);
     }
 
     /// 画一块空面板（内容区尺寸给死）：给「窗口模板」用（版面还没生成时）。
@@ -407,8 +430,8 @@ impl Painter {
 }
 
 /// 把主题文件里的 21 个颜色套到渲染主题上（其余注解色保持缺省）。
-fn apply_theme_colors(theme: &mut Theme, file: &cloudime_platform::ThemeFile) {
-    fn color(value: cloudime_platform::ThemeColor) -> Color {
+fn apply_theme_colors(theme: &mut Theme, file: &cloud_ui_types::ThemeFile) {
+    fn color(value: cloud_ui_types::ThemeColor) -> Color {
         Color::rgba(value.r, value.g, value.b, value.a)
     }
     let candidate = file.candidate;
@@ -466,7 +489,7 @@ fn scale(dpi: u32) -> f32 {
 #[cfg(test)]
 mod tests {
     use super::{Painter, StatusKind};
-    use cloudime_platform::ItemNumberStyle;
+    use cloud_ui_types::ItemNumberStyle;
     use cloudime_render::StatusCell;
 
     fn settings() -> crate::RenderSettings {

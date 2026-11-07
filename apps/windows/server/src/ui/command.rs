@@ -39,4 +39,20 @@ pub(super) enum UiCommand {
 
     /// 脚本窗口的一次操作（`cloudime.window.*`）：建 / 换内容 / 显示 / 收起 / 关。
     ScriptWindow(Box<cloudime_script::WindowRequest>),
+
+    /// 脚本同步消息对话框：请求 + UI 线程回填结果的通道。
+    MessageDialog(
+        Box<(
+            cloudime_script::MessageDialogRequest,
+            std::sync::mpsc::Sender<u8>,
+        )>,
+    ),
+
+    /// 脚本同步文本输入对话框：请求 + UI 线程回填文本的通道。
+    TextInputDialog(
+        Box<(
+            cloudime_script::TextInputDialogRequest,
+            std::sync::mpsc::Sender<String>,
+        )>,
+    ),
 }

@@ -1,0 +1,33 @@
+[package]
+name = "cloudime-mcp-client-sidecar"
+description = "MCP Client sidecar：按 mcp.toml 连接外部 MCP Server，经命名管道供 cloudime-server 调用"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "cloudime-mcp-client"
+path = "src/main.rs"
+
+[lints]
+workspace = true
+
+[dependencies]
+clap.workspace = true
+cloudime-mcp-client.workspace = true
+rmcp = { workspace = true, features = ["client", "transport-child-process"] }
+serde.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+tokio = { workspace = true, features = [
+    "io-util",
+    "macros",
+    "net",
+    "process",
+    "rt-multi-thread",
+    "sync",
+    "time",
+] }
+tracing.workspace = true
+tracing-subscriber.workspace = true

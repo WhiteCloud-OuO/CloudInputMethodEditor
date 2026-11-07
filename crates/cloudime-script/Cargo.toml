@@ -11,6 +11,7 @@ workspace = true
 
 [dependencies]
 cloud-ui-core.workspace = true
+cloudime-mcp-client.workspace = true
 cloudime-render.workspace = true
 jiff.workspace = true
 mlua.workspace = true

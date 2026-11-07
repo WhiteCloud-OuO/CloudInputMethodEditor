@@ -269,10 +269,11 @@ impl CandidateWindow {
             false,
             Some(unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default()),
         )?;
+        template.set_top_most(true);
         let dpi = unsafe { GetDpiForSystem() }.max(96);
         let data = RefCell::new(RenderData::empty());
         // 资产的寿命在宿主这块窗建好**之后**开始：先有自己，再建名下资产（见 `cloud_ui::auxiliary`）
-        match KeyMapWindow::new(painter.clone()) {
+        match KeyMapWindow::new(painter.clone(), template.hwnd()) {
             Ok(asset) => template.assets_mut().add(Box::new(asset)),
             Err(error) => tracing::error!(%error, "建键位映射参考窗口失败，将不显示它"),
         }
@@ -408,9 +409,9 @@ impl CandidateWindow {
     }
 
     /// 这一组的焦点在不在**自己**身上（缺省在；被指定给名下资产时不在，见 [`cloud_ui::auxiliary::Focus`]）。
-    /// 不在时窗口过程让位：整块窗鼠标穿透，点不着、滚轮也不是它的。
+    /// 不在时窗口过程让位：整块窗鼠标穿透，点不着、滚轮也不是它的；名下有模态资产时也一样。
     pub(crate) fn focused(&self) -> bool {
-        self.template.focused()
+        self.template.accepts_input()
     }
 
     /// 把名下资产驱动一遍（贴出一帧、或开关变了之后调）。

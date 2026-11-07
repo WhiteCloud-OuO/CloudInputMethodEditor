@@ -4,8 +4,8 @@ use std::path::{Path, PathBuf};
 use std::sync::OnceLock;
 
 use cloudime_platform::{
-    Config, FullHalfPunctuation, InputScheme, ItemNumberStyle, LayoutMode, LogLevel,
-    MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MAX_NEED_TIMES, MIN_ASSOCIATION_COUNTS,
+    Config, FullHalfPunctuation, InputScheme, ItemNumberStyle, LayoutMode, LocalModelMode,
+    LogLevel, MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MAX_NEED_TIMES, MIN_ASSOCIATION_COUNTS,
     MIN_CANDIDATE_COUNT, MIN_NEED_TIMES, MO_HU_YIN_BITS, MouseWordSelection,
     PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PreeditMode, SimpTrad, ThemeColor,
     ThemeFile,
@@ -82,6 +82,7 @@ impl Component for Settings {
             phrase_edit: None,
             phrase_status,
             script_status: String::new(),
+            remote_scripts: scripts::RemoteState::Idle,
             theme_names: Vec::new(),
             theme_selected: None,
             scheme_entries: Vec::new(),
@@ -110,7 +111,7 @@ impl Component for Settings {
         settings
     }
 
-    fn update(&mut self, message: Message, _context: &ComponentContext<Self>) {
+    fn update(&mut self, message: Message, context: &ComponentContext<Self>) {
         match message {
             Message::Navigate(Some(tag)) => {
                 self.page = tag;
@@ -167,6 +168,7 @@ impl Component for Settings {
                 );
             }
             Message::MixtureInput(on) => self.save("input", "mixture_input", on),
+            Message::SmartSymbols(on) => self.save("input", "smart_symbols", on),
             Message::FullHalfPunctuation(Some(i)) if i < FullHalfPunctuation::ALL.len() => {
                 self.save(
                     "input",
@@ -206,8 +208,15 @@ impl Component for Settings {
             Message::ShowStatusChangeTip(on) => self.save("input", "show_status_change_tip", on),
 
             // 候选页
-            Message::LocalModel(on) => {
-                self.save("candidate", "use_local_sentence_organization_model", on);
+            Message::LocalModel(Some(index)) if index < LocalModelMode::ALL.len() => {
+                let mode = LocalModelMode::ALL[index];
+                self.save("candidate", "local_model", mode.key());
+                // 旧键也写一份：老版本 / 本版本的兼容读取都看它；新模式不是「关闭」就是开着。
+                self.save(
+                    "candidate",
+                    "use_local_sentence_organization_model",
+                    mode != LocalModelMode::Off,
+                );
             }
             Message::Arrangement(Some(i)) if i < LayoutMode::ALL.len() => {
                 self.save(
@@ -346,20 +355,72 @@ impl Component for Settings {
             }
 
             // 脚本页
-            Message::ScriptToggle(file, on) => {
-                // 名单里一律按文件名（大小写不敏感）：先摘掉再按需加回去，
+            Message::ScriptToggle(id, on) => {
+                // 名单里一律按文件夹名（大小写不敏感）：先摘掉新旧两种写法再按需加回去，
                 // 免得同一只脚本攒出两条不同大小写的记录。
                 let mut disabled = self.config.script.disabled.clone();
-                disabled.retain(|name| !name.eq_ignore_ascii_case(&file));
+                disabled.retain(|name| !scripts::same_script(name, &id));
                 if !on {
-                    disabled.push(file);
+                    disabled.push(id);
                 }
                 self.save_array("script", "disabled", &disabled);
                 self.script_status = "已在配置里记下，重启输入法服务后生效。".to_owned();
             }
             Message::ScriptRemove(file) => scripts::remove(self, &file),
             Message::ScriptEdit(file) => scripts::edit(self, &file),
-            Message::ScriptNew => scripts::create(self),
+            Message::ScriptOpenDirectory => scripts::open_directory(self),
+            Message::ScriptRefreshOnline => {
+                self.remote_scripts = scripts::RemoteState::Loading;
+                self.script_status = "正在获取在线脚本列表…".to_owned();
+                context.spawn_background(|_| match cloudime_script_store::fetch_catalog() {
+                    Ok(catalog) => Message::ScriptOnlineLoaded(Ok(catalog)),
+                    Err(error) => Message::ScriptOnlineLoaded(Err(error.to_string())),
+                });
+            }
+            Message::ScriptOnlineLoaded(result) => {
+                self.remote_scripts = match result {
+                    Ok(catalog) => {
+                        self.script_status =
+                            format!("在线脚本列表已更新（{} 个）。", catalog.scripts.len());
+                        scripts::RemoteState::Loaded(catalog)
+                    }
+                    Err(error) => {
+                        self.script_status = format!("获取在线脚本列表失败：{error}");
+                        scripts::RemoteState::Failed(error)
+                    }
+                };
+            }
+            Message::ScriptInstallOnline(index) => {
+                let scripts::RemoteState::Loaded(catalog) = &self.remote_scripts else {
+                    self.script_status = "先点「在线获取脚本」拉取列表。".to_owned();
+                    return;
+                };
+                let Some(script) = catalog.scripts.get(index).cloned() else {
+                    self.script_status = "在线列表已经变了，重新获取后再试。".to_owned();
+                    return;
+                };
+                let catalog = catalog.clone();
+                let root = scripts::directory(self);
+                self.script_status = format!("正在获取 {}…", script.name);
+                context.spawn_background(move |_| match catalog.install(&script, &root) {
+                    Ok(report) => Message::ScriptInstallFinished(Ok(format!(
+                        "已获取 {}：新写入 {} 个文件，跳过 {} 个相同文件。重启输入法服务后生效。",
+                        script.name,
+                        report.written.len(),
+                        report.skipped.len()
+                    ))),
+                    Err(error) => Message::ScriptInstallFinished(Err(format!(
+                        "获取 {} 失败：{error}",
+                        script.name
+                    ))),
+                });
+            }
+            Message::ScriptInstallFinished(result) => {
+                self.script_status = match result {
+                    Ok(text) => text,
+                    Err(error) => error,
+                };
+            }
             Message::ScriptGlobalHotkeys(on) => {
                 self.save("script", "global_hotkeys", on);
                 self.script_status = "全局热键设置已更新，重启输入法服务后生效。".to_owned();

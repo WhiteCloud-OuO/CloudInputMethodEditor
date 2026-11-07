@@ -116,11 +116,13 @@ impl<S: Read + Write> EngineClient<S> {
         &mut self,
         text: String,
         document: Option<DocumentText>,
+        context: u64,
     ) -> Result<(), ClientError> {
         self.send(&ClientMessage::Surrounding {
             session: self.session,
             text,
             document,
+            context,
         })
     }
 

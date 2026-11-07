@@ -6,7 +6,7 @@
 //!
 //! **能画的元素**（`docs/design/windows.md` §6）：`text`（[`FontLibrary`] + 字形管线）、`svg`（`svg` 模块）、
 //! `img`（[`decode_image`] / [`load_image`] / [`read_image`] / [`draw_image`]）、`line` / `rect`（含圆角与圆）/
-//! `path`（画布那几笔填充原语，tiny-skia 的路径）。
+//! `path`（画布那几笔填充原语，tiny-skia 的路径）、`window_icon`（按设备像素对齐的窗口字形）。
 //!
 //! 元素各是一条 trait（`elements`）；唯一的实现是 `Render`（渲染：离屏位图，整块贴给窗口，内容持久）。
 //! 窗口里的每一笔都经这些 trait 画。
@@ -30,6 +30,7 @@ mod svg;
 mod text;
 mod theme;
 
+pub use canvas::rounded_rect_pixmap;
 #[cfg(target_os = "windows")]
 pub use color::Color;
 pub use control::{
@@ -41,7 +42,7 @@ pub use control::{
 /// 脚本窗口 / 面板的内容：**声明式**元素表（display list），由 [`Renderer::render_document`] 一次出图。
 pub use document::{
     ControlName, Document, Element, FontSlot, HitRect, HitShape, InstanceInfo, PathCommand, Region,
-    SelfDrawingPanel, StaticTextContent, TextEditPlacement,
+    SelfDrawingPanel, StaticTextContent, TextEditPlacement, WindowGlyph,
 };
 /// **能画的元素**的 traits：`text` / `svg` / `img` / `line` / `rect`（含圆角与圆）/ `path`；
 /// 以及控件绘制用的一整套 [`ControlRender`]。

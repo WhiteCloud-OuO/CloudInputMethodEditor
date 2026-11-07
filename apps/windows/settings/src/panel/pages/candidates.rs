@@ -1,18 +1,16 @@
 //! 「候选」页：`[candidate]` 分节（排布、个数、三个字体、序号样式、最小宽度、按程序隐藏）。
 
 use cloudime_platform::{
-    CandidateConfig, FontChoice, InputScheme, ItemNumberStyle, LayoutMode, MAX_ASSOCIATION_COUNTS,
-    MAX_CANDIDATE_COUNT, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MouseWordSelection,
-    PreeditMode,
+    CandidateConfig, FontChoice, InputScheme, ItemNumberStyle, LayoutMode, LocalModelMode,
+    MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT,
+    MouseWordSelection, PreeditMode,
 };
 use windows_reactor::*;
 
-use crate::panel::controls::{
-    field, field_top, labeled, note, page, radio_row, scroll_list, slider_field,
-};
+use crate::panel::controls::{field, field_top, page, radio_row, scroll_list, slider_field};
 use crate::panel::{Message, Settings};
 
-/// 本地整句模型文件在不在这里：用户目录 `%APPDATA%\CloudIME\local_models\` 优先，其次随包 `data\local_models\`。
+/// 基本模型的文件在不在这里：用户目录 `%APPDATA%\CloudIME\local_models\` 优先，其次随包 `Models\`。
 /// 判定与 Server 的 `rescore::find_model` 对齐（`.qjm` 单文件，或三件套里的 `model.safetensors`）。
 fn local_model_present(settings: &Settings) -> bool {
     let data_dir = settings.data_dir();
@@ -20,10 +18,32 @@ fn local_model_present(settings: &Settings) -> bool {
         cloudime_platform::resources::bundled_root().unwrap_or_else(|| data_dir.to_path_buf());
     [
         data_dir.join("local_models"),
+        root.join("Models"),
         root.join("data/local_models"),
     ]
     .into_iter()
     .any(|dir| dir_has_model(&dir))
+}
+
+/// 知意模型与 ONNX Runtime 在不在这里：模型优先随包的 `Models/laya-zhen-long-l12-int8g/`，
+/// 其次用户目录 `models/zhiyi-onnx/`；运行库在安装目录（开发时也认 `target/installer/onnxruntime/`）。
+fn zhiyi_present(settings: &Settings) -> bool {
+    let data_dir = settings.data_dir();
+    let root =
+        cloudime_platform::resources::bundled_root().unwrap_or_else(|| data_dir.to_path_buf());
+    let model = [
+        root.join("Models/laya-zhen-long-l12-int8g"),
+        data_dir.join("models/zhiyi-onnx"),
+    ]
+    .into_iter()
+    .any(|dir| dir.join("laya.int8g.onnx").is_file());
+    model
+        && [
+            root.join("onnxruntime.dll"),
+            root.join("target/installer/onnxruntime/onnxruntime.dll"),
+        ]
+        .into_iter()
+        .any(|path| path.is_file())
 }
 
 /// 目录里能加载的模型：一个 `.qjm` 单文件，或三件套里的 `model.safetensors`。
@@ -42,34 +62,55 @@ fn dir_has_model(dir: &std::path::Path) -> bool {
     })
 }
 
-/// 模型开关那一项：常规说明小字下面，模型文件缺失时再补一行红字，免得以为是开关坏了。
+/// 本地模型那一项：关闭 / 基本（含章）/ 增强（知意）/ 混合（含章+知意）；模型文件缺失时补一行红字。
 fn model_field(settings: &Settings, context: &mut ViewContext<Settings>) -> View {
-    let toggle = ToggleSwitch::new()
-        .is_on(
-            settings
-                .config
-                .candidate
-                .use_local_sentence_organization_model,
-        )
-        .on_toggled(context.callback(Message::LocalModel));
-    let row = labeled("使用本地整句模型（输入法内置）", toggle);
-    let hint = note(
-        "开启后，消耗一部分处理器和内存资源以获得更精准的整句输入；关闭后，仅使用词库和短语匹配。",
+    let mode = settings.config.candidate.resolved_local_model();
+    let row = field(
+        "本地模型",
+        "关闭只用词库与短语匹配；基本使用含章整句模型；增强使用知意，读光标前文重排候选并按音节出字；混合同时加载两个模型，短输入走知意、长句两个一起用。",
+        mode_combo(
+            &LocalModelMode::ALL,
+            mode,
+            LocalModelMode::label,
+            context.callback(Message::LocalModel),
+        ),
     );
-    if local_model_present(settings) {
-        return StackPanel::new().spacing(4.0).children([row, hint]);
+    let basic_present = local_model_present(settings);
+    let zhiyi_present = zhiyi_present(settings);
+    let warning = match mode {
+        LocalModelMode::Off => None,
+        LocalModelMode::Basic if !basic_present => Some(
+            "未找到基本模型文件：把 .qjm 模型放进 %APPDATA%\\CloudIME\\local_models\\，或让安装包带上 Models\\。",
+        ),
+        LocalModelMode::Enhanced if !zhiyi_present => Some(
+            "未找到知意模型或 onnxruntime.dll：确认安装目录下有 Models\\laya-zhen-long-l12-int8g\\ 与 onnxruntime.dll。",
+        ),
+        LocalModelMode::Hybrid => match (basic_present, zhiyi_present) {
+            (true, true) => None,
+            (false, false) => Some(
+                "混合模式需要基本模型和知意模型：确认安装目录 Models\\ 里的 .qjm 与 Models\\laya-zhen-long-l12-int8g\\、onnxruntime.dll 都在。",
+            ),
+            (false, true) => Some(
+                "混合模式缺少基本模型：把 .qjm 模型放进 %APPDATA%\\CloudIME\\local_models\\，或让安装包带上 Models\\。",
+            ),
+            (true, false) => Some(
+                "混合模式缺少知意模型或 onnxruntime.dll：确认安装目录下有 Models\\laya-zhen-long-l12-int8g\\ 与 onnxruntime.dll。",
+            ),
+        },
+        _ => None,
+    };
+    let mut children = vec![KeyedView::new("model", row)];
+    if let Some(text) = warning {
+        children.push(KeyedView::new(
+            "model-warning",
+            TextBlock::new()
+                .text(text)
+                .text_wrapping(TextWrapping::Wrap)
+                .font_size(12.0)
+                .foreground(ThemeBrush::SystemCritical),
+        ));
     }
-    let warning: View = TextBlock::new()
-        .text(
-            "未找到本地模型文件，开启也不生效：把 .qjm 模型放进 %APPDATA%\\CloudIME\\local_models\\，或让安装包带上 data\\local_models\\。",
-        )
-        .text_wrapping(TextWrapping::Wrap)
-        .font_size(12.0)
-        .foreground(ThemeBrush::SystemCritical)
-        .into();
-    StackPanel::new()
-        .spacing(4.0)
-        .children([row, hint, warning])
+    StackPanel::new().spacing(4.0).keyed_children(children)
 }
 
 /// 三个字体项：点按钮弹系统字体对话框时用它区分改哪一个。

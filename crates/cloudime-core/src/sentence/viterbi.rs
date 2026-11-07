@@ -45,7 +45,19 @@ struct Node {
 
     /// 到此为止路径词权重的对数之和（见 `Conversion::log_weight`）。
     log_weight: f64,
+
+    /// 这个词不在语言模型里时的兜底 log 概率：拼接备选时给它换个前词重算转移（见 [`splice`]）。
+    fallback: f64,
 }
+
+mod diverse;
+mod splice;
+
+/// 这么多音节以上才拼接备选（见 [`splice`]）：短句的 n-best 本来就覆盖得到各处。
+const MIN_SPLICED_SYLLABLES: usize = 13;
+
+/// 要 16 条整句时每个词留这么多条来路。
+const NBEST_HISTORIES: usize = 4;
 
 /// 把音节序列转成最可能的词序列。`positions` 每个位置是若干写法（第一种是敲的，其余是模糊音 / 敲错变体），
 /// `cost(位置, 命中的音节)` 是那个位置命中这种写法要扣的分（敲的原样 0），
@@ -138,6 +150,35 @@ pub fn convert_paths(
     cost: impl Fn(usize, &str) -> f64,
     cache: &mut SpanCache,
 ) -> Vec<Conversion> {
+    convert_paths_with_emission(
+        dictionaries,
+        positions,
+        keep_partial,
+        k,
+        model,
+        personal,
+        weight,
+        cost,
+        |_, _, _| 0.0,
+        cache,
+    )
+}
+
+/// 同上，额外给每个候选词加一笔「字分布」分（选词模型按音节出的字概率）：
+/// `emission(start, text, syllables)` 返回这笔分，直接加进路径分（不进 `static_score`）。
+#[allow(clippy::too_many_arguments)]
+pub fn convert_paths_with_emission(
+    dictionaries: &[&Dictionary],
+    positions: &[Vec<SyllablePattern<'_>>],
+    keep_partial: bool,
+    k: usize,
+    model: &dyn LanguageModel,
+    personal: Personal<'_>,
+    weight: impl Fn(&str) -> u32,
+    cost: impl Fn(usize, &str) -> f64,
+    emission: impl Fn(usize, &str, &[String]) -> f64,
+    cache: &mut SpanCache,
+) -> Vec<Conversion> {
     let Some((last, head)) = positions.split_last() else {
         return Vec::new();
     };
@@ -158,6 +199,9 @@ pub fn convert_paths(
     if n == 0 || k == 0 {
         return Vec::new();
     }
+    // 要的条数超过缺省束宽时（选词模型要 16 条），每个词留几条来路、束宽同比放大，
+    // 否则 n-best 多半只差句尾一两个字，句子中间没有备选。
+    let histories = if k > BEAM_WIDTH { NBEST_HISTORIES } else { 1 };
     let total: f64 = dictionaries
         .iter()
         .map(|d| d.total_frequency() as f64)
@@ -177,9 +221,10 @@ pub fn convert_paths(
         placeholder: false,
         penalty: 0.0,
         log_weight: 0.0,
+        fallback: 0.0,
     });
     for start in 0..n {
-        prune(&mut nodes[start]);
+        prune(&mut nodes[start], histories);
         if nodes[start].is_empty() {
             continue;
         }
@@ -199,31 +244,35 @@ pub fn convert_paths(
                     * association_factor(&hit.text, hit.syllables.len()))
                 .max(1.0);
                 let fallback = fallback_log_prob(hit.frequency, log_total);
-                let (score, back) =
-                    best_predecessor(&nodes, start, &hit.text, model, personal, fallback);
-                let (penalty, static_score, previous_log_weight) = {
-                    let previous = &nodes[start][back];
-                    let penalty = previous.penalty + hit.penalty;
-                    let static_step = model
-                        .log_prob((start > 0).then_some(previous.text.as_str()), &hit.text)
-                        .unwrap_or(fallback);
-                    (
+                let emitted = emission(start, &hit.text, &hit.syllables);
+                for (score, back) in predecessors(
+                    &nodes, start, &hit.text, model, personal, fallback, histories,
+                ) {
+                    let (penalty, static_score, previous_log_weight) = {
+                        let previous = &nodes[start][back];
+                        let penalty = previous.penalty + hit.penalty;
+                        let static_step = model
+                            .log_prob((start > 0).then_some(previous.text.as_str()), &hit.text)
+                            .unwrap_or(fallback);
+                        (
+                            penalty,
+                            previous.static_score + static_step,
+                            previous.log_weight,
+                        )
+                    };
+                    nodes[end].push(Node {
+                        start,
+                        text: hit.text.clone(),
+                        syllables: hit.syllables.clone(),
+                        score: score - hit.penalty + emitted,
+                        static_score,
+                        back,
+                        placeholder: false,
                         penalty,
-                        previous.static_score + static_step,
-                        previous.log_weight,
-                    )
-                };
-                nodes[end].push(Node {
-                    start,
-                    text: hit.text.clone(),
-                    syllables: hit.syllables.clone(),
-                    score: score - hit.penalty,
-                    static_score,
-                    back,
-                    placeholder: false,
-                    penalty,
-                    log_weight: previous_log_weight + word_weight.ln(),
-                });
+                        log_weight: previous_log_weight + word_weight.ln(),
+                        fallback,
+                    });
+                }
             }
         }
         // 这个音节连单字都查不到：用音节本身占位，别让整句断掉
@@ -250,10 +299,14 @@ pub fn convert_paths(
                 placeholder: true,
                 penalty,
                 log_weight,
+                fallback: UNKNOWN_LOG_PROB,
             });
         }
     }
-    prune(&mut nodes[n]);
+    prune(&mut nodes[n], histories);
+    if nodes[n].is_empty() {
+        return Vec::new();
+    }
     let mut paths: Vec<Conversion> = Vec::with_capacity(k.min(nodes[n].len()));
     for index in 0..nodes[n].len() {
         if paths.len() >= k {
@@ -263,6 +316,14 @@ pub fn convert_paths(
         if !paths.iter().any(|p| p.text == conversion.text) {
             paths.push(conversion);
         }
+    }
+    if histories > 1 && n >= MIN_SPLICED_SYLLABLES {
+        paths.extend(splice::spliced(&nodes, n, k, model, personal));
+        paths.sort_by(|a, b| b.score.total_cmp(&a.score));
+        let mut seen = HashSet::new();
+        paths.retain(|p| seen.insert(p.text.clone()));
+        diverse::spread(&mut paths);
+        paths.truncate(k);
     }
     paths
 }
@@ -379,6 +440,51 @@ fn span_candidates(
         .collect()
 }
 
+/// 在 `nodes[start]` 的前驱里挑让 `word` 得分最高的前 `histories` 条，按得分降序返回 (累计得分, 前驱下标)。
+fn predecessors(
+    nodes: &[Vec<Node>],
+    start: usize,
+    word: &str,
+    model: &dyn LanguageModel,
+    personal: Personal<'_>,
+    fallback: f64,
+    histories: usize,
+) -> Vec<(f64, usize)> {
+    if histories == 1 {
+        return vec![best_predecessor(
+            nodes, start, word, model, personal, fallback,
+        )];
+    }
+    let mut all: Vec<(f64, usize)> = (0..nodes[start].len())
+        .map(|index| {
+            let score = nodes[start][index].score
+                + transition_log_prob(
+                    model,
+                    personal,
+                    predecessor_context(nodes, start, index),
+                    word,
+                    fallback,
+                );
+            (score, index)
+        })
+        .collect();
+    all.sort_by(|a, b| b.0.partial_cmp(&a.0).unwrap_or(std::cmp::Ordering::Equal));
+    all.truncate(histories);
+    all
+}
+
+/// `nodes[start][index]` 作前驱时的上下文：前词是它，前二词是它的回指。
+fn predecessor_context(nodes: &[Vec<Node>], start: usize, index: usize) -> Context<'_> {
+    if start == 0 {
+        return Context::START;
+    }
+    let previous = &nodes[start][index];
+    Context {
+        previous: Some(previous.text.as_str()),
+        earlier: (previous.start > 0).then(|| nodes[previous.start][previous.back].text.as_str()),
+    }
+}
+
 /// 在 `nodes[start]` 的前驱里挑让 `word` 得分最高的那条，返回 (累计得分, 前驱下标)。
 /// 转移概率先问静态模型（不认识就用词库兜底值），再与个人 n-gram 插值；前二词是前驱自己的前驱（回指）。
 fn best_predecessor(
@@ -408,14 +514,23 @@ fn best_predecessor(
     best
 }
 
-/// 按得分降序只留束宽条。
-fn prune(nodes: &mut Vec<Node>) {
+/// 按得分降序只留「束宽 × 来路数」条；同一个词（同起点同文本）最多留 `histories` 条来路。
+fn prune(nodes: &mut Vec<Node>, histories: usize) {
     nodes.sort_by(|a, b| {
         b.score
             .partial_cmp(&a.score)
             .unwrap_or(std::cmp::Ordering::Equal)
     });
-    nodes.truncate(BEAM_WIDTH);
+    if histories > 1 {
+        let mut seen: std::collections::HashMap<(usize, String), usize> =
+            std::collections::HashMap::new();
+        nodes.retain(|node| {
+            let count = seen.entry((node.start, node.text.clone())).or_default();
+            *count += 1;
+            *count <= histories
+        });
+    }
+    nodes.truncate(BEAM_WIDTH * histories);
 }
 
 #[cfg(test)]
@@ -459,6 +574,26 @@ mod tests {
         assert_eq!(conversion.words[0].text, "我想");
         assert_eq!(conversion.words[0].syllables, ["wo", "xiang"]);
         assert_eq!(conversion.syllables.len(), 5);
+    }
+
+    #[test]
+    fn long_inputs_get_multiple_paths_with_splice() {
+        let dictionary = Dictionary::parse("啊\ta\t100\n呵\ta\t100\n").unwrap();
+        let syllables = vec!["a"; 14];
+        let patterns = complete(&syllables);
+        let paths = convert_paths(
+            &[&dictionary],
+            &patterns,
+            false,
+            16,
+            &NoLanguageModel,
+            Personal::NONE,
+            |_| 0,
+            |_, _| 0.0,
+            &mut SpanCache::default(),
+        );
+        assert!(paths.len() > 1, "长输入应拼出多条整句路径");
+        assert!(paths.iter().all(|path| path.syllables.len() == 14));
     }
 
     #[test]

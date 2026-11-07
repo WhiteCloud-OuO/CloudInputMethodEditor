@@ -41,6 +41,8 @@ pub(crate) enum Message {
     SimpTrad(Option<usize>),
     MixtureInput(bool),
     FullHalfPunctuation(Option<usize>),
+    /// 智能符号（`[input] smart_symbols`）。
+    SmartSymbols(bool),
     /// 成对补全的位下标（见 `PAIRWISE_COMPLETION_BITS`）+ 新值。
     PairwiseCompletion(usize, bool),
     /// 符号映射的位下标（见 `PUNCTUATION_MAPPING_BITS`）+ 新值。
@@ -50,8 +52,8 @@ pub(crate) enum Message {
     ShowStatusChangeTip(bool),
 
     // 候选页
-    /// 本地整句模型开关（`[candidate] use_local_sentence_organization_model`）。
-    LocalModel(bool),
+    /// 本地模型模式（`[candidate] local_model` 的下标，见 `LocalModelMode::ALL`）。
+    LocalModel(Option<usize>),
     /// 候选项排布方向（`LayoutMode::ALL` 的下标）。
     Arrangement(Option<usize>),
     /// 候选项个数（滑轨）。
@@ -121,14 +123,22 @@ pub(crate) enum Message {
     ResetTranslateLearning,
 
     // 脚本页
-    /// 启用 / 禁用某个脚本（文件名，写 `[script] disabled`）。
+    /// 启用 / 禁用某个脚本（文件夹名，写 `[script] disabled`）。
     ScriptToggle(String, bool),
-    /// 删除某个脚本文件。
+    /// 删除某个脚本文件夹。
     ScriptRemove(String),
-    /// 用记事本打开某个脚本。
+    /// 用记事本打开某个脚本的入口文件。
     ScriptEdit(String),
-    /// 新建一个脚本：建文件、写模板、用记事本打开。
-    ScriptNew,
+    /// 打开脚本目录（资源管理器）。
+    ScriptOpenDirectory,
+    /// 从线上脚本仓库获取列表。
+    ScriptRefreshOnline,
+    /// 在线列表回来了。
+    ScriptOnlineLoaded(Result<cloudime_script_store::Catalog, String>),
+    /// 安装在线列表里的第 `index` 个脚本。
+    ScriptInstallOnline(usize),
+    /// 在线脚本安装结束。
+    ScriptInstallFinished(Result<String, String>),
     /// 为脚本提供全局热键（`[script] global_hotkeys`）。
     ScriptGlobalHotkeys(bool),
 

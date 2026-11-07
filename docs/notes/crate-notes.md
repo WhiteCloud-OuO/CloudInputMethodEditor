@@ -149,6 +149,11 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 - 整句候选同样进这个池子：整句按整段读法给结构键（覆盖满、无简拼、末音节完整、`exact` 为真）；整句权重 = 路径词权重（`词频 × (1+选择次数) × 联想折扣`）
   的几何平均 × 模型系数（`rescore_paths` 里 `clamp(exp(λ·(神经分 − 静态分)), e^-4, e^4)`，没拿到神经分 1.0）。Viterbi 为每条部分路径累计 `log_weight`，
   `Conversion` 带 `log_weight` / `neural_factor`；同文本同读音的词候选不重复插、同文本不同读音的去掉词级那条、整句顶上。
+  接了选词模型且输入 ≥4 音节时，`plain_sentence` 一次要 16 条整句路径（否则最多 3 条；短输入只 1 条）：
+  `sentence_paths` 把 `k=16` 传给 Viterbi，后者按 `k > BEAM_WIDTH` 开 `NBEST_HISTORIES=4` 条来路、束宽 ×4；
+  13 音节以上再沿最优路径每个词界拼最多 3 条「只改一处」的备选（`sentence/viterbi/splice.rs`），
+  并按改动处排开（`diverse.rs`，同一处最多留 1 条在前）。重排后 `trim_sentence_alternates` 只保留前
+  `SENTENCE_CANDIDATES=3` 条整句，避免把第一页的词候选挤走。
 - 拼写纠错（`correction`）分两路，都按权重打折、原样读法的候选一直保留：
   ① 整段一处编辑（`engine/query/spelling.rs`）：拼音「不像话」（`unlikely_pinyin`）或末尾落单字母（`trailing_single_letter`）时，把**换位 / 键盘相邻键替换**
   能整段切分的纠正读法作为额外候选（`tier` 2，`correction::loose_segmentation` 允许换位末尾没敲完）；仅末尾落单字母触发时只试换位。折扣换位 0.75、替换 0.70。
@@ -162,6 +167,10 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
   `TypoCosts::correction_penalty` / `correction_transpose_discount` 已无路径调用（类型保留，CLI `--tune` 的 `correction` / `correction-transpose` 已移除）。
 
 `EngineSession` 保存可挂起的组句、标点、历史与学习链，`Engine::swap_session` 在同一个引擎里交换输入状态，共用词库与落盘服务。切换上下文时清除查询及异步重排缓存，并由平台恢复各自私密状态。
+
+特殊输入模式（`Engine::set_special_input`）：查询生成完候选后只留**第一个音节的单字**（`keep_single_characters`；按第一切分的音节文本匹配，残缺音节按前缀），选一个字后 `Composition::select_prefix` 把该音节连同后面的 `'` 一起吃掉，剩余拼音进入下一个音节。拼音行由 `marked_parts(..., special)` 把最后一段拼音按第一音节切开：当前音节 `Typed`，剩余音节 `Rest`；renderer 把 `Rest` 画成角标色（`theme.colors.badge`）。右 Alt 只在候选窗口显示（组句中）的中文状态、且当前方案是全拼 / 双拼时由 TSF `would_eat` 吃掉、送 Server 的 `special_input_key` 切换；`InputSettings::special_input` 由 Server 按 `InputScheme` 下发（只有 `FullPinyin` / `DualKeyPinyin` 为真），形码等方案（以及旧协议没这个字段时）右 Alt 原样归应用、不吞键；热加载换到不支持的方案时 Server 会 `set_special_input(false)`。英文状态或窗口不在时仍作 AltGr 交给应用。候选窗口销毁（`Composed` 变 `None` / `reset_composition`）时自动 `set_special_input(false)`。
+
+`InputHistory`（`history.rs`）按应用分桶保存最近上屏的文本：每个应用 256 字、最多 16 个应用，默认 60 秒没上屏就过期；应用读不到光标前文时，整句模型与选词模型用它当前文。`Engine::set_application` 切桶，`Engine::enter_input_box` 清当前应用（DLL 送来的 TSF 上下文标识变了时由 Server 调）；时长由 `[candidate] context_memory_seconds` 控制，0 表示永不过期。
 
 `Engine::raw_preedit()`（`engine/raw/`）只读返回 `RawPreedit { text, cursor_bytes }`：完整未上屏组合（已选文本 + 未选拼音）及 UTF-8 字节光标，与随后 `take_raw()` 共用文本生成，保留大小写、显式分隔符及光标后的剩余内容；不运行候选查询、不学习、不记日志、统计、历史或展示回报。首位固定 0，末位固定完整文本长度；`take_raw()` 的提交和清理顺序不变（回车 = 已选文本 + 剩余拼音原样，去掉手敲的 `'`；已选段在选中时已各自记过输入日志，这里只补未选拼音那一段）。
 
@@ -242,6 +251,24 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 异步的（`with_async_sentence_scorer`，后台线程 `RescoreWorker`）查询不等模型：缺分的记下来，壳停键后 `request_rescoring`、`poll_rescoring` 到了再 `query` 一次。
 前文优先用壳给的应用光标前文（`set_rescoring_context`），没有用本会话最近 64 个上屏字符。CLI `--neural <导出目录>`（`--neural-weight` / `--neural-context` / `--neural-async`）。
 
+`zhiyi`（feature `zhiyi`，Windows 用）是知意 1.4V2-Long-L12 的 int8 ONNX 选词模型：`ChoiceScorer::load_onnx(dir, onnxruntime.dll, 2)` 运行时动态加载
+ONNX Runtime，读 `laya.int8g.onnx`、`tokenizer.json`、`unified_vocab.json`。输入序列 `<bos> 前文 <eos> <mask>×拼音单元 <eos> <mask>候选… <eos>`，
+`f:zhong` / `p:g` 对音节完整 / 前缀；`score` 给每条候选一个 logit，`compose` 用 composition 头给每个音节一行字表 log 概率。
+`zhiyi::choice_model` 把它接到 Core 的 `ChoiceModel`。模型权重 Apache-2.0，随安装包放在 `Models\laya-zhen-long-l12-int8g\`
+（用户目录 `%APPDATA%\CloudIME\models\zhiyi-onnx\` 可作为替换）；运行库装到 Server exe 旁边
+（`apps/windows/scripts/fetch-onnxruntime.ps1` 取 ONNX Runtime 1.24.4）。
+
+Core 侧 `engine/choice/`：`ChoiceTier`（省电 5 条 / 32 字、均衡 9 / 64、准确 18 / 128）、`ChoiceRequest`（前文 + 拼音单元 + 候选文本），
+`ChoiceWorker` 后台线程只算最新一页 / 一批出字，`ChoiceRanker` 缓存最近一页分与 8 张 `CharTable`。
+`rerank_choices` 在候选排序后只把前 N 条里盖住整段输入的候选按「模型 log softmax + 二元 LM + 原位置先验」挑最好的挪到组首；
+短语输入（4–8 音节）整句备选很容易占满模型窗口，正确的词根本没进比较：这里会把重排前最好的词候选补进
+`ChoiceRequest`，它的位置先验 / LM 按 `FALLBACK_TERMS_SCALE=0.1` 算（原排名被整句候选挤乱，不能照算），
+让模型分自己决定能否升到第一；重排后 `keep_word_candidate_near_top` 再把它保在前 `SENTENCE_CANDIDATES`（3）条。
+2–3 字词本来就在窗口里，不补（补进去反而会把正确的词挤掉）；>8 音节交给整句候选，不抢长句第一页。
+不再为短语单独加载基本模型：补窗后知意短语的 Top1 明显高于基本，Top3 基本持平；多加载一份只会多占内存。
+`char_table` 给 Viterbi 的词加 `char_emission`（字分布相对该槽最好的字，下限 −12，改读音固定 −4，×0.5）。
+`rescoring_pending` / `request_rescoring` / `poll_rescoring` 与整句重打分共用同一条停顿后后台链。
+
 ## crates/cloudime-lm
 
 `BigramModel`，Core `sentence::LanguageModel` trait 的实现，从 `data/generated/lm.qj`（或 `lm-unigram.tsv` / `lm-bigram.tsv`）加载
@@ -253,7 +280,7 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 
 `Config`（TOML 配置文件，`[input]` / `[candidate]` / `[general]` / `[phrase]` / `[word_bank]` / `[status_bar]` / `[debugging]` / `[update]` 分节，首次运行写模板，
 `set_value` 用 toml_edit 原地改键保留注释（分节可带点，`candidate.pinyin_font` 这种子表也走它））；
-`[candidate]` 收拢候选窗口那一套：`use_local_sentence_organization_model`（原 `[model] enabled`）、`candidate_arrangement_direction`、
+`[candidate]` 收拢候选窗口那一套：`local_model`（`off` / `basic` / `enhanced` / `hybrid`；原 `[model] enabled` 与旧布尔键 `use_local_sentence_organization_model` 仍按 `basic` / `off` 读，`CandidateConfig::resolved_local_model` 处理优先级）、`context_memory_seconds`（读不到光标前文时历史多少秒过期，缺省 60，0 为不过期）、`candidate_arrangement_direction`、
 `candidate_count`（夹 5–9）、`candidate_association_counts`（联想候选项目上限，夹 0–4；候选列表里「比读法更长的词」最多留几条，
 见 `ranking::rank` 的 `association_limit`；缺省 2）、`pinyin_font` / `candidate_font` / `item_number_font`（各 `family` + `size` 的子表；
 缺省微软雅黑 11 / 13 / 11 pt）、`symbol_font` / `japanese_font`（u 模式符号窗口的补充字族，只存字族名；缺省
@@ -280,6 +307,7 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 f/h 32、u/ü 64、uo/o 128、an/ang 256、en/eng 512、in/ing 1024、wang/huang 2048，`MO_HU_YIN_BITS`；0.0.3 起从「五组合并位」改成一位一条，
 老配置同一数值的含义会变，用户重勾一遍即可。Core 侧的规则见 `FuzzyRules`：`uo_o` 走 `luo`↔`lo` 这类合法音节对，
 `wang_huang` 是 `wang`↔`huang` 整音节成对互换，只对完整音节生效）、`simp_trad_chinese_chars_toggle`、`mixture_input`、`full_half_punctuation_marks_toggle`、
+`smart_symbols`（智能符号，缺省 `false`；设置页「智能符号（空格）」写它）、
 `[input.punctuation_marks_mapping]`（位图：`/`→`、` 1、小键盘 `/`→`÷` 2、小键盘 `*`→`×` 4、`~`→`～` 8、`·`→`` ` `` 16，
 `PUNCTUATION_MAPPING_BITS`，只做单键替换；老配置里的表与 `~=` 这类两键规则已下线，读到表退回缺省位图）、`punctuation_marks_pairwise_completion`（位图）、
 `use_half_wide_punctuation_marks_after_digital`；`[general]` 里 `Shift` + 字母那一项已删（固定进组句，见上），`page_keys` 也已删（翻页键固定主键盘 `-` / `=`），
@@ -336,6 +364,22 @@ DLL 据此在**组句里**把这一个键送来问一趟（`eats_key` 里那条�
 强制用 `PreeditMode::Window`：行内组句会让 Windows 11 记事本把 TSF 上下文收成 `0..0`，已上屏的符号落在
 上下文外，`ShiftStart` / `ShiftEnd` 都拉不开范围；范围删不动时改为 `SendInput` 补发一个退格 / 删除键，并把
 它登记在 `Shared::injected_key` 里让 `OnTestKeyDown` / `OnKeyDown` 放行，应用自己删。
+
+**v22** 给 `InputSettings` 加了 `smart_symbols`（智能符号）：DLL 据此在中文状态、没组句时把空格也吃掉送来，
+并像 `script_wants_text` 那样在按键前现读光标前文 —— 否则 Server 不知道空格前那个字是什么。老 DLL 不带这个
+字段、读成 `false`，表现为「中文模式下空格不会按前一个字换成标点」，静默少一个功能，按规矩 +1。
+`RouterConfig.smart_symbols` 来自 `[input] smart_symbols`（缺省 `false`；设置页「输入」里是「智能符号（空格）」开关，
+放在「中文模式下符号映射」上方，写 `input.smart_symbols`）。Server 侧的规则在 `cloudime-core::punctuation`（`smart_space_single` / `smart_space_double`），
+`dispatch/key/smart_symbol.rs` 管两次按键：第一击上屏 `，` 并记住原来光标前的字，第二击（与第一击间隔
+**小于 1 秒**）用 `delete_before` 撤掉第一击再按那个字换成 `？` / `！` / `——` / `。`，`说` 换成 `：“`
+（成对补全开着时连 `”` 一起补、光标停在中间）。超时的那一下按普通空格处理，不另起后台定时器，
+只记第一击的 `Instant`，第二击进来时比较。
+`Router.smart_before` 由 DLL 前文与本进程刚上屏的文本共同维护；`stop_rescoring` 清 `surrounding` 时**不**清它，
+否则每次选完词都要等下一份前文。
+
+**v23** 给 `ClientMessage::Surrounding` 加了 `context`（DLL 侧 `ITfContext` 指针）：Server 发现它变了就
+`Engine::enter_input_box()`，把当前应用的上下文历史清掉。老 DLL 不带、读成 `0`，只少这个重置，不坏已有输入；
+按规矩 +1 并重装 DLL。
 
 **主题文件**（`theme.rs`）：`Themes\*.json` 装候选窗口 / 悬浮工具栏 / 状态切换提示三个窗口的 21 个颜色，分 `candidate`（15 项）/ `bar`（背景 / 图标 / 阴影）/ `tip`（同三项）三组；`ThemeColor` 是一个 `#AARRGGBB`（也认 `#RRGGBB`，serde 走字符串、缺键回缺省，`Default` 对齐现有观感）。`ThemeFile::{load, save}`（`save` 建父目录 + 美化 JSON）；`theme_dirs(bundled_root)` 给出两个候选目录 —— 用户目录 `%APPDATA%\CloudIME\Themes`（可写）与随包目录 `<安装目录>\Themes`（只读），`list_themes` 两处都扫、**用户目录优先**（同名盖掉随包的）、按名字排序，`find_theme` 在它上面按名字找（可带 / 不带 `.json`、大小写不敏感）；`DEFAULT_THEME_FILE` = `Default.json`（随包另有一份 `Panic.json`，两份都是内置主题）、`THEMES_DIR` = `Themes`。`[theme]` 只有一个 `curr_theme`（文件名，不是路径；缺省 `Default.json`），设置页「主题」页写它、Server 靠它选主题。注解色（`gloss` / `pos` / `fresh`）暂不进主题文件。
 
@@ -504,7 +548,7 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 `rebuild_text_edits` 按名字复用同名 RichEdit 宿主（keyed diff），数据没变时 `set_data` 直接跳过。
 `cloud-ui` 的窗口壳和 `cloudime-script` 的 JSON / Lua 绑定共用这里的页面树，避免 `cloud-ui` 与
 `cloudime-script` 互相依赖。
-子页面脚本由 JSON 的 `script` 字段声明，固定从 `Scripts/shared/` 加载。`PageLayout` 把
+子页面脚本由 JSON 的 `script` 字段声明，固定从**当前脚本文件夹**的 `shared/` 加载。`PageLayout` 把
 `InstanceInfo.script` / `instance_items` 带出来，`window.rs` 在窗口创建、`set_data`、列表窗口
 更新后按实例路径建 `ctx` 并调用 `created`；滚出虚拟窗口的实例调用 `destroyed`。事件在
 `Runtime::dispatch` 里先找 `event.instance` 对应的子页面脚本，返回 `true` 会跳过主窗口脚本。
@@ -554,23 +598,175 @@ RichEdit 宿主。自动窗口按 **8 行一块** 对齐（`auto_list_scroll` �
 
 Windows 壳的公共层（2026-10-20 从 `apps/windows/server/src/ui/` 抽出）：`cloudime-render` 只负责把内容画成位图，
 这里管分层窗口、窗口模板、资产 / 焦点、脚本窗口与 RichEdit 宿主。依赖方向是
-`cloudime-render` / `cloudime-script` / `cloudime-platform` → `cloud-ui` → Server；`cloud-ui` 不反向依赖 Server。
+`cloudime-render` / `cloud-ui-types` → `cloud-ui`；IME 专用的 `cloudime-platform` 只在 `ime` 特性下引入，
+`cloudime-script` 只在 `script` 特性下引入。`cloud-ui` 不反向依赖 Server。
+`cloud-ui` / `cloud-ui-core` / `cloud-ui-types` 在 `D:\Programming\RUST\CloudUI` 有独立副本：改这边的接口、行为或
+对应文档时，同一个任务里要同步过去（两边分别 fmt / clippy / test；渲染器在那边叫 `cloud-ui-render`）。
+
+`cloud-ui-types` 放独立 UI 也需要的数据类型：`LayoutMode`、`ItemNumberStyle`、
+`ThemeFile` / `ThemeColor` 与三个窗口主题；`cloudime-platform` 只 re-export 这些类型并继续负责主题目录扫描。
 
 - **共享渲染器**：`painter` 的 `Painter` / `SharedPainter` / `StatusKind` 与 `RenderSettings`（原先在
   `dispatch/candidates/sink.rs`，现在 Server 的 `dispatch` 只做再导出）。候选窗、状态条、脚本窗口共用同一份字体缓存。
-- **窗口模板**：`independent_window_template`（独立窗口壳 + 名下资产）、`auxiliary_window_template`（辅助窗口面板）、
+- **窗口模板**：`independent_window_template`（独立窗口壳 + 名下资产）、`auxiliary_window_template`（辅助窗口面板，
+  含内置 dialog）、`mask`（共享蒙版窗口，原先在 `app/mask.rs`；`app` 与脚本窗口共用）、
   `layered`（预乘 RGBA → BGRA → `UpdateLayeredWindow`）、`monitor` / `window_class` / `window`（工作区、窗口类、模块句柄与鼠标穿透）。
 - **资产模型**：`auxiliary` 的 `Asset` / `Assets` / `Bridge` / `Host` / `Focus` / `DesignatedAssetToGetFocus`。
   候选窗口的键位映射参考 `KeyMapWindow` 仍是候选专属，留在 `apps/windows/server/src/ui/key_map/`；脚本辅助窗口在 `script_window`。
-- **脚本窗口**：`script_window`（`ScriptWindows` / `ScriptWindow` / `ScriptAuxiliary`）以及 `text_host` / `text_store` / `tsf`
-  （windowless RichEdit + TSF）。`ScriptWindows`、`ScriptWindowEvents` 是给 Server 的入口；请求 / 事件类型仍来自 `cloudime-script`。
-  这条依赖由 `script` 特性控制（缺省开）；只要通用窗口的独立程序可以 `default-features = false`，不拖进 LuaJIT。
-- **RichEdit 宿主与 topmost**：脚本主窗口和每个 `text_edit` 宿主窗都是 topmost；点击主窗口后它可能浮到旧宿主上方，
+  **模态**：`AssetKind`（`Auxiliary` / `Dialog`）+ `Asset::set_modal` + `Assets::set_modal(name, modal)`。
+  普通模态同时只允许一件（已有模态时再设另一件返回 `false`）；`Assets::modal` 是 `Vec<ModalEntry>` 栈，
+  dialog（`AssetKind::Dialog`）由 `Assets::add` 自动压栈，并先把原栈顶 `set_modal(false)` 挂起，dialog 销毁时
+  再 `set_modal(true)` 恢复；可嵌套。对 dialog 调 `set_modal(false)` 走 `std::process::abort()`（不是 panic）。
+  模态期间 `IndependentWindowTemplate::sync_input` 让所有者鼠标穿透、脚本窗口的 RichEdit 宿主
+  `set_input_blocked(true)`（`WM_NCHITTEST -> HTTRANSPARENT` + 放掉焦点），桥接 / `sync` 照旧。
+  辅助窗口建出来就是宿主的 owned window（`AuxiliaryWindowTemplate::new` 的 owner 参数），所以总在所有者上面；
+  设模态与每次 `show` 再 `HWND_TOP`，脚本窗口在模态期间不再 `raise` RichEdit 宿主。模态随 `retire` /
+  `retire_named` 自动取消（先取消再销毁），普通 `hide` 不取消；dialog 不允许 `hide`。
+  **内置 dialog**：`AuxiliaryWindowTemplate::dialog(painter, owner, DialogOptions { mask })` 建 `AssetKind::Dialog`，
+  创建即显示 / 置顶 / 模态；`DialogOptions::mask` 时第一次 `sync` 用 `Bridge::mask` 记下原蒙版、`Bridge::set_mask`
+  切到 `WindowMask::dim(0.35)`，`Asset::detach` 在销毁前恢复。具体 dialog 种类由独立模块提供，
+  `Content::Empty` 只是通用 dialog 的占位。
+  焦点：`Assets::add` 对 dialog 会把焦点从其他资产经 `return_focus_to_owner` 收回，再指定给 dialog。
+  **对话框都是类**：`MessageDialog::new(title, text, icon, &buttons)` /
+  `TextInputDialog::new(title, text, allow_multiline, default_text)` 返回实例，`pub style: DialogStyle`
+  可改字体槽 / 字号 / 五种颜色；`show(self)` 吃掉实例并同步阻塞，所以「属性只在 show 之前有效」
+  在 Rust 由编译器保证。`DialogStyle`（`dialog/style.rs`）把颜色覆盖写进主题副本，字号 / 字体槽由各对话框
+  传给 `dialog/layout.rs` 的标题 / 正文 / 按钮绘制。
+  **消息对话框**（`crate::dialog::MessageDialog`，`cloud-ui` 的 `dialog` 模块）：`show(self) -> u8`
+  同步阻塞；`current` 线程本地当前窗口提供 owner / painter，`AuxiliaryWindowTemplate::dialog` 建 owned window，
+  `show_centered` 居中，`EnableWindow(owner, false)` 挡住所有者，嵌套 `GetMessageW` 循环等按钮点击。
+  布局是 `Document`：标题栏（与 demo 主窗口同款，无关闭按钮、无分隔线）/ 图标 + `TextBlock` / 按钮组；
+  `buttons` 1..=4，空或超长 abort。按钮区域名 `message.button.<index>`，点击回填 `AtomicI32` 并 post 唤醒消息。
+  背景由对话框自己的整块 `Element::Rect` 画，`AuxiliaryWindowTemplate::set_background(false)` 关掉模板底色，
+  避免深色模式下窗口面板底色与文档背景两套圆角在边缘叠出浅色亮边。
+  `icon` 取 `""` / `failure` / `success` / `query` / `warning`，四张 SVG 直接作为 `&str`
+  常量内嵌在 `dialog/message.rs`；空串不画图，源色保留。
+  **文本输入对话框**（`crate::dialog::TextInputDialog`）：`show(self) -> String`。
+  布局 / 背景 / 嵌套循环与消息对话框共用；内容区是 `TextBlock` + `TextEdit`/`TextBox`，按钮固定确定 / 取消。
+  编辑框实际由 `TextHostWindow` 承载，宿主位置取元素 `edit_rect()`（避开边框 / 圆角），背景 / 边框仍由元素画；
+  打开即 `select_all(true)` + `host.focus()`，直接输入替换缺省文本。
+  确定返回编辑框文本，取消返回 `default_text`（空则空串）；单行模式先把 `default_text` 的换行转成字面量 `\n`。
+  **共用部分**：`dialog/layout.rs` 独占尺寸常数、折行、标题文字与按钮绘制；`dialog/blocking.rs` 的
+  `BlockingPanel` 独占「禁用所有者 → 屏蔽 RichEdit → `show_centered` → 嵌套 `GetMessageW` → `Drop` 恢复」。
+  所有者名下的 RichEdit 宿主列表来自 `current::CurrentWindow.edit_hosts`（独立窗口进入 `current` 时传入），
+  不再回查 `AppWindow` —— 对话框是在 `Application::update` 里打开的，那时 `AppWindow` 正被可变借用，
+  `try_borrow()` 会失败；关闭时逐个 `set_input_blocked(false)` 并恢复原焦点。
+  新增对话框只写自己的内容区文档与「区域名 → 下标」映射，再按类的方式暴露属性。
+  **拖拽**：`AuxiliaryWindowTemplate` 只对 `AssetKind::Dialog` 生效：`WM_LBUTTONDOWN` 记光标与两块窗口起点
+  （按在区域上不拖），`WM_MOUSEMOVE` 超过 4 像素后同时 `SetWindowPos` 对话框和 `owner`，`WM_LBUTTONUP`
+  结束拖拽并抑制这次点击；`SetCapture` / `WM_CAPTURECHANGED` 保证拖出窗口也连续。所有者保持 `EnableWindow(false)`。
+  编辑框宿主 / 蒙版是独立顶层窗口，不会跟着父窗口走：`BlockingPanel` 通过
+  `set_owner_followers(current.edit_hosts, current.followers)` 交给模板，拖拽时按相同位移 `TextHostWindow::move_by`
+  / `SetWindowPos`；文本输入对话框自己的宿主用 `follow_edit_host` 追加。这条不能依赖 app 的 `WM_MOVE`：
+  dialog 的嵌套消息循环跑在 `Application::update` 里，`AppWindow` 一直被可变借用，`with_window` 拿不到它。
+  脚本所有者的缓存位置仍靠 `ScriptWindow::external_move`（`WM_MOVE`）重算，宿主 / 蒙版最终位置与模板搬的一致。
+  **克隆 / 窃取**：`Asset::as_clonable` 缺省 `None`，资产要额外实现 `Clonable` 才允许；来源侧
+  `Assets::clone_asset` / `steal_asset` 先调 `ensure_cloneable`，**模态资产直接 panic**（检查放在查
+  `Clonable` 之前，没实现 `Clonable` 也绕不过去）。`steal_asset` 先克隆成功才 `retire_named` 原件。
+- **脚本窗口**：`script_window`（`ScriptWindows` / `ScriptWindow` / `ScriptAuxiliary`），编辑框宿主在 `text_edit`
+  （windowless RichEdit + TSF，面板 / 独立应用共用）。`ScriptWindows`、`ScriptWindowEvents` 是给 Server 的入口；请求 / 事件类型仍来自 `cloudime-script`。
+  Lua 侧 `win:set_modal(true/false)` 走 `WindowRequest::SetModal`，只有辅助窗口有效；dialog 上取消会 abort。
+  `create_dialog{ owner, mask }` 走 `WindowRequest::CreateDialog`，UI 侧 `ScriptAuxiliary::new_dialog` 建
+  `AuxiliaryWindowTemplate::dialog`，自动显示并压模态栈；`mask` 时脚本窗口用共享 `mask::MaskWindow` 开蒙版
+  （`ScriptWindow::sync_mask` 按内容区 + 主题圆角摆放，蒙版抬到最前后再 `raise_modal`，不会盖住 dialog）。
+  `cloudime.window.message_dialog{…}` / `text_input_dialog{…}` 返回**实例**（mlua userdata）：
+  内容字段与 `DialogStyle` 都走 `add_fields` 的字段 getter / setter，`show` 是 `add_method_mut` 的方法；
+  设过 `shown` 之后所有 setter 与第二次 `show` 都返回 Lua 错误。`:show()` 时把请求（含 `style`）
+  发给 UI 线程**同步**等回复：Runtime 的 hook 由 Router 在 `set_script_window_sink` 时装到 sink 上；
+  `UiCommand::MessageDialog` 回 `u8`、`UiCommand::TextInputDialog` 回 `String`，
+  UI 线程 `ScriptWindows::message_dialog` / `text_input_dialog` 进入宿主 `current` 上下文后构造
+  `MessageDialog` / `TextInputDialog` 实例并 `.show()`；脚本侧 `cloudime_script::DialogStyle` 到
+  `cloud_ui::DialogStyle` 在 `script_window` 里用 `From` 转一次。
+  这条依赖由 `script` 特性控制（缺省关）；Server 显式开 `script`（连带 `ime`），独立 exe 默认不拖进 LuaJIT。
+  `ime` 特性才引入 `cloudime-platform` 的输入方案类型与辅助窗口模板；`app` / `painter` / `text_edit` 默认不依赖平台。
+  `auxiliary_window_template` 现在**不再**依赖 `ime`（键位映射那部分单独 gated），消息对话框因此默认特性可用。
+  面板的光标：窗口类注册 `IDC_ARROW`，`WM_SETCURSOR` 在 `HTCLIENT` 一律显式恢复箭头；
+  编辑框的 I 型光标由 `text_edit` 的宿主自己设，鼠标从宿主移回对话框 / 所有者时不会再停在 I 型。
+- **独立应用宿主**（2026-10-28）：`app` 模块给普通 exe 用。`run_native` 默认建
+  `WS_OVERLAPPEDWINDOW | WS_EX_APPWINDOW`，跑 Win32 消息循环；`WM_PAINT` 时调
+  `Application::update` / `view`，把 `Document` 经 `Painter::render_document` 出图后
+  `StretchDIBits` 贴到客户区。事件是 `AppEvent`（尺寸 / 鼠标移动与离开 / 滚轮 / 键盘 / 字符 / 焦点；
+  `WM_MOUSELEAVE` 发 `MouseLeft`，重复坐标的 `WM_MOUSEMOVE` 会去重，避免重绘反馈环），
+  `Context` 提供尺寸、DPI、`request_redraw`、`close`、最小化 / 最大化 / 显示 / 隐藏
+  （`minimize` / `toggle_maximize` / `show` / `hide`）。窗口仍只在 UI 线程用，`Application` 不要求 `Send`。
+  `apps/cloud-ui-demo` 是最小回归示例；`apps/cloud-ui-demo/installer/` 是独立应用打包参考
+  （`build.rs` 嵌 manifest + 图标，Inno Setup 按用户安装 / 卸载，不混入输入法安装包）。
+  `View::text_edit` / `text_box` 生成的 `Element::TextEdit` / `TextBox` 由 `app` 的 `sync_text_edits`
+  配 RichEdit 宿主（`Document::text_edits()` + `text_boxes()` 统一处理）；多行宿主建好后要
+  `ensure_layout()`，再把 `scroll_info()` 回写成 `TextBox.h_scroll` / `v_scroll`，渲染器才画内部滚动条。
+  `AppEvent::TextChanged` / `TextFocusChanged` / `TextKey` 把编辑状态交回应用，文本仍由应用保存。
+  `Decorations::None` 改走分层窗口（`WS_POPUP | WS_EX_LAYERED` + `UpdateLayeredWindow`），
+  四周按 `Shadow::panel().margin()` 留透明边、内容区从留白内沿算起；`shadow` / `corner_radius` 决定
+  阴影与圆角（`Painter::set_corner_radius` 改主题圆角，`View::background_rounded` 画可见底板）。
+  `UpdateLayeredWindow` 的目标点是**窗口左上角**：位图本身含白边，传内容坐标会让窗口每帧漂移。
+  留白区 `WM_NCHITTEST` 返回 `HTTRANSPARENT`；`caption_height`（点）设了才有自绘标题栏拖动区：
+  区域内命中任意 `Document.regions` 回 `HTCLIENT`（按钮可点），其余回 `HTCAPTION`（拖动 / 双击最大化）。
+  带标题栏的 `WS_POPUP` 补 `WS_MINIMIZEBOX | WS_MAXIMIZEBOX`；最大化时 `WM_GETMINMAXINFO` 用当前显示器
+  工作区限制，宿主按 `IsZoomed` 把白边当 0、关阴影；`Context::minimize` / `toggle_maximize` / `close`
+  只写 `WindowCommand`，`WM_PAINT` 借用结束后才 `ShowWindow` / `DestroyWindow`，防止同步 `WM_SIZE` 重入 `RefCell`。
+  **多窗口**：线程本地 `WINDOWS` 表（HWND → `AppWindow`）代替单例，窗口过程按 HWND 取；
+  `Context::open_window(options, app)` 建隐藏窗口、登记、返回 `WindowId`，显示推迟到这一帧 `WM_PAINT`
+  借用结束（`PENDING_SHOW`）；`WM_NCDESTROY` 摘表项，最后一个窗口销毁才 `PostQuitMessage`。
+  关闭时先把 `edits` / `retired` 摘出窗口再析构，宿主析构里的 TSF / 焦点回调不会重入 `RefCell`。
+  **托盘**：`WindowOptions::tray`（`TrayOptions`：提示文字 + `TrayMenuItem` 列表）在窗口创建时
+  `Shell_NotifyIcon(NIM_ADD)`、销毁时 `NIM_DELETE`；图标用 `LoadImageW` 按 `SM_CXSMICON` 取 exe
+  资源 ID 1，取不到退回 `IDI_APPLICATION`。回调消息是 `WM_APP + 0x50`，鼠标 / 菜单项都走
+  `AppEvent::Tray(TrayEvent)`；`Context::show` / `hide` 仍走窗口命令队列。窗口隐藏 / 最小化时没有
+  `WM_PAINT`，托盘消息里直接 `pump` 一遍 `Application::update`（不渲染），否则菜单项不会生效；
+  主窗口不可见 / 不在前台时菜单 owner 换用离屏 1×1 `WS_POPUP | WS_EX_TOOLWINDOW` 窗口，否则
+  `TrackPopupMenuEx` 一弹就收（或把主窗口强行提到前面）。监听 `TaskbarCreated` 广播，
+  Explorer 重启后重新注册。
+  `apps/cloud-ui-demo` 的托盘菜单有「显示窗口 / 隐藏到托盘 / 退出」。
+  **窗口蒙版**：`WindowMask { color }` 把 `Color::a` 当整体不透明度；`WindowOptions::mask` 是初始值，
+  `Context::set_mask` 运行时开关。实现是一块 owner = 应用窗口的顶层分层窗
+  （`WS_EX_LAYERED | WS_EX_TRANSPARENT | WS_EX_NOACTIVATE | WS_EX_TOOLWINDOW`），位置跟客户区
+  （无边框时扣阴影白边）；圆角用 `cloudime_render::rounded_rect_pixmap` 生成预乘 RGBA 位图，
+  经 `UpdateLayeredWindow` 逐像素贴上（最大化时按 0 圆角）。不用 `SetWindowRgn` 的硬区域，
+  圆角 AA 边缘与窗口背景一致，不会漏出没被蒙版覆盖的像素；`WM_NCHITTEST -> HTTRANSPARENT`、
+  `WM_MOUSEACTIVATE -> MA_NOACTIVATE`，鼠标 / 键盘仍落到下面的控件。它在 RichEdit 宿主之上，
+  `paint` 里 `sync_text_edits` 之后 `sync_mask` 再抬一次；**蒙版开启时** `sync_text_edits` 跳过
+  `host.raise()`、`set_bounds` 用 `SWP_NOZORDER`，避免每帧 z-order 抖动让编辑框背景闪。
+  `WM_MOUSEMOVE` 对同一坐标去重，避免贴图与重绘互相触发形成持续重绘。
+  窗口隐藏 / 最小化时 `hide_owned` 把蒙版和顶层编辑框宿主一起藏掉。只盖客户区，系统标题栏不在内。
+- **无 Lua 的 view 层**（2026-10-28）：`view` 模块的 `View` 用 `column` / `row` / `panel` /
+  `scrollable_page` / `title_bar` / `label` / `button` / `icon_button` / `spacer` / `flex_spacer` /
+  `background` / `list_box` / `text_edit` / `text_box` 搭页面，
+  `build` 走 `cloud-ui-core` 的 measure-arrange（文字宽度由 `Painter::measure_text` 提供）再生成 `Document`；
+  按钮同时写 `Document.regions`，`AppEvent::RegionClicked(name)` 把左键点击交回应用。
+  `list_box` 是已实现的**子页面容器**，生成 `Element::ListBox`，行样式 / 选中 / 悬停由
+  `view::ListItem` 与 `ListBoxState` 决定，可点击行按 `action` 写 region；`View::pointer` 提供行悬停。
+  列表盒收到的 `pointer` 已经减过列表盒原点，`build` 直接和 `0..width` / `0..height` 比，
+  `row_at` 也吃局部 y；不要再减 `rect.x` / `rect.y`，否则鼠标在列表外时反而会误高亮。
+  `ListBoxStyle::auto_item_gap_averaging` 缺省 true，渲染器把剩余高度平均进行间隙、只画完整行；
+  行列表要用 `list_box`，`scrollable_page`（可滚动页面，控件容器）只负责任意内容的裁剪。
+  `scrollable_page`（可滚动页面）是通用控件容器，生成 `Element::SelfDrawingPanel`（`clip = true`）：
+  子控件按 `(panel 原点 + offset)` 换算坐标，
+  超出视口由渲染器的面板图层裁掉；滚动条轨道 / 滑块作为面板 children 追加在内容之后。
+  `build` 记录 `ScrollablePageMetrics { rect, content_height, viewport_height }`，
+  `scrollable_page_metrics(name)` 取；
+  区域命中框按 `drawn + local` 平移、按面板矩形裁剪，滚出视口的按钮 / 行不可点。
+  `title_bar` 是一行普通控件：标题 + 三个图标按钮；默认最小化 / 最大化 / 还原生成
+  `Element::WindowIcon`（`WindowGlyph`），renderer 按 `round(1.2 × scale)` 取设备像素线宽、
+  把图标盒和所有矩形取整后绘制，三个字形同一线宽，不经过 SVG 缩放；关闭走 `Element::Svg`
+  （`打叉.svg` + 根节点 `color` + 抗锯齿）。`TitleBarStyle::pixel_icons = false` 时三个按钮回到 SVG：
+  `include_str!` 的四个资产、形状 `fill="currentColor"`、主题 icon / hover 色写进根节点 `color`、
+  `tint` 留空；最小化 / 最大化 / 还原的 SVG 再加 `shape-rendering="crispEdges"`。
+  按钮名是 `MINIMIZE_ACTION` / `MAXIMIZE_ACTION` / `CLOSE_ACTION`。
+  `window_icon_rects` 的单测覆盖 12/15/18/24/30px 图标盒，保证同 DPI 下三个字形线宽一致。
+  `text_edit` / `text_box` 分别生成 `Element::TextEdit` / `TextBox`，文字由 `text_edit` 模块的 RichEdit 宿主承载。
+  `view::Theme` 是独立应用的一套颜色 / 字号 / 圆角，派生出 label / button / panel / list_box /
+  text_edit / text_box / scroll / title_bar 样式；`Theme::dark()` / `light()` 是两套缺省值，和 IME 的 `ThemeFile` 互不影响。
+  布局核心有一个配套修正：带 `padding` 的容器在固有尺寸阶段要给子节点减去内边距
+  （`intrinsic_size` 的 `content_width` / `content_height`），否则 `Auto` 宽的子节点会按整页宽测量、溢出右边界。
+  `apps/cloud-ui-demo` 已改用这条路径，不再手写 `Element`。
+- **RichEdit 宿主与 topmost**：脚本主窗口和它名下的 `text_edit` 宿主窗都是 topmost（独立应用不置顶时宿主也不置顶）；点击主窗口后它可能浮到旧宿主上方，
   表现为编辑框背景还在、文字被盖住。`sync_text_edits` 每次都要把可见宿主重新
   `SetWindowPos(HWND_TOPMOST, SWP_NOMOVE | SWP_NOSIZE)`；位置 / 显隐刚变化时再 `InvalidateRect` + `UpdateWindow`
   同步画一帧，避免大跨度滚动后新宿主先露出空背景、下一轮消息才画出文字。
   列表行内宿主按当前 `ListBox.rows` 全窗口创建（不只完整可见行），用 `TextEditPlacement.visible` 控制显隐；
   主窗口贴图前先同步宿主，避免滚动动画帧里标签已到新位置、编辑框文字还停在上一帧。
+  宿主注册表 `HOSTS` 只存 `Weak`（宿主由 `ScriptWindow` / `AppWindow` 的 `edits` 持有）：强引用会让
+  注册表把宿主续命到 TLS 析构，析构里再访问 `HOSTS` 就会报 AccessError。
 - **平台约束**：除 `RenderSettings` 外，模块都只在 Windows 编译（`lib.rs` 按 `cfg(windows)` 导出）；窗口创建、窗口过程、
   `ScriptWindows::apply` 必须在同一个 UI 线程上，类型是 `Rc` / `RefCell` / `thread_local!`，不是 `Send`。
   字体枚举走 DirectWrite，i686 也能编；`SetProcessDpiAwarenessContext` 仍由 Server 在创建任何窗口之前调用。
@@ -582,6 +778,19 @@ Windows 壳的公共层（2026-10-20 从 `apps/windows/server/src/ui/` 抽出）
 与查到的结果 `Available`。`Version` 自己实现语义化版本比较，不引 semver。`[update]` 配置与 `UpdateChannel` 在 `cloudime-platform`。
 `examples/check.rs` 手动走一遍；`tools/release-sign` 是发版侧的 keygen / sign / verify。
 
+## crates/cloudime-script-store
+
+在线脚本仓库（设计见 `docs/design/script.md`「在线获取脚本」）：`fetch_catalog()` 用 reqwest `blocking` +
+`native-tls` + 系统代理拉 `index.json`（默认 `raw.githubusercontent.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse/main/index.json`，
+`CLOUDIME_SCRIPT_INDEX` 可覆盖），15 秒超时、1 MB 上限；解析时查 `version == 2`、id 唯一且能当文件夹名
+（无路径分隔符 / 不是 Windows 保留名）、名字非空、文件列表非空、路径相对且无 `..`、正好一个
+`target = script` 的入口 `.lua`。
+`Catalog::install(script, Scripts根)` 先把所有文件下载进内存（单文件 4 MB、单脚本合计 16 MB），
+再查冲突：内容相同记 `skipped`、内容不同整份报错不写；然后逐个写 `*.part` 再 rename。
+`target` → `Scripts\<id>\` 根部 / `shared\` / `layouts\` / `dlls\`，只取源路径的文件名。
+设置页在后台任务里调它（`context.spawn_background`），界面状态是 `scripts::RemoteState`
+（`Idle` / `Loading` / `Loaded(Catalog)` / `Failed`）；装完只提示重启（文件默认启用，由 `[script] disabled` 管）。
+
 ## crates/cloudime-script
 
 用户脚本的运行时：`mlua` + LuaJIT（版本在根 `[workspace.dependencies]` 里定，特性 `luajit` + `vendored`）——
@@ -589,7 +798,8 @@ LuaJIT 源码随 crate 编译进二进制，装机包不依赖机器上装的 Lu
 `mlua` 只在这个 crate 声明一次，别处用 `cloudime_script::mlua` 这个再导出。LuaJIT 在 x64 与 i686 都编得出来
 （TSF DLL 有 32 位那份），2026-10-07 起。
 
-`runtime.rs` 是全部：`Runtime::load(dir)` 读 `dir` 下的 `*.lua`（按文件名排序）依次 `exec`，`Runtime::none()`
+`runtime.rs` 是全部：`Runtime::load(dir)` 只扫 `dir` 下的一级脚本文件夹（按文件夹名排序），每个文件夹根部
+必须正好一个 `.lua`，执行它；`Runtime::none()`
 是不读盘的空运行时（`RouterConfig::scripts_dir` 为 `None` 时用它）；脚本用全局表 `cloudime` 的
 `on(事件名, 处理函数)` 登记、`log(文本)` 写日志，另读 `cloudime.context`（光标前文，派发前由 `set_context` 刷新）。
 规则（没脚本走老路 / 有脚本在固定四处跑、风险自担）见 `docs/design/script.md`，这里只记实现。
@@ -600,10 +810,12 @@ LuaJIT 源码随 crate 编译进二进制，装机包不依赖机器上装的 Lu
 `cloudime` 表锁成**只读代理**（`__index` 指向本体、`__newindex` 报错），本体留在 `Runtime::host` 里
 给运行时自己写 `context`；`rawset` 能绕过这道锁，但只改到脚本自己看到的那份（运行时的函数本体不受影响）。
 `cloudime.on` 只在加载期允许（`loading` 标记）；`http_get` 的响应时间限制不能超过清单里的 `timeout`。
-`Runtime::load(dir, disabled)` 读**安装目录**的 `Scripts\` **根部**（Server 里 `RouterConfig::from(&config).with_bundled_scripts()`
-指过去）：按文件名排序执行，**跳过 `template.lua`**（新建脚本的模板）与 `[script] disabled` 里列到的文件（大小写不敏感）；
-`shared\` / `layouts\` / `dlls\` / `saved\` 子目录不参与启动加载；子页面 JSON 的 `script`
-例外，会按需从 `shared\` 加载为实例脚本。
+`Runtime::load(dir, disabled)` 读**安装目录**的 `Scripts\`（Server 里 `RouterConfig::from(&config).with_bundled_scripts()`
+指过去）：只扫**一级脚本文件夹**，按文件夹名排序，每个文件夹根部必须**正好一个** `.lua`（入口）才执行；
+**跳过 `template.lua`**（随包的清单骨架）与 `[script] disabled` 里列到的**文件夹名**（大小写不敏感）；
+根部其它旧版平铺 `.lua` 不加载（记一条警告）。`shared\` / `layouts\` / `dlls\` / `saved\` 子目录不参与启动加载；
+子页面 JSON 的 `script` 例外，会按需从**该脚本文件夹**的 `shared\` 加载为实例脚本。
+清单记下文件夹 `id` 与入口文件名：i 模式与 `[script] disabled` 用 `id`，日志用入口名。
 清单的 `description` 只是记下来进日志（设置页自己扫文件取它，见 `docs/design/script.md`）。
 `dispatch` 把处理函数**返回的表**按登记顺序递回调用方
 （返回 `nil` / 别的类型的跳过）—— 返回值是什么意思本 crate 不管，由派发方（Server）定；`has_handlers(事件名)`
@@ -673,6 +885,55 @@ v2 布局另存 `PageLayout`（页面树 + 路径索引 + 滚动偏移），`set
   （首选命中率 / 字准确率 / 查询耗时；不依赖日志里当时选了什么，给整句排序与语言模型的改动当尺子），`--eval-save` 冻结成 `句子\t拼音\t上文` 三列文件，
   之后直接 `--eval-text` 它保证比的是同一份句子（本机的在 `data/eval/sentences.tsv`）。排序、整句、纠错的改动先跑它们再合。
 
+## apps/mcp
+
+只读 stdio MCP Server（`cloudime-mcp-server`），给外部 AI 客户端查询词库；不依赖 TSF DLL，也不碰当前输入会话。
+用 `rmcp 3.8` 的 server + stdio transport；stdout 只能有 JSON-RPC，日志走 stderr。
+
+数据：默认按安装根定位 `WordBank\`，主词库用 `DictDb::from_path_without_rare`，第三方词库用 `WordBank::load_except(Some(main))`；
+`UserWordBank.db` 是内置文件，按设计跳过。`--dict` / `--word-bank` / `--include-rare` / `--no-extras` 控制来源。
+Engine 不注入 Learner、LM 或神经模型；查询在 blocking 线程执行。三个工具是 `cloudime_segment_pinyin`、`cloudime_lookup_pinyin`、`cloudime_dictionary_info`。
+排序与词库查询仍由 Core 提供；MCP 只做参数校验、DTO 和协议适配。
+
+`rmcp` 需要 `AuxiliaryTable: Send` 才能让 `Engine` 跨 blocking 线程；辅助码表本来都是内存数据，加这个约束。
+安装包把 `cloudime-mcp-server.exe` 放在 `{app}`，不注册服务、不开机启动。
+
+## crates/cloudime-mcp-client + apps/mcp-client
+
+MCP Client 的共享协议与 sidecar。`crates/cloudime-mcp-client` 只放 `mcp.toml` 解析、
+命名管道帧（4 字节小端长度 + UTF-8 JSON）和 IPC 消息；不依赖 rmcp，所以 `cloudime-script` 可以只拿协议。
+`apps/mcp-client` 是 `cloudime-mcp-client.exe`：命名管道服务端 + `rmcp` client + `TokioChildProcess`。
+
+`mcp.toml` 在 `%APPDATA%\CloudIME\`，字段 `name` / `command` / `args` / `env` / `timeout_ms` / `allowed_tools`；
+`allowed_tools` 为空表示不允许任何工具。第一版不热加载。
+
+链路：Lua `cloudime.mcp.*` → `cloudime-script` 的异步请求管线 → `apps/windows/server/src/mcp`
+（`\\.\pipe\cloudime-mcp-client`）→ sidecar → 外部 MCP Server。
+**不自动启动**：sidecar 只在脚本 `cloudime.mcp.start`（或用户手动运行）时存在；`tools` / `call`
+不会拉起进程，外部 Server 的 session 也只由 `StartServer` 建立，`StopServer` 关闭。
+
+IPC 动作：`StartServer` / `StopServer` / `ListTools` / `Call` / `ListServers` / `Shutdown`。
+`Started` / `Error` 带 `client_owned`：Server 本次是否为这条 start 拉起了 sidecar；运行时据此在链尾
+发 `Shutdown`。`Shutdown` 先让 sidecar 关掉所有外部 session（`RunningService::close`，连同子进程），
+响应写回后再退出；Server 最多等 2 秒，超时才强杀。
+
+链尾规则：脚本从 `start` 到“没有挂起的 MCP 请求”为一轮任务链；`Runtime::finish_mcp_scopes` 在
+事件处理函数、每个异步回调、`tick` 后调用。链结束时 `stop` 该脚本启动的 Server；若 sidecar 是 Lua
+拉起的且没有其他脚本的 MCP scope，再 `Shutdown`。用户手动启动的 sidecar（`client_owned=false`）不会被关。
+
+sidecar 里每个 Server 一个 session（`tokio::sync::Mutex` 串行），不同 Server 可并行；
+调用受请求时限与 `timeout_ms` 中较小者约束，结果序列化上限 256 KB。外部 Server 的 stderr 逐行写进日志。
+
+Lua 结果：`start` 回 `{ server, started, client_owned }`，`stop` 回 `{ server, stopped }`；
+`tools` 回 `{ server, tools = { { name, description } } }`；
+`call` 回 `{ server, tool, content, structured, is_error, error }`。JSON `null` 在 Lua 里是 `nil`（键消失）。
+脚本只能调用配置里的 Server 与白名单工具；参数表转 JSON 时数组下标必须从 1 连续、不能和字符串键混用。
+
+脚本有挂着的 HTTP / MCP 请求时，Server 的 `next_tick` 从一秒缩到 20 毫秒，结果到了就回调，不必等配置热加载那一拍。
+
+第一版只做 `tools`，不做 resources / prompts / sampling / roots / elicitation / Streamable HTTP。
+`cloudime-mcp-client.exe` 与 `cloudime-mcp-server.exe` 一起放 `{app}`，都不注册服务、不开机启动。
+
 ## apps/windows
 
 一个产品两个 package：`server`（Server 进程：IPC 分派 + Engine + 命名管道 + 自绘候选窗与悬浮状态条）与 `tsf`（TSF 文本服务 DLL，lib 名固定 `cloudime_tsf`），
@@ -696,7 +957,8 @@ v2 布局另存 `PageLayout`（页面树 + 路径索引 + 滚动偏移），`set
 只有主词库坏了才回落 `assets/sample/dict.tsv`，连样例都装不起来才 `exit(1)`。数据坏了只该掉效果：曾因为随包 `.qj` 还是改名前的魔数，
 Server 装配直接退出，表现成「装完打不出候选、按键没反应、状态条也不显示」。
 
-**用户脚本**（0.1.0 起，运行时见 `crates/cloudime-script`）：脚本放安装目录 `Scripts\*.lua`（只认根部），
+**用户脚本**（0.1.0 起，运行时见 `crates/cloudime-script`）：脚本放安装目录 `Scripts\<脚本名>\`，
+每个文件夹一个脚本、根部正好一个入口 `.lua`，
 `RouterConfig::scripts_dir` 由 `main.rs` 的 `RouterConfig::from(&config).with_bundled_scripts()` 指过去
 （`RouterConfig::default()` 不带它 —— 测试不该去读开发机上真实的脚本目录）。`Router::new` 里 `Runtime::load`
 加载，之后每次按键在 `handle_key` **最前面**派 `key`（脚本看到的是这一键**处理之前**的状态），
@@ -864,6 +1126,10 @@ Server 只按自己的语义处理 —— 谁先定义谁优先，脚本抢不�
 `time_range`（`{ from = "20:00", to = "06:00" }`，本地时间、左闭右开、跨夜也行，**每个时间段窗口每个脚本只触发一次**）、
 `candidate_context`（`candidate_pinyin`，比较前去掉 `'` / 空白并转小写）、
 `focus_app`（`apps` 必填）、`manual`（i 模式选中脚本时运行，事件只派给选中的那一个脚本）。
+`show_in_i_mode`（可选，缺省 false）只对手动触发脚本生效：`manual` 恒进 i 模式；带修饰键的
+`combination_key` 看它；`time_range` / `candidate_context` / `focus_app` / 单键组合是**自动触发**，
+写了也忽略并 `warn!`。i 模式运行组合键脚本时按清单第一个 key + 修饰键合成 `key` 事件（`highlight` 为空），
+交给原来的键处理函数。
 `runtime.rs::parse_manifest` 解析（键名见 `parse_key_name`：`KEY_NAMES` 里的功能键 + 单个字母 / 数字 / 标点），
 `Manifest::accepts(event, key, pinyin)` 过滤：`startup` / `window` 谁都收；`key` 要 `(虚拟键码, 修饰键位图)`
 与清单**精确**对上（组句里 Server 会把所有按键派出去，运行时只转对得上的）；`candidates` 要规范化后的
@@ -913,7 +1179,7 @@ Chromium 把「物理键还按着时注入的同名键」当自动重复，宿�
 **启动可执行文件**不用接：完整标准库的 `os.execute('start notepad.exe')` 已经能做。
 
 改脚本要重启 Server 才生效（托盘右键「重启输入法服务」），没有热重载。
-本地整句模型：`dispatch/rescore/` 按 `[candidate] use_local_sentence_organization_model` 在后台线程加载预热、停键后重排，见 `docs/design/architecture.md`「本地整句模型」。
+本地模型：`dispatch/rescore/` 按 `[candidate] local_model` 在后台线程加载预热、停键后重排；`basic` 接含章·知微 `SentenceScorer`，`enhanced` 接知意 `ChoiceModel`（候选页重排 + 按音节出字），`hybrid` 两份都接：≤8 音节只走知意，≥9 音节含章先重排整句路径、知意再出字和重排候选（`Engine::set_sentence_scorer_min_syllables`）；两个后台线程可能先后回来，`Engine::rescoring_in_flight` 让 Server 轮询到两边都收完再重画，见 `docs/design/architecture.md`「本地模型」。
 热加载的 `WordBank\` 目录与启动同款（按 `WordBank\Dict.db` 与附加词库的 mtime / 长度快照重装）；
 短语库（安装目录 `Phrases\Phrase.db`）也按文件 mtime 单独热重读；`[phrase] use_default_phrases` 变了也重读一遍。不合成一个 crate，因为 DLL 不能带 Engine 的依赖树，见 `apps/windows/README.md`；
 协议类型在 `cloudime-platform::protocol`，设计见 `docs/design/architecture.md`「Windows：TSF」。
@@ -962,7 +1228,7 @@ Chromium 把「物理键还按着时注入的同名键」当自动重复，宿�
 `service/mode.rs::switch_mode` 一处拦住（内置英文模式下发为关时才拦英文，协议值现在恒开）；状态条点击在 Server 侧（`dispatch/status/mod.rs`）走同一条路，
 「输入」页在 `settings/src/panel/pages/input.rs`，
 对应 `[input]` 那九项（最前面是「输入方案」下拉 `ComboBox`（**全键拼音**（缺省；界面名，配置值仍是 `full_pinyin`）/ 双键拼音 / 形码输入，落 `input_schemes`；形码输入还没实现）；选中的方案会在下拉**紧跟后面**生成它自己的那块面板（`scheme_body`：粗体标题 + 若干行，套 `scheme_card` 的卡片外观 —— `Border` 的卡片底色 / 圆角 / 1 DIP 边框 / 内边距；没实现的方案用 `scheme_placeholder` 占位）—— 使用简拼、模糊音、中英文混合输入就放在「全键拼音」那一块里，双键拼音那块是方案下拉 + 「显示原始输入按键」开关（`show_raw_input`，配置项）+ 「中英文混合输入」开关（`set_scheme_mixture_input` 写 `use_input_scheme.cfg` 的 `mixture_input`，`[input] mixture_input` 那份只管全键拼音）+ 「使用辅助码」开关（`set_auxiliary_codes` 改写方案文件的 `[Auxiliary] UsingAuxiliaryCodes`）+「辅助码方案」下拉 + 「在候选项显示辅助码」开关（`set_candidate_auxiliary` 写 `candidate_auxiliary`，开了辅助码且表读得出来时才可点）（`pick_auxiliary_scheme` 写 `use_input_scheme.cfg` 的 `auxiliary` 行；第 0 项是「（不使用）」，选了就写文件名）**紧挨着右边再加一个下拉**选「辅助码怎么对」（`AuxiliaryMode` 四种，`panel::pick_auxiliary_mode` 写 `auxiliary_mode` 行；两个下拉都在「使用辅助码」开着、且表读得出来时可点）+「启用键位映射参考」下拉（`set_key_map_reference` 写 `key_map_reference`：关闭 / 按下组合键时 / 始终跟随候选窗口）+「键位映射参考组合键」两个下拉夹一个 `+` 的 `TextBlock`（`set_key_map_hotkey` 写 `key_map_hotkey`，`ctrl+f1` 这样；下面那行注说明组合键可能被系统 / 应用占用）+ `[刷新方案] [应用方案] [打开方案目录]`（`apply_dual_key_scheme` 写 `input_schemes` 并 `crate::server::restart`，让方案 `WordBank` 的词库重新装配；无效方案红字列原因），别的方案下**压根不生成**，所以不用 `is_enabled` 置灰（早先那版置灰的写法已删）；框架**没导出 `Visibility`**（整个 crate 搜 `visibility` 一处都没有，也没有 `Popup` / `Flyout` 元素、没有「拿到底层 XAML 对象」的公开口子；`LayoutControl` 只给 `opacity` / 对齐 / `margin` / `exit_transition`，`CanvasChildExt` 给 `canvas_left` / `canvas_top`），所以「隐藏」就是不把它放进 children（`controls::feedback` 同一条路）。面板会改变子项个数，而 `children` 是**按位置认身份**的，插进来会让后面每一项换身份被重建（丢焦点 / 选中态）—— 所以这一页改用 `keyed_children` 并给每项一个 key。模糊音、符号映射、符号成对补全三组勾选都用 `ListView`，每项是一份 `ListViewItem`、内容就是一个自带文本的 `CheckBox`（`CheckBox` 是 `ContentControl`，文本直接 `.content(label)`，不用再套 `TextBlock`）；列表共用 `controls::scroll_list`——`selection_mode(None)` 不要选中高亮，`max_height` 卡在 5 行（`LIST_ROW_HEIGHT × LIST_VISIBLE_ROWS`），超出的组（符号成对补全 10 项）由列表自己出滚动条；简繁单选与候选页的排布单选走 `controls::radio_row`——**独立 `RadioButton`** 横排（同一个 `group_name` 互斥），**不用框架的 `RadioButtons` 容器**：容器一行内容的「期望高度」比实际渲染矮（渲染 32、期望 25），渲染出来的选项比自己盒子低 3.5px，左边的标签按盒子居中后看着总差一点，从外面（`min_height` / 套一层面板）也调不动；独立控件和开关 / 下拉一样是单控件，居中对得上；标点全半角下拉等）；标签与控件默认**垂直居中**（`controls::labeled`，标签不设对齐会被拉伸到整行高、文字却画在自己顶部，40 高的开关行里就偏上约 10px）；一行很高的控件（`ListView`、单选）改用 `controls::labeled_top` / `field_top`，标签顶对齐、与第一行内容对齐；「候选」页在 `pages/candidates.rs`，
-对应 `[candidate]`（本地整句模型开关、排布单选、个数滑轨（右侧跟一个当前值数字）、联想候选项目上限滑轨 0–4、四个「字体…」按钮弹系统字体对话框 `font_dialog.rs`、
+对应 `[candidate]`（本地模型下拉四档：关闭 / 基本（含章）/ 增强（知意）/ 混合（含章+知意），写 `local_model` 并同步旧布尔键、排布单选、个数滑轨（右侧跟一个当前值数字）、联想候选项目上限滑轨 0–4、四个「字体…」按钮弹系统字体对话框 `font_dialog.rs`、
 符号补充字体 / 日文补充字体两个按钮只取 `pick_family` 的字族名（落 `symbol_font` / `japanese_font`）、序号样式下拉、最小宽度、展示更多候选项（`ToggleSwitch`：**非全键拼音方案下置灰**，`is_enabled(false)` —— 它下面的「使用鼠标选词」下拉（`mode_combo` 返回的是 `ComboBox`，能直接接 `.is_enabled()`）与「展开后每个候选项的最大宽度」（`NumberBox`）跟着一起置灰；它的 U / I / V 三种模式也只在「全键拼音」下有效，写在说明里）、按程序隐藏的名单（下面每行一个 2 列 `Grid`——`Star` 列放程序名、「删除」按钮放第二列，外壳用 `controls::scroll_list` 卡 5 行，多了自己滚动））；「短语」页在 `pages/phrase.rs`（顶部「启用软件自带短语」开关；列表每行是一个 5 列 `Grid`——短语内容（`Star` 列，`Wrap` + `max_lines(3)` + 省略号）/ 候选内容 / 触发字母串 / 位置 / 编辑·删除两个按钮，列宽全部钉死（含操作列，否则表头那行没有按钮、`Star` 列会多占一截导致表头与数据行错位）；表单 + 列表读写安装目录 `Phrases\Phrase.db` 的 `user` 表）；
 「主题」页在 `pages/theme/`：`mod.rs` 是页面（`Slot` 是那 21 个颜色槽，`ALL` / `label()` / `get()` / `set()`，顺序与页面一致；高亮 / 普通候选序号各一项；「新建主题」按钮 + 名字 `TextBox` + 「确认保存」按钮、「选择主题」`ComboBox` + 「刷新主题」/「应用主题」两个按钮、21 行「名称 + 可点的 `#aarrggbb`」，末尾挂 `color_dialog::ColorDialog`）；
 `preview.rs` 是页顶那块预览，**走真渲染器**：按草稿 + 配置里的四项字体拼一份 `cloudime_render::Theme`（`min_width_pixels` 固定 200），拼一帧样例（拼音行、两条候选、角标「句」/「造」、页码、译文 Tip、在线那一行），用 `Renderer::render` 画候选窗、`render_status` 画悬浮工具栏（7 个图标）与状态切换提示（前 4 个），三份各自带主题阴影色的 `Shadow`；
@@ -971,9 +1237,9 @@ Chromium 把「物理键还按着时注入的同名键」当自动重复，宿�
 「导入主题」挑 `.json` → 先 `ThemeFile::load` 验一遍 → `save` 进用户目录 → `refresh_theme_names()` + `select_theme()`（自动刷新列表，但不自动应用）；「导出当前主题」把草稿 `save` 到用户挑的位置。
 两行控件的首列固定 120（`PICKER_LABEL_WIDTH`，WinUI 的 `Button` 最小宽度本来就是 120），让「选择主题」的下拉与上面一行的名字框左边对齐。
 状态在 `panel/mod.rs`（`theme_names` / `theme_selected` / `theme_draft` / `theme_new_name` / `theme_status` / `color_dialog` / `color_slot`），消息 `Theme*` 在 `message.rs`，处理在 `component.rs`：**改色只动草稿** —— 点颜色（`ThemeColorOpen(slot)`）开对话框，`ColorDialog`「确定」后 `slot.set(&mut theme_draft, ..)`，预览与那一行跟着变。「确认保存」只 `ThemeFile::save` 到 `%APPDATA%\CloudIME\Themes\<名字>.json`（**存下来但不换**）；「应用主题」才把选中的名字写进 `[theme] curr_theme`（同值也写）并**立刻重启输入法服务**（`crate::server::restart`，与托盘右键 / 脚本页那条同一条路）—— 重启才盖得过脚本临时换过的主题（没选中就提示先选一份，也不走保留名校验）。「新建主题」从内置的 `Themes\Default.json` 复制（`find_theme` 找不到就 `ThemeFile::default()`）；名字由纯函数 `theme_stem` 定（名字框空则沿用当前选中的那份；与随包两份内置主题 `Default` / `Panic` 同名的一律拒 —— 大小写不敏感，带 `.json` 后缀也认）。「刷新主题」重扫 `list_themes`。
-「脚本」页在 `pages/scripts.rs`：顶部一行加粗红字的声明、三列 `Grid` 列表（文件名 / 介绍 / 启用开关 + 「删除此脚本」「编辑此脚本」）、「新建脚本」按钮；列宽与单元格抽成通用的 `controls::grid_row` / `controls::text_cell`（上面短语页那个 5 列 `Grid` 也改用它俩）；表格整体另有 `controls::table`（外面一圈 1 DIP `ThemeBrush::CardStroke` 边框 + 6 DIP 圆角 + 12 DIP 内边距）与 `controls::header_row`（表头那行整行铺 `CardBackground`）——
+「脚本」页在 `pages/scripts.rs`：顶部一行加粗红字的声明、三列 `Grid` 列表（脚本名称 / 介绍 / 启用开关 + 「删除此脚本」「编辑此脚本」），下面一行「在线获取脚本」「打开脚本目录」「重启输入法服务」；列宽与单元格抽成通用的 `controls::grid_row` / `controls::text_cell`（上面短语页那个 5 列 `Grid` 也改用它俩）；表格整体另有 `controls::table`（外面一圈 1 DIP `ThemeBrush::CardStroke` 边框 + 6 DIP 圆角 + 12 DIP 内边距）与 `controls::header_row`（表头那行整行铺 `CardBackground`）——
 **`windows-reactor 0.100` 的 `Grid` 没有 `border_brush` / `border_thickness`**（只有 `rows` / `columns` / `row_spacing` / `column_spacing` / `background` / `children`；整个框架里带 `border_brush` 的只有 `Border` 与 `TextBox`），所以「表格的边」是外面套的那层 `Border`；
-行与行之间那条线由 `grid_row` 自己在 `Grid` 下面压一个 1 DIP 的 `Border`（`background(CardStroke)` + `opacity(0.5)` + `height(1.0)`）画出来。表头那行的底色**不带内边距**（`header_row` 只包一层），表头与数据行才都从 `table` 那 12 DIP 内边距起算、列不会错开；操作列宽 300 DIP，开关与两个按钮都放开最小宽度（`min_width(0)`，WinUI 的 `Button` 默认最小宽度是 120）、开关用 `ToggleSwitchSlot::OnContent` / `OffContent` 置空自带的「开 / 关」文字 —— 否则三个控件按默认宽度加起来顶出列外，最后那个按钮会被右边缘切掉一截。脚本目录 = 安装目录 `Scripts\`（与 `cloudime-script` 的 `DIRECTORY`、Server 读的同一处），列表跳过 `template.lua`；第二列的介绍是从文件里**文本扫**出来的（`describe_in` 认 `description = "…"` / `'…'`、跳过 `--` 注释）——设置程序里不执行脚本，Lua 运行时只在 Server；开关写 `[script] disabled`（`Config::set_array`，缺分节会补出来），删除先用 `rfd` 确认、再顺手把它从名单里摘掉；「新建脚本」在 `Scripts\` 取不重名的文件名（`script.lua` → `script-2.lua`…）、写入 `include_str!` 编进 exe 的 `Scripts\template.lua`，随后 `panel/notepad.rs` 用记事本打开并把模板 `WM_SETTEXT` 塞进它的 `Edit` 子控件（`EnumWindows` 先按我们刚起的进程号认主窗口、机器上本来开着别的记事本时才按类名 `Notepad` 兜底；等窗口与填字都在后台线程轮询，上限 4 秒，不卡界面）。这一页的改动（含开关）都要重启 Server 才生效 —— 「新建脚本」右边那个「重启输入法服务」按钮走 `crate::server::restart()`：连 `\\.\pipe\cloudime` 发一条 `ClientMessage::Indicator { RestartServer }`（设置程序不常驻连接，开一次用完即走），与托盘那条路完全一样（这条消息 Server 不回包，所以发完不等；连不上就把原因写在页面状态里）。
+行与行之间那条线由 `grid_row` 自己在 `Grid` 下面压一个 1 DIP 的 `Border`（`background(CardStroke)` + `opacity(0.5)` + `height(1.0)`）画出来。表头那行的底色**不带内边距**（`header_row` 只包一层），表头与数据行才都从 `table` 那 12 DIP 内边距起算、列不会错开；操作列宽 300 DIP，开关与两个按钮都放开最小宽度（`min_width(0)`，WinUI 的 `Button` 默认最小宽度是 120）、开关用 `ToggleSwitchSlot::OnContent` / `OffContent` 置空自带的「开 / 关」文字 —— 否则三个控件按默认宽度加起来顶出列外，最后那个按钮会被右边缘切掉一截。脚本目录 = 安装目录 `Scripts\`（与 `cloudime-script` 的 `DIRECTORY`、Server 读的同一处），列表按一级脚本文件夹列出、只显示根部正好一个 `.lua` 的文件夹（0 个的不显示，多个的标红说明），跳过 `template.lua`；第一列的名称与第二列的介绍都是从入口文件里**文本扫**出来的（`field_in` 认 `name = "…"` / `description = "…"` / `'…'`、跳过 `--` 注释）——设置程序里不执行脚本，Lua 运行时只在 Server；开关写 `[script] disabled`（文件夹名，`Config::set_array`，缺分节会补出来），删除先用 `rfd` 确认、再删整个文件夹并把它从名单里摘掉；「打开脚本目录」用 `open_with_explorer` 打开安装目录的 `Scripts\`（不存在先建）。这一页的改动（含开关）都要重启 Server 才生效 —— 「在线获取脚本」同一行的「重启输入法服务」按钮走 `crate::server::restart()`：连 `\\.\pipe\cloudime` 发一条 `ClientMessage::Indicator { RestartServer }`（设置程序不常驻连接，开一次用完即走），与托盘那条路完全一样（这条消息 Server 不回包，所以发完不等；连不上就把原因写在页面状态里）。
 「调试」页在 `pages/debugging.rs`：**原「统计」页整页搬来的输入统计面板**（末尾是「数据与组件」说明）与紧随其后的 `[debugging]` 自动隐藏开关、
 原来「高级」页的数据 / 日志入口（打开数据目录 / 打开日志目录 / 打包日志到桌面 / 清空输入日志四个按钮一行）与项目 GitHub 页面 / 帮助手册两个按钮一行、详细日志、学习输入习惯、记录输入日志。
 「帮助手册」（`Message::OpenTutorial`）用系统默认程序打开随包的 `tutorial.md`（`component.rs::tutorial_path` = `bundled_root()/tutorial.md`，走 `controls::open_document`；
@@ -1027,7 +1293,9 @@ Server `dispatch/key/input.rs::ctrl_digit` 按键码认数字（按住 Ctrl 时 
 删字走 `Collapse(TF_ANCHOR_START)` + `ShiftStart(-count)`——这正是 `surrounding.rs` 往左读前文的写法，
 判据用 `ShiftStart` 回报的 `pchSkipped`（**不要**用 `IsEmpty`：它在部分宿主上会直接失败，把已经挪动的
 范围误判成没挪动，真机踩过），并且要用 `GetSelection` 给的**原始范围**、不能先 `Clone`（真机上 `Clone` 出来的
-范围 `ShiftStart` 报告「挪了 0」，怎么都不动），拉不开再按 `ITfRangeACP` 的位置圈；成对补全要停在两符号中间，改**注入方向键**
+范围 `ShiftStart` 报告「挪了 0」，怎么都不动），拉不开再按 `ITfRangeACP` 的位置圈；范围两条路都失败时补发一个退格键，
+这时**替换文本也必须用 `SendInput` 的 Unicode 输入跟在退格后面**（`inject_text`）—— 不能在同一个编辑会话里先用 TSF 插新符号：
+应用按顺序先处理退格，会删掉刚插的新符号，原来的旧标点反而留着（智能符号真机踩过）。成对补全要停在两符号中间，改**注入方向键**
 （`SendInput` 左 / 右，在编辑会话里发、会话返回后应用才处理，那时文本已落好），因为部分宿主会覆盖 TSF 的
 `SetSelection`（真机上光标一直停在末尾，而同一应用对方向键的响应是好的）；`SendInput` 被拒（AppContainer / UIPI）
 才退回 TSF 位移。两条路失败都只记日志，不把这一键的上屏带崩。
@@ -1069,7 +1337,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 **两个模板**（都是从 `general_window` 那一个拆出来的；模板只给「某一类窗口」共用，本身不是窗口）：
 
 - **独立窗口模板**（`crates/cloud-ui/src/independent_window_template/`，`IndependentWindowTemplate`）：注册窗口类 + 建一块
-  **分层、置顶、不抢焦点**的弹出窗（`WS_EX_LAYERED | TOOLWINDOW | TOPMOST | NOACTIVATE`，纯展示的再加 `TRANSPARENT`），
+  **分层、不抢焦点**的弹出窗（`WS_EX_LAYERED | TOOLWINDOW | NOACTIVATE`，纯展示的再加 `TRANSPARENT`），
+  置顶缺省关，建好后 `set_top_most(true)` 才进 topmost band（`SetWindowPos(HWND_TOPMOST)`，撤销用 `HWND_NOTOPMOST`）；
   并且**管名下的资产**（`Assets`）：宿主建好自己那块窗之后 `assets_mut().add(...)`，`Drop` 里**先** `assets.retire()`
   **再** `DestroyWindow` 自己 —— 资产的寿命就落在这段区间里。候选窗口、悬浮工具栏、状态切换提示都用它建窗，
   各自只留窗口过程与业务状态。**焦点**（`focused()`）也在这层：焦点缺省在自己身上，被指定给名下的资产后
@@ -1086,6 +1355,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   由 `set_spec` 设；没设过时：键位映射参考按版面自己定尺寸（高度按 `key_map_height`：竖排取宿主现在的内容高度、
   横排取「装 9 个候选项」那档，两者都不低于 316 物理像素），文档内容按 `Document` 自己的尺寸，空面板才按宿主形状算默认；
   `set_shadow` 开关阴影，`show` 按「位置 / 尺寸 / 版面版本 / 渲染器代号」判重，没变就不重贴。
+  置顶同样缺省关（`set_top_most` 显式开），脚本窗口建好后会自己开；
   **焦点**：`new(painter, able_to_get_focus)`、`set_focused` 开关鼠标穿透（`WS_EX_TRANSPARENT`，命中测试读同一个位），
   没声明过的不接输入（记一条日志）。**鼠标**：`set_events` 装一个出口（脚本辅助窗口用），窗口过程把
   `WM_MOUSEMOVE` / `WM_MOUSELEAVE` / 左右键抬起变成 `PanelEvent`（内容区点坐标 + 1 起的命中元素；悬停只在换元素时派）；
@@ -1133,7 +1403,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   得脚本 `aux:focus(true)` 走所有者指定。**窗口外观归脚本**：`create{ background = false }` 让
   `Renderer::render_document` 跳过面板底色 / 圆角的填充（`panel_canvas` 的 `background` 参数），
   内容区保持透明，脚本用一整块圆角 `rect` 等元素自己画背景；阴影按 `shadow` 走同一套通用阴影层
-  （也可以再关掉，连阴影都不画）。随包的 `Scripts/test-caret-window.lua` 就是这么画的
+  （也可以再关掉，连阴影都不画）。随包的 `Scripts/test-caret-window/test-caret-window.lua` 就是这么画的
   （`background = false` / `shadow = false`，关闭按钮的悬停换色也全在 Lua 里），
   对应的行为测试在 `crates/cloudime-script/tests/caret_window_script.rs`，`runtime.rs` 只留宿主 API。
 - **区域**（`region`，2026-10-17）：窗口内容里可以被鼠标**点击 / 拖拽**的范围，数据在
@@ -1157,8 +1427,8 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   插入点所在显示器 DPI 把像素换成**点**、连同工作区派 `caret` 事件（`dispatch/script.rs::caret_payload`）。
   这样脚本窗口的 `show{ x, y }` 与载荷同一单位，不用自己乘 DPI。`Runtime::load` 从脚本目录上一级
   取安装目录，Server 再用 `bundled_root()` 校正；`cloudime.install_dir()` / `install_path()` 给绝对路径，
-  `shared_path` / `layout_path` / `dll_path` 分别锁在 `Scripts\shared` / `Scripts\layouts` / `Scripts\dlls`，
-  `saved_path` 在 `Scripts\saved` 下自动建子目录（只收相对路径），
+  `shared_path` / `layout_path` / `dll_path` 分别锁在**当前脚本文件夹**的 `shared` / `layouts` / `dlls`，
+  `saved_path` 在该脚本的 `saved` 下自动建子目录（只收相对路径），
   `canonicalize` 后必须仍在安装目录内。`svg` 元素新增 `path`（读文件文本，最多 2 MB），配合
   `install_path` 就能直接画随包的 `Images\SVG\*.svg`，不用把 SVG 抄进 Lua。
 - **主题颜色**（2026-10-17）：`Runtime::set_theme_hook` 由 Server 装（`Router::new`），
@@ -1213,8 +1483,9 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 - **单行编辑框**（`text_edit`，2026-10-18）：`control::TextEdit` 负责背景胶囊 / 边框（缺省颜色
   `#FFC8C8C8`、1 物理像素且不随缩放；显式 `edge_width` 仍按点缩放）、可选 SVG（按背景高度缩放、`SvgAlign` 左右）和文本区几何
   （无 SVG：`w-h` 居中；有 SVG：`w-h-svg宽度-4`；高度向内缩 1 点边框）。实际的编辑控件是
-  **windowless RichEdit**（`crates/cloud-ui/src/script_window/text_host.rs`）：每块 `text_edit` 建一个普通顶层宿主窗
-  （owner = 脚本窗，`WS_EX_TOOLWINDOW | WS_EX_TOPMOST`），从 `Msftedit.dll` 取 `CreateTextServices`，
+  **windowless RichEdit**（`crates/cloud-ui/src/text_edit/mod.rs`）：每块 `text_edit` 建一个普通顶层宿主窗
+  （owner = 脚本窗 / 独立应用窗口；`WS_EX_TOOLWINDOW` 必有，`WS_EX_TOPMOST` 由 `create(.., top_most, ..)`
+  决定 —— 脚本窗传 `true`，独立应用跟随 `WindowOptions::top_most`），从 `Msftedit.dll` 取 `CreateTextServices`，
   用 `IID_ITextServices` 做 `QueryInterface` 拿 `ITextServices`，再把自己的 `ITextHost` 实现接上去；
   绘制由宿主窗 `WM_PAINT` 不调 `TxDraw`；键盘 / 鼠标 / IME 消息原样转给 `TxSendMessage`，文字和选区由宿主用 GDI 自绘。
   `TxGetExtent` 必须返回 **HIMETRIC**（`像素 * 2540 / dpi`），返回像素会导致 RichEdit 布局成零宽、
@@ -1229,6 +1500,9 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   先 `rebuild_text_edits` + `sync_text_edits`，再贴主窗口）；反过来会出现标签已到新位置、编辑框文字
   还停在上一帧。窗口按 8 行一块更新，块内只移动宿主位置，不换文本；换窗时名字匹配不到则按路径
   槽位复用未聚焦的宿主，避免整窗销毁重建造成闪烁。
+  同一个宿主也被 `app` 的独立窗口复用：`AppWindow::sync_text_edits` 按 `Document::text_edits()`
+  摆放，宿主颜色 / 字体取元素字段（缺省回落 `Painter` 主题）；主题切换导致颜色变化时按
+  `EditColors` 重建宿主。宿主颜色不再固定 topmost，`raise()` 按 `top_most` 选 `HWND_TOPMOST` / `HWND_TOP`。
   单行 / 多行编辑框的宿主都加 `WS_EX_LAYERED`，用它的背景色做 `LWA_COLORKEY` 色键，这样列表行背景
   和控件自己的半透明 `fill` 能从宿主空白处透出来；文字和选区仍由 RichEdit 正常绘制。多行
   `text_box` 的 `scrollbar` 仍由主画布绘制，不在 RichEdit 宿主里。
@@ -1245,7 +1519,9 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `focus_text_edit` 在点到胶囊边距时把焦点交给宿主。
   `TextEdit` 仍是可交互元素（返回命中框），自动区域和按钮一样在解析时加进 `Document.regions`。
   **嵌套 / 滚动 / 读写**（2026-10-18）：`Document::text_edits()` 递归累加面板偏移，因此
-  `panel.children` 里的 `text_edit` 也建宿主；嵌套控件补同名区域，`focus_text_edit` 先按区域名找宿主。
+  `panel.children` 里的 `text_edit` 也建宿主；`clip = true` 的裁剪面板会把面板矩形并进
+  placement 的 `clip`（`collect_text_edits` / `collect_text_boxes`），宿主只显示交集。
+  嵌套控件补同名区域，`focus_text_edit` 先按区域名找宿主。
   单行文本超过编辑区时 `scroll_x` 跟随光标，绘制 / 选区 / 插入符共用它；鼠标坐标在转发给 RichEdit
   前补上 `scroll_x`，所以点击位置和显示一致。单行插入符由宿主自绘并靠窗口计时器闪烁：`SetTimer`
   必须传非零的 `CARET_TIMER_ID`；传 0 时返回值与 `WM_TIMER.wParam` 可能对不上，插入符会一直显示。
@@ -1296,7 +1572,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   缓存上次边界和显隐，脚本窗口每帧重画时不再对所有宿主重复 `SetWindowPos` / `ShowWindow`。
   宿主位置 / 显隐刚变化时仍要 `InvalidateRect` + `UpdateWindow` 同步补一帧；每次同步再把可见宿主
   重新提到 topmost 顶部，避免主窗口浮上来盖住编辑框文字。
-- **TSF 桥**（`crates/cloud-ui/src/script_window/text_store.rs` / `tsf.rs`，2026-10-18）：windowless RichEdit 自己只提供
+- **TSF 桥**（`crates/cloud-ui/src/text_edit/text_store.rs` / `tsf.rs`，2026-10-18）：windowless RichEdit 自己只提供
   IMM32 的 `ITextHost::TxImmGetContext`，不直接参与 TSF；要让 CloudIME 的中文输入作用到它，必须补
   客户端文本存储。`text_store.rs` 实现 `ITextStoreACP`，把 `GetText` / `SetText` / 选区 / 插入 /
   `GetTextExt` 桥到 RichEdit 的 `TxSendMessage(WM_GETTEXT / EM_GETSEL / EM_SETSEL / EM_REPLACESEL /
@@ -1319,12 +1595,15 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   `TxGetPropertyBits` 返回 `TXTBIT_RICHTEXT | TXTBIT_SAVESELECTION`，RichEdit 只负责编辑模型、
   选区和 TSF，不再负责文字 / 插入符绘制。鼠标悬停的 `WM_MOUSEMOVE` 不转给 RichEdit，也不主动
   失效；只有按住左键拖选或键输入时才强制重绘，避免文字随鼠标移动高频闪烁。
+  拖选时单独记鼠标锚点（`drag_anchor`）：反向拖选按**光标端**（而不是 `EM_GETSEL` 的正序
+  右端）横向滚动；按住左键拖到编辑框左右边缘时，20 ms 定时器自动横向滚动并重送鼠标位置，
+  长文本往左拖也能继续扩选。计时器 ID 用 `SetTimer` 的返回值（不能假定等于请求的 ID）。
 - **JSON 布局文件**（`cloudime-script/src/layout_file.rs`，2026-10-18）：`win:load_layout(path)` 与
   `create{ layout = path }` 读 JSON 后**先转成 Lua 内容表**，再交给 `window.rs::parse_document`；
   不复制元素解析逻辑，JSON 与 Lua 的字段 / 缺省值因此始终一致。支持顶层 `width` / `height` /
   `controls`（或 `elements`）/ `regions`，根也可以直接是控件数组；`null` 转成 Lua `nil`，
   数组转 1 起序列。单文件上限 4 MB；`svg_path` / `img.path` 先按布局文件目录、再逐级向上找，
-  因此 `Scripts/layouts` 里的布局能引用安装根目录的 `Images/...`。
+  因此 `Scripts/<脚本>/layouts` 里的布局能引用安装根目录的 `Images/...`。
   **每个控件必须有 `name`**（英文字母开头、只含字母 / 数字 / 下划线、最长 255、布局内大小写敏感
   唯一、不能是 Rust 关键字）；名字收集进 `Document.control_names`，窗口事件载荷新增 `control`
   （`ScriptWindowEvent.control`），独立窗口和辅助窗口都按命中根元素查它。
@@ -1364,10 +1643,15 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
   也得所有者**指定**才拿得到；**资产克隆 / 窃取**（§5.1 / §5.2）来的就是这条路：特性跟原件一样（克隆件 /
   窃取件自带自己的 `able_to_get_focus`），焦点还留在所有者或姊妹资产身上。两边差别在原件：窃取时原件
   被销毁、它那一组销毁前按「生命周期末」自动归还焦点；克隆则原件与它那一组**一点不动**。
+  **模态资产禁止克隆 / 窃取**：来源侧 `Assets::ensure_cloneable` 先查模态，命中直接 panic（不是返回失败），
+  之后才看 `Asset::as_clonable`；`clone_asset` 原件不动，`steal_asset` 克隆成功后才 `retire_named` 原件。
 - **渲染**（`docs/design/windows.md` §6）：元素各是一条 trait（`cloudime-render`）—— `elements` 里六条
   （`TextElement` / `SvgElement` / `ImageElement` / `LineElement` / `RectElement` / `PathElement`），实现是
   `Render`（离屏位图 + 共享字形管线，`measure` 也走它）。（曾经还有一份 GDI + GDI+ 的 `Paint`，2026-10-17 试完删了；
   那版在 git 历史里。）
+  **内容裁剪**：`Canvas::set_clip` 把内容区（不含阴影留白）设成裁剪矩形；`fill_rect` / `fill_path` /
+  `stroke_path` / 图像走 tiny-skia `Mask`，字形 / 位图混合走逐像素边界，所以超出窗口内容区的文字、路径、
+  SVG、图像都不会显示；阴影和背景在设裁剪之前画，不受影响。
   **两处缓存**（2026-10-17）：① **阴影层缓存** —— 阴影只跟尺寸 / 圆角 / 模糊 / 偏移 / 颜色 / 缩放有关，跟内容无关，
   `Renderer` 按这个 key 留最多 4 份已经算好的 `Pixmap`（候选窗 / 键位映射 / 状态条 / 提示各一份），命中就整块
   `copy_from_slice`（`Render::blit`，目标这时还是空的）；没缓存时每帧要 3 遍盒式模糊 + 整画布混合，200% 缩放下
@@ -1420,7 +1704,8 @@ u 模式复用同一件资产，但走 `CandidateSink::set_symbol_aux(Option<Key
 
 **i 模式**（`server/src/dispatch/i_mode/`）：全拼空组句按 `i`、或 `Ctrl+Alt+I` 进（双拼的 `i` 是声母，只走
 `Ctrl+Alt+I`）；`set_i_mode` 统一切换 `Router::i_mode`，双拼 / 形码进入时把键位映射参考设为 `Off`、退出时恢复配置；全拼没有这套映射参考，不碰它。
-`recompose_i_mode` 在缓冲区只有 `i` 时只用 `Runtime::script_infos()` 里 `manual = true`（清单 `trigger_condition = "manual"`）的脚本，按脚本文件名顺序生成候选（`text = 文件名`、
+`recompose_i_mode` 在缓冲区只有 `i` 时只用 `Runtime::script_infos()` 里 `i_mode = true` 的脚本
+（`manual` 恒真；带修饰键的组合键脚本看清单 `show_in_i_mode`；自动触发脚本恒假），按脚本文件夹名顺序生成候选（`text = 文件夹名`、
 `display = 清单 name`，`CandidateKind::Shortcut`，候选角标在 `candidate_badges` 里特判成空），超过一个字母且开了
 中英混输时改调 `Engine::query_english_words()` 只出英文词。按键在 `i_mode_key`：空格运行高亮脚本、Enter
 `take_raw()` 上屏 `i`、Esc 清组句，数字按页内下标直接运行；`Ctrl+数字` 把 `description` 写进候选窗的 `online`
@@ -1506,10 +1791,10 @@ TSF 那边 `key_sink::would_eat` / `eats_key` 在**组句里**（候选窗显示
 只有脚本声明过的那几套修饰键（`combination_key` 的 `combination_modifiers`，DLL 的 `wants_script_key`）与那几个具体的键本身
 （`combination_key` 的 `keys`；DLL 的 `wants_declared_key` 只认**不带修饰键时**按下的那些）才先问一趟
 （见「用户脚本」一节的触发条件）。`Alt` / `Win` 不碰
-（AltGr = Ctrl+Alt、Win 是系统键，都在外壳那一层）。
+（AltGr = Ctrl+Alt、Win 是系统键，都在外壳那一层）；右 Alt 例外，全拼 / 双拼的中文状态被特殊输入模式占用，形码等方案仍归应用。
 小牛翻译的两份实际脚本（候选版 / 独立窗口版）与其 `md5.lua` 已迁到脚本仓库
 `https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse` 的 `src\` 下；安装包只装
-`Scripts\template.lua`，源码仓库 `Scripts\shared` 里的示例与共享工具都不随包。脚本拿到译文后会按
+`Scripts\template.lua`，源码仓库 `Scripts\examples` 里的示例都不随包。脚本拿到译文后会按
 `cloudime.candidate.width()`（候选窗内容区宽度，点）折行（最多 5 行、超出的补「…」），
 不再改窗口宽度 —— 窗口宽度只由候选决定。
 

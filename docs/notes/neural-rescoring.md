@@ -78,9 +78,9 @@
 2. **Core 异步重排**（`engine/rescoring/`）：一次查询里整句转换会跑好几遍（纠错变体、中英混输比分），所有路径文本进一张「前文 + 文本 → 神经分」缓存；
    同步打分器当场补分（评测每句 69 → 27 ms），异步的先记下缺分的文本，壳停键后 `request_rescoring` 一次送后台线程（几条攒一批），
    `poll_rescoring` 收到后再 `query` 一次就全在缓存里。CLI `--neural-async` 走同一条路，300 句上与同步结果逐句一致。
-3. **壳**：模型随包 `data\local_models\*.qjm`（字级小模型 fp16 约 56 MB，`dispatch/rescore::find_model` 用户目录优先、随包兜底，多份时挑词表含汉字的），后台线程加载 + 预热后接上；
+3. **壳**：模型随包 `Models\*.qjm`（字级小模型 fp16 约 56 MB，`dispatch/rescore::find_model` 用户目录优先、随包兜底，多份时挑词表含汉字的），后台线程加载 + 预热后接上；
    每键先读应用光标前 64 个 UTF-16 单元当前文（`tsf/src/com/edit/surrounding.rs`，应用给不出退回本会话历史），
-   停键 80 ms 请求、20 ms 轮询，结果到了只重画当前页，翻过页或动过高亮不打扰。`[candidate] use_local_sentence_organization_model` 开关在「候选」页。
+   停键 80 ms 请求、20 ms 轮询，结果到了只重画当前页，翻过页或动过高亮不打扰。`[candidate] local_model` 四档在「候选」页（含混合档：含章 + 知意同时加载）。
 
 ## 结论与下一步
 
