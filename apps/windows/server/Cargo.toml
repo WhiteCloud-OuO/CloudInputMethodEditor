@@ -1,7 +1,7 @@
 [package]
 name = "cloudime-windows-server"
 description = "Windows 输入法的 Server 进程：持有 Engine，跑在应用进程外，与 TSF DLL（../tsf）走 IPC 协议通信"
-version = "0.1.3-dev"
+version = "0.1.3-beta.1"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
@@ -20,10 +20,11 @@ cloudime-core.workspace = true
 cloudime-dictionary.workspace = true
 cloudime-learning.workspace = true
 cloudime-lm.workspace = true
-cloudime-neural.workspace = true
+cloudime-neural = { workspace = true, features = ["zhiyi"] }
 cloudime-platform.workspace = true
+cloudime-mcp-client.workspace = true
 cloudime-render.workspace = true
-cloud-ui.workspace = true
+cloud-ui = { workspace = true, features = ["script"] }
 cloudime-script.workspace = true
 cloudime-translate.workspace = true
 cloudime-update.workspace = true
@@ -68,4 +69,4 @@ windows = { version = "0.62.2", features = [
 windows-core = "0.62.2"
 
 [target."cfg(windows)".build-dependencies]
-winresource = "0.1.31"
+winresource.workspace = true

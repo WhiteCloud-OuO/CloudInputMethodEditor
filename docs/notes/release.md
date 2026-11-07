@@ -3,7 +3,7 @@
 2026-09-07 搭起来的：GitHub Actions 按标签打包、建 Release、生成官网下载页用的 `releases.json`。
 这里记怎么发一版、各环节的依赖，以及官网怎么消费产物。
 
-本仓库从青简 fork、版本号从头开始（`0.0.1` 是第一次发版）；当前 `version.txt` 与三个 Windows 壳都是 `0.1.3-dev`。
+本仓库从青简 fork、版本号从头开始（`0.0.1` 是第一次发版）；当前 `version.txt` 与三个 Windows 壳都是 `0.1.3-beta.1`。
 
 ## CI 与自动化
 
@@ -16,8 +16,8 @@
 
 ## 一次发版做什么
 
-1. 改版本号，把 `-dev` 去掉：根目录 `version.txt`（三个壳的版本号都从它来），再跑 `.\cargo-build.ps1 -OnlyVersion`
-   同步 `apps/windows/{server,tsf,settings}/Cargo.toml`（打包读 `server`，`version.txt` 与三个 `Cargo.toml` 一起提交，别只改一边），
+1. 改版本号，把 `-dev` 去掉：根目录 `version.txt`（三个壳的版本号都从它来；它在 `.gitignore` 里，只给本机脚本读、不进仓库），再跑 `.\cargo-build.ps1 -OnlyVersion`
+   同步 `apps/windows/{server,tsf,settings}/Cargo.toml`（打包读 `server`，**三个 `Cargo.toml` 与 `Cargo.lock` 一起提交**，别只改一边；本机 `version.txt` 跟着改到同一版本），
    然后 `cargo update --workspace --offline` 同步 `Cargo.lock`。
    **发版之间版本号一直带 `-dev`**（Rust nightly / Firefox Nightly 那套）：`version.txt` 写 `0.0.1-dev`，打包脚本再接上 git 短哈希，
    本地装的、CI 中间构建的都显示 `0.0.1-dev-1a2b3c4`（工作区有改动加 `+`），测试时一眼知道装的是哪个提交；版本号干净的一定是线上包；带 `-dev` 的标签 CI 直接拒绝。
@@ -91,7 +91,8 @@ cargo 命令全 `--locked`（含 `build.ps1`）。普通 CI 只有 `contents: re
   打包前检查 `lm.qj` 与 `*.qjm` 的魔数必须是 `CLOUDIME`（词库是 SQLite 存档，没有这个头，不查），还是改名前的 `QINGJIAN` 就拒绝（报错里给出下面 `rehead` 的完整命令）。
 - `tools/release/data-fetch.sh`：按 `data.lock` 下载（有 gh 用 gh，没有就 curl 直连）、按锁文件里的哈希校验（不信 Release 自己那份 `SHA256SUMS`），
   两份包都解到**仓库根**（`WordBank/`、`data/generated/`、`data/local_models/` 各就各位）。`release.yml` 的打包 job 和离线自编译走同一个脚本；
-  `cloudime.iss` 把 `WordBank\*.db`（主词库 `Dict.db`）装进 `{app}\WordBank`、`data\generated` 与 `assets` 里的文件按仓库相对路径装进 `{app}`，模型（`data\local_models\*.qjm`）装进 `{app}\data\local_models`（没有就不装，Server 不重排）。
+  `cloudime.iss` 把 `WordBank\*.db`（主词库 `Dict.db`）装进 `{app}\WordBank`、`data\generated` 与 `assets` 里的文件按仓库相对路径装进 `{app}`，模型装进 `{app}\Models`：含章 `data\local_models\*.qjm` 与知意 `Models\laya-zhen-long-l12-int8g\`（没有就不装，Server 不重排）。
+  知意（增强档）是例外：模型直接放在仓库 `Models\laya-zhen-long-l12-int8g\`，随 git 与安装包，不经过数据 Release。
   标签与两个哈希记进 `build-info.json`（`data_tag` / `data_sha256` / `model_sha256`）。
 
 数据重生成之后（重跑 lexicon / bigram）或模型重训之后跑一次 `data-bundle.sh`（三件套比 `.qjm` 新会自动重打），
