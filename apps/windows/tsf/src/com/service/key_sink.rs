@@ -8,7 +8,7 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CAPITAL, VK_SPACE};
 use windows::Win32::UI::TextServices::{ITfContext, ITfKeyEventSink_Impl};
 use windows::core::{BOOL, GUID, Ref, Result};
 
-use cloudime_platform::protocol::{IndicatorCommand, InputSettings, KeyEvent, KeyOutcome};
+use cloudime_platform::protocol::{IndicatorCommand, KeyEvent, KeyOutcome};
 
 use super::TextService_Impl;
 use super::next::Next;
@@ -41,9 +41,6 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         self.note_key_down(vk, lparam);
         if self.keyboard_disabled(&pic) {
             return Ok(FALSE);
-        }
-        if is_right_alt(vk, lparam) && self.special_input_allowed() {
-            return Ok(TRUE);
         }
         if self.char_width_hotkey(vk) {
             return Ok(TRUE);
@@ -83,19 +80,6 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         if self.keyboard_disabled(&pic) {
             return Ok(FALSE);
         }
-        // 右 Alt：按住不放会连发 key-down，只认第一拍；宿主报 0x12 / 0xA5 都统一合成 0xA5 送 Server。
-        if is_right_alt(vk, lparam) && self.special_input_allowed() {
-            // 第一拍已经切过：后面的自动重复拍只吃掉，不再切换。
-            if is_auto_repeat(lparam) && self.special_alt_down.get() {
-                return Ok(TRUE);
-            }
-            let eaten = self.handle_key(pic, self.key_event(0xA5));
-            // 按下吃了，抬起也得吃：只留下一个孤立的 Alt 抬起，应用会当成「按 Alt」弹菜单。
-            if eaten {
-                self.special_alt_down.set(true);
-            }
-            return Ok(eaten.into());
-        }
         if self.char_width_hotkey(vk) {
             self.send_indicator(IndicatorCommand::ToggleCharWidthType);
             return Ok(TRUE);
@@ -104,23 +88,13 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
         Ok(self.handle_key(pic, event).into())
     }
 
-    fn OnTestKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
-        let vk = wparam.0 as u32;
-        self.note_key_up(vk);
-        // 右 Alt 的按下被当成特殊输入模式开关吃掉了：抬起也必须吃掉。
-        if eats_special_alt_up(vk, lparam, self.special_alt_down.get()) {
-            return Ok(TRUE);
-        }
+    fn OnTestKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
+        self.note_key_up(wparam.0 as u32);
         Ok(FALSE)
     }
 
-    fn OnKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
-        let vk = wparam.0 as u32;
-        self.note_key_up(vk);
-        if eats_special_alt_up(vk, lparam, self.special_alt_down.get()) {
-            self.special_alt_down.set(false);
-            return Ok(TRUE);
-        }
+    fn OnKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
+        self.note_key_up(wparam.0 as u32);
         Ok(FALSE)
     }
 
@@ -253,11 +227,6 @@ impl TextService_Impl {
         if self.raw_input() || self.mode_state.disabled() {
             return false;
         }
-        // 右 Alt（Alt Gr）：只在候选窗口显示着（组句中）的中文状态、且当前方案支持时
-        // 留给特殊输入模式开关；形码等方案原样归应用。
-        if self.special_input_allowed() && wants_special_input(event, self.mode_state.english()) {
-            return true;
-        }
         // 修饰键本身不吃（见 [`is_modifier_key`]）：这一拍与「Ctrl 组合要不要接管」无关。
         if is_modifier_key(event.virtual_key) {
             return false;
@@ -317,16 +286,6 @@ impl TextService_Impl {
             "Server 没接管，重放回应用 vk={}",
             event.virtual_key
         ));
-    }
-
-    /// 右 Alt 现在能不能当特殊输入模式开关（候选窗口显示着、中文、没被禁用、不是直通名单，
-    /// 且当前输入方案支持 —— 只有全拼 / 双拼，形码等方案下右 Alt 原样归应用）。
-    fn special_input_allowed(&self) -> bool {
-        self.shared.composing()
-            && !self.raw_input()
-            && !self.mode_state.disabled()
-            && !self.mode_state.english()
-            && special_input_supported(self.input_settings.get())
     }
 
     /// 当前设置是不是「完全不接管」（名单里的程序）。
@@ -565,37 +524,7 @@ fn is_replay(replaying: &std::cell::Cell<Option<u32>>, vk: u32) -> bool {
     replaying.take() == Some(vk)
 }
 
-/// 右 Alt（Alt Gr，`VK_RMENU`）：中文状态下由输入法吃掉，当特殊输入模式开关；英文状态归应用。
-///
-/// 有的宿主把右 Alt 报成 `VK_MENU`（0x12）而不是 `VK_RMENU`（0xA5），靠 `lparam` 的扩展位区分。
-fn is_right_alt(vk: u32, lparam: LPARAM) -> bool {
-    vk == 0xA5 || (vk == 0x12 && ((lparam.0 as u32) & (1 << 24)) != 0)
-}
-
-/// 给 Server 的合成右 Alt 事件用（不管宿主报的是 0xA5 还是 0x12，都统一成 0xA5）。
-fn wants_special_input(event: &KeyEvent, english: bool) -> bool {
-    event.virtual_key == 0xA5 && !english
-}
-
-/// 当前输入方案支不支持逐音节特殊输入模式：Server 在 `InputSettings::special_input` 里下发，
-/// 只有全拼 / 双拼为真；形码等方案下右 Alt 原样交给应用。
-fn special_input_supported(input: Option<InputSettings>) -> bool {
-    input.is_some_and(|input| input.special_input)
-}
-
-/// 右 Alt 的按下被当成特殊输入模式开关吃掉后，抬起也要吃掉：
-/// 应用只收到一个孤立的 Alt 抬起时，会当成「按 Alt」弹出菜单 / 进入选区。
-fn eats_special_alt_up(vk: u32, lparam: LPARAM, swallowed_down: bool) -> bool {
-    swallowed_down && is_right_alt(vk, lparam)
-}
-
-/// `lparam` 的 bit 30：这是按住不放的自动重复，不是新的一次按键。
-fn is_auto_repeat(lparam: LPARAM) -> bool {
-    (lparam.0 as u32) & (1 << 30) != 0
-}
-
 /// 修饰键**本身**（Ctrl / Alt / Shift / Win 的左右键）：不是「组合键」，一律不吃。
-/// 例外是右 Alt（`0xA5`）：它由 [`TextService_Impl::would_eat`] 在中文状态下单独吃掉，当特殊输入模式开关。
 ///
 /// 这条很关键：`OnTestKeyDown` 一旦吃了 `Ctrl` 的 key-down，**后面那个键在 TSF 与应用眼里就没有
 /// 修饰键了**（`modifiers.ctrl` 变 false），表现成 `Ctrl+A` 打出一个 `a`、全选失效 —— 而 Ctrl 组合
@@ -677,14 +606,11 @@ fn eats_key(
 /// 组句里 Ctrl 组合能不能被吃进 Server：见 [`eats_key`] 里那条规则（带 Ctrl、不带 Alt / Win 就吃）。
 #[cfg(test)]
 mod tests {
-    use cloudime_platform::protocol::{InputSettings, KeyEvent, KeyModifiers};
-
-    use windows::Win32::Foundation::LPARAM;
+    use cloudime_platform::protocol::{KeyEvent, KeyModifiers};
 
     use super::{
-        eats_special_alt_up, eats_without_server, is_modifier_key, is_replay, is_right_alt,
-        smart_space_key, special_input_supported, wants_declared_key, wants_script_key,
-        wants_special_input,
+        eats_without_server, is_modifier_key, is_replay, smart_space_key, wants_declared_key,
+        wants_script_key,
     };
     use crate::com::key::event::to_key_event;
 
@@ -879,47 +805,8 @@ mod tests {
         }
     }
 
-    /// 右 Alt 只在中文状态当特殊输入开关；英文状态与左 Alt 都归应用。
-    #[test]
-    fn right_alt_is_the_special_input_switch_in_chinese_only() {
-        let alt = KeyModifiers {
-            alt: true,
-            ..KeyModifiers::default()
-        };
-        assert!(wants_special_input(&KeyEvent::new(0xA5, None, alt), false));
-        assert!(!wants_special_input(&KeyEvent::new(0xA5, None, alt), true));
-        assert!(!wants_special_input(&KeyEvent::new(0xA4, None, alt), false));
-        // 宿主可能把右 Alt 报成 VK_MENU + 扩展位。
-        assert!(is_right_alt(0xA5, LPARAM(0)));
-        assert!(is_right_alt(0x12, LPARAM(1 << 24)));
-        assert!(!is_right_alt(0x12, LPARAM(0)));
-        assert!(!is_right_alt(0xA4, LPARAM(1 << 24)));
-    }
-
-    /// 特殊输入模式只认全拼 / 双拼：Server 没下发（旧协议 / 刚连上）或形码方案下都不接管右 Alt。
-    #[test]
-    fn special_input_needs_a_scheme_that_supports_it() {
-        assert!(!special_input_supported(None));
-        assert!(!special_input_supported(Some(InputSettings::default())));
-        assert!(special_input_supported(Some(InputSettings {
-            special_input: true,
-            ..InputSettings::default()
-        })));
-    }
-
-    /// 右 Alt 的按下被当成特殊输入模式开关吃掉后，抬起也要吃；没吃按下时抬起照常归应用。
-    #[test]
-    fn right_alt_key_up_is_eaten_after_the_switch() {
-        assert!(eats_special_alt_up(0xA5, LPARAM(0), true));
-        // 宿主可能把右 Alt 报成 VK_MENU + 扩展位。
-        assert!(eats_special_alt_up(0x12, LPARAM(1 << 24), true));
-        assert!(!eats_special_alt_up(0xA5, LPARAM(0), false));
-        assert!(!eats_special_alt_up(0xA4, LPARAM(0), true));
-    }
-
     /// 修饰键**本身**不吃（`Ctrl` / `Alt` / `Shift` / `Win` 左右键）：吃了它，后面那个键在 TSF
     /// 与应用眼里就没有修饰键了 —— `Ctrl+A` 会变成打出一个 `a`、全选失效。
-    /// 右 Alt 在 `eats_key` 这层也不吃，中文状态的特殊模式开关在 `would_eat` 更前面处理。
     #[test]
     fn modifier_keys_are_never_eaten() {
         let ctrl = KeyModifiers {

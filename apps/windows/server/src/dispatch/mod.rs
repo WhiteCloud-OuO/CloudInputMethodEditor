@@ -23,8 +23,6 @@ use std::cell::RefCell;
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::rc::Rc;
-use std::sync::Arc;
-use std::sync::atomic::AtomicBool;
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::time::{Duration, Instant};
 
@@ -67,10 +65,6 @@ pub struct Router {
 
     /// 活跃会话及各自的宿主应用。
     sessions: HashMap<SessionId, SessionInfo>,
-
-    /// UI 线程的低层键盘钩子要不要吞右 Alt：只在前台是 Word / Office、正在组句、
-    /// 中文且方案支持时置位。钩子线程只读这个原子量，不碰 Router。
-    special_alt_enabled: Arc<AtomicBool>,
 
     /// 当前持有组句的会话。
     focused: Option<SessionId>,
@@ -317,7 +311,6 @@ impl Router {
                 ..config
             },
             sessions: HashMap::new(),
-            special_alt_enabled: Arc::new(AtomicBool::new(false)),
             focused: None,
             composed: None,
             u_mode: None,
@@ -426,8 +419,6 @@ impl Router {
             switch_mode: SwitchKeys::default(),
             english_mode: true,
             shift_letter_compose: true,
-            // 特殊输入模式只认全拼 / 双拼：形码等方案下 DLL 的右 Alt 原样归应用。
-            special_input: self.config.special_input,
             full_width_chars: self.config.full_width_chars,
             smart_symbols: self.config.smart_symbols,
             raw_input,
@@ -468,11 +459,6 @@ impl Router {
     /// 焦点变了：把「当前前台应用」记进脚本那个只读快照（`cloudime.foreground_app()`）。
     fn sync_focused_app(&self) {
         *self.focused_app_snapshot.borrow_mut() = self.focused_app().map(str::to_owned);
-    }
-
-    /// 把「现在能不能吞右 Alt」的原子量交给 UI 线程的低层键盘钩子读。
-    pub fn set_special_alt_flag(&mut self, flag: Arc<AtomicBool>) {
-        self.special_alt_enabled = flag;
     }
 
     /// 把当前配置给一份给脚本（`cloudime.get_curr_config`）：`main.rs` 建好 Router 时调一次，

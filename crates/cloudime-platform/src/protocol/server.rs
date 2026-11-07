@@ -38,11 +38,6 @@ pub struct InputSettings {
     #[serde(default)]
     pub shift_letter_compose: bool,
 
-    /// 当前输入方案支持逐音节特殊输入模式（全拼 / 双拼）。DLL 据此决定右 Alt（Alt Gr）在
-    /// 组句中吃不吃：形码等方案下右 Alt 原样交给应用，不吞键。
-    #[serde(default)]
-    pub special_input: bool,
-
     /// 全角字符（状态条上的「全角 / 半角」开关）。开着时可打印 ASCII 要转全角，而英文模式本来是纯直通、
     /// 字母根本到不了 Server，所以 DLL 得先把这类按键吃掉送来（`eats_key`）；半角时照旧不吃。
     #[serde(default)]
@@ -109,7 +104,6 @@ impl Default for InputSettings {
             switch_mode: SwitchKeys::default(),
             english_mode: true,
             shift_letter_compose: false,
-            special_input: false,
             full_width_chars: false,
             smart_symbols: false,
             raw_input: false,

@@ -129,31 +129,24 @@ fn compose(router: &mut Router, text: &str, modifiers: KeyModifiers) {
     }
 }
 
-/// 右 Alt（Alt Gr）切特殊输入模式；`yun'duo` 先出 `yun` 的单字，选完再出 `duo`。
+/// 主键盘 `/` 切特殊输入模式；`yun'duo` 先出 `yun` 的单字，选完再出 `duo`。
 #[test]
-fn right_alt_toggles_special_input_and_commits_one_character_at_a_time() {
+fn slash_toggles_special_input_and_commits_one_character_at_a_time() {
     let normal = KeyModifiers::default();
-    let alt = KeyModifiers {
-        alt: true,
-        ..normal
-    };
     let mut r = special_router();
-    // 没有候选窗口时不切换（右 Alt 原样归应用）。
-    assert_eq!(key(&mut r, 0xA5, None, alt).0, KeyOutcome::Passthrough);
+    // 没在组句时不切换（仍是普通标点）。
+    key(&mut r, 0xBF, Some('/'), normal);
     assert!(!r.engine.special_input());
 
     compose(&mut r, "yun'duo", normal);
-    let (outcome, commit, _) = key(&mut r, 0xA5, None, alt);
+    let (outcome, commit, _) = key(&mut r, 0xBF, Some('/'), normal);
     assert_eq!(outcome, KeyOutcome::Consumed);
-    assert_eq!(commit, None);
-    assert!(
-        r.engine.special_input(),
-        "候选窗口显示时右 Alt 打开特殊输入模式"
-    );
+    assert_eq!(commit, None, "触发键不当作标点上屏");
+    assert!(r.engine.special_input(), "主键盘 / 打开特殊输入模式");
     // 再按一次关掉，第三次再打开；开关本身不改已敲的拼音。
-    key(&mut r, 0xA5, None, alt);
+    key(&mut r, 0xBF, Some('/'), normal);
     assert!(!r.engine.special_input());
-    key(&mut r, 0xA5, None, alt);
+    key(&mut r, 0xBF, Some('/'), normal);
     assert!(r.engine.special_input());
 
     let items = r.engine.query().unwrap().candidates.items;
@@ -192,64 +185,30 @@ fn right_alt_toggles_special_input_and_commits_one_character_at_a_time() {
         "候选窗口销毁后自动关闭特殊输入模式"
     );
 
-    // 形码等不支持特殊输入模式的方案：候选窗口显示着，右 Alt 也原样归应用。
+    // 小键盘除号与 Ctrl + / 都不是触发键。
+    let mut numpad = special_router();
+    compose(&mut numpad, "yun'duo", normal);
+    key(&mut numpad, 0x6F, Some('/'), normal);
+    assert!(!numpad.engine.special_input());
+    let mut ctrl = special_router();
+    compose(&mut ctrl, "yun'duo", normal);
+    key(
+        &mut ctrl,
+        0xBF,
+        Some('/'),
+        KeyModifiers {
+            ctrl: true,
+            ..normal
+        },
+    );
+    assert!(!ctrl.engine.special_input());
+
+    // 形码等不支持特殊输入模式的方案：`/` 仍是普通标点。
     let mut r = special_router();
     r.config.special_input = false;
     compose(&mut r, "yun'duo", normal);
-    assert_eq!(key(&mut r, 0xA5, None, alt).0, KeyOutcome::Passthrough);
-    assert!(!r.engine.special_input());
-}
-
-/// 主键盘 `/` 也能切特殊输入模式；小键盘除号与带修饰键的组合不算。
-#[test]
-fn slash_toggles_special_input_on_the_main_keyboard_only() {
-    let normal = KeyModifiers::default();
-    let mut r = special_router();
-    compose(&mut r, "yun'duo", normal);
-
-    // 小键盘除号（VK_DIVIDE）不是触发键；它按普通标点走，可能把组句上屏，重新打一段再试主键盘。
-    key(&mut r, 0x6F, Some('/'), normal);
-    assert!(!r.engine.special_input());
-    compose(&mut r, "yun'duo", normal);
-
-    let (outcome, commit, _) = key(&mut r, 0xBF, Some('/'), normal);
-    assert_eq!(outcome, KeyOutcome::Consumed);
-    assert_eq!(commit, None, "触发键不当作标点上屏");
-    assert!(r.engine.special_input(), "主键盘 / 打开特殊输入模式");
-
     key(&mut r, 0xBF, Some('/'), normal);
-    assert!(!r.engine.special_input(), "再按一次关闭");
-
-    // Ctrl + / 归应用，不切换。
-    let ctrl = KeyModifiers {
-        ctrl: true,
-        ..normal
-    };
-    key(&mut r, 0xBF, Some('/'), ctrl);
     assert!(!r.engine.special_input());
-}
-
-/// 低层钩子只在 Office 宿主 + 组句 + 中文 + 方案支持时吞右 Alt；其他程序仍走 TSF 击键 sink。
-#[test]
-fn low_level_special_alt_is_office_only() {
-    let normal = KeyModifiers::default();
-    let mut r = special_router();
-    r.handle(ClientMessage::OpenSession {
-        session: SessionId(1),
-        app: Some("WINWORD.EXE".to_owned()),
-        protocol: PROTOCOL_VERSION,
-    });
-    assert!(!r.special_alt_available(), "还没组句时不吞");
-    compose(&mut r, "yun'duo", normal);
-    assert!(r.special_alt_available(), "Word 组句中要吞");
-    r.handle_special_alt(false);
-    assert!(!r.engine.special_input(), "抬起不切换");
-    r.handle_special_alt(true);
-    assert!(r.engine.special_input(), "按下切换");
-
-    let mut notepad = special_router();
-    compose(&mut notepad, "yun'duo", normal);
-    assert!(!notepad.special_alt_available(), "非 Office 不绕过 TSF");
 }
 
 /// 特殊输入模式只对全拼 / 双拼开放：`RouterConfig::special_input` 跟着输入方案走。

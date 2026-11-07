@@ -47,22 +47,20 @@ mod viewport;
 pub(crate) use measure::SharedMeasurer;
 pub(crate) use viewport::Viewport;
 
-use std::cell::{Cell, RefCell};
+use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
-use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
-use windows::Win32::Foundation::{E_FAIL, LPARAM, LRESULT, RECT, WPARAM};
+use windows::Win32::Foundation::{E_FAIL, LPARAM, RECT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    ASFW_ANY, AllowSetForegroundWindow, CallNextHookEx, DispatchMessageW, GetMessageW, HC_ACTION,
-    HHOOK, KBDLLHOOKSTRUCT, MSG, PostThreadMessageW, SetWindowsHookExW, TranslateMessage,
-    UnhookWindowsHookEx, WH_KEYBOARD_LL, WM_APP, WM_KEYDOWN, WM_SYSKEYDOWN,
+    ASFW_ANY, AllowSetForegroundWindow, DispatchMessageW, GetMessageW, MSG, PostThreadMessageW,
+    TranslateMessage, WM_APP,
 };
 use windows::core::{Error, Result};
 
@@ -78,7 +76,6 @@ use crate::dispatch::{
     CandidateEvent, CandidateSink, RenderSettings, ScriptWindowSink, StatusEvent, StatusSink,
     StatusView,
 };
-use crate::ipc::Work;
 use cloud_ui::painter::{Painter, SharedPainter};
 use cloud_ui::script_window::{ScriptWindowEvents, ScriptWindows};
 
@@ -93,14 +90,6 @@ const WM_WAKE: u32 = WM_APP;
 
 /// 状态条窗口的定时器发现 Caps Lock 亮灭变了：重画一次状态条（`WM_WAKE` 是投命令，这个是纯重画）。
 const WM_STATUS_CAPS: u32 = WM_APP + 1;
-
-thread_local! {
-    /// 右 Alt 低层钩子读的「现在能不能吞」原子量 + 把事件送回工人线程的出口。
-    static SPECIAL_ALT: RefCell<Option<(Arc<AtomicBool>, Sender<Work>)>> = const { RefCell::new(None) };
-
-    /// 这一轮右 Alt 的按下已经被钩子吞掉：抬起也一起吞，别给 Word 留一个孤立的 Alt 抬起。
-    static SPECIAL_ALT_DOWN: Cell<bool> = const { Cell::new(false) };
-}
 
 /// UI 线程句柄：发命令 = 投进通道 + 一条 `WM_WAKE`。线程 detached，随进程存活。
 #[derive(Clone)]
@@ -121,7 +110,6 @@ impl UiHandle {
         on_status: StatusEvents,
         on_candidates: CandidateEvents,
         on_script_window: ScriptWindowEvents,
-        special_alt: Option<(Arc<AtomicBool>, Sender<Work>)>,
     ) -> Result<Self> {
         // 用 Option<u32> 而非 Result 回报，免得 windows Error 跨线程。
         let (ready_tx, ready_rx) = mpsc::channel::<Option<u32>>();
@@ -137,7 +125,6 @@ impl UiHandle {
                     on_status,
                     on_candidates,
                     on_script_window,
-                    special_alt,
                     window_viewport,
                 )
             })
@@ -281,7 +268,6 @@ fn run(
     on_status: StatusEvents,
     on_candidates: CandidateEvents,
     on_script_window: ScriptWindowEvents,
-    special_alt: Option<(Arc<AtomicBool>, Sender<Work>)>,
     viewport: Arc<Viewport>,
 ) {
     // 按物理像素定位，与应用报来的组句屏幕矩形对齐；已设过会失败，忽略。
@@ -317,7 +303,6 @@ fn run(
     // 脚本建的窗口（`cloudime.window.*`）：与其它窗口共用同一个渲染器，鼠标事件经 `on_script_window`
     // 送回工人线程。
     let mut script_windows = ScriptWindows::new(painter.clone(), on_script_window);
-    let special_alt_hook = install_special_alt_hook(special_alt);
     if ready.send(Some(thread_id)).is_err() {
         return;
     }
@@ -352,62 +337,6 @@ fn run(
             DispatchMessageW(&msg);
         }
     }
-    if let Some(hook) = special_alt_hook {
-        let _ = unsafe { UnhookWindowsHookEx(hook) };
-    }
-}
-
-/// 在 UI 线程装 `WH_KEYBOARD_LL`：Word / Office 的 Alt 不进 TSF，也不进应用消息队列，
-/// 只有这条消息循环上的低层钩子能赶在它前面。
-fn install_special_alt_hook(info: Option<(Arc<AtomicBool>, Sender<Work>)>) -> Option<HHOOK> {
-    let info = info?;
-    SPECIAL_ALT.with(|state| *state.borrow_mut() = Some(info));
-    let hook = unsafe { SetWindowsHookExW(WH_KEYBOARD_LL, Some(special_alt_hook), None, 0) };
-    match hook {
-        Ok(hook) => Some(hook),
-        Err(error) => {
-            SPECIAL_ALT.with(|state| state.borrow_mut().take());
-            tracing::error!(%error, "安装右 Alt 低层键盘钩子失败");
-            None
-        }
-    }
-}
-
-/// 钩子只处理右 Alt：`special_alt_enabled` 为真时吞掉并通知 Router，抬起也一起吞。
-/// 别的键、别的 Alt、以及不满足条件时全部原样放行。
-unsafe extern "system" fn special_alt_hook(code: i32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
-    if code as u32 == HC_ACTION {
-        let info = unsafe { &*(lparam.0 as *const KBDLLHOOKSTRUCT) };
-        let right_alt = info.vkCode == 0xA5 || (info.vkCode == 0x12 && info.flags.0 & 0x01 != 0);
-        if right_alt {
-            let down = matches!(wparam.0 as u32, WM_KEYDOWN | WM_SYSKEYDOWN);
-            let active = SPECIAL_ALT.with(|state| {
-                state
-                    .borrow()
-                    .as_ref()
-                    .is_some_and(|(flag, _)| flag.load(Ordering::Relaxed))
-            });
-            let held = SPECIAL_ALT_DOWN.with(Cell::get);
-            if down {
-                if active && !held {
-                    SPECIAL_ALT_DOWN.with(|cell| cell.set(true));
-                    SPECIAL_ALT.with(|state| {
-                        if let Some((_, sender)) = state.borrow().as_ref() {
-                            let _ = sender.send(Work::SpecialAlt { down: true });
-                        }
-                    });
-                    return LRESULT(1);
-                }
-                if held {
-                    return LRESULT(1);
-                }
-            } else if held {
-                SPECIAL_ALT_DOWN.with(|cell| cell.set(false));
-                return LRESULT(1);
-            }
-        }
-    }
-    unsafe { CallNextHookEx(None, code, wparam, lparam) }
 }
 
 fn apply(

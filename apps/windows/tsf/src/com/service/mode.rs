@@ -360,10 +360,6 @@ impl TextService_Impl {
 
     /// 本线程得到 / 失去键盘焦点。得到：补连接，跟上全局模式（别的应用里可能刚切过）。
     pub(super) fn set_thread_focus(&self, foreground: bool) {
-        // 失焦时右 Alt 的抬起可能再也收不到；别把标记留给下一次按键。
-        if !foreground {
-            self.special_alt_down.set(false);
-        }
         if self.shared.foreground() == foreground {
             return;
         }

@@ -168,7 +168,7 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 
 `EngineSession` 保存可挂起的组句、标点、历史与学习链，`Engine::swap_session` 在同一个引擎里交换输入状态，共用词库与落盘服务。切换上下文时清除查询及异步重排缓存，并由平台恢复各自私密状态。
 
-特殊输入模式（`Engine::set_special_input`）：查询生成完候选后只留**第一个音节的单字**（`keep_single_characters`；按第一切分的音节文本匹配，残缺音节按前缀），选一个字后 `Composition::select_prefix` 把该音节连同后面的 `'` 一起吃掉，剩余拼音进入下一个音节。拼音行由 `marked_parts(..., special)` 把最后一段拼音按第一音节切开：当前音节 `Typed`，剩余音节 `Rest`；renderer 把 `Rest` 画成角标色（`theme.colors.badge`）。右 Alt 或主键盘 `/`（`VK_OEM_2` + 字符 `/`，不带 Ctrl / Alt / Win / Shift；小键盘除号不算）只在候选窗口显示（组句中）的中文状态、且当前方案是全拼 / 双拼时由 TSF `would_eat` 吃掉、送 Server 的 `special_input_key` 切换；`/` 在组句外走普通标点。`InputSettings::special_input` 由 Server 按 `InputScheme` 下发（只有 `FullPinyin` / `DualKeyPinyin` 为真），形码等方案（以及旧协议没这个字段时）右 Alt 原样归应用、不吞键；热加载换到不支持的方案时 Server 会 `set_special_input(false)`。英文状态或窗口不在时仍作 AltGr 交给应用。**在 TSF 能收到右 Alt 的程序里，按下与抬起都吃掉**（`special_alt_down` 记着这一轮按下被吃）：只吃按下的话，应用会收到一个孤立的 Alt 抬起，在不少程序里等于「按 Alt」弹出菜单 / 进入选区，把候选窗和模式一起打断；失焦时清掉标记。Word / Office 的 Alt 不经过 TSF 击键 sink、也不进应用消息队列：Server UI 线程另装 `WH_KEYBOARD_LL`（`apps/windows/server/src/ui/mod.rs`），`Router::special_alt_enabled` 原子量（组句 + 中文 + 全拼 / 双拼 + `focused_app` 是 Office）为真时吞掉右 Alt，投 `Work::SpecialAlt` 调 `Router::handle_special_alt`；每处理完一件活 `refresh_special_alt_state` 刷新。候选窗口销毁（`Composed` 变 `None` / `reset_composition`）时自动 `set_special_input(false)`。
+特殊输入模式（`Engine::set_special_input`）：查询生成完候选后只留**第一个音节的单字**（`keep_single_characters`；按第一切分的音节文本匹配，残缺音节按前缀），选一个字后 `Composition::select_prefix` 把该音节连同后面的 `'` 一起吃掉，剩余拼音进入下一个音节。拼音行由 `marked_parts(..., special)` 把最后一段拼音按第一音节切开：当前音节 `Typed`，剩余音节 `Rest`；renderer 把 `Rest` 画成角标色（`theme.colors.badge`）。主键盘 `/`（`VK_OEM_2` + 字符 `/`，不带 Ctrl / Alt / Win / Shift；小键盘除号不算）只在候选窗口显示（组句中）的中文状态、且当前方案是全拼 / 双拼时由 TSF `would_eat` 吃掉、送 Server 的 `special_input_key` 切换；`/` 在组句外走普通标点。形码等方案不切换；热加载换到不支持的方案时 Server 会 `set_special_input(false)`。右 Alt / AltGr 不再被输入法占用，原样交给应用。候选窗口销毁（`Composed` 变 `None` / `reset_composition`）时自动 `set_special_input(false)`。
 
 `InputHistory`（`history.rs`）按应用分桶保存最近上屏的文本：每个应用 256 字、最多 16 个应用，默认 60 秒没上屏就过期；应用读不到光标前文时，整句模型与选词模型用它当前文。`Engine::set_application` 切桶，`Engine::enter_input_box` 清当前应用（DLL 送来的 TSF 上下文标识变了时由 Server 调）；时长由 `[candidate] context_memory_seconds` 控制，0 表示永不过期。
 
@@ -1791,7 +1791,7 @@ TSF 那边 `key_sink::would_eat` / `eats_key` 在**组句里**（候选窗显示
 只有脚本声明过的那几套修饰键（`combination_key` 的 `combination_modifiers`，DLL 的 `wants_script_key`）与那几个具体的键本身
 （`combination_key` 的 `keys`；DLL 的 `wants_declared_key` 只认**不带修饰键时**按下的那些）才先问一趟
 （见「用户脚本」一节的触发条件）。`Alt` / `Win` 不碰
-（AltGr = Ctrl+Alt、Win 是系统键，都在外壳那一层）；右 Alt 例外，全拼 / 双拼的中文状态被特殊输入模式占用，形码等方案仍归应用。
+（AltGr = Ctrl+Alt、Win 是系统键，都在外壳那一层）；右 Alt 不再被输入法占用，原样归应用（特殊输入模式改用主键盘 `/`）。
 小牛翻译的两份实际脚本（候选版 / 独立窗口版）与其 `md5.lua` 已迁到脚本仓库
 `https://github.com/WhiteCloud-OuO/CloudIME_ScriptWarehouse` 的 `src\` 下；安装包只装
 `Scripts\template.lua`，源码仓库 `Scripts\examples` 里的示例都不随包。脚本拿到译文后会按

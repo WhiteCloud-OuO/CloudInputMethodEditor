@@ -1,7 +1,5 @@
 //! 按键怎么作用到 Engine / 高亮上。
 
-use std::sync::atomic::Ordering;
-
 use cloudime_core::{CandidateKind, char_width, shortcut};
 use cloudime_platform::LayoutMode;
 use cloudime_platform::input_schemes::KeyMapReference;
@@ -136,46 +134,14 @@ impl Router {
         }
     }
 
-    /// 低层键盘钩子截到右 Alt 后调用：按下切换特殊输入模式。
-    /// Word / Office 的 Alt 不进 TSF，也不进 Server 的按键消息，只能由 UI 线程的钩子代劳。
-    pub(crate) fn handle_special_alt(&mut self, down: bool) {
-        if !down || !self.special_alt_available() {
-            return;
-        }
-        let on = !self.engine.special_input();
-        self.engine.set_special_input(on);
-        tracing::info!(on, "低层钩子切换特殊输入模式");
-        self.recompose();
-        let shown = self.self_drawn_frame();
-        self.reconcile_candidates(&shown);
-    }
-
-    /// 当前前台会话是不是「Word / Office + 组句 + 中文 + 方案支持」：UI 线程的钩子据此决定吞不吞右 Alt。
-    pub(crate) fn special_alt_available(&self) -> bool {
-        self.config.special_input
-            && !self.engine.english_mode()
-            && self.composing()
-            && self.focused_app().is_some_and(is_office_app)
-    }
-
-    /// 把上面那个判断写进钩子线程读的原子量。每次处理完一件活都刷新一次（组句开始 / 结束、换应用）。
-    pub(crate) fn refresh_special_alt_state(&self) {
-        self.special_alt_enabled
-            .store(self.special_alt_available(), Ordering::Relaxed);
-    }
-
-    /// 右 Alt（Alt Gr）或主键盘 `/`：组句里切换特殊输入模式。模式本身由 Engine 记着，
-    /// 下次查询就只出单字。`/` 只认主键盘的 VK_OEM_2 + 裸键；小键盘除号与带修饰键的组合不算。
+    /// 主键盘 `/`：组句里切换特殊输入模式。模式本身由 Engine 记着，下次查询就只出单字。
+    /// 只认主键盘的 VK_OEM_2 + 裸键；小键盘除号与带修饰键的组合不算。
     fn special_input_key(&mut self, event: &KeyEvent) -> Option<Effect> {
         let slash = event.virtual_key == codes::SLASH
             && event.character == Some('/')
             && !event.modifiers.has_command_key()
             && !event.modifiers.shift;
-        let trigger = event.virtual_key == codes::RIGHT_ALT || slash;
-        if !trigger
-            || event.modifiers.english_mode
-            || !self.composing()
-            || !self.config.special_input
+        if !slash || event.modifiers.english_mode || !self.composing() || !self.config.special_input
         {
             return None;
         }
@@ -745,15 +711,6 @@ impl Router {
     fn horizontal(&self) -> bool {
         self.config.layout == LayoutMode::Horizontal
     }
-}
-
-/// Office 的宿主 exe：Alt 在这些程序里不走 TSF 击键 sink，也不经过应用消息队列，
-/// 只能由 Server UI 线程的低层键盘钩子截住。
-fn is_office_app(app: &str) -> bool {
-    matches!(
-        app.to_ascii_lowercase().as_str(),
-        "winword.exe" | "excel.exe" | "powerpnt.exe" | "outlook.exe" | "onenote.exe"
-    )
 }
 
 /// 杀词后候选窗状态行上的提示。
