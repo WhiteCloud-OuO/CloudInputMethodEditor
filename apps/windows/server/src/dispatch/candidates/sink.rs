@@ -32,6 +32,9 @@ pub trait CandidateSink: Send {
     /// V 模式说明窗口的开关（拼音串只有一个 `v` 时为真）。不画的实现默认什么都不做。
     fn set_v_mode_help(&self, _on: bool) {}
 
+    /// 高级数学计算界面的说明窗口开关。不画的实现默认什么都不做。
+    fn set_calculator_help(&self, _on: bool) {}
+
     /// 开关「辅助窗口」（`auxiliary_window`，眼下是键位映射参考）：挂在配置的组合键上。
     /// 不画的实现（[`NoopSink`]）默认什么都不做。
     fn auxiliary_toggle(&self) {}

@@ -401,11 +401,6 @@ impl Router {
         if self.config.translate_enabled {
             frame.tip = self.translate.tip(&self.highlighted_text());
         }
-        // 表达式模式（`v` 开头）或在表达式计算面板里：底部那一行换成提示 —— 本地词典的译文在这里
-        // 没有意义（候选是算出来的），提示同时告诉用户这一模式能敲什么。
-        if let Some(hint) = self.expression_hint() {
-            frame.tip = Some(hint);
-        }
         // u 模式：支持中英混输时在翻译 Tip 那一行告诉用户可以直接打英文单词。
         if let Some(u_mode) = self.u_mode {
             frame.tip = self.mixture_enabled().then(|| {
@@ -421,16 +416,6 @@ impl Router {
         // 在线翻译那一行（`Ctrl+T`）与本地 Tip 无关：单独看它自己的状态
         frame.online = self.online.line();
         frame
-    }
-
-    /// 表达式计算面板底部那一行的提示；不在面板时 `None`（照常用本地词典的译文）。
-    ///
-    /// 走 `Tip` 这个通道（渲染端只认它），`learned = true` 借的是「深灰」那个颜色 —— 提示不是
-    /// 「刚学会的译文」，只是同一条路。
-    fn expression_hint(&self) -> Option<cloudime_translate::Tip> {
-        self.engine
-            .calculator()
-            .then(|| hint_tip("按Tab/Esc退出表达式计算"))
     }
 
     /// 当前高亮候选的文本：本地词典按它查词条。

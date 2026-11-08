@@ -257,6 +257,9 @@ pub(crate) struct CandidateWindow {
     /// V 模式说明窗口是否该显示（拼音串只有一个 `v` 时）。
     v_mode_help: Rc<Cell<bool>>,
 
+    /// 高级数学计算界面的说明窗口是否该显示。
+    calculator_help: Rc<Cell<bool>>,
+
     /// 上次贴出去的**内容区**屏幕矩形（物理像素）；没显示时为 `None`。
     /// 辅助窗口模板按它（宿主内容区矩形）把自己摆在候选窗旁边。
     content_rect: Cell<Option<RECT>>,
@@ -301,7 +304,13 @@ impl CandidateWindow {
             Err(error) => tracing::error!(%error, "建键位映射参考窗口失败，将不显示它"),
         }
         let v_mode_help = Rc::new(Cell::new(false));
-        match VModeHelpWindow::new(painter.clone(), template.hwnd(), v_mode_help.clone()) {
+        let calculator_help = Rc::new(Cell::new(false));
+        match VModeHelpWindow::new(
+            painter.clone(),
+            template.hwnd(),
+            v_mode_help.clone(),
+            calculator_help.clone(),
+        ) {
             Ok(asset) => template.assets_mut().add(Box::new(asset)),
             Err(error) => tracing::error!(%error, "建 V 模式说明窗口失败，将不显示它"),
         }
@@ -331,6 +340,7 @@ impl CandidateWindow {
             viewport,
             reversed,
             v_mode_help,
+            calculator_help,
             content_rect: Cell::new(None),
             assets_on: Cell::new(false),
             assets_mode: Cell::new(KeyMapReference::Off),
@@ -511,6 +521,12 @@ impl CandidateWindow {
         self.sync_assets();
     }
 
+    /// 高级数学计算界面的说明窗口：计算面板开着时显示。
+    pub(crate) fn set_calculator_help(&self, on: bool) {
+        self.calculator_help.set(on);
+        self.sync_assets();
+    }
+
     /// 按光标矩形定位并显示：贴光标下方（放不下放上方），四周留出阴影。
     pub(crate) fn show(&self, anchor: RECT) {
         self.anchor.set(Some(anchor));
@@ -528,6 +544,7 @@ impl CandidateWindow {
     pub(crate) fn hide(&self) {
         self.reversed.store(false, Ordering::Relaxed);
         self.v_mode_help.set(false);
+        self.calculator_help.set(false);
         // 忘掉 anchor 与上一帧的位置：下次重新弹出时即使内容碰巧一样，也不该跟上次的高亮位置做滑动。
         self.anchor.set(None);
         self.content_rect.set(None);

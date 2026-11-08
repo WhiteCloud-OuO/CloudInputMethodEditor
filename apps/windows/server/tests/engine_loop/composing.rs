@@ -210,7 +210,7 @@ fn page_keys_are_fixed_to_minus_and_equals() {
 }
 
 #[test]
-fn minus_and_equals_page_keys_preserve_expression_input() {
+fn minus_and_equals_are_page_keys_outside_expression() {
     let mut router = router_with(RouterConfig {
         page_size: 1,
         ..RouterConfig::default()
@@ -232,21 +232,15 @@ fn minus_and_equals_page_keys_preserve_expression_input() {
     assert_eq!(preedit(&frame), "ni");
     press(&mut router, KeyEvent::new(0x1B, None, Default::default()));
 
-    type_letters(&mut router, "v");
-    for c in "2-1=".chars() {
-        let event = match c {
-            '-' => KeyEvent::new(0xBD, Some('-'), Default::default()),
-            '=' => KeyEvent::new(0xBB, Some('='), Default::default()),
-            _ => punct(c),
-        };
-        let (outcome, commit, _) = press(&mut router, event);
-        assert_eq!((outcome, commit), (KeyOutcome::Consumed, None));
-    }
-    let (outcome, commit, _) = press(&mut router, punct(' '));
-    assert_eq!(
-        (outcome, commit),
-        (KeyOutcome::Consumed, Some("2-1=1".to_owned()))
+    // V 模式里 `=` 现在属于表达式字符（`=>` 进制转换），不再当翻页键。
+    let (_, _, frame) = type_letters(&mut router, "v");
+    assert_eq!(preedit(&frame), "v");
+    let (outcome, commit, frame) = press(
+        &mut router,
+        KeyEvent::new(0xBB, Some('='), Default::default()),
     );
+    assert_eq!((outcome, commit), (KeyOutcome::Consumed, None));
+    assert_eq!(preedit(&frame), "v=");
 }
 
 #[test]

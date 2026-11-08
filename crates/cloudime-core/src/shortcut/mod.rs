@@ -11,29 +11,31 @@
 mod calendar;
 mod evaluator;
 mod numeral;
+mod radix;
 
 use jiff::Zoned;
 
 use crate::candidate::{Candidate, CandidateKind};
 
 pub use calendar::{date_forms, now_forms, time_forms, weekday_forms};
-pub use evaluator::evaluate;
+pub use evaluator::{evaluate, evaluate_basic};
 pub use numeral::{
     amount_lower, amount_upper, chinese_decimal_lower, chinese_decimal_upper, chinese_lower,
     chinese_upper,
 };
+pub use radix::conversion_forms;
 
 /// 表达式模式的固定前缀。`v` 不是任何拼音音节的开头，用它不会和拼音冲突。
 pub const EXPRESSION_PREFIX: char = 'v';
 
 /// 表达式模式下允许敲进缓冲区的非字母字符：数字、四则运算、求余 `%`、阶乘 `!`、复数模 `@`、
-/// 幂 `^` 与 `,`（函数的参数分隔）。`#` 是取名前缀。字母（函数名、虚数单位 `i`）本来就能进缓冲区，不在此列；
-/// `x` 不是乘号，乘要敲 `*`。
+/// 幂 `^`、`,`（函数参数分隔）、`#` 取名前缀、`=` / `>` 进制转换前缀。字母（函数名、虚数单位 `i`）
+/// 本来就能进缓冲区，不在此列；`x` 不是乘号，乘要敲 `*`。
 pub fn is_expression_char(c: char) -> bool {
     c.is_ascii_digit()
         || matches!(
             c,
-            '+' | '-' | '*' | '/' | '%' | '!' | '@' | '#' | '(' | ')' | ',' | '.' | '^'
+            '+' | '-' | '*' | '/' | '%' | '!' | '@' | '#' | '=' | '>' | '(' | ')' | ',' | '.' | '^'
         )
 }
 
@@ -52,8 +54,11 @@ pub fn v_mode_candidates(input: &str, now: &Zoned, seconds: bool) -> Vec<Candida
 }
 
 /// 表达式计算面板（V 模式里按 Tab 进来）的候选：**只有结果这一条** —— 算式空着显示 `0`，
-/// 算错 / 溢出就是空表（面板那边显示成没有候选）。
+/// 算错 / 溢出就是空表（面板那边显示成没有候选）。`=>` 进制转换仍给三条转换结果。
 pub fn result_candidates(body: &str) -> Vec<Candidate> {
+    if let Some(forms) = conversion_forms(body) {
+        return forms.into_iter().map(shortcut_candidate).collect();
+    }
     let text = if body.trim().is_empty() {
         "0".to_owned()
     } else {
@@ -82,10 +87,13 @@ const AMOUNT_FRACTION_DIGITS: usize = 2;
 
 /// 表达式键之后的部分：一个数出中文数字与金额，四则运算出结果与「算式=结果」。
 fn expression_forms(body: &str) -> Vec<String> {
+    if let Some(forms) = conversion_forms(body) {
+        return forms;
+    }
     if let Some(forms) = number_forms(body) {
         return forms;
     }
-    match evaluate(body) {
+    match evaluate_basic(body) {
         Some(result) => vec![result.clone(), format!("{body}={result}")],
         None => Vec::new(),
     }
@@ -228,6 +236,20 @@ mod tests {
     #[test]
     fn expression_shortcuts() {
         assert_eq!(texts("v1+2", false), ["3", "1+2=3"]);
+        // V 模式没进高级面板：函数不算，四则 / 取余 / 幂 / 阶乘照常
+        assert!(texts("vsin(30)", false).is_empty());
+        assert_eq!(texts("v2^10", false), ["1024", "2^10=1024"]);
+        assert_eq!(texts("v5!", false), ["120", "5!=120"]);
+        assert_eq!(texts("v7%3", false), ["1", "7%3=1"]);
+        // `=>` 进制转换：源进制之外三种
+        assert_eq!(texts("v=>255", false), ["0b11111111", "0o377", "0xff"]);
+        assert_eq!(
+            result_candidates("sin(30)")
+                .into_iter()
+                .map(|candidate| candidate.text)
+                .collect::<Vec<_>>(),
+            ["0.5"]
+        );
         assert_eq!(
             texts("v123", false),
             [
@@ -262,7 +284,8 @@ mod tests {
     fn expression_chars() {
         assert!(is_expression_char('7'));
         assert!(is_expression_char('('));
-        assert!(!is_expression_char('='));
+        assert!(is_expression_char('='));
+        assert!(is_expression_char('>'));
         assert!(!is_expression_char('x'));
     }
 }

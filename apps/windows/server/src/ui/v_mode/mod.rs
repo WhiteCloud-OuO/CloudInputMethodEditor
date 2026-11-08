@@ -19,25 +19,50 @@ const GAP: f32 = 8.0;
 const MAX_TEXT_WIDTH: f32 = 520.0;
 
 const TITLE: &str = "V模式";
-const HELP: [&str; 6] = [
-    "输入数学表达式进行计算，支持数学函数（例如“sin(30)+lg(100)”）。按Tab进入/退出高级数学计算界面。",
+const HELP: [&str; 7] = [
+    "输入数学表达式进行计算，支持数学函数（例如“sin(30)+lg(100)”）。只输入 v 时按Tab进入/退出高级数学计算界面。",
     "输入数字进行转换（例如“12.12”）。",
+    "输入=>加0b/0o/0x/十进制数进行进制转换（例如“=>0x33ccff”）。",
     "输入sj/rq/xq/xz获得时间/日期/星期/现在（例如“xz”）。",
     "输入@加省份简称加英文字母（忽略大小写）获得车牌和所在地（例如“@sua”可以匹配到“苏A”/“江苏省南京市”/“江苏南京”）。",
     "输入#加姓名拼音字母获得取名结果（仅限汉族名字，例如“#zhangwei”可以匹配到“张伟”）。选中姓氏后它会留在组句里，接着输入名字。",
     "",
 ];
 
+const CALC_TITLE: &str = "高级数学计算界面";
+const CALC_HELP: [&str; 7] = [
+    "三角函数：sin/cos/tan/cot（角度），sinr/cosr/tanr/cotr（弧度）",
+    "反三角：asin/acos/atan（返回角度）",
+    "对数与根号：lg/ln/log(底数,真数)、sqrt",
+    "双曲：sinh/cosh/tanh",
+    "统计与组合：arrange/combine/avg/vari/sum",
+    "运算：+ - * / % ^ !，@ 复数模（只能后缀）",
+    "虚数单位：i（例如 3+4*i）",
+];
+const CALC_FOOTER: &str = "按Tab/Esc退出高级数学计算";
+
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum HelpMode {
+    VMode,
+    Calculator,
+}
+
 /// V 模式说明窗口：显示 / 收起由候选窗口的 `shown` 共享格子控制。
 pub(crate) struct VModeHelpWindow {
     template: Rc<AuxiliaryWindowTemplate>,
     painter: SharedPainter,
-    shown: Rc<Cell<bool>>,
-    generation: Cell<Option<u64>>,
+    v_mode: Rc<Cell<bool>>,
+    calculator: Rc<Cell<bool>>,
+    built: Cell<Option<(u64, HelpMode)>>,
 }
 
 impl VModeHelpWindow {
-    pub(crate) fn new(painter: SharedPainter, owner: HWND, shown: Rc<Cell<bool>>) -> Result<Self> {
+    pub(crate) fn new(
+        painter: SharedPainter,
+        owner: HWND,
+        v_mode: Rc<Cell<bool>>,
+        calculator: Rc<Cell<bool>>,
+    ) -> Result<Self> {
         let template = Rc::new(AuxiliaryWindowTemplate::new(
             painter.clone(),
             false,
@@ -48,8 +73,9 @@ impl VModeHelpWindow {
         Ok(Self {
             template,
             painter,
-            shown,
-            generation: Cell::new(None),
+            v_mode,
+            calculator,
+            built: Cell::new(None),
         })
     }
 }
@@ -57,7 +83,18 @@ impl VModeHelpWindow {
 impl Asset for VModeHelpWindow {
     fn sync(&self, owner: &dyn Bridge) {
         let host = owner.host();
-        if !self.shown.get() || host.expanded {
+        let mode = if self.calculator.get() {
+            Some(HelpMode::Calculator)
+        } else if self.v_mode.get() {
+            Some(HelpMode::VMode)
+        } else {
+            None
+        };
+        let Some(mode) = mode else {
+            self.hide();
+            return;
+        };
+        if host.expanded {
             self.hide();
             return;
         }
@@ -72,12 +109,12 @@ impl Asset for VModeHelpWindow {
                 return;
             };
             let generation = painter.generation();
-            (self.generation.get() != Some(generation))
-                .then(|| (generation, build_document(painter)))
+            (self.built.get() != Some((generation, mode)))
+                .then(|| (generation, build_document(painter, mode)))
         };
         if let Some((generation, document)) = built {
             self.template.set_document(document);
-            self.generation.set(Some(generation));
+            self.built.set(Some((generation, mode)));
         }
         self.template.show(rect, host.layout);
     }
@@ -91,42 +128,57 @@ impl Asset for VModeHelpWindow {
     }
 }
 
-/// 标签用候选项颜色，正文用额外内容颜色；正文按固定宽度折行，避免窗口横跨整屏。
-fn build_document(painter: &mut cloud_ui::painter::Painter) -> Document {
+/// 标签用候选项颜色，正文用额外内容颜色，退出提示用角标颜色；正文按固定宽度折行。
+fn build_document(painter: &mut cloud_ui::painter::Painter, mode: HelpMode) -> Document {
     let palette = painter.palette();
+    let (title, paragraphs, footer) = match mode {
+        HelpMode::VMode => (TITLE, &HELP[..], None),
+        HelpMode::Calculator => (CALC_TITLE, &CALC_HELP[..], Some(CALC_FOOTER)),
+    };
     let (_, title_size) = painter.text_font(FontSlot::Candidate);
     let (_, body_size) = painter.text_font(FontSlot::Translate);
     let title_width = painter
-        .measure_text(TITLE, FontSlot::Candidate, title_size)
+        .measure_text(title, FontSlot::Candidate, title_size)
         .0;
     let title_height = painter
-        .measure_text(TITLE, FontSlot::Candidate, title_size)
+        .measure_text(title, FontSlot::Candidate, title_size)
         .1;
     let body_height = painter.measure_text("国", FontSlot::Translate, body_size).1 + 2.0;
 
     let mut lines = Vec::new();
     {
         let mut measure = |text: &str| painter.measure_text(text, FontSlot::Translate, body_size).0;
-        for paragraph in HELP {
+        for paragraph in paragraphs {
             if paragraph.is_empty() {
                 continue;
             }
             lines.extend(wrap(paragraph, MAX_TEXT_WIDTH, &mut measure));
         }
     }
+    let footer_lines = footer.map_or_else(Vec::new, |footer| {
+        let mut measure = |text: &str| painter.measure_text(text, FontSlot::Translate, body_size).0;
+        wrap(footer, MAX_TEXT_WIDTH, &mut measure)
+    });
 
     let text_width = lines
         .iter()
+        .chain(footer_lines.iter())
         .map(|line| painter.measure_text(line, FontSlot::Translate, body_size).0)
         .fold(title_width, f32::max);
     let width = (text_width + PADDING * 2.0).max(360.0);
-    let height = PADDING * 2.0 + title_height + GAP + lines.len() as f32 * body_height;
+    let footer_height = if footer_lines.is_empty() {
+        0.0
+    } else {
+        GAP + footer_lines.len() as f32 * body_height
+    };
+    let height =
+        PADDING * 2.0 + title_height + GAP + lines.len() as f32 * body_height + footer_height;
 
-    let mut elements = Vec::with_capacity(lines.len() + 1);
+    let mut elements = Vec::with_capacity(lines.len() + footer_lines.len() + 1);
     elements.push(Element::Text {
         x: PADDING,
         y: PADDING,
-        text: TITLE.to_owned(),
+        text: title.to_owned(),
         size: title_size,
         slot: FontSlot::Candidate,
         color: palette.text,
@@ -141,6 +193,18 @@ fn build_document(painter: &mut cloud_ui::painter::Painter) -> Document {
             size: body_size,
             slot: FontSlot::Translate,
             color: palette.extra,
+            italic: false,
+        });
+    }
+    let footer_top = body_top + body_height * (elements.len() - 1) as f32 + GAP;
+    for (index, line) in footer_lines.into_iter().enumerate() {
+        elements.push(Element::Text {
+            x: PADDING,
+            y: footer_top + body_height * index as f32,
+            text: line,
+            size: body_size,
+            slot: FontSlot::Translate,
+            color: palette.badge,
             italic: false,
         });
     }

@@ -149,6 +149,8 @@ impl Router {
             let v_mode_help =
                 self.engine.expression_mode() && self.engine.composition().text() == "v";
             self.candidates.set_v_mode_help(v_mode_help);
+            self.candidates
+                .set_calculator_help(self.engine.calculator());
             let unchanged = matches!(
                 &self.last_shown,
                 Some((f, b, r)) if f == frame && *b == badges && *r == rect

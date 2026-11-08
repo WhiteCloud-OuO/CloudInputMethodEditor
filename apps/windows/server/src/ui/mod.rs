@@ -189,6 +189,10 @@ impl CandidateSink for UiHandle {
         self.post(UiCommand::VModeHelp(on));
     }
 
+    fn set_calculator_help(&self, on: bool) {
+        self.post(UiCommand::CalculatorHelp(on));
+    }
+
     /// 开关「辅助窗口」（`auxiliary_window`，眼下是键位映射参考）：挂在配置的组合键上。
     /// **必须在这个 impl 里覆盖** —— Router 拿的是 `Box<dyn CandidateSink>`，trait 上的默认体是空的。
     fn auxiliary_toggle(&self) {
@@ -400,6 +404,7 @@ fn apply(
         }
         UiCommand::Hide => window.hide(),
         UiCommand::VModeHelp(on) => window.set_v_mode_help(on),
+        UiCommand::CalculatorHelp(on) => window.set_calculator_help(on),
         UiCommand::AuxiliaryToggle => {
             // 名下的资产由宿主（候选窗口）自己管：这里只把开关递过去
             let on = window.toggle_assets();

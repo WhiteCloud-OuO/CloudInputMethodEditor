@@ -131,10 +131,24 @@ impl Complex {
 }
 
 /// 算式求值。算不了返回 `None`，算出来是最终显示文本。
+///
+/// **高级模式**：支持函数、虚数单位 `i`、复数模 `@`、排列组合与统计函数。
 pub fn evaluate(text: &str) -> Option<String> {
+    evaluate_with(text, true)
+}
+
+/// 基础模式：只允许四则运算、求余 `%`、乘方 `^`、阶乘 `!`（含括号与一元正负号）。
+///
+/// V 模式没进高级数学计算界面时走这条；函数、`i`、`@` 一律算语法错。
+pub fn evaluate_basic(text: &str) -> Option<String> {
+    evaluate_with(text, false)
+}
+
+fn evaluate_with(text: &str, advanced: bool) -> Option<String> {
     let mut parser = Parser {
         bytes: text.as_bytes(),
         position: 0,
+        advanced,
     };
     let value = parser.expression()?;
     if parser.position != parser.bytes.len() || !value.is_finite() {
@@ -150,6 +164,9 @@ struct Parser<'a> {
 
     /// 当前读到的位置。
     position: usize,
+
+    /// 高级模式：允许函数、`i`、`@`。
+    advanced: bool,
 }
 
 impl Parser<'_> {
@@ -257,6 +274,9 @@ impl Parser<'_> {
             if self.eat(b'!') {
                 value = Complex::real(factorial(value)?);
             } else if self.eat(b'@') {
+                if !self.advanced {
+                    return None;
+                }
                 value = Complex::real(value.modulus());
             } else {
                 return Some(value);
@@ -277,6 +297,10 @@ impl Parser<'_> {
         }
         if matches!(self.peek(), Some(b'0'..=b'9' | b'.')) {
             return self.number();
+        }
+        // 基础模式不允许函数 / 虚数单位：遇到字母直接算语法错。
+        if !self.advanced {
+            return None;
         }
         let start = self.position;
         while matches!(self.peek(), Some(byte) if byte.is_ascii_alphabetic()) {
@@ -536,6 +560,21 @@ fn format_number(value: f64) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn basic_mode_rejects_functions_complex_and_modulus() {
+        assert_eq!(evaluate_basic("1+2*3").as_deref(), Some("7"));
+        assert_eq!(evaluate_basic("2^10").as_deref(), Some("1024"));
+        assert_eq!(evaluate_basic("5!").as_deref(), Some("120"));
+        assert_eq!(evaluate_basic("7%3").as_deref(), Some("1"));
+        assert_eq!(evaluate_basic("sin(30)"), None);
+        assert_eq!(evaluate_basic("lg(100)"), None);
+        assert_eq!(evaluate_basic("i"), None);
+        assert_eq!(evaluate_basic("(5+6*i)@"), None);
+        // 高级模式仍支持这些
+        assert_eq!(evaluate("sin(30)").as_deref(), Some("0.5"));
+        assert_eq!(evaluate("i").as_deref(), Some("i"));
+    }
 
     #[test]
     fn arithmetic() {

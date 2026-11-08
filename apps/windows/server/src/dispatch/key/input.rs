@@ -371,8 +371,8 @@ impl Router {
                     // 面板里再按 Tab：退出表达式计算，回到 V 模式（算式留着，可以再按 Tab 进来）
                     self.engine.set_calculator(false);
                     Effect::Changed(None)
-                } else if self.engine.expression_mode() {
-                    // V 模式里按 Tab：进表达式计算面板（候选从此固定成结果那一条）
+                } else if self.engine.expression_mode() && self.engine.composition().text() == "v" {
+                    // 拼音串只剩 `v` 时才进高级数学计算界面；已有算式时不抢 Tab。
                     self.engine.set_calculator(true);
                     Effect::Changed(None)
                 } else {

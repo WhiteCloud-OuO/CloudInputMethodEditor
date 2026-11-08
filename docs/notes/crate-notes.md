@@ -55,14 +55,20 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 （不然 `atan2(-0.0, -4)` 给出 `-π`，`sqrt(-4)` 会算成 `-2i`）。算不了（语法错、除零、定义域外、
 溢出 / 非有限）一律 `None` = 空候选。
 
-**表达式计算器面板**：`Engine.calculator`（壳在 `v` 模式里按 `Tab` 设、`Tab` / `Esc` 清，组句结束也清）——
-开着时 `query_expression` 走 `shortcut::result_candidates`：**只给结果那一条候选**
-（算式空着给 `0`，算错给空），拼音行用 `typed_display` 显示算式本身（去掉 `v`）。壳那一侧：
+**表达式计算器面板**：`Engine.calculator`（壳只在拼音串**只剩 `v`** 时按 `Tab` 设，`Tab` / `Esc` 清，组句结束也清）——
+开着时 `query_expression` 走 `shortcut::result_candidates`：候选是结果（算式空着给 `0`，算错给空；
+`=>` 进制转换给三条），拼音行用 `typed_display` 显示算式本身（去掉 `v`）。壳那一侧：
 `apply_function_key` 的 `TAB` / `ESCAPE` 先看 `calculator`（进 / 出面板，不展开候选窗）、
-`apply_printable` 在面板里把**所有可打印 ASCII**都 `push` 进算式（标点按西文，忽略全角 / 符号映射），
-`composed::expression_hint` 只给表达式计算面板的底部提示（「按Tab/Esc退出表达式计算」）；
-V 模式本身不再往翻译 Tip 里写「输入数字或表达式」。面板里回车走 `calculator_expression`：算得出来就上屏「算式=结果」
+`apply_printable` 在面板里把**所有可打印 ASCII**都 `push` 进算式（标点按西文，忽略全角 / 符号映射）；
+面板不再往翻译 Tip 里写「按Tab/Esc退出表达式计算」，改为候选窗旁挂「高级数学计算界面」说明窗口
+（标题用候选项颜色、函数列表用额外内容颜色、底部「按Tab/Esc退出高级数学计算」用角标颜色）。
+V 模式本身只允许基础运算（`+ - * / % ^ !` 与括号 / 一元正负号，`shortcut::evaluate_basic`）；
+函数、`i`、`@` 只在面板里走 `shortcut::evaluate`。面板里回车走 `calculator_expression`：算得出来就上屏「算式=结果」
 （`5*6=30`），否则原样上屏（`take_raw` 顺手清组句，`calculator` 由 `handle_key` 的空组句那一拍清掉）。
+
+**进制转换**（`shortcut::radix`）：`=>` + `0b` / `0o` / `0x` / 无前缀整数，解析成 `u128` 后给其余三种进制
+（2 / 8 / 10 / 16；非十进制带小写前缀）。`=>` 的两个字符进了表达式字符集（`=` / `>`），V 模式与高级面板都能用；
+普通算式里的 `0x` 不按十六进制解析。
 
 **双键拼音**（`shuangpin.rs`，2026-10-10；方案文件与规范见 `docs/design/input-schemes.md`）：`Table`（`zero_initials` / `remapping` / `exchange` / `auxiliary` / `raw_input`）把按键还原成完整拼音。
 `expand(keys)` 两键一个音节、`'` 强制分词（不上屏）、开了辅助码时**小写是拼音键、大写是辅助码**

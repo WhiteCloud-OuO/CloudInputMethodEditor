@@ -329,8 +329,9 @@ fn surrounding(router: &mut Router, text: &str) {
 fn the_calculator_panel_commits_the_expression_with_its_value() {
     let normal = KeyModifiers::default();
     let mut r = router(9);
-    compose(&mut r, "v2*(3+4)", normal);
-    key(&mut r, 0x09, Some('\t'), normal); // 进面板
+    compose(&mut r, "v", normal);
+    key(&mut r, 0x09, Some('\t'), normal); // 只有 v 时进面板
+    compose(&mut r, "2*(3+4)", normal);
     let (outcome, commit, _) = key(&mut r, 0x0D, Some('\r'), normal);
     assert_eq!(outcome, KeyOutcome::Consumed);
     assert_eq!(commit.as_deref(), Some("2*(3+4)=14"));
@@ -339,8 +340,9 @@ fn the_calculator_panel_commits_the_expression_with_its_value() {
 
     // 算不出来（`v2*`）：照旧原样上屏
     let mut r = router(9);
-    compose(&mut r, "v2*", normal);
+    compose(&mut r, "v", normal);
     key(&mut r, 0x09, Some('\t'), normal);
+    compose(&mut r, "2*", normal);
     let (_, commit, _) = key(&mut r, 0x0D, Some('\r'), normal);
     assert_eq!(commit.as_deref(), Some("v2*"));
 
@@ -367,17 +369,61 @@ fn expression_mode_does_not_add_a_tip() {
     assert!(plain.self_drawn_frame().tip.is_none(), "普通拼音不该有提示");
 }
 
-/// V 模式里 Tab 进表达式计算面板：候选固定成结果那一条、拼音行显示算式（没有 `v`）、
-/// 标点按西文进算式；Tab / Esc 退出回 V 模式。
+/// V 模式里只有拼音串是 `v` 时按 Tab 才进高级数学计算界面；候选固定成结果那一条、
+/// 拼音行显示算式（没有 `v`）、标点按西文进算式；Tab / Esc 退出回 V 模式。
+/// `v` 模式的基础算式只到四则 / 取余 / 幂 / 阶乘；函数只在高级面板里。`=>` 进制转换走 `=` `>` 两个键。
+#[test]
+fn v_mode_basic_expressions_and_radix_conversion() {
+    let normal = KeyModifiers::default();
+
+    let mut functions = router(9);
+    compose(&mut functions, "vsin(30)", normal);
+    assert!(
+        functions.self_drawn_frame().candidates.items.is_empty(),
+        "V 模式没进高级面板时不出函数结果"
+    );
+
+    let mut radix = router(9);
+    compose(&mut radix, "v=>0x33ccff", normal);
+    let texts: Vec<String> = radix
+        .self_drawn_frame()
+        .candidates
+        .items
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect();
+    assert_eq!(texts, ["0b1100111100110011111111", "0o14746377", "3394815"]);
+
+    // 有算式时 Tab 不进面板；只有 v 才进
+    let mut tab = router(9);
+    compose(&mut tab, "v1+2", normal);
+    key(&mut tab, 0x09, Some('\t'), normal);
+    assert!(!tab.engine.calculator());
+}
+
+#[test]
+fn calculator_supports_functions_after_entering_from_bare_v() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    compose(&mut r, "v", normal);
+    key(&mut r, 0x09, Some('\t'), normal);
+    compose(&mut r, "sin(30)", normal);
+    let frame = r.self_drawn_frame();
+    assert_eq!(frame.candidates.items.len(), 1);
+    assert_eq!(frame.candidates.items[0].text, "0.5");
+}
+
 #[test]
 fn tab_enters_and_leaves_the_calculator_panel() {
     let mut r = router(9);
     let normal = KeyModifiers::default();
-    compose(&mut r, "v2*(3+4)", normal);
-
-    let (outcome, _, frame) = key(&mut r, 0x09, Some('\t'), normal);
+    compose(&mut r, "v", normal);
+    let (outcome, _, _) = key(&mut r, 0x09, Some('\t'), normal);
     assert_eq!(outcome, KeyOutcome::Consumed);
     assert!(r.engine.calculator());
+    assert_eq!(r.engine.raw_preedit().text, "v");
+    compose(&mut r, "2*(3+4)", normal);
+    let frame = r.self_drawn_frame();
     assert_eq!(frame.candidates.items.len(), 1, "面板里只有一条候选");
     assert_eq!(frame.candidates.items[0].text, "14");
     assert_eq!(preedit(&frame), "2*(3+4)", "拼音行显示算式本身");
@@ -392,17 +438,33 @@ fn tab_enters_and_leaves_the_calculator_panel() {
     assert!(!r.engine.calculator());
     assert_eq!(preedit(&frame), "v2*(3+4);");
 
-    // Esc 在面板里也是「退出表达式计算」，不清空组句
+    // 已有算式时 Tab 不再进面板（只有 `v` 才能进）
+    let (_, _, _) = key(&mut r, 0x09, Some('\t'), normal);
+    assert!(!r.engine.calculator());
+
+    // 清空后重新只输入 v，再进面板测 Esc / 光标 / Delete
+    key(&mut r, 0x1B, None, normal); // 清空组句
+    compose(&mut r, "v2*(3+4)", normal);
+    key(&mut r, 0x09, Some('\t'), normal);
+    assert!(!r.engine.calculator(), "已有算式时 Tab 不进面板");
+    key(&mut r, 0x1B, None, normal);
+    compose(&mut r, "v", normal);
     key(&mut r, 0x09, Some('\t'), normal);
     assert!(r.engine.calculator());
+    compose(&mut r, "2*(3+4);", normal);
+
+    // Esc 在面板里也是「退出表达式计算」，不清空组句
     let (outcome, _, _) = key(&mut r, 0x1B, None, normal);
     assert_eq!(outcome, KeyOutcome::Consumed);
     assert!(!r.engine.calculator());
     assert_eq!(r.engine.composition().text(), "v2*(3+4);");
 
-    // `[` `]` 在面板里仍然移拼音光标（不进算式）
+    // 重新进面板：`[` `]` 仍然移拼音光标（不进算式）
+    key(&mut r, 0x1B, None, normal);
+    compose(&mut r, "v", normal);
     key(&mut r, 0x09, Some('\t'), normal);
     assert!(r.engine.calculator());
+    compose(&mut r, "2*(3+4);", normal);
     let before = r.engine.composition().cursor();
     let (_, commit, _) = key(&mut r, 0xDB, Some('['), normal);
     assert_eq!(commit, None);
