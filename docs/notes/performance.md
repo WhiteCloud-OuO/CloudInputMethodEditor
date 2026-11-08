@@ -221,6 +221,14 @@ TSV 解析路径也改成产出同样的结构，查询代码只有一份。
 1809 缺失就回退 CPU），运行时只多约 3 MB。代价是输入要 padding 到固定维度 / 分桶，短输入才有收益；
 动态维度反而比 CPU 慢。
 
+**固定维度 padding 的坑（2026-11-08）**：实测只把 `seq_len` 固定、`num_markers` / `num_slots` 保持动态，
+已经能拿到几乎全部收益（seq=64：13.2 → 5.5 ms；再加 markers/slots 固定只差 0.1 ms）。但**不能直接补 0**：
+模型里有 64 个 `DynamicQuantizeLinear`，量化 scale 是按整个激活张量（含 padding）算的；同一段真实输入
+后面补 0 再跑，`attention_mask` 已经正确标 0、编码器 mask 也是 `-inf`，logits 仍会变约 0.1、
+`char_logits` 变约 1.0 —— 动态量化 scale 被 padding 拉变了。rank 可能被改，不能当固定维度直接用。
+要用固定桶，得先做**静态量化 / 导出 float 模型**（让 padding 不再影响量化 scale），或者只用动态维度
+（长输入仍比 CPU 快，短输入不如 CPU）。
+
 **含章（candle）——CUDA 能跑，但不适合随包**：candle 0.11 的 `cuda` feature 会把权重放显存，但
 `candle-kernels` 的 build.rs 用 `cudaforge` 调 `nvcc` 编 PTX；本机只有驱动（CUDA 13.1），没装 CUDA Toolkit，
 `nvcc` 不在 PATH，所以这次没编出 CUDA 版。运行期还要 CUDA runtime + cuBLAS（几百 MB），随安装包不现实；
@@ -231,6 +239,11 @@ candle 也没有 DirectML 后端。CPU 基线：加载 694 ms，8 条候选 77 m
 8 候选、超过 128 token 的长前文）与 candle 的 `score` 总分最大差 **5.8e-4**（ONNX logits 最大差 6.5e-5），
 排序不受影响。DirectML 上 8 候选从 candle CPU 的 77.1 ms 降到 12.9 ms，长前文 38.7 → 28.6 ms；
 f32 模型显存约 +230 MB。fp16 更快更省，但 `score` 差会到 2.6e-2，适合“能用”而不是严格对拍。
+
+带 `past_k` / `past_v` 的缓存模型也导了一版，与完整序列同样的对拍最大差 **5.9e-4**。CPU 上“前文一次 + 每批
+候选一小步”在长前文是 13.8 + 7.9 ms（完整序列 60 ms），同一段前文反复打分只付 7.9 ms；短前文反而完整
+序列更省。DirectML 上缓存模型的 step 因为 `past` 还是动态维度，反而要 26–33 ms，目前不如 DirectML 完整
+序列（8 候选 13.2 ms / 长前文 27.8 ms）；要把 DML 缓存也压下来，下一步得把 `past` 也做固定桶。
 
 **建议**：近期继续用 CPU（异步重排 40–80 ms 在 80 ms 防抖预算内，够用）。真要上 GPU，最省事的路线是
 **两份模型统一走 ONNX + DirectML**：含章用 `tools/model-export/` 导出的模型（先按完整序列，之后可补 K/V

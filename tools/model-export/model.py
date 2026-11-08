@@ -116,6 +116,27 @@ class FullModel(nn.Module):
         return logits
 
 
+class CacheModel(nn.Module):
+    """带 K/V 缓存的导出包装：`past_k` / `past_v` 形状 `[层, batch, 头, past, 头维]`。"""
+
+    def __init__(self, model: CharLM):
+        super().__init__()
+        self.model = model
+
+    def forward(
+        self,
+        ids: torch.Tensor,
+        past_keys: torch.Tensor,
+        past_values: torch.Tensor,
+    ) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
+        logits, keys, values = self.model(
+            ids,
+            list(past_keys.unbind(0)),
+            list(past_values.unbind(0)),
+        )
+        return logits, torch.stack(keys), torch.stack(values)
+
+
 @torch.no_grad()
 def score(
     model: CharLM,
