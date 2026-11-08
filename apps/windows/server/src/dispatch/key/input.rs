@@ -286,11 +286,24 @@ impl Router {
         }
         match event.virtual_key {
             codes::UP | codes::LEFT => {
-                self.translate.move_choice_highlight(-1);
+                // 反向竖排时这条列表是从下往上，UP 变成「下一条」。
+                let delta = if event.virtual_key == codes::UP && self.candidates.reversed_vertical()
+                {
+                    1
+                } else {
+                    -1
+                };
+                self.translate.move_choice_highlight(delta);
                 return Effect::Navigated;
             }
             codes::DOWN | codes::RIGHT => {
-                self.translate.move_choice_highlight(1);
+                let delta =
+                    if event.virtual_key == codes::DOWN && self.candidates.reversed_vertical() {
+                        -1
+                    } else {
+                        1
+                    };
+                self.translate.move_choice_highlight(delta);
                 return Effect::Navigated;
             }
             // 空格 = 选高亮那条，与鼠标单击同一条路。进选择界面时高亮落在第 1 条上，
@@ -373,23 +386,26 @@ impl Router {
             // —— 竖排收起是「上下挪高亮、左右翻页」，横排收起是「左右挪高亮、上下翻页」。
             // 拼音光标在收起态也不再由方向键移，改用 `[` `]`（见 [`Self::apply_printable`]）。
             // 展开成网格后四个方向都挪高亮。
+            // 反向竖排时列表方向是**从下往上**，上下键跟着翻一下（展开网格也一样）。
             codes::DOWN => {
+                let reversed = self.candidates.reversed_vertical();
                 if self.show_more {
-                    self.move_highlight_in_grid(1, 0);
+                    self.move_highlight_in_grid(if reversed { -1 } else { 1 }, 0);
                 } else if self.horizontal() {
                     self.page(1);
                 } else {
-                    self.move_highlight(1);
+                    self.move_highlight(if reversed { -1 } else { 1 });
                 }
                 Effect::Navigated
             }
             codes::UP => {
+                let reversed = self.candidates.reversed_vertical();
                 if self.show_more {
-                    self.move_highlight_in_grid(-1, 0);
+                    self.move_highlight_in_grid(if reversed { 1 } else { -1 }, 0);
                 } else if self.horizontal() {
                     self.page(-1);
                 } else {
-                    self.move_highlight(-1);
+                    self.move_highlight(if reversed { 1 } else { -1 });
                 }
                 Effect::Navigated
             }

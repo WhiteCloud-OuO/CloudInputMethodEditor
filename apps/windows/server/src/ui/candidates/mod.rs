@@ -11,6 +11,7 @@ use std::cell::{Cell, RefCell};
 use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
@@ -249,6 +250,9 @@ pub(crate) struct CandidateWindow {
     /// 最近画出来的内容区尺寸（点）对外公布的地方：脚本的 `cloudime.candidate.width()` 读它。
     viewport: Arc<Viewport>,
 
+    /// 当前这一帧是不是反向竖排（工人线程处理方向键时读）。
+    reversed: Arc<AtomicBool>,
+
     /// 上次贴出去的**内容区**屏幕矩形（物理像素）；没显示时为 `None`。
     /// 辅助窗口模板按它（宿主内容区矩形）把自己摆在候选窗旁边。
     content_rect: Cell<Option<RECT>>,
@@ -273,6 +277,7 @@ impl CandidateWindow {
         painter: SharedPainter,
         events: CandidateEvents,
         viewport: Arc<Viewport>,
+        reversed: Arc<AtomicBool>,
     ) -> Result<Self> {
         // 独立窗口模板：注册窗口类 + 建一块分层、置顶、不抢焦点的弹出窗（要接鼠标，给个箭头）
         let mut template = IndependentWindowTemplate::new(
@@ -315,6 +320,7 @@ impl CandidateWindow {
             zoom_step: Cell::new(0),
             script_scale: Cell::new(None),
             viewport,
+            reversed,
             content_rect: Cell::new(None),
             assets_on: Cell::new(false),
             assets_mode: Cell::new(KeyMapReference::Off),
@@ -504,6 +510,7 @@ impl CandidateWindow {
     }
 
     pub(crate) fn hide(&self) {
+        self.reversed.store(false, Ordering::Relaxed);
         // 忘掉 anchor 与上一帧的位置：下次重新弹出时即使内容碰巧一样，也不该跟上次的高亮位置做滑动。
         self.anchor.set(None);
         self.content_rect.set(None);
@@ -618,6 +625,8 @@ impl CandidateWindow {
             self.hide();
             return;
         };
+        self.reversed
+            .store(view.reverse_vertical, Ordering::Relaxed);
         *self.last_rects.borrow_mut() = rendered.highlight_rects.clone();
         *self.last_regions.borrow_mut() = rendered.regions.clone();
         // 收起态：把高亮那条的宽度记下来，展开成网格时当每格的最小宽度。

@@ -25,6 +25,8 @@ struct Recorded {
     auxiliary_toggles: Mutex<u32>,
     /// 下发给候选窗口的键位映射参考显示方式（`CandidateSink::set_auxiliary_mode`）。
     auxiliary_modes: Mutex<Vec<KeyMapReference>>,
+    /// 模拟候选窗当前是不是反向竖排。
+    reversed: Mutex<bool>,
 }
 
 struct RecordingSink(Arc<Recorded>);
@@ -44,6 +46,10 @@ impl CandidateSink for RecordingSink {
 
     fn set_auxiliary_mode(&self, mode: KeyMapReference) {
         self.0.auxiliary_modes.lock().unwrap().push(mode);
+    }
+
+    fn reversed_vertical(&self) -> bool {
+        *self.0.reversed.lock().unwrap()
     }
 }
 
@@ -513,6 +519,29 @@ fn page_keys_move_by_page_and_boundaries_hold() {
         key(&mut router, 0x22, None, normal);
         assert_eq!(key(&mut router, 0x21, None, normal).2.page, 0);
     }
+}
+
+/// 反向竖排时上下键要跟视觉方向一致：UP 往序号大的方向走，DOWN 往序号小的方向走；
+/// 展开成网格后上下键也按「从下往上」的视觉行反一下。
+#[test]
+fn reverse_vertical_flips_up_and_down_keys() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    let recorded = Arc::new(Recorded::default());
+    *recorded.reversed.lock().unwrap() = true;
+    r.set_candidate_sink(Box::new(RecordingSink(recorded)));
+    r.config.show_more_candidate_items = true;
+    compose(&mut r, "qq", normal);
+    assert_eq!(r.self_drawn_frame().highlight, 0);
+
+    // 收起态：UP 往序号大的方向（视觉上往上），DOWN 回来。
+    assert_eq!(key(&mut r, 0x26, None, normal).2.highlight, 1);
+    assert_eq!(key(&mut r, 0x28, None, normal).2.highlight, 0);
+
+    // 展开网格：视觉上一行在序号后面（反向填充），UP 从 0 跳到第 6 个。
+    assert_eq!(key(&mut r, 9, None, normal).2.columns, 5);
+    assert_eq!(key(&mut r, 0x26, None, normal).2.highlight, 5);
+    assert_eq!(key(&mut r, 0x28, None, normal).2.highlight, 0);
 }
 
 /// 组句里 Tab 展开「更多候选项」：一屏 = 5 × 候选项个数（竖排 5 列），序号不再画，

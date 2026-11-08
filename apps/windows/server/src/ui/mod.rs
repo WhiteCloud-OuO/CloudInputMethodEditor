@@ -50,6 +50,7 @@ pub(crate) use viewport::Viewport;
 use std::cell::RefCell;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
 
@@ -102,6 +103,9 @@ pub struct UiHandle {
 
     /// 候选窗最近画出来的内容区尺寸（点），脚本的 `cloudime.candidate.width()` 读它。
     viewport: Arc<Viewport>,
+
+    /// 候选窗当前是不是反向竖排（UI 线程每画一帧写，工人线程处理方向键时读）。
+    reversed: Arc<AtomicBool>,
 }
 
 impl UiHandle {
@@ -116,6 +120,8 @@ impl UiHandle {
         let (command_tx, command_rx) = mpsc::channel::<UiCommand>();
         let viewport = Arc::new(Viewport::default());
         let window_viewport = viewport.clone();
+        let reversed = Arc::new(AtomicBool::new(false));
+        let window_reversed = reversed.clone();
         thread::Builder::new()
             .name("cloudime-candidates".to_owned())
             .spawn(move || {
@@ -126,6 +132,7 @@ impl UiHandle {
                     on_candidates,
                     on_script_window,
                     window_viewport,
+                    window_reversed,
                 )
             })
             .map_err(|_| Error::from(E_FAIL))?;
@@ -134,6 +141,7 @@ impl UiHandle {
                 sender: command_tx,
                 thread_id,
                 viewport,
+                reversed,
             }),
             _ => Err(Error::from(E_FAIL)),
         }
@@ -162,6 +170,10 @@ impl CandidateSink for UiHandle {
 
     fn viewport(&self) -> Option<(f32, f32)> {
         self.viewport.get()
+    }
+
+    fn reversed_vertical(&self) -> bool {
+        self.reversed.load(Ordering::Relaxed)
     }
 
     /// 开关「辅助窗口」（`auxiliary_window`，眼下是键位映射参考）：挂在配置的组合键上。
@@ -269,6 +281,7 @@ fn run(
     on_candidates: CandidateEvents,
     on_script_window: ScriptWindowEvents,
     viewport: Arc<Viewport>,
+    reversed: Arc<AtomicBool>,
 ) {
     // 按物理像素定位，与应用报来的组句屏幕矩形对齐；已设过会失败，忽略。
     let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
@@ -276,7 +289,7 @@ fn run(
     // 装上时随 Configure 命令建。
     let painter: SharedPainter = Rc::new(RefCell::new(None));
     // 先建窗口再报 id：建窗口顺带建起本线程的消息队列，之后 PostThreadMessageW 才有处可投。
-    let window = match CandidateWindow::new(painter.clone(), on_candidates, viewport) {
+    let window = match CandidateWindow::new(painter.clone(), on_candidates, viewport, reversed) {
         Ok(window) => Rc::new(window),
         Err(error) => {
             tracing::error!(%error, "建候选窗口失败，Server 将不显示候选框");
@@ -442,6 +455,7 @@ mod tests {
             sender,
             thread_id: 0,
             viewport: Arc::new(Viewport::default()),
+            reversed: Arc::new(AtomicBool::new(false)),
         });
         sink.auxiliary_toggle();
         assert!(

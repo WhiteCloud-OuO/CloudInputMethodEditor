@@ -23,6 +23,12 @@ pub trait CandidateSink: Send {
         None
     }
 
+    /// 候选窗当前是否按**反向竖排**显示（竖排 + 窗口在光标上方 + 用户开了自动反向）。
+    /// 方向键据此把上下反一下；不画的实现默认 `false`。
+    fn reversed_vertical(&self) -> bool {
+        false
+    }
+
     /// 开关「辅助窗口」（`auxiliary_window`，眼下是键位映射参考）：挂在配置的组合键上。
     /// 不画的实现（[`NoopSink`]）默认什么都不做。
     fn auxiliary_toggle(&self) {}

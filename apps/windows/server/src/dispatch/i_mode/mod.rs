@@ -179,9 +179,10 @@ impl Router {
 
     fn i_mode_arrow(&mut self, key: u32) {
         let vertical = self.config.layout == LayoutMode::Vertical;
+        let reversed = vertical && self.candidates.reversed_vertical();
         match key {
-            UP if vertical => self.move_highlight(-1),
-            DOWN if vertical => self.move_highlight(1),
+            UP if vertical => self.move_highlight(if reversed { 1 } else { -1 }),
+            DOWN if vertical => self.move_highlight(if reversed { -1 } else { 1 }),
             LEFT if vertical => self.page(-1),
             RIGHT if vertical => self.page(1),
             LEFT => self.move_highlight(-1),
