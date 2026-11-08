@@ -15,4 +15,8 @@ pub struct DebuggingConfig {
     /// 不处于输入状态时自动禁用输入法（实验性，缺省关）：焦点不在可输入文本区域（没有文本焦点、只读视图、
     /// 密码框这类上下文）时按「禁用」走，回到文本区域再恢复（判断与动作都在 DLL，见 TSF 那一节）。
     pub auto_disable_without_text_input: bool,
+
+    /// 模型优先使用图形处理器加载（实验性，缺省关）：为之后的 DirectML 推理保留的偏好；
+    /// 当前版本还没有 GPU 推理路径，打开只记录偏好，仍走 CPU。
+    pub prefer_gpu_model: bool,
 }

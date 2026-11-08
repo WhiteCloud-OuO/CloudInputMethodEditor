@@ -474,6 +474,9 @@ impl Component for Settings {
             Message::AutoHideFloatToolBar(on) => {
                 self.save("debugging", "auto_hide_float_tool_bar", on);
             }
+            Message::PreferGpuModel(on) => {
+                self.save("debugging", "prefer_gpu_model", on);
+            }
             Message::AutoDisableWithoutTextInput(on) => {
                 self.save("debugging", "auto_disable_without_text_input", on);
             }

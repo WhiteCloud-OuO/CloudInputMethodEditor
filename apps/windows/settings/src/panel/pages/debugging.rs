@@ -200,6 +200,13 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
                 .is_on(d.auto_hide_float_tool_bar)
                 .on_toggled(context.callback(Message::AutoHideFloatToolBar)),
         ),
+        field(
+            "模型优先使用图形处理器加载（实验性功能）",
+            "让本地候选 / 整句模型优先在 GPU（DirectML）上加载，GPU 不可用时回退 CPU。当前版本只记录偏好，推理仍走 CPU。",
+            ToggleSwitch::new()
+                .is_on(d.prefer_gpu_model)
+                .on_toggled(context.callback(Message::PreferGpuModel)),
+        ),
         StackPanel::new()
             .orientation(Orientation::Horizontal)
             .spacing(8.0)

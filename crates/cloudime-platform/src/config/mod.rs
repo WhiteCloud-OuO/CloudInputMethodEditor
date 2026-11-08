@@ -214,6 +214,8 @@ show_status_bar = true
 # 自动隐藏悬浮工具栏（实验性功能）：开启后，前台是全屏应用（游戏 / 看视频）时收起；
 # 切到别的输入法、云朵输入法被禁用时始终收起，不受这一项影响。关掉后全屏时也不收起
 auto_hide_float_tool_bar = false
+# 模型优先使用图形处理器加载（实验性功能）：为之后的 GPU 推理保留；当前版本仍走 CPU
+prefer_gpu_model = false
 # 不处于输入状态时自动禁用输入法（实验性功能）：焦点不在可输入文本区域（只读视图、密码框、
 # 没有文本焦点）时自动禁用，回到文本区域再启用。用户手动按 Ctrl + Space 禁用的不受影响
 auto_disable_without_text_input = false
@@ -437,6 +439,7 @@ mod tests {
         assert_eq!(config.candidate.item_number_font.size, 11.0);
         // 全屏时不自动收起悬浮工具栏；翻译 Tip 默认选英文词典，重置计数从 0 开始
         assert!(!config.debugging.auto_hide_float_tool_bar);
+        assert!(!config.debugging.prefer_gpu_model);
         assert_eq!(config.translate.dictionary, "glossary-en.db");
         assert_eq!(config.translate.reset_counter, 0);
     }
@@ -450,6 +453,14 @@ mod tests {
         assert_eq!(config.script.disabled, ["niutrans-window", "ONLINE-SEARCH"]);
         // 模板里带着这一节（新装的用户不用手加）
         assert!(TEMPLATE.contains("[script]\n"));
+    }
+
+    #[test]
+    fn prefer_gpu_model_defaults_off_and_reads_from_toml() {
+        let config: Config = toml::from_str("").unwrap();
+        assert!(!config.debugging.prefer_gpu_model);
+        let config: Config = toml::from_str("[debugging]\nprefer_gpu_model = true\n").unwrap();
+        assert!(config.debugging.prefer_gpu_model);
     }
 
     #[test]

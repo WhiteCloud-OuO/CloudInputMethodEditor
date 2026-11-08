@@ -169,6 +169,9 @@ pub struct Router {
     /// 知意模型的 ONNX Runtime 线程数（`[candidate] zhiyi_threads`）。
     zhiyi_threads: usize,
 
+    /// 模型优先使用 GPU（`[debugging] prefer_gpu_model`，实验性；当前版本只记录偏好）。
+    prefer_gpu_model: bool,
+
     /// 进行中的模型加载；加载完接到 Engine 上就清掉。
     model_loader: Option<ModelLoader>,
 
@@ -356,6 +359,7 @@ impl Router {
             model_path: None,
             zhiyi_model: None,
             zhiyi_threads: cloudime_platform::DEFAULT_ZHIYI_THREADS,
+            prefer_gpu_model: false,
             model_loader: None,
             applied_model: LocalModelMode::Off,
             effective_model: LocalModelMode::Off,

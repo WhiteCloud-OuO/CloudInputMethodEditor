@@ -136,6 +136,15 @@ impl Router {
         }
     }
 
+    /// 模型优先使用 GPU（实验性）：当前还没有 GPU 推理路径，只记录偏好；接上 DML 后由这里触发重载。
+    pub fn set_prefer_gpu_model(&mut self, prefer: bool) {
+        if prefer == self.prefer_gpu_model {
+            return;
+        }
+        self.prefer_gpu_model = prefer;
+        tracing::info!(prefer, "模型优先使用图形处理器（实验性）：当前版本仍用 CPU");
+    }
+
     /// 热加载：模式或知意线程数变了才重载 / 卸载。
     pub(super) fn apply_model_config(&mut self, mode: LocalModelMode, zhiyi_threads: usize) {
         if mode == self.applied_model && zhiyi_threads == self.zhiyi_threads {
