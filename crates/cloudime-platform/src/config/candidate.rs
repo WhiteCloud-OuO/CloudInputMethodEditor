@@ -23,6 +23,15 @@ pub const DEFAULT_CANDIDATE_BOX_MINIMUM_WIDTH: u32 = 180;
 /// 太长的候选项截断并显示 `…`。`0` 表示不限。
 pub const DEFAULT_CANDIDATE_ITEM_MAXIMUM_WIDTH: u32 = 420;
 
+/// 知意模型 ONNX Runtime 的缺省线程数：2 线程偏省电，4 线程在这类 CPU 上快 20–25%。
+pub const DEFAULT_ZHIYI_THREADS: usize = 4;
+
+/// 知意模型线程数下限。
+pub const MIN_ZHIYI_THREADS: usize = 1;
+
+/// 知意模型线程数上限（再多的收益递减，还会和打字抢 CPU）。
+pub const MAX_ZHIYI_THREADS: usize = 32;
+
 /// 一种字体的用法：字族名 + 字号（点）。
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 #[serde(default)]
@@ -163,6 +172,10 @@ pub struct CandidateConfig {
     /// 本地模型模式：关闭 / 基本（含章）/ 增强（知意）/ 混合（含章+知意）。
     pub local_model: LocalModelMode,
 
+    /// 知意模型 ONNX Runtime 的线程数（1–32）；缺省 4。
+    #[serde(default = "default_zhiyi_threads")]
+    pub zhiyi_threads: usize,
+
     /// 旧配置里的布尔开关（`use_local_sentence_organization_model`）：只读兼容，不再写回。
     /// `local_model` 不是「基本」时以它为准；是「基本」时旧值 `false` 仍按「关闭」读。
     #[serde(
@@ -230,10 +243,15 @@ pub struct CandidateConfig {
     pub program_list_of_hiding_candidate: Vec<String>,
 }
 
+fn default_zhiyi_threads() -> usize {
+    DEFAULT_ZHIYI_THREADS
+}
+
 impl Default for CandidateConfig {
     fn default() -> Self {
         Self {
             local_model: LocalModelMode::default(),
+            zhiyi_threads: DEFAULT_ZHIYI_THREADS,
             legacy_local_model_enabled: None,
             context_memory_seconds: cloudime_core::DEFAULT_FRESH_SECONDS,
             candidate_arrangement_direction: LayoutMode::default(),
@@ -279,6 +297,12 @@ impl CandidateConfig {
     pub fn association_counts(&self) -> usize {
         self.candidate_association_counts
             .clamp(MIN_ASSOCIATION_COUNTS, MAX_ASSOCIATION_COUNTS)
+    }
+
+    /// 夹到合法范围的知意线程数。
+    pub fn zhiyi_threads(&self) -> usize {
+        self.zhiyi_threads
+            .clamp(MIN_ZHIYI_THREADS, MAX_ZHIYI_THREADS)
     }
 
     /// 这个程序（exe 文件名，不区分大小写）在不在「不显示候选框」名单里。
@@ -364,5 +388,20 @@ mod tests {
         assert!(config.hides_candidate_for(" Code.EXE "));
         assert!(!config.hides_candidate_for("notepad.exe"));
         assert!(!config.hides_candidate_for(""));
+    }
+
+    #[test]
+    fn zhiyi_threads_default_to_four_and_clamp() {
+        assert_eq!(CandidateConfig::default().zhiyi_threads(), 4);
+        let config = CandidateConfig {
+            zhiyi_threads: 0,
+            ..CandidateConfig::default()
+        };
+        assert_eq!(config.zhiyi_threads(), MIN_ZHIYI_THREADS);
+        let config = CandidateConfig {
+            zhiyi_threads: 99,
+            ..CandidateConfig::default()
+        };
+        assert_eq!(config.zhiyi_threads(), MAX_ZHIYI_THREADS);
     }
 }

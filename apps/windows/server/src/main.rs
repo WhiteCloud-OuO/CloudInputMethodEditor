@@ -267,6 +267,7 @@ fn main() {
         model_path.clone(),
         zhiyi_model.clone(),
         config.candidate.resolved_local_model(),
+        config.candidate.zhiyi_threads(),
     );
     if let Some(path) = config_path() {
         let user = user_dir();

@@ -22,8 +22,8 @@ use toml_edit::DocumentMut;
 use crate::error::ConfigError;
 
 pub use candidate::{
-    CandidateConfig, DEFAULT_CANDIDATE_BOX_MINIMUM_WIDTH, DEFAULT_FAMILY, FontChoice,
-    ItemNumberStyle, LocalModelMode, MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT,
+    CandidateConfig, DEFAULT_CANDIDATE_BOX_MINIMUM_WIDTH, DEFAULT_FAMILY, DEFAULT_ZHIYI_THREADS,
+    FontChoice, ItemNumberStyle, LocalModelMode, MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT,
     MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MouseWordSelection,
 };
 pub use debugging::DebuggingConfig;
@@ -127,6 +127,8 @@ punctuation_marks_mapping = 0
 [candidate]
 # 本地模型：off 关闭 / basic 基本（含章整句模型）/ enhanced 增强（知意：候选重排 + 按音节出字）/ hybrid 混合（含章+知意）
 local_model = "basic"
+# 知意模型的 ONNX Runtime 线程数（1–32）：4 比 2 快约 20–25%，更多线程收益递减
+zhiyi_threads = 4
 # 应用读不到光标前文时，这个应用里多少秒内上屏的字还给模型当前文；0 表示一直算
 context_memory_seconds = 60
 # 候选项排布方向：vertical 竖排 / horizontal 横排（横排只给高亮候选显示译文）
@@ -448,6 +450,16 @@ mod tests {
         assert_eq!(config.script.disabled, ["niutrans-window", "ONLINE-SEARCH"]);
         // 模板里带着这一节（新装的用户不用手加）
         assert!(TEMPLATE.contains("[script]\n"));
+    }
+
+    #[test]
+    fn zhiyi_threads_defaults_and_reads_from_toml() {
+        let config: Config = toml::from_str("").unwrap();
+        assert_eq!(config.candidate.zhiyi_threads(), 4);
+        let config: Config = toml::from_str("[candidate]\nzhiyi_threads = 6\n").unwrap();
+        assert_eq!(config.candidate.zhiyi_threads(), 6);
+        let config: Config = toml::from_str("[candidate]\nzhiyi_threads = 0\n").unwrap();
+        assert_eq!(config.candidate.zhiyi_threads(), 1);
     }
 
     #[test]

@@ -121,10 +121,12 @@ impl Router {
         model_path: Option<PathBuf>,
         zhiyi: Option<(PathBuf, PathBuf)>,
         mode: LocalModelMode,
+        zhiyi_threads: usize,
     ) {
         self.model_path = model_path;
         self.zhiyi_model = zhiyi;
         self.applied_model = mode;
+        self.zhiyi_threads = zhiyi_threads;
         self.effective_model = LocalModelMode::Off;
         self.lazy_sentence = None;
         self.sentence_ready = false;
@@ -134,12 +136,13 @@ impl Router {
         }
     }
 
-    /// 热加载：模式变了才重载 / 卸载。
-    pub(super) fn apply_model_config(&mut self, mode: LocalModelMode) {
-        if mode == self.applied_model {
+    /// 热加载：模式或知意线程数变了才重载 / 卸载。
+    pub(super) fn apply_model_config(&mut self, mode: LocalModelMode, zhiyi_threads: usize) {
+        if mode == self.applied_model && zhiyi_threads == self.zhiyi_threads {
             return;
         }
         self.applied_model = mode;
+        self.zhiyi_threads = zhiyi_threads;
         self.unload_local_model();
         if mode != LocalModelMode::Off {
             self.load_local_model();
@@ -202,7 +205,11 @@ impl Router {
     }
 
     fn spawn_zhiyi(&mut self, dir: PathBuf, runtime: PathBuf) -> bool {
-        self.model_loader = ModelLoader::spawn(ModelFiles::Zhiyi { dir, runtime });
+        self.model_loader = ModelLoader::spawn(ModelFiles::Zhiyi {
+            dir,
+            runtime,
+            threads: self.zhiyi_threads,
+        });
         self.model_loader.is_some()
     }
 

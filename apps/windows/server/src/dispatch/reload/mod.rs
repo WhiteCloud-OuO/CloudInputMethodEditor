@@ -205,7 +205,10 @@ impl Router {
         // 脚本的量尺也跟上：字体设置变了它自己会重建渲染器
         self.measure.borrow_mut().0 = settings;
         self.reconcile_status();
-        self.apply_model_config(config.candidate.resolved_local_model());
+        self.apply_model_config(
+            config.candidate.resolved_local_model(),
+            config.candidate.zhiyi_threads(),
+        );
 
         let Some(reload) = &mut self.reload else {
             return;

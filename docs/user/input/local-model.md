@@ -46,4 +46,6 @@ local_model = "off"
 
 知意第一次加载后，会在 `%LOCALAPPDATA%\CloudIME\cache\onnx\` 存一份约 80 MB 的优化图，用来加快下次启动；删掉会自动重建。
 
+知意推理默认用 4 个 ONNX Runtime 线程（`[candidate] zhiyi_threads`，1–32）。线程多通常更快，但发热也更多；机器风扇明显变吵时可以调回 2。
+
 知意权重由[知意输入法](https://github.com/dd1000001000/zhiyi_ime)的作者训练并授权（Apache-2.0）；输入法不联网。

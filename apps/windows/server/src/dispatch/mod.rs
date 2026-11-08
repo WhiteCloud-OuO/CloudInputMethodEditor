@@ -166,6 +166,9 @@ pub struct Router {
     /// 知意模型目录与 ONNX Runtime；没有为 `None`。
     zhiyi_model: Option<(PathBuf, PathBuf)>,
 
+    /// 知意模型的 ONNX Runtime 线程数（`[candidate] zhiyi_threads`）。
+    zhiyi_threads: usize,
+
     /// 进行中的模型加载；加载完接到 Engine 上就清掉。
     model_loader: Option<ModelLoader>,
 
@@ -352,6 +355,7 @@ impl Router {
             last_shown: None,
             model_path: None,
             zhiyi_model: None,
+            zhiyi_threads: cloudime_platform::DEFAULT_ZHIYI_THREADS,
             model_loader: None,
             applied_model: LocalModelMode::Off,
             effective_model: LocalModelMode::Off,

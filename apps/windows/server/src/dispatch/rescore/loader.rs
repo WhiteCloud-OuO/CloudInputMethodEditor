@@ -8,16 +8,17 @@ use cloudime_core::ChoiceModel;
 use cloudime_neural::zhiyi::ChoiceScorer;
 use cloudime_neural::{CharScorer, NeuralError};
 
-/// 知意用几个线程：多了发热，两个线程一次也只要几十毫秒。
-const ZHIYI_THREADS: usize = 2;
-
 /// 这次要加载哪个模型。
 pub(super) enum ModelFiles {
     /// 基本：含章·知微整句模型。
     Sentence(PathBuf),
 
-    /// 增强：知意的 int8 ONNX 模型目录与运行库。
-    Zhiyi { dir: PathBuf, runtime: PathBuf },
+    /// 增强：知意的 int8 ONNX 模型目录、运行库与 ORT 线程数。
+    Zhiyi {
+        dir: PathBuf,
+        runtime: PathBuf,
+        threads: usize,
+    },
 }
 
 /// 加载的是哪一档，失败时据此决定往哪一档回退。
@@ -65,9 +66,11 @@ impl ModelLoader {
                 let started = std::time::Instant::now();
                 let loaded = match &files {
                     ModelFiles::Sentence(path) => load_sentence(path).map(LoadedModel::Sentence),
-                    ModelFiles::Zhiyi { dir, runtime } => {
-                        load_zhiyi(dir, runtime).map(LoadedModel::Choice)
-                    }
+                    ModelFiles::Zhiyi {
+                        dir,
+                        runtime,
+                        threads,
+                    } => load_zhiyi(dir, runtime, *threads).map(LoadedModel::Choice),
                 };
                 if loaded.is_ok() {
                     let total_ms = started.elapsed().as_millis();
@@ -77,8 +80,9 @@ impl ModelLoader {
                             total_ms,
                             "本地模型已加载并预热"
                         ),
-                        ModelFiles::Zhiyi { dir, .. } => tracing::info!(
+                        ModelFiles::Zhiyi { dir, threads, .. } => tracing::info!(
                             path = %dir.display(),
+                            threads,
                             total_ms,
                             "本地模型已加载并预热"
                         ),
@@ -115,9 +119,13 @@ fn load_sentence(path: &Path) -> Result<Box<CharScorer>, NeuralError> {
     Ok(Box::new(scorer))
 }
 
-fn load_zhiyi(dir: &Path, runtime: &Path) -> Result<Arc<dyn ChoiceModel>, NeuralError> {
+fn load_zhiyi(
+    dir: &Path,
+    runtime: &Path,
+    threads: usize,
+) -> Result<Arc<dyn ChoiceModel>, NeuralError> {
     let cache = cloudime_platform::dirs::cache_dir().map(|dir| dir.join("onnx"));
-    let scorer = ChoiceScorer::load_onnx(dir, runtime, ZHIYI_THREADS, cache.as_deref())?;
+    let scorer = ChoiceScorer::load_onnx(dir, runtime, threads, cache.as_deref())?;
     // 预热：第一次前向要做图优化。
     let typed = scorer.letter_units("ni");
     scorer.score("", &typed, &["ni", "nin"])?;
