@@ -201,6 +201,35 @@ TSV 解析路径也改成产出同样的结构，查询代码只有一份。
 300 句评测结果与 f32 逐句一致、与 Python 对拍仍在容差内，延迟略快（64 字前文 × 8 条 27 → 25 ms）。空闲时 CPU 0 到 1%，敲键那一刻 10 到 18%。
 评测集全量（8322 句，`--eval-text`，同步模式，λ 0.5 前文 64）：改前平均 61 ms、最慢 781 ms；改后平均 24 ms、最慢 101 ms，命中率不变（41.6% / 79.1%）。
 
+## GPU 可行性（2026-11-08，RTX 3060 8 GB / i5-12600KF）
+
+**知意（int8 ONNX）——DirectML 能跑，而且整图都在 GPU 上**：用 `onnxruntime-directml` 1.24.4 加载同一个
+`laya.int8g.onnx`，profiling 里整图融成一个 `DmlFusedNode`（`DmlExecutionProvider`，seq=64 时 kernel 2.2 ms）；
+会话存活期间显存约 +170 MB（系统总占用 444 → 613 MiB）。不固定维度的 DML 比 CPU 慢；固定 `seq_len` /
+`num_markers` / `num_slots` 后（`add_free_dimension_override_by_name`）才明显更快。下表是 `sess.run` 本身
+（batch=1，不含分词与业务开销）：
+
+| seq | CPU | DML 动态 | DML 固定 |
+| --- | --- | --- | --- |
+| 64 | 9.6 ms | 13.3 ms | 5.4 ms |
+| 128 | 16.8 ms | 15.1 ms | 12.3 ms（p50 14.3） |
+| 192 | 26.1 ms | 16.9 ms | 13.8 ms（p50 9.1） |
+| 256 | 34.5 ms | 19.1 ms | 11.3 ms |
+| 320 | 47.7 ms | 22.5 ms | 14.3 ms |
+
+包体：DirectML 版 `onnxruntime.dll` 17.3 MB（CPU 版 14.2 MB），`DirectML.dll` 是系统自带（Win10 1903+；
+1809 缺失就回退 CPU），运行时只多约 3 MB。代价是输入要 padding 到固定维度 / 分桶，短输入才有收益；
+动态维度反而比 CPU 慢。
+
+**含章（candle）——CUDA 能跑，但不适合随包**：candle 0.11 的 `cuda` feature 会把权重放显存，但
+`candle-kernels` 的 build.rs 用 `cudaforge` 调 `nvcc` 编 PTX；本机只有驱动（CUDA 13.1），没装 CUDA Toolkit，
+`nvcc` 不在 PATH，所以这次没编出 CUDA 版。运行期还要 CUDA runtime + cuBLAS（几百 MB），随安装包不现实；
+candle 也没有 DirectML 后端。CPU 基线：加载 694 ms，`score` 8 条候选 39.7 ms（约 5 ms/条），权重 56 MB。
+
+**建议**：近期继续用 CPU（异步重排 40 ms 在 80 ms 防抖预算内，够用）。真要上 GPU，最省事的路线是
+**两份模型统一走 ONNX + DirectML**：把含章导出成 ONNX（输出与 candle 对拍）、知意按固定维度分桶 padding，
+运行时装 DirectML 版 ORT（只多 3 MB），显存合计约 300 MB；含章走 candle CUDA 只适合开发机自测。
+
 ## 经验
 
 1. **先量再改，先打点再改。** 第三轮猜错两次的原因是凭「常识」判断热点（哈希查表、大数组二分都是教科书里的慢点），
