@@ -238,6 +238,15 @@ padding 后有效位置也**逐位一致**（logits / char_logits 差都是 0）
 64 / 128 / 256 / 320 分别约 6.6 / 8.5 / 13.3 / 16.6 ms，仍比 CPU 的 9.4 / 16.6 / 35.5 / 47.4 ms 快 2–3 倍。
 模型文件 84.5 MB（与原 int8 模型一样），可以直接按 `seq_len` 建桶了。
 
+**固定桶 + DML 的预期收益（2026-11-08）**：本机 `input-log.jsonl` 的 3.7 万条 commit 里，balanced
+（前文按 64 字）估算 seq p50 ≈ 97、p90 ≈ 103，accurate（128 字）p50 ≈ 161；候选通常 9 条。真实 Rust
+`ChoiceScorer::score`（16 字前文 / 9 候选）2 线程 13.3 ms、4 线程 10.4 ms、8 线程 10.4 ms；长前文
+（116 字）2 线程 22.3 ms、4 线程 17.2 ms。DML 固定 128 约 8.5 ms、192 约 11 ms。相对当前 2 线程，
+DML 典型省 5–9 ms、长前文省 10–13 ms；相对 4 线程只再省 2–7 ms。候选更新链路还有 80 ms 防抖 +
+20 ms 轮询，总感知提升约 4–8%。**先把 `ZHIYI_THREADS` 从 2 提到 4（可配置）是零显存、零包体成本的
+第一步**；全量多桶 DML 缓存每桶约 170 MB 显存、每个桶启动多约 1 秒，收益不足以默认开启，最多做单桶
+opt-in 的 spike。
+
 **含章（candle）——CUDA 能跑，但不适合随包**：candle 0.11 的 `cuda` feature 会把权重放显存，但
 `candle-kernels` 的 build.rs 用 `cudaforge` 调 `nvcc` 编 PTX；本机只有驱动（CUDA 13.1），没装 CUDA Toolkit，
 `nvcc` 不在 PATH，所以这次没编出 CUDA 版。运行期还要 CUDA runtime + cuBLAS（几百 MB），随安装包不现实；
