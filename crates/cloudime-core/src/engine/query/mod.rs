@@ -8,6 +8,10 @@ mod result;
 mod snapshot;
 mod spelling;
 
+/// 一两个字母的输入会命中十几万个词（`z` 有 17 万），全收下来再评分会把按键预算吃光。
+/// 每个音节键只取词频最高的前几条，足够排出前 500 条候选。
+const SHORT_PREFIX_PER_KEY: usize = 64;
+
 pub(crate) use english_tail::EnglishTail;
 pub use result::Query;
 pub(super) use result::join_marked;
@@ -569,6 +573,12 @@ impl Engine {
         let mut memo: HashMap<String, Vec<Match<'_>>> = HashMap::new();
         // 原样输入本身能否整段对一个词（决定纠错读法要不要回补折扣）
         let scope_letters: usize = scope.chars().filter(|c| *c != '\'').count();
+        // 一两个字母时限制每个音节键的命中数，避免把十几万个词全评分一遍；更长的输入不受影响。
+        let per_key = if scope_letters <= 2 {
+            SHORT_PREFIX_PER_KEY
+        } else {
+            usize::MAX
+        };
         let mut original_exact = false;
         // 每种切分里最强的“正好覆盖整个切分”的词；用来决定拼音行显示哪一种切分。
         let mut segmentation_quality: Vec<Option<(u32, usize)>> = vec![None; segmentations.len()];
@@ -591,7 +601,13 @@ impl Engine {
             let expanded = self.fuzzy.expand(&patterns);
             let positions = expanded.positions();
             let abbreviated = abbreviated_count(&patterns);
-            let hits = self.lookup_all(&positions);
+            let hits = if count == 1 && !last.complete {
+                // 只打了一个还没打完的音节（`z` / `zh`）：多音节词等打完这个音节再收，
+                // 否则 `z` 会把十几万个两字以上的词全评分一遍。完整音节（`ni` / `kai`）不受影响。
+                self.lookup_all_short(&positions, per_key, 1)
+            } else {
+                self.lookup_all_limited(&positions, per_key)
+            };
             scored.reserve(hits.len());
             for hit in hits {
                 if hit.exact && segmentation.letters() == scope_letters {
@@ -632,9 +648,9 @@ impl Engine {
                         .unwrap_or(prefix_letters),
                     None => prefix_letters,
                 };
-                let hits = memo
-                    .entry(pattern_key(prefix))
-                    .or_insert_with(|| self.lookup_exact_all(&positions[..prefix_len]));
+                let hits = memo.entry(pattern_key(prefix)).or_insert_with(|| {
+                    self.lookup_exact_all_limited(&positions[..prefix_len], per_key)
+                });
                 let abbreviated = abbreviated_count(prefix);
                 for hit in hits.iter().copied() {
                     let penalty = expanded.penalty(hit.syllables());
@@ -658,6 +674,11 @@ impl Engine {
         }
         // 词库能证明某种切分更像一个词时，把它挪到最前：`shangou` 的 `shan gou`（山沟）
         // 要压过解析器按“最长音节”先给出的 `shang ou`。没有精确命中的切分保持原顺序。
+        tracing::debug!(
+            scored = scored.len(),
+            segmentations = segmentations.len(),
+            "候选池"
+        );
         if !strict {
             let mut order: Vec<usize> = (0..segmentations.len()).collect();
             order.sort_by(|&a, &b| {
@@ -692,7 +713,12 @@ impl Engine {
                 let letters: usize = patterns.iter().map(|p| p.text.len()).sum();
                 let last = &correction.segmentation.syllables[count - 1];
                 let abbreviated = abbreviated_count(&patterns);
-                for hit in self.lookup_all(&positions) {
+                let hits = if count == 1 && !last.complete {
+                    self.lookup_all_short(&positions, per_key, 1)
+                } else {
+                    self.lookup_all_limited(&positions, per_key)
+                };
+                for hit in hits {
                     scored.push(Scored {
                         coverage: letters,
                         full_last: last.complete
@@ -1208,19 +1234,33 @@ impl Engine {
     }
 
     /// 主词库与用户词一起查（每个位置多种写法），按 [`Self::all_dictionaries`] 的顺序跨词库去重。
-    pub(super) fn lookup_all(
+    /// 每个命中键最多取 `per_key` 条。
+    pub(super) fn lookup_all_limited(
         &self,
         positions: &[Vec<cloudime_dictionary::SyllablePattern<'_>>],
+        per_key: usize,
     ) -> Vec<Match<'_>> {
-        self.lookup_across_dictionaries(positions, false)
+        self.lookup_across_dictionaries(positions, false, per_key, usize::MAX)
+    }
+
+    /// 只收音节数不超过 `max_syllables` 的词（单个还没打完的音节用）。
+    pub(super) fn lookup_all_short(
+        &self,
+        positions: &[Vec<cloudime_dictionary::SyllablePattern<'_>>],
+        per_key: usize,
+        max_syllables: usize,
+    ) -> Vec<Match<'_>> {
+        self.lookup_across_dictionaries(positions, false, per_key, max_syllables)
     }
 
     /// 只要音节数正好等于位置数的词，主词库与用户词一起查，同样按词库顺序跨词库去重。
-    pub(super) fn lookup_exact_all(
+    /// 每个命中键最多取 `per_key` 条。
+    pub(super) fn lookup_exact_all_limited(
         &self,
         positions: &[Vec<cloudime_dictionary::SyllablePattern<'_>>],
+        per_key: usize,
     ) -> Vec<Match<'_>> {
-        self.lookup_across_dictionaries(positions, true)
+        self.lookup_across_dictionaries(positions, true, per_key, usize::MAX)
     }
 
     /// 按 [`Self::all_dictionaries`] 的顺序逐本查词，做「跨词库、靠前优先」的过滤：处理第 N 本时，
@@ -1230,15 +1270,24 @@ impl Engine {
         &self,
         positions: &[Vec<cloudime_dictionary::SyllablePattern<'_>>],
         exact: bool,
+        per_key: usize,
+        max_syllables: usize,
     ) -> Vec<Match<'_>> {
         let mut hits = Vec::new();
         let mut seen: HashSet<&str> = HashSet::new();
         for dictionary in self.all_dictionaries() {
+            let started = Instant::now();
             let found = if exact {
-                dictionary.lookup_exact_alt(positions)
+                dictionary.lookup_exact_alt_short(positions, per_key, max_syllables)
             } else {
-                dictionary.lookup_pattern_alt(positions)
+                dictionary.lookup_pattern_alt_short(positions, per_key, max_syllables)
             };
+            tracing::debug!(
+                entries = found.len(),
+                elapsed_us = started.elapsed().as_micros() as u64,
+                exact,
+                "词库查询"
+            );
             let mut current: HashSet<&str> = HashSet::with_capacity(found.len());
             for hit in found {
                 if seen.contains(hit.text) {

@@ -294,6 +294,7 @@ TSF DLL 与 Server 都从宿主进程继承这个变量。
   `before_us` / `doc_us`（64 字前文 / 整篇文档读取）、`surround_us`（整篇写管道）、`caret_us`（量光标 + 写位置）。
 - Server 日志里的 target `cloudime_timing`：
   `按键处理`（总）、`按键脚本`、`重算候选`、`候选查询`（parse / lookup / rank）、
+  `按键收尾`（焦点 / `apply_key` / 出自绘帧 / 重画 / 回 DLL 帧）、
   `候选窗显示`（UI 线程排队 `queue_us` + `set_content/show` 的 `render_us`）。
 
 本机 Adobe After Effects 2020 的组句名称框（idle vs 6 个 CPU 忙线程 + AE `BelowNormal`）：
@@ -312,6 +313,28 @@ TSF DLL 与 Server 都从宿主进程继承这个变量。
 AE 这个输入框的 TSF 上下文返回 0 字，`doc_us` 没被触发；要验证「整篇文档读取」还得找真正返回文本的输入框。
 另外观察到两件事（与本轮打点无关，后面单独查）：AE 里候选窗出现在屏幕右上角而不是输入框旁；
 强杀 AE 后候选窗没有跟着消失。
+
+**短前缀查询限制（2026-11-08，随后改）：** 打点显示 `z` 这类单字母输入会从词库收到 17 万条命中
+（`zh` 11 万），逐条建 `Scored` 再排序是 `lookup` / `rank` 的主要开销。处理：
+
+- `cloudime-dictionary` 的查询收窄加了 `LookupLimit`：每键最多取 `per_key` 条、只收不超过若干音节的键
+  （`lookup_pattern_alt_short` / `lookup_exact_alt_short`）；原有 `lookup_*` 走不限模式。
+- Core 只对「**一个还没打完的音节**」（`z` / `zh`，`last.complete == false`）用 `max_syllables = 1`：
+  单音节的字 / 词全留，多音节词等这个音节打完再出；`ni` / `kai` 这类完整音节和 `zhangwei` 不受影响。
+- 一两个字母时每键最多取 64 条（`SHORT_PREFIX_PER_KEY`），更多只会在排序时被丢掉。
+
+`--typing` 实测（release，完整 data/generated/dict.tsv）：
+
+| 输入 | 改前 | 改后 |
+|---|---|---|
+| `z` | 33.8 ms（lookup 24.7 / rank 9.1） | 8.5 ms（lookup 7.8 / rank 0.7） |
+| `zh` | 25.9 ms（lookup 18.6 / rank 6.7） | 7.6 ms（lookup 6.7 / rank 0.9） |
+| `n` | 约 10 ms | 2.9 ms |
+| `zhangwei` | 10.4 ms | 10.1 ms（完整音节，不受影响） |
+
+AE 满载复测：`z` 的 Server `lookup` 从 20.4 ms 降到约 4–8 ms，按键处理回到 5–11 ms；
+剩余候选窗延迟主要是 UI 首帧渲染（3–12 ms，受 CPU 抢占影响）。注意这是有意改变：
+只打半个音节时不再出 `你好` / `你们` 这类多音节词；样例词库里的脚本重排用例因此从 `n` 改成 `kai`。
 
 ## 经验
 

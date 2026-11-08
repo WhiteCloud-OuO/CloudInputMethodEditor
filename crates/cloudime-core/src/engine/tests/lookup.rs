@@ -169,7 +169,7 @@ fn earlier_dictionary_wins_for_the_same_text() {
     // 同一本里同一个词按两种读法命中：这一层不去重，两条都在（rank 再按名次挑）
     let engine = Engine::new(Dictionary::parse("重\tzhong\t100\n重\tzong\t100\n").unwrap());
     let positions = vec![vec![cloudime_dictionary::SyllablePattern::prefix("z")]];
-    let hits = engine.lookup_all(&positions);
+    let hits = engine.lookup_all_limited(&positions, usize::MAX);
     assert_eq!(hits.len(), 2);
     assert!(hits.iter().all(|hit| hit.text == "重"));
 }
@@ -295,6 +295,35 @@ fn sentence_conversion_competes_with_word_hits_by_weight() {
             .iter()
             .any(|c| c.kind == CandidateKind::Sentence && c.text == "想开")
     );
+}
+
+#[test]
+fn single_syllable_input_skips_multi_syllable_words() {
+    // 单字母输入会命中十几万个以它开头的词；只保留单音节词，多音节词等再敲几个字母。
+    let dictionary = Dictionary::parse("在\tzai\t100\n砸\tza\t90\n咱们\tzan men\t80\n").unwrap();
+    let mut engine = Engine::new(dictionary);
+    engine.set_input("z");
+    let short: Vec<String> = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect();
+    assert!(short.contains(&"在".to_owned()));
+    assert!(!short.contains(&"咱们".to_owned()));
+
+    engine.set_input("zanmen");
+    let long: Vec<String> = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect();
+    assert!(long.contains(&"咱们".to_owned()));
 }
 
 #[test]

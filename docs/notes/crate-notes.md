@@ -22,6 +22,9 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 `Dictionary::from_path`（单份中文旧入口）把普通组与稀有组合并读回。**查询仍是原来那套二分收窄**：SQLite 只当存档格式，热路径不查库，
 `Match` 里的拼音仍借自内存键 arena。
 键按字节序排好，查询逐音节位置二分收窄（简拼位置按音节块跳扫），`lookup_pattern`（≥ 模式长度）与 `lookup_exact`（正好等长）同一套实现。
+短前缀查询（2026-11-08）：`LookupLimit` 给收窄加「每键最多 `per_key` 条」与「只收不超过 `max_syllables` 个音节的键」两个上限，
+`lookup_pattern_alt_short` / `lookup_exact_alt_short` 走限量版；原有 `lookup_*` 传 `LookupLimit::ALL`，结果不变。
+单字母 `z` 会命中 17 万个词，Core 只对「一个还没打完的音节」用 `max_syllables = 1`，把多音节词留到音节打完再出。
 稀有组懒加载：启动时只有 `[word_bank] rare_items = true` 才读；关着时装配层走 `from_path_without_rare`，配置热加载打开开关后由
 `dispatch/reload` 调 `rare_from_path` 补上；再关掉开关时 `Engine::clear_rare` 丢掉这一组释放内存，下次打开重新加载。
 `DictDb::rare` 交给 `Engine::with_rare` / `Engine::set_rare` 挂上，由 `Engine::set_rare_enabled` 开关；

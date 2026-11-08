@@ -192,7 +192,9 @@ impl Router {
     }
 
     fn handle_key_inner(&mut self, session: SessionId, event: KeyEvent) -> ServerMessage {
+        let focus_started = Instant::now();
         self.ensure_focus(session);
+        let focus_us = focus_started.elapsed().as_micros();
         // 不是紧接着的第二个空格：双击空格作废。
         self.note_key_for_smart_symbol(&event);
         // 脚本先看一眼这一键：返回的表能改这一拍的结果（见 `script`）。
@@ -260,6 +262,7 @@ impl Router {
             };
         }
         self.notice = actions.notice.clone();
+        let apply_started = Instant::now();
         let (commit, outcome) = match self.apply_key(&event) {
             Effect::Changed(commit) => {
                 let started = Instant::now();
@@ -276,6 +279,7 @@ impl Router {
             Effect::Navigated => (None, KeyOutcome::Consumed),
             Effect::Passthrough => (None, KeyOutcome::Passthrough),
         };
+        let apply_us = apply_started.elapsed().as_micros();
         // 智能符号：把「光标前一个字符」推进到这一键之后（本进程刚上屏的文本比 DLL 前文更新）。
         self.note_key_result(&event, commit.as_deref());
         // 脚本在这一键里（例如 i 模式运行的 manual 脚本）才调 `cloudime.caret()`：也要带上。
@@ -310,8 +314,26 @@ impl Router {
             self.notice = Some(notice);
         }
         // 自绘窗吃未降级的帧；发给 DLL 的那份按老协议降级（见 composed 的 current_frame）
+        let frame_started = Instant::now();
         let shown = self.self_drawn_frame();
+        let frame_us = frame_started.elapsed().as_micros();
+        let reconcile_started = Instant::now();
         self.reconcile_candidates(&shown);
+        let reconcile_us = reconcile_started.elapsed().as_micros();
+        let wire_started = Instant::now();
+        let frame = self.current_frame();
+        let wire_us = wire_started.elapsed().as_micros();
+        if crate::timing::enabled() {
+            tracing::info!(
+                target: "cloudime_timing",
+                focus_us = focus_us as u64,
+                apply_us = apply_us as u64,
+                frame_us = frame_us as u64,
+                reconcile_us = reconcile_us as u64,
+                wire_us = wire_us as u64,
+                "按键收尾"
+            );
+        }
         ServerMessage::KeyResult {
             session,
             outcome,
@@ -320,7 +342,7 @@ impl Router {
             delete_before: self.delete_before,
             delete_after: self.delete_after,
             want_caret,
-            frame: self.current_frame(),
+            frame,
         }
     }
 

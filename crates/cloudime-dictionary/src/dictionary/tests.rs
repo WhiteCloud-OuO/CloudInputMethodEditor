@@ -7,6 +7,18 @@ fn texts<'a>(matches: &'a [Match<'a>]) -> Vec<&'a str> {
 }
 
 #[test]
+fn short_lookup_limits_per_key_and_syllables() {
+    let dictionary =
+        Dictionary::parse("在\tzai\t100\n再\tzai\t90\n载\tzai\t80\n咱们\tzan men\t70\n").unwrap();
+    let positions = vec![vec![SyllablePattern::prefix("z")]];
+    let limited = dictionary.lookup_pattern_alt_short(&positions, 2, 1);
+    assert_eq!(texts(&limited), ["在", "再"]);
+    assert!(!limited.iter().any(|hit| hit.text == "咱们"));
+    let all = dictionary.lookup_pattern_alt_short(&positions, usize::MAX, usize::MAX);
+    assert!(all.iter().any(|hit| hit.text == "咱们"));
+}
+
+#[test]
 fn full_syllables_match_exact_and_longer_words() {
     let dictionary = Dictionary::parse(SAMPLE).unwrap();
     let matches = dictionary.lookup(&["kai", "fa"], false);

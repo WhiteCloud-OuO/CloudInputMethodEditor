@@ -16,6 +16,38 @@ use crate::pattern::{SyllablePattern, canonical_syllable};
 /// 收窄到多小的区间就改成逐键比对。
 const LINEAR_SCAN_LIMIT: usize = 48;
 
+/// 一次查询的收窄上限：每个键最多取几条、只收不超过几个音节的键。
+#[derive(Debug, Clone, Copy)]
+struct LookupLimit {
+    /// 每个命中键最多取几条（键内按词频降序）。
+    per_key: usize,
+
+    /// 键的音节数上限；`usize::MAX` 表示不限。
+    max_syllables: usize,
+}
+
+impl LookupLimit {
+    /// 不限。
+    const ALL: Self = Self {
+        per_key: usize::MAX,
+        max_syllables: usize::MAX,
+    };
+
+    fn mode(self, exact_only: bool) -> LookupMode {
+        LookupMode {
+            exact_only,
+            limit: self,
+        }
+    }
+}
+
+/// 一次查询的模式：是否只要正好覆盖的词，以及收窄上限。
+#[derive(Debug, Clone, Copy)]
+struct LookupMode {
+    exact_only: bool,
+    limit: LookupLimit,
+}
+
 /// `.qj` 里的分节：词文本 arena、拼音键 arena、键索引、词目。
 const TEXT_TAG: [u8; 4] = *b"TEXT";
 const KEYS_TAG: [u8; 4] = *b"KEYS";
@@ -410,7 +442,7 @@ impl Dictionary {
     pub fn lookup_exact(&self, pattern: &[SyllablePattern<'_>]) -> Vec<Match<'_>> {
         let positions: Vec<&[SyllablePattern<'_>]> =
             pattern.iter().map(std::slice::from_ref).collect();
-        self.lookup_positions(&positions, true)
+        self.lookup_positions(&positions, LookupLimit::ALL.mode(true))
     }
 
     /// 按音节序列查词。
@@ -435,7 +467,7 @@ impl Dictionary {
     pub fn lookup_pattern(&self, pattern: &[SyllablePattern<'_>]) -> Vec<Match<'_>> {
         let positions: Vec<&[SyllablePattern<'_>]> =
             pattern.iter().map(std::slice::from_ref).collect();
-        self.lookup_positions(&positions, false)
+        self.lookup_positions(&positions, LookupLimit::ALL.mode(false))
     }
 
     /// 每个位置给多种写法（模糊音：`zi` 也接受 `zhi`），命中音节数 ≥ 位置数、逐位满足其中一种写法的词。
@@ -446,7 +478,43 @@ impl Dictionary {
         &self,
         positions: &[impl AsRef<[SyllablePattern<'p>]>],
     ) -> Vec<Match<'_>> {
-        self.lookup_positions(positions, false)
+        self.lookup_positions(positions, LookupLimit::ALL.mode(false))
+    }
+
+    /// [`Self::lookup_pattern_alt`] 的限量版：每个命中键最多取 `per_key` 条（键内按词频降序）。
+    ///
+    /// 单字母 / 双字母输入会命中十几万个词（`z` 有 17 万），全收下来再排序会把按键预算吃光；
+    /// 只取每个音节键最常用的前几条，排名前列的候选不变，代价从键数 × 键内词数降到键数 × `per_key`。
+    pub fn lookup_pattern_alt_limited<'p>(
+        &self,
+        positions: &[impl AsRef<[SyllablePattern<'p>]>],
+        per_key: usize,
+    ) -> Vec<Match<'_>> {
+        self.lookup_positions(
+            positions,
+            LookupLimit {
+                per_key,
+                max_syllables: usize::MAX,
+            }
+            .mode(false),
+        )
+    }
+
+    /// 只收音节数不超过 `max_syllables` 的键（`z` 这类单字母输入只留单音节词）。
+    pub fn lookup_pattern_alt_short<'p>(
+        &self,
+        positions: &[impl AsRef<[SyllablePattern<'p>]>],
+        per_key: usize,
+        max_syllables: usize,
+    ) -> Vec<Match<'_>> {
+        self.lookup_positions(
+            positions,
+            LookupLimit {
+                per_key,
+                max_syllables,
+            }
+            .mode(false),
+        )
     }
 
     /// [`Self::lookup_exact`] 的多写法版。
@@ -454,7 +522,40 @@ impl Dictionary {
         &self,
         positions: &[impl AsRef<[SyllablePattern<'p>]>],
     ) -> Vec<Match<'_>> {
-        self.lookup_positions(positions, true)
+        self.lookup_positions(positions, LookupLimit::ALL.mode(true))
+    }
+
+    /// [`Self::lookup_exact_alt`] 的限量版；语义同 [`Self::lookup_pattern_alt_limited`]。
+    pub fn lookup_exact_alt_limited<'p>(
+        &self,
+        positions: &[impl AsRef<[SyllablePattern<'p>]>],
+        per_key: usize,
+    ) -> Vec<Match<'_>> {
+        self.lookup_positions(
+            positions,
+            LookupLimit {
+                per_key,
+                max_syllables: usize::MAX,
+            }
+            .mode(true),
+        )
+    }
+
+    /// [`Self::lookup_exact_alt`] 的短输入限量版；语义同 [`Self::lookup_pattern_alt_short`]。
+    pub fn lookup_exact_alt_short<'p>(
+        &self,
+        positions: &[impl AsRef<[SyllablePattern<'p>]>],
+        per_key: usize,
+        max_syllables: usize,
+    ) -> Vec<Match<'_>> {
+        self.lookup_positions(
+            positions,
+            LookupLimit {
+                per_key,
+                max_syllables,
+            }
+            .mode(true),
+        )
     }
 
     /// 键按字节序排好，所以「以某段前缀开头的键」总是一段连续区间：逐个音节位置用二分收窄区间，
@@ -463,7 +564,7 @@ impl Dictionary {
     fn lookup_positions<'p>(
         &self,
         positions: &[impl AsRef<[SyllablePattern<'p>]>],
-        exact_only: bool,
+        mode: LookupMode,
     ) -> Vec<Match<'_>> {
         let mut matches = Vec::new();
         if positions.is_empty() || positions.iter().any(|p| p.as_ref().is_empty()) {
@@ -475,7 +576,7 @@ impl Dictionary {
             0,
             &mut prefix,
             0..self.index.len(),
-            exact_only,
+            mode,
             &mut matches,
         );
         matches
@@ -489,7 +590,7 @@ impl Dictionary {
         depth: usize,
         prefix: &mut String,
         range: Range<usize>,
-        exact_only: bool,
+        mode: LookupMode,
         out: &mut Vec<Match<'a>>,
     ) {
         let last = depth + 1 == positions.len();
@@ -504,14 +605,7 @@ impl Dictionary {
             // 区间已经很小：直接逐键比对剩下的模式，比继续二分 + 递归便宜（全简拼时小块极多）。
             // 当前位置只按这一种写法比（`an` 的区间里也有 `ang…`，那些留给 `ang` 那一轮，否则重复）
             if sub.len() <= LINEAR_SCAN_LIMIT {
-                self.scan_range(
-                    current,
-                    &positions[depth + 1..],
-                    base_len,
-                    sub,
-                    exact_only,
-                    out,
-                );
+                self.scan_range(current, &positions[depth + 1..], base_len, sub, mode, out);
                 continue;
             }
             match (current.complete, last) {
@@ -521,25 +615,25 @@ impl Dictionary {
                         .first()
                         .filter(|entry| self.key(entry).len() == prefix.len())
                     {
-                        self.push_matches(entry, true, out);
+                        self.push_matches(entry, true, mode.limit, out);
                     }
-                    if !exact_only {
+                    if !mode.exact_only {
                         prefix.push(' ');
                         for entry in &self.index[self.prefix_range(prefix, sub)] {
-                            self.push_matches(entry, false, out);
+                            self.push_matches(entry, false, mode.limit, out);
                         }
                     }
                 }
                 (true, false) => {
                     prefix.push(' ');
                     let deeper = self.prefix_range(prefix, sub);
-                    self.narrow(positions, depth + 1, prefix, deeper, exact_only, out);
+                    self.narrow(positions, depth + 1, prefix, deeper, mode, out);
                 }
                 // 前缀且是最后一个、全都要：区间里全是命中，音节数正好等于位置数的才精确
-                (false, true) if !exact_only => {
+                (false, true) if !mode.exact_only => {
                     for entry in &self.index[sub] {
                         let exact = !self.key(entry)[base_len..].contains(' ');
-                        self.push_matches(entry, exact, out);
+                        self.push_matches(entry, exact, mode.limit, out);
                     }
                 }
                 // 前缀且后面还有（或只要精确的）：按区间里实际出现的音节逐块进入，
@@ -553,7 +647,7 @@ impl Dictionary {
                         prefix.push_str(syllable);
                         if last {
                             if key.len() == prefix.len() {
-                                self.push_matches(&self.index[position], true, out);
+                                self.push_matches(&self.index[position], true, mode.limit, out);
                             }
                             prefix.push(' ');
                             position = self
@@ -565,7 +659,7 @@ impl Dictionary {
                         prefix.push(' ');
                         // 这个音节名下的键：先是可能存在的「正好到此为止」的键，然后是 `音节 + 空格` 开头的一段
                         let block = self.prefix_range(prefix, position..sub.end);
-                        self.narrow(positions, depth + 1, prefix, block.clone(), exact_only, out);
+                        self.narrow(positions, depth + 1, prefix, block.clone(), mode, out);
                         position = block.end.max(position + 1);
                     }
                 }
@@ -581,7 +675,7 @@ impl Dictionary {
         rest: &[impl AsRef<[SyllablePattern<'p>]>],
         offset: usize,
         range: Range<usize>,
-        exact_only: bool,
+        mode: LookupMode,
         out: &mut Vec<Match<'a>>,
     ) {
         for entry in &self.index[range] {
@@ -594,8 +688,8 @@ impl Dictionary {
                 });
             if accepted {
                 let exact = syllables.next().is_none();
-                if exact || !exact_only {
-                    self.push_matches(entry, exact, out);
+                if exact || !mode.exact_only {
+                    self.push_matches(entry, exact, mode.limit, out);
                 }
             }
         }
@@ -615,16 +709,35 @@ impl Dictionary {
         &self.keys[entry.key_start as usize..entry.key_start as usize + entry.key_len as usize]
     }
 
+    /// 键里的音节数（`z` 是 1，`zhong guo` 是 2）。
+    fn syllable_count(key: &str) -> usize {
+        if key.contains(' ') {
+            key.split(' ').count()
+        } else {
+            1
+        }
+    }
+
     fn text(&self, slot: &Slot) -> &str {
         &self.texts[slot.text_start as usize..slot.text_start as usize + slot.text_len as usize]
     }
 
-    /// 把一个键下的全部词目追加为命中。
-    fn push_matches<'a>(&'a self, entry: &KeyIndex, exact: bool, out: &mut Vec<Match<'a>>) {
+    /// 把一个键下的词目追加为命中；每键最多 `limit.per_key` 条（键内按词频降序），
+    /// 键的音节数超过 `limit.max_syllables` 时整键跳过。
+    fn push_matches<'a>(
+        &'a self,
+        entry: &KeyIndex,
+        exact: bool,
+        limit: LookupLimit,
+        out: &mut Vec<Match<'a>>,
+    ) {
         let key = self.key(entry);
+        if limit.max_syllables != usize::MAX && Self::syllable_count(key) > limit.max_syllables {
+            return;
+        }
         let range =
             entry.first_slot as usize..entry.first_slot as usize + entry.slot_count as usize;
-        for slot in &self.slots[range] {
+        for slot in self.slots[range].iter().take(limit.per_key) {
             out.push(Match {
                 text: self.text(slot),
                 pinyin: key,
@@ -647,7 +760,7 @@ impl Dictionary {
             });
             if accepted {
                 let exact = syllables.next().is_none();
-                self.push_matches(entry, exact, &mut matches);
+                self.push_matches(entry, exact, LookupLimit::ALL, &mut matches);
             }
         }
         matches

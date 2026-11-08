@@ -361,7 +361,7 @@ fn a_script_can_reorder_the_candidates() {
     // 先看引擎自己排的样子
     let plain = {
         let mut router = router();
-        let (_outcome, _commit, frame) = press(&mut router, letter('n'));
+        let (_outcome, _commit, frame) = type_letters(&mut router, "kai");
         candidate_texts_of(&frame)
     };
     assert!(plain.len() > 2, "样例词库该给出多个候选：{plain:?}");
@@ -370,14 +370,14 @@ fn a_script_can_reorder_the_candidates() {
     write_script_with(
         &dir,
         "reorder.lua",
-        "trigger_condition = 'candidate_context', candidate_pinyin = 'n'",
+        "trigger_condition = 'candidate_context', candidate_pinyin = 'kai'",
         "cloudime.on('candidates', function(list)\n\
              return { order = { 2, 1 } }\n\
          end)\n",
     )
     .unwrap();
     let mut router = router_with(config_with_scripts(dir));
-    let (_outcome, _commit, frame) = press(&mut router, letter('n'));
+    let (_outcome, _commit, frame) = type_letters(&mut router, "kai");
     let scripted = candidate_texts_of(&frame);
     // 头两个换了个儿，其余不动
     assert_eq!(scripted[0], plain[1]);
