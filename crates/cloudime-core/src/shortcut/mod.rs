@@ -16,7 +16,7 @@ use jiff::Zoned;
 
 use crate::candidate::{Candidate, CandidateKind};
 
-pub use calendar::{date_forms, time_forms, weekday_forms};
+pub use calendar::{date_forms, now_forms, time_forms, weekday_forms};
 pub use evaluator::evaluate;
 pub use numeral::{
     amount_lower, amount_upper, chinese_decimal_lower, chinese_decimal_upper, chinese_lower,
@@ -37,29 +37,18 @@ pub fn is_expression_char(c: char) -> bool {
         )
 }
 
-/// 按输入算快捷候选；不是快捷输入时为空。表达式固定用 [`EXPRESSION_PREFIX`]；`now` 由调用方给，测试可固定时间。
-pub fn candidates(input: &str, now: &Zoned) -> Vec<Candidate> {
-    let texts: Vec<String> = match input {
+/// V 模式（`v` 开头）的快捷候选：日期 / 时间 / 星期 / 现在，或算式与数字。
+/// `input` 带前导 `v`；`seconds` 是设置里的「V 模式的时间显示秒数」。
+pub fn v_mode_candidates(input: &str, now: &Zoned, seconds: bool) -> Vec<Candidate> {
+    let body = input.strip_prefix(EXPRESSION_PREFIX).unwrap_or(input);
+    let texts = match body {
         "rq" => date_forms(now),
-        "sj" => time_forms(now),
+        "sj" => time_forms(now, seconds),
         "xq" => weekday_forms(now),
-        _ => match input.strip_prefix(EXPRESSION_PREFIX) {
-            Some(body) => expression_forms(body),
-            None => Vec::new(),
-        },
+        "xz" => now_forms(now, seconds),
+        _ => expression_forms(body),
     };
-    texts
-        .into_iter()
-        .map(|text| Candidate {
-            text,
-            display: None,
-            kind: CandidateKind::Shortcut,
-            syllables: Vec::new(),
-            reading: None,
-            auxiliary: None,
-            auxiliary_typed: None,
-        })
-        .collect()
+    texts.into_iter().map(shortcut_candidate).collect()
 }
 
 /// 表达式计算面板（V 模式里按 Tab 进来）的候选：**只有结果这一条** —— 算式空着显示 `0`，
@@ -73,7 +62,11 @@ pub fn result_candidates(body: &str) -> Vec<Candidate> {
             None => return Vec::new(),
         }
     };
-    vec![Candidate {
+    vec![shortcut_candidate(text)]
+}
+
+fn shortcut_candidate(text: String) -> Candidate {
+    Candidate {
         text,
         display: None,
         kind: CandidateKind::Shortcut,
@@ -81,7 +74,7 @@ pub fn result_candidates(body: &str) -> Vec<Candidate> {
         reading: None,
         auxiliary: None,
         auxiliary_typed: None,
-    }]
+    }
 }
 
 /// 金额最多几位小数（角、分）。
@@ -129,14 +122,14 @@ mod tests {
     use super::*;
 
     fn now() -> Zoned {
-        date(2026, 9, 3)
-            .at(19, 6, 23, 0)
+        date(2026, 5, 4)
+            .at(14, 8, 36, 0)
             .to_zoned(TimeZone::UTC)
             .unwrap()
     }
 
-    fn texts(input: &str) -> Vec<String> {
-        candidates(input, &now())
+    fn texts(input: &str, seconds: bool) -> Vec<String> {
+        v_mode_candidates(input, &now(), seconds)
             .into_iter()
             .map(|c| c.text)
             .collect()
@@ -144,17 +137,99 @@ mod tests {
 
     #[test]
     fn calendar_shortcuts() {
-        assert_eq!(texts("rq"), ["2026年9月3日", "2026-09-03", "2026/09/03"]);
-        assert_eq!(texts("sj"), ["19:06", "19:06:23", "19点06分"]);
-        assert_eq!(texts("xq"), ["星期四", "周四"]);
-        assert!(texts("rqi").is_empty());
+        assert_eq!(
+            texts("vrq", false),
+            [
+                "2026年5月4日",
+                "2026年05月04日",
+                "2026-5-4",
+                "2026-05-04",
+                "2026/5/4",
+                "2026/05/04",
+                "5月4日",
+                "05月04日",
+                "5-4",
+                "05-04",
+                "5/4",
+                "05/04",
+            ]
+        );
+        assert_eq!(
+            texts("vsj", false),
+            [
+                "14时08分",
+                "下午2时08分",
+                "14:08",
+                "14-08",
+                "2:08 p.m.",
+                "2-08 p.m.",
+                "2:08 pm",
+                "2-08 pm",
+            ]
+        );
+        assert_eq!(texts("vxq", false), ["星期一", "周一", "礼拜一"]);
+        assert_eq!(
+            texts("vxz", false),
+            [
+                "2026年5月4日14时08分",
+                "2026年05月04日14时08分",
+                "2026-5-4 14:08",
+                "2026-05-04 14:08",
+                "2026/5/4 14:08",
+                "2026/05/04 14:08",
+                "2026-5-4 2:08 p.m.",
+                "2026-05-04 2:08 p.m.",
+                "2026/5/4 2:08 p.m.",
+                "2026/05/04 2:08 p.m.",
+                "2026-5-4 2:08pm",
+                "2026-05-04 2:08pm",
+                "2026/5/4 2:08pm",
+                "2026/05/04 2:08pm",
+            ]
+        );
+        // 普通输入不再给日期 / 时间 / 星期快捷候选（见 engine::tests::lookup）。
+    }
+
+    #[test]
+    fn seconds_follow_the_setting() {
+        let all = texts("vsj", true);
+        assert_eq!(
+            &all[..4],
+            ["14时08分36秒", "下午2时08分36秒", "14:08:36", "14-08-36"]
+        );
+        assert!(all.contains(&"2:08:36 p.m.".to_owned()));
+        assert!(all.contains(&"2-08-36 p.m.".to_owned()));
+        let now = texts("vxz", true);
+        assert_eq!(now[0], "2026年5月4日14时08分36秒");
+        assert!(now.contains(&"2026-05-04 2:08:36pm".to_owned()));
+    }
+
+    #[test]
+    fn sunday_uses_礼拜天() {
+        let sunday = date(2026, 5, 10)
+            .at(6, 8, 0, 0)
+            .to_zoned(TimeZone::UTC)
+            .unwrap();
+        let forms: Vec<String> = v_mode_candidates("vxq", &sunday, false)
+            .into_iter()
+            .map(|c| c.text)
+            .collect();
+        assert_eq!(forms, ["星期日", "周日", "礼拜天"]);
+
+        let morning: Vec<String> = v_mode_candidates("vsj", &sunday, false)
+            .into_iter()
+            .map(|c| c.text)
+            .collect();
+        assert_eq!(&morning[..4], ["06时08分", "上午6时08分", "06:08", "06-08"]);
+        assert!(morning.contains(&"6:08 a.m.".to_owned()));
+        assert!(morning.contains(&"6-08 am".to_owned()));
     }
 
     #[test]
     fn expression_shortcuts() {
-        assert_eq!(texts("v1+2"), ["3", "1+2=3"]);
+        assert_eq!(texts("v1+2", false), ["3", "1+2=3"]);
         assert_eq!(
-            texts("v123"),
+            texts("v123", false),
             [
                 "一百二十三",
                 "壹佰贰拾叁",
@@ -163,7 +238,7 @@ mod tests {
             ]
         );
         assert_eq!(
-            texts("v123.5"),
+            texts("v123.5", false),
             [
                 "一百二十三点五",
                 "壹佰贰拾叁点伍",
@@ -171,13 +246,16 @@ mod tests {
                 "壹佰贰拾叁元伍角"
             ]
         );
-        assert_eq!(texts("v123."), texts("v123"));
+        assert_eq!(texts("v123.", false), texts("v123", false));
         // 超过角分的小数只有读法；带运算符的照常算
-        assert_eq!(texts("v3.14159"), ["三点一四一五九", "叁点壹肆壹伍玖"]);
-        assert_eq!(texts("v1.5*2"), ["3", "1.5*2=3"]);
-        assert!(texts("v").is_empty());
-        assert!(texts("v1+").is_empty());
-        assert!(texts("very").is_empty());
+        assert_eq!(
+            texts("v3.14159", false),
+            ["三点一四一五九", "叁点壹肆壹伍玖"]
+        );
+        assert_eq!(texts("v1.5*2", false), ["3", "1.5*2=3"]);
+        assert!(texts("v", false).is_empty());
+        assert!(texts("v1+", false).is_empty());
+        assert!(texts("very", false).is_empty());
     }
 
     #[test]

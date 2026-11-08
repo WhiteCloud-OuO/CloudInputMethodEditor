@@ -262,6 +262,9 @@ pub struct Engine {
     /// 繁体输出模式。
     traditional: bool,
 
+    /// V 模式的时间 / 现在候选是否带秒数（`sj` / `xz`）。
+    v_mode_time_seconds: bool,
+
     /// 繁体转换器。
     opencc: Option<ferrous_opencc::OpenCC>,
 
@@ -413,6 +416,7 @@ impl Engine {
             chain: CommitChain::default(),
             fuzzy: FuzzyRules::default(),
             traditional: false,
+            v_mode_time_seconds: false,
             opencc: None,
             traditional_map: std::cell::RefCell::new(HashMap::new()),
         }

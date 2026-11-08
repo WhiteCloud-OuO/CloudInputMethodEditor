@@ -395,17 +395,14 @@ impl Router {
         frame
     }
 
-    /// 表达式模式（`v` 开头）底部那一行的提示；不在表达式模式时 `None`（照常用本地词典的译文）。
+    /// 表达式计算面板底部那一行的提示；不在面板时 `None`（照常用本地词典的译文）。
     ///
     /// 走 `Tip` 这个通道（渲染端只认它），`learned = true` 借的是「深灰」那个颜色 —— 提示不是
     /// 「刚学会的译文」，只是同一条路。
     fn expression_hint(&self) -> Option<cloudime_translate::Tip> {
-        if self.engine.calculator() {
-            return Some(hint_tip("按Tab/Esc退出表达式计算"));
-        }
         self.engine
-            .expression_mode()
-            .then(|| hint_tip("输入数字或表达式"))
+            .calculator()
+            .then(|| hint_tip("按Tab/Esc退出表达式计算"))
     }
 
     /// 当前高亮候选的文本：本地词典按它查词条。

@@ -127,6 +127,7 @@ impl RenderData {
         self.notice = frame.notice.clone();
     }
 
+    /// 拼音串只有一个 `v`、还没有候选时，V 模式说明窗口该弹出来。
     /// 候选页面树 + Document 路径要的视图。提示（删了什么词）画在拼音行右侧；
     /// `highlight_animation` 是纯展示的高亮条滑动信息；`min_cell_width` 是展开成网格时每格的最小宽度。
     pub(super) fn candidate_view(

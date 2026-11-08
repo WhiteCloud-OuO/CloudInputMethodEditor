@@ -42,6 +42,7 @@ mod measure;
 pub(crate) use cloud_ui::monitor::{dpi_near, work_area_near};
 mod status;
 mod status_tip;
+mod v_mode;
 mod viewport;
 
 pub(crate) use measure::SharedMeasurer;
@@ -174,6 +175,10 @@ impl CandidateSink for UiHandle {
 
     fn reversed_vertical(&self) -> bool {
         self.reversed.load(Ordering::Relaxed)
+    }
+
+    fn set_v_mode_help(&self, on: bool) {
+        self.post(UiCommand::VModeHelp(on));
     }
 
     /// 开关「辅助窗口」（`auxiliary_window`，眼下是键位映射参考）：挂在配置的组合键上。
@@ -368,6 +373,7 @@ fn apply(
             window.show(to_win_rect(rect));
         }
         UiCommand::Hide => window.hide(),
+        UiCommand::VModeHelp(on) => window.set_v_mode_help(on),
         UiCommand::AuxiliaryToggle => {
             // 名下的资产由宿主（候选窗口）自己管：这里只把开关递过去
             let on = window.toggle_assets();

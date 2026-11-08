@@ -298,25 +298,55 @@ fn sentence_conversion_competes_with_word_hits_by_weight() {
 }
 
 #[test]
-fn shortcuts_follow_the_first_local_candidate() {
-    let all = texts("rq");
-    let shortcut = all.iter().position(|t| t.ends_with('日')).unwrap();
-    assert!(shortcut <= 1);
-    assert!(all.iter().any(|t| t.contains('-')));
+fn normal_input_does_not_offer_calendar_shortcuts() {
+    // 日期 / 时间 / 星期已经移到 V 模式：普通全拼里 `rq` / `sj` / `xq` 只是普通拼音。
+    for input in ["rq", "sj", "xq"] {
+        let mut engine = engine();
+        engine.set_input(input);
+        let query = engine.query().unwrap();
+        assert!(
+            !query
+                .candidates
+                .items
+                .iter()
+                .any(|c| c.kind == CandidateKind::Shortcut),
+            "普通输入 {input} 不该再出快捷候选"
+        );
+    }
+}
+
+#[test]
+fn v_mode_offers_calendar_shortcuts() {
+    for (input, count) in [("vrq", 12), ("vsj", 8), ("vxq", 3), ("vxz", 14)] {
+        let mut engine = engine();
+        engine.set_input(input);
+        let query = engine.query().unwrap();
+        assert_eq!(query.candidates.items.len(), count, "{input}");
+        assert!(
+            query
+                .candidates
+                .items
+                .iter()
+                .all(|c| c.kind == CandidateKind::Shortcut),
+            "{input} 应全是快捷候选"
+        );
+    }
 
     let mut engine = engine();
-    engine.set_input("xq");
-    let query = engine.query().unwrap();
-    let weekday = query
-        .candidates
-        .items
-        .iter()
-        .find(|c| c.kind == CandidateKind::Shortcut)
-        .unwrap()
-        .clone();
-    assert!(weekday.text.starts_with("星期"));
-    engine.commit(&weekday);
-    assert!(engine.composition().is_empty());
+    engine.set_input("vsj");
+    assert!(
+        engine.query().unwrap().candidates.items[0]
+            .text
+            .ends_with('分')
+    );
+    engine.set_v_mode_time_seconds(true);
+    engine.set_input("vsj");
+    assert!(
+        engine.query().unwrap().candidates.items[0]
+            .text
+            .contains('秒'),
+        "打开设置后 sj 应带秒"
+    );
 }
 
 #[test]

@@ -146,6 +146,9 @@ impl Router {
             self.hide_candidate_window();
         } else if let Some(rect) = self.last_rect {
             let badges = self.candidate_badges(frame);
+            let v_mode_help =
+                self.engine.expression_mode() && self.engine.composition().text() == "v";
+            self.candidates.set_v_mode_help(v_mode_help);
             let unchanged = matches!(
                 &self.last_shown,
                 Some((f, b, r)) if f == frame && *b == badges && *r == rect

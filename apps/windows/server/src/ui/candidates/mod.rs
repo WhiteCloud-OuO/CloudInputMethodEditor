@@ -37,6 +37,7 @@ use cloudime_render::{HighlightAnimation, HighlightRect, Pixmap, Region, clip_pi
 
 pub(crate) use self::render_data::RenderData;
 use super::key_map::KeyMapWindow;
+use super::v_mode::VModeHelpWindow;
 use super::{CandidateEvents, Viewport};
 use crate::dispatch::{CandidateEvent, RenderSettings};
 use cloud_ui::auxiliary::{Bridge, DesignatedAssetToGetFocus, Host};
@@ -253,6 +254,9 @@ pub(crate) struct CandidateWindow {
     /// 当前这一帧是不是反向竖排（工人线程处理方向键时读）。
     reversed: Arc<AtomicBool>,
 
+    /// V 模式说明窗口是否该显示（拼音串只有一个 `v` 时）。
+    v_mode_help: Rc<Cell<bool>>,
+
     /// 上次贴出去的**内容区**屏幕矩形（物理像素）；没显示时为 `None`。
     /// 辅助窗口模板按它（宿主内容区矩形）把自己摆在候选窗旁边。
     content_rect: Cell<Option<RECT>>,
@@ -296,6 +300,11 @@ impl CandidateWindow {
             Ok(asset) => template.assets_mut().add(Box::new(asset)),
             Err(error) => tracing::error!(%error, "建键位映射参考窗口失败，将不显示它"),
         }
+        let v_mode_help = Rc::new(Cell::new(false));
+        match VModeHelpWindow::new(painter.clone(), template.hwnd(), v_mode_help.clone()) {
+            Ok(asset) => template.assets_mut().add(Box::new(asset)),
+            Err(error) => tracing::error!(%error, "建 V 模式说明窗口失败，将不显示它"),
+        }
         Ok(Self {
             template,
             data,
@@ -321,6 +330,7 @@ impl CandidateWindow {
             script_scale: Cell::new(None),
             viewport,
             reversed,
+            v_mode_help,
             content_rect: Cell::new(None),
             assets_on: Cell::new(false),
             assets_mode: Cell::new(KeyMapReference::Off),
@@ -495,6 +505,12 @@ impl CandidateWindow {
         self.sync_assets();
     }
 
+    /// V 模式说明窗口：拼音串只有一个 `v` 时打开，其他时候收起。
+    pub(crate) fn set_v_mode_help(&self, on: bool) {
+        self.v_mode_help.set(on);
+        self.sync_assets();
+    }
+
     /// 按光标矩形定位并显示：贴光标下方（放不下放上方），四周留出阴影。
     pub(crate) fn show(&self, anchor: RECT) {
         self.anchor.set(Some(anchor));
@@ -511,6 +527,7 @@ impl CandidateWindow {
 
     pub(crate) fn hide(&self) {
         self.reversed.store(false, Ordering::Relaxed);
+        self.v_mode_help.set(false);
         // 忘掉 anchor 与上一帧的位置：下次重新弹出时即使内容碰巧一样，也不该跟上次的高亮位置做滑动。
         self.anchor.set(None);
         self.content_rect.set(None);

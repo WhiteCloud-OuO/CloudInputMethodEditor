@@ -567,6 +567,16 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             ),
         ),
         KeyedView::new(
+            "v-mode-time-seconds",
+            field(
+                "V 模式的时间显示秒数",
+                "开启后，V 模式里 `sj` / `xz` 得到的时间候选会带上秒数（如 14:08:36）。",
+                ToggleSwitch::new()
+                    .is_on(input.v_mode_time_seconds)
+                    .on_toggled(context.callback(Message::VModeTimeSeconds)),
+            ),
+        ),
+        KeyedView::new(
             "feedback",
             crate::panel::controls::feedback(&settings.notice),
         ),

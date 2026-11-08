@@ -344,7 +344,7 @@ impl Engine {
                     if !english {
                         return Err(ParseError::NoSegmentation);
                     }
-                    let query = self.english_only_query(keys, rest.to_owned(), start, false);
+                    let query = self.english_only_query(keys, rest.to_owned(), start);
                     if query.candidates.items.is_empty() {
                         return Err(ParseError::NoSegmentation);
                     }
@@ -498,7 +498,7 @@ impl Engine {
                 if !english {
                     return Err(error);
                 }
-                let query = self.english_only_query(keys, rest, start, allow_extras);
+                let query = self.english_only_query(keys, rest, start);
                 if query.candidates.items.is_empty() {
                     return Err(error);
                 }
@@ -738,10 +738,6 @@ impl Engine {
         let mut items: Vec<Candidate> =
             ranked.into_iter().map(|(candidate, _)| candidate).collect();
         let rank = start.elapsed();
-        // 快捷候选按敲的键认（`rq` 日期），插在本地首选之后
-        if allow_extras {
-            self.insert_shortcuts(&mut items, keys);
-        }
         // 选词模型：把前几条里盖住整段输入的候选按前文重排（没分就记下，停顿后后台算）。
         self.rerank_choices(&mut items);
 
@@ -811,7 +807,8 @@ impl Engine {
                 },
             };
         }
-        let mut items = shortcut::candidates(scope, &jiff::Zoned::now());
+        let mut items =
+            shortcut::v_mode_candidates(scope, &jiff::Zoned::now(), self.v_mode_time_seconds);
         if let Some(word) = self.english.as_ref().and_then(|english| english.get(scope)) {
             items.push(Candidate {
                 text: word.to_owned(),
@@ -1275,25 +1272,14 @@ impl Engine {
     }
 
     /// 「拼音这边一个候选都出不来」时的兜底查询：只按**整段英文词 + 前缀补全**出候选（不纠错），
-    /// 拼音行留原样的按键（`tail`），没有切分。`shortcuts` 为真时顺带插按原始按键认的快捷候选
-    /// （`rq` 这类，只有全键拼音传真）。候选为空由调用方决定报不报错。
-    pub(super) fn english_only_query(
-        &self,
-        keys: &str,
-        rest: String,
-        start: Instant,
-        shortcuts: bool,
-    ) -> Query {
+    /// 拼音行留原样的按键（`tail`），没有切分。候选为空由调用方决定报不报错。
+    pub(super) fn english_only_query(&self, keys: &str, rest: String, start: Instant) -> Query {
         let mut pool: Vec<(Candidate, PoolRank)> = Vec::new();
         let full = keys.chars().filter(|c| *c != '\'').count();
         self.push_english(&mut pool, true, full, 0, false);
         let ranked = rank_pool(pool);
         let weights = pool_weights(&ranked);
-        let mut items: Vec<Candidate> =
-            ranked.into_iter().map(|(candidate, _)| candidate).collect();
-        if shortcuts {
-            self.insert_shortcuts(&mut items, keys);
-        }
+        let items: Vec<Candidate> = ranked.into_iter().map(|(candidate, _)| candidate).collect();
         Query {
             segmentations: Vec::new(),
             candidates: CandidateList { items },

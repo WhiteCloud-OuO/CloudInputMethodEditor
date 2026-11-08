@@ -255,6 +255,9 @@ pub struct InputConfig {
     /// 状态切换提示：中 / 英、大写锁定、全 / 半角、简 / 繁、中文 / 西文标点变化时，
     /// 在输入光标附近弹一个停留 1 秒的提示条（只在处于输入状态时弹）。
     pub show_status_change_tip: bool,
+
+    /// V 模式的时间 / 现在候选是否带秒数（`sj` / `xz`）。缺省关。
+    pub v_mode_time_seconds: bool,
 }
 
 impl Default for InputConfig {
@@ -273,6 +276,7 @@ impl Default for InputConfig {
             use_half_wide_punctuation_marks_after_digital: true,
             special_input_word: false,
             show_status_change_tip: true,
+            v_mode_time_seconds: false,
         }
     }
 }

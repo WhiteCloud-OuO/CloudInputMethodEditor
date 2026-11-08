@@ -52,6 +52,7 @@ pub(crate) enum Message {
     SpecialInputWord(bool),
     /// 状态切换提示（`[input] show_status_change_tip`）。
     ShowStatusChangeTip(bool),
+    VModeTimeSeconds(bool),
 
     // 候选页
     /// 本地模型模式（`[candidate] local_model` 的下标，见 `LocalModelMode::ALL`）。

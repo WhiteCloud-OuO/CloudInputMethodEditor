@@ -327,17 +327,16 @@ fn the_calculator_panel_commits_the_expression_with_its_value() {
     assert_eq!(commit.as_deref(), Some("v2*(3+4)"));
 }
 
-/// 表达式模式（`v` 开头）底部那一行换成用法提示；普通拼音没有这段提示。
+/// 表达式模式（`v` 开头）不再占底部 Tip 那一行；普通拼音也没有这段提示。
 #[test]
-fn expression_mode_shows_a_hint_in_the_tip() {
+fn expression_mode_does_not_add_a_tip() {
     let normal = KeyModifiers::default();
     let mut expression = router(9);
     compose(&mut expression, "v1+2", normal);
-    let tip = expression
-        .self_drawn_frame()
-        .tip
-        .expect("表达式模式该有用法提示");
-    assert_eq!(tip.joined(), "输入数字或表达式");
+    assert!(
+        expression.self_drawn_frame().tip.is_none(),
+        "V 模式不再往翻译 Tip 里写「输入数字或表达式」"
+    );
 
     let mut plain = router(9);
     compose(&mut plain, "nihao", normal);

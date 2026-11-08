@@ -155,6 +155,8 @@ impl Router {
         self.engine.set_traditional_mode(
             config.input.simp_trad_chinese_chars_toggle == cloudime_platform::SimpTrad::Traditional,
         );
+        self.engine
+            .set_v_mode_time_seconds(config.input.v_mode_time_seconds);
         self.engine.set_learning(config.general.learning);
         self.engine
             .set_context_memory(config.candidate.context_memory_seconds);

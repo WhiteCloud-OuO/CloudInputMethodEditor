@@ -12,6 +12,9 @@ pub(super) enum UiCommand {
     /// 收起候选窗口。
     Hide,
 
+    /// V 模式说明窗口开关（拼音串只有一个 `v`）。
+    VModeHelp(bool),
+
     /// 显示 / 更新悬浮状态条。
     StatusShow(Box<StatusView>),
 

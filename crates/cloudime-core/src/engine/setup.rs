@@ -162,6 +162,11 @@ impl Engine {
         }
     }
 
+    /// V 模式里 `sj` / `xz` 的时间候选是否带秒（设置页「V 模式的时间显示秒数」）。
+    pub fn set_v_mode_time_seconds(&mut self, on: bool) {
+        self.v_mode_time_seconds = on;
+    }
+
     /// 光标后剩余拼音的显示形式：能切就按音节用 `'` 连上，切不动就原样。
     pub(super) fn marked_rest(&self, rest: &str) -> String {
         marked_rest(rest, self.use_jian_pin)

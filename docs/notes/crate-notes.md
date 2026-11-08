@@ -40,7 +40,7 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 `candidate` / `ranking`（候选排序：结构键 + 权重，见下） / `shortcut` / `sentence` / `fuzzy` /
 `english`（英文候选：中文模式里的中英混输与前缀补全）/ `engine`（`query::EnglishTail`：句末英文词并入整句，`woxiangxuehaorust` → 我想学好rust，尾段也像拼音时按分数与拼音读法比）。
 
-切分展示：解析器先按音节数 / 残缺数 / 长音节给出候选切分；`query_reading` 查完词库后再按“有没有正好覆盖整个切分的词”重排一次，词库能证明更像词的切分排到最前（`shangou` 的 `shan gou` / 山沟 压过 `shang ou`），拼音行和整句都用这份顺序。单字候选不乘按字累计的全局用户权重，只保留当前输入串的 `choice_weight`，避免常选 `de` 的「的」把罕见读音 `di` 一起抬高。表达式：`shortcut::candidates` 以固定前缀 `v`（`EXPRESSION_PREFIX`）认表达式模式，算四则运算与中文数字；`rq` / `sj` / `xq` 出日期 / 时间 / 星期，候选是 `CandidateKind::Shortcut`，上屏吃掉整段作用域。`Engine::expression_mode` 决定组句中数字与运算符进缓冲区还是选词。
+切分展示：解析器先按音节数 / 残缺数 / 长音节给出候选切分；`query_reading` 查完词库后再按“有没有正好覆盖整个切分的词”重排一次，词库能证明更像词的切分排到最前（`shangou` 的 `shan gou` / 山沟 压过 `shang ou`），拼音行和整句都用这份顺序。单字候选不乘按字累计的全局用户权重，只保留当前输入串的 `choice_weight`，避免常选 `de` 的「的」把罕见读音 `di` 一起抬高。表达式：`shortcut::v_mode_candidates` 以固定前缀 `v`（`EXPRESSION_PREFIX`）认 V 模式，算四则运算与中文数字，并出 `vrq` / `vsj` / `vxq` / `vxz` 的日期 / 时间 / 星期 / 现在候选（`[input] v_mode_time_seconds` 控制秒数）；候选是 `CandidateKind::Shortcut`，上屏吃掉整段作用域。普通输入不再插这些日期 / 时间快捷候选。`Engine::expression_mode` 决定组句中数字与运算符进缓冲区还是选词。
 
 `shortcut::evaluator` 是**复数内核**（实部 + 虚部，`Complex`）：`+ - * / % ^ ! @`、括号、一元正负号，
 **不做隐式乘法**（`6i`、`2(3+4)`、`2x3` 都是语法错，`x` 也不当乘号）；函数见 `call`（三角函数收角度、
@@ -55,8 +55,8 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 （算式空着给 `0`，算错给空），拼音行用 `typed_display` 显示算式本身（去掉 `v`）。壳那一侧：
 `apply_function_key` 的 `TAB` / `ESCAPE` 先看 `calculator`（进 / 出面板，不展开候选窗）、
 `apply_printable` 在面板里把**所有可打印 ASCII**都 `push` 进算式（标点按西文，忽略全角 / 符号映射），
-`composed::expression_hint` 按状态给底部那一行的提示（`v` 模式：「输入数字或表达式」；
-面板：「按Tab/Esc退出表达式计算」）。面板里回车走 `calculator_expression`：算得出来就上屏「算式=结果」
+`composed::expression_hint` 只给表达式计算面板的底部提示（「按Tab/Esc退出表达式计算」）；
+V 模式本身不再往翻译 Tip 里写「输入数字或表达式」。面板里回车走 `calculator_expression`：算得出来就上屏「算式=结果」
 （`5*6=30`），否则原样上屏（`take_raw` 顺手清组句，`calculator` 由 `handle_key` 的空组句那一拍清掉）。
 
 **双键拼音**（`shuangpin.rs`，2026-10-10；方案文件与规范见 `docs/design/input-schemes.md`）：`Table`（`zero_initials` / `remapping` / `exchange` / `auxiliary` / `raw_input`）把按键还原成完整拼音。
@@ -97,7 +97,7 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 `Engine::set_shuangpin` / `set_auxiliary_codes` 挂表；`query_inner` 里双拼分支排在 `is_raw` **与表达式之前**（`v` / `u` / `i` 三种面板仅全键拼音）；
 `query_shuangpin` 每种解法按它那几份切分跑一遍 `query_reading`（`query_phonetic` 多了个 `reading` 参数：给定就**不再自己切**，
 同一段按键的几份切分按**并集**查，简拼 / 末尾放宽 / 纠错读法都不参与）、
-取第一个能出候选的，并传 `allow_extras=false`（不插 `rq` 这类快捷候选与英文尾段）+ `english = Engine::shuangpin_mixture_input`
+取第一个能出候选的，并传 `allow_extras=false`（不插英文尾段；日期 / 时间快捷候选已经只在 V 模式里，普通输入不再插）+ `english = Engine::shuangpin_mixture_input`
 （`use_input_scheme.cfg` 的 `mixture_input`，`Engine::set_shuangpin_mixture_input` 挂）—— **英文词按敲的原始按键匹配**，
 开着才匹配、关掉一律不匹配（与全键拼音那份 `[input] mixture_input` 各管各的），且**不做拼错纠正**；
 一种解法都没有（按键不是这套方案的键、开了辅助码还大小写混用）就是
@@ -110,7 +110,7 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 拼音行同理：开着走 `Table::typed_marked`（按音节补半角 `'`：`vhgo` → `vh'go`，辅助码贴在那个音节上），
 关掉时显示展开后的完整拼音并置 `Query::expanded_pinyin`（光标按这段显示算，`es` → `shou|`；Shift 那套按按键长度切的显示串这时候不能顶上来）。
 `Engine::expression_mode` 见到挂着双拼表直接返回 `false` —— `v` / `u` / `i` 三种模式仅全键拼音，双拼下 `v` 只是方案键
-（否则 `vhgo` 会被当表达式、候选窗左下角还会冒出「输入数字或表达式」）。
+（否则 `vhgo` 会被当表达式）。
 选中候选时 `Engine::consumed_by` 走 `Table::typed_covered`（按「两键一个音节 + 辅助码」把候选的几个音节换算成按键字节数；
 候选**末音节只按了第一个键**时那半个音节的键也算它的 —— 那种前缀候选（`yzd` 的「云朵」，`d` 是「朵」的声母）
 从前算不出按键数会落到全拼那套对齐上，只吃掉一两个键，拼音串里残留半截按键），
@@ -650,7 +650,7 @@ Windows 壳的公共层（2026-10-20 从 `apps/windows/server/src/ui/` 抽出）
   含内置 dialog）、`mask`（共享蒙版窗口，原先在 `app/mask.rs`；`app` 与脚本窗口共用）、
   `layered`（预乘 RGBA → BGRA → `UpdateLayeredWindow`）、`monitor` / `window_class` / `window`（工作区、窗口类、模块句柄与鼠标穿透）。
 - **资产模型**：`auxiliary` 的 `Asset` / `Assets` / `Bridge` / `Host` / `Focus` / `DesignatedAssetToGetFocus`。
-  候选窗口的键位映射参考 `KeyMapWindow` 仍是候选专属，留在 `apps/windows/server/src/ui/key_map/`；脚本辅助窗口在 `script_window`。
+  候选窗口的键位映射参考 `KeyMapWindow` 仍是候选专属，留在 `apps/windows/server/src/ui/key_map/`；V 模式说明窗口 `VModeHelpWindow` 在 `ui/v_mode/`（静态 `Document`，标签用候选项色、正文用额外内容色）；脚本辅助窗口在 `script_window`。
   **模态**：`AssetKind`（`Auxiliary` / `Dialog`）+ `Asset::set_modal` + `Assets::set_modal(name, modal)`。
   普通模态同时只允许一件（已有模态时再设另一件返回 `false`）；`Assets::modal` 是 `Vec<ModalEntry>` 栈，
   dialog（`AssetKind::Dialog`）由 `Assets::add` 自动压栈，并先把原栈顶 `set_modal(false)` 挂起，dialog 销毁时
