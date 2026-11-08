@@ -385,6 +385,10 @@ fn apply(
                     queue_us = queue_us as u64,
                     render_us = started.elapsed().as_micros() as u64,
                     candidates = frame.candidates.items.len(),
+                    left = rect.left,
+                    top = rect.top,
+                    right = rect.right,
+                    bottom = rect.bottom,
                     "候选窗显示"
                 );
             }

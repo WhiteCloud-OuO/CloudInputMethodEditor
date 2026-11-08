@@ -186,6 +186,16 @@ impl Router {
         if self.focused != Some(session) {
             return;
         }
+        if crate::timing::enabled() {
+            tracing::info!(
+                target: "cloudime_timing",
+                left = rect.left,
+                top = rect.top,
+                right = rect.right,
+                bottom = rect.bottom,
+                "候选窗位置"
+            );
+        }
         self.last_rect = Some(rect);
         // 组句结束后 `last_rect` 会清掉，但状态切换提示还要用它定位，所以另记一份留着。
         self.last_caret = Some(rect);
