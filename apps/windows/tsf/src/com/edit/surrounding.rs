@@ -4,6 +4,7 @@
 
 use std::mem::ManuallyDrop;
 use std::panic::{AssertUnwindSafe, catch_unwind};
+use std::time::Instant;
 
 use windows::Win32::Foundation::E_FAIL;
 use windows::Win32::System::Com::CoTaskMemFree;
@@ -103,9 +104,16 @@ pub(crate) fn input_context(context: &ITfContext, ec: u32, document: bool) -> In
             id,
         };
     }
+    let before_started = Instant::now();
+    let before = text_before_caret(ec, &range);
+    crate::com::log::timing(format_args!(
+        "时序 before_us={} chars={}",
+        before_started.elapsed().as_micros(),
+        before.as_ref().map_or(0, |text| text.chars().count())
+    ));
     InputContext {
         private: false,
-        before: text_before_caret(ec, &range),
+        before,
         document: document.then(|| document_text(ec, &range)).flatten(),
         id,
     }
@@ -126,6 +134,7 @@ const DOCUMENT_LIMIT: i32 = 200_000;
 /// `DocumentText.caret` 是光标在返回文本里的字符下标（`cloudime.text.before` 按它切）。
 /// 私密框、读不到、空文档返回 `None`。
 fn document_text(ec: u32, caret: &ITfRange) -> Option<DocumentText> {
+    let started = Instant::now();
     // 分两半读（光标前 / 光标后）：拼起来就是「以光标为中心」，光标下标天然是前一半的字符数。
     // 某一侧为空（光标就在文档两头）不算失败，两侧都为空才是没有文本。
     let before = side_text(ec, caret, true).unwrap_or_default();
@@ -133,10 +142,16 @@ fn document_text(ec: u32, caret: &ITfRange) -> Option<DocumentText> {
     let caret_index = before.chars().count();
     let mut text = before;
     text.push_str(&after);
-    (!text.is_empty()).then_some(DocumentText {
+    let chars = text.chars().count();
+    let result = (!text.is_empty()).then_some(DocumentText {
         text,
         caret: caret_index,
-    })
+    });
+    crate::com::log::timing(format_args!(
+        "时序 doc_us={} chars={chars}",
+        started.elapsed().as_micros()
+    ));
+    result
 }
 
 /// 从光标往一侧读最多 [`DOCUMENT_LIMIT`] / 2 个 UTF-16 单元：`before = true` 读光标之前，否则读之后。

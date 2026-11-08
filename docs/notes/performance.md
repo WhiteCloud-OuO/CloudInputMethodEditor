@@ -283,6 +283,36 @@ DirectML 路径与 DML 版运行库已接入，但当前知意 int8 模型会被
 
 在数值问题解决前不要把 `prefer_gpu_model` 设为默认；`CLOUDIME_ZHIYI_DML_FORCE=1` 只用于开发验证。
 
+## 只读打点：按键 → 编辑会话 → 候选窗（2026-11-08）
+
+给「软件运行慢时候选窗偶尔卡」加的分段计时。只在环境变量 `CLOUDIME_TIMING=1` 时输出，平时不改变行为；
+TSF DLL 与 Server 都从宿主进程继承这个变量。
+
+- TSF 日志（`%LOCALAPPDATA%\CloudIME\logs\tsf.*.log`）里的 `时序 ...`：
+  `test_us` / `down_us`（`OnTestKeyDown` / `OnKeyDown` 总耗时）、`keyrpc_us`（同步管道等 Server）、
+  `editsession_us`（异步编辑会话总耗时）、`context_us`（起组句读光标前文 / 私密判断）、
+  `before_us` / `doc_us`（64 字前文 / 整篇文档读取）、`surround_us`（整篇写管道）、`caret_us`（量光标 + 写位置）。
+- Server 日志里的 target `cloudime_timing`：
+  `按键处理`（总）、`按键脚本`、`重算候选`、`候选查询`（parse / lookup / rank）、
+  `候选窗显示`（UI 线程排队 `queue_us` + `set_content/show` 的 `render_us`）。
+
+本机 Adobe After Effects 2020 的组句名称框（idle vs 6 个 CPU 忙线程 + AE `BelowNormal`）：
+
+| 段 | 空闲 | 满载 |
+|---|---|---|
+| Server `lookup` | 2.5–5.3 ms | 3.0–20.4 ms |
+| Server `rank` | 0.9–1.5 ms | 1.0–5.7 ms |
+| Server 查询合计 | 3.7–7.1 ms | 3.8–26.9 ms |
+| TSF `keyrpc_us` | 4.6–9.0 ms | 4.2–36.9 ms（首键） |
+| TSF `editsession_us` | 2.2–4.1 ms | 0.4–9.6 ms |
+| TSF `caret_us` | 2.0–3.7 ms | 0.1–8.5 ms |
+| UI `render_us` | 0.9–2.5 ms | 1.7–10.1 ms |
+
+结论：这一轮里 Server 的词库查询是主项，CPU 被别的软件挤占时会放大 4–5 倍；UI 渲染和 TSF 编辑会话各占几毫秒。
+AE 这个输入框的 TSF 上下文返回 0 字，`doc_us` 没被触发；要验证「整篇文档读取」还得找真正返回文本的输入框。
+另外观察到两件事（与本轮打点无关，后面单独查）：AE 里候选窗出现在屏幕右上角而不是输入框旁；
+强杀 AE 后候选窗没有跟着消失。
+
 ## 经验
 
 1. **先量再改，先打点再改。** 第三轮猜错两次的原因是凭「常识」判断热点（哈希查表、大数组二分都是教科书里的慢点），

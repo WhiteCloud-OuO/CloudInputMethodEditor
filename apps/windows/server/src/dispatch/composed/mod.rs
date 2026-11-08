@@ -2,6 +2,8 @@
 
 mod state;
 
+use std::time::Instant;
+
 use cloudime_core::{Candidate, CandidateKind, CandidateLayout, CandidateList, Query};
 use cloudime_platform::LayoutMode;
 use cloudime_platform::PreeditMode;
@@ -87,7 +89,28 @@ impl Router {
         // 只有脚本可能要看 Core 的排序数字时才把权重留一份（没脚本就完全不多花这一步）
         let wants_weights =
             self.scripts.has_handlers("candidates") || self.scripts.has_pending_requests();
-        let built = self.engine.query().ok().map(|query| {
+        let query_started = Instant::now();
+        let query = self.engine.query().ok();
+        if crate::timing::enabled() {
+            if let Some(query) = &query {
+                tracing::info!(
+                    target: "cloudime_timing",
+                    parse_us = query.timings.parse.as_micros() as u64,
+                    lookup_us = query.timings.lookup.as_micros() as u64,
+                    rank_us = query.timings.rank.as_micros() as u64,
+                    total_us = query_started.elapsed().as_micros() as u64,
+                    candidates = query.candidates.items.len(),
+                    "候选查询"
+                );
+            } else {
+                tracing::info!(
+                    target: "cloudime_timing",
+                    total_us = query_started.elapsed().as_micros() as u64,
+                    "候选查询失败"
+                );
+            }
+        }
+        let built = query.map(|query| {
             let (preedit, cursor) = marked_parts(&query, self.engine.special_input());
             (
                 query.candidates.items.clone(),

@@ -8,6 +8,7 @@ pub mod ipc;
 pub mod mcp;
 /// 系统语音（SAPI）：`Shift + 反引号` 念候选的译文。
 pub mod speech;
+pub(crate) mod timing;
 /// 候选窗口 / 状态条的自绘线程；仅 Windows。
 #[cfg(windows)]
 pub mod ui;

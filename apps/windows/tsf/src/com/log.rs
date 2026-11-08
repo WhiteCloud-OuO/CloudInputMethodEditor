@@ -6,6 +6,7 @@
 
 use std::io::Write;
 use std::path::PathBuf;
+use std::sync::OnceLock;
 use std::sync::atomic::{AtomicU32, Ordering};
 
 use cloudime_platform::logs::daily::{self, KEEP_DAYS};
@@ -16,6 +17,20 @@ const PREFIX: &str = "tsf";
 
 /// 本进程上次写日志的日子（自 1970 起的天数）；换了天才清一次旧文件。
 static LAST_DAY: AtomicU32 = AtomicU32::new(0);
+
+/// 分段打点开关：环境变量 `CLOUDIME_TIMING` 存在时才写，平时不产生额外日志。
+/// 只用于排查「按键 → 编辑会话 → 候选窗」的耗时，不影响行为。
+pub(crate) fn timing_enabled() -> bool {
+    static ENABLED: OnceLock<bool> = OnceLock::new();
+    *ENABLED.get_or_init(|| std::env::var_os("CLOUDIME_TIMING").is_some())
+}
+
+/// 打点行：参数按 `format_args!` 传，关着时连字符串都不拼。
+pub(crate) fn timing(args: std::fmt::Arguments<'_>) {
+    if timing_enabled() {
+        log(&args.to_string());
+    }
+}
 
 pub(crate) fn log(message: &str) {
     let Some(dir) = dir() else { return };

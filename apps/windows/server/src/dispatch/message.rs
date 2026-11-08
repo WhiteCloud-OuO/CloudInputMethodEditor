@@ -1,5 +1,7 @@
 //! 按消息类型分派：会话开关、按键、轮询、失焦上屏、选区 / 光标矩形 / 中英模式的通知。
 
+use std::time::Instant;
+
 use cloudime_platform::protocol::{
     ClientMessage, Frame, KeyEvent, KeyOutcome, PROTOCOL_VERSION, SESSION_OPENED_SINCE,
     ServerMessage, SessionId,
@@ -175,6 +177,21 @@ impl Router {
     }
 
     fn handle_key(&mut self, session: SessionId, event: KeyEvent) -> ServerMessage {
+        let started = Instant::now();
+        let vk = event.virtual_key;
+        let response = self.handle_key_inner(session, event);
+        if crate::timing::enabled() {
+            tracing::info!(
+                target: "cloudime_timing",
+                elapsed_us = started.elapsed().as_micros() as u64,
+                vk,
+                "按键处理"
+            );
+        }
+        response
+    }
+
+    fn handle_key_inner(&mut self, session: SessionId, event: KeyEvent) -> ServerMessage {
         self.ensure_focus(session);
         // 不是紧接着的第二个空格：双击空格作废。
         self.note_key_for_smart_symbol(&event);
@@ -188,7 +205,17 @@ impl Router {
         {
             ScriptActions::default()
         } else {
-            self.script_actions(&event)
+            let started = Instant::now();
+            let actions = self.script_actions(&event);
+            if crate::timing::enabled() {
+                tracing::info!(
+                    target: "cloudime_timing",
+                    script_us = started.elapsed().as_micros() as u64,
+                    vk = event.virtual_key,
+                    "按键脚本"
+                );
+            }
+            actions
         };
         // 脚本在这次（或之前某次回调里）要过光标位置：这一拍的 KeyResult 顺路请 DLL 量一次。
         let mut want_caret = self.scripts.take_caret_request();
@@ -235,7 +262,15 @@ impl Router {
         self.notice = actions.notice.clone();
         let (commit, outcome) = match self.apply_key(&event) {
             Effect::Changed(commit) => {
+                let started = Instant::now();
                 self.recompose();
+                if crate::timing::enabled() {
+                    tracing::info!(
+                        target: "cloudime_timing",
+                        recompose_us = started.elapsed().as_micros() as u64,
+                        "重算候选"
+                    );
+                }
                 (commit, KeyOutcome::Consumed)
             }
             Effect::Navigated => (None, KeyOutcome::Consumed),

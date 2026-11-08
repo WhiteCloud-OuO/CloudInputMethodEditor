@@ -5,6 +5,7 @@
 
 use std::panic::{AssertUnwindSafe, catch_unwind};
 use std::rc::Rc;
+use std::time::Instant;
 
 use windows::Win32::Foundation::E_FAIL;
 use windows::Win32::UI::TextServices::{
@@ -34,10 +35,17 @@ pub(crate) struct UpdateSession {
 
 impl ITfEditSession_Impl for UpdateSession_Impl {
     fn DoEditSession(&self, ec: u32) -> Result<()> {
+        let started = Instant::now();
         // 从框架的 C++ 调进来：panic 不能越过 FFI。
         let result = catch_unwind(AssertUnwindSafe(|| {
             apply(&self.shared, &self.engine, &self.context, ec, &self.update)
         }));
+        crate::com::log::timing(format_args!(
+            "时序 editsession_us={} commit={} preedit_len={}",
+            started.elapsed().as_micros(),
+            self.update.commit.is_some(),
+            self.update.preedit.chars().count()
+        ));
         match result {
             Ok(Ok(())) => Ok(()),
             Ok(Err(error)) => {

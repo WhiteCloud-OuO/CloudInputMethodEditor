@@ -8,6 +8,8 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{VK_CAPITAL, VK_SPACE};
 use windows::Win32::UI::TextServices::{ITfContext, ITfKeyEventSink_Impl};
 use windows::core::{BOOL, GUID, Ref, Result};
 
+use std::time::Instant;
+
 use cloudime_platform::protocol::{IndicatorCommand, KeyEvent, KeyOutcome};
 
 use super::TextService_Impl;
@@ -33,6 +35,7 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
 
     /// 所有键（含之后被吃掉的）都先经过这里，Shift 单击的判定放在这一层。
     fn OnTestKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        let started = Instant::now();
         let vk = wparam.0 as u32;
         // 刚补发的退格 / 删除键：这是给应用自己的，别再吃一遍（否则会递归）。
         if self.shared.is_injected_key(vk as u16) {
@@ -68,10 +71,16 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
                 self.engine.clone(),
             );
         }
-        Ok(self.would_eat(&self.key_event(vk)).into())
+        let eat = self.would_eat(&self.key_event(vk));
+        crate::com::log::timing(format_args!(
+            "时序 test_us={} vk={vk} eat={eat}",
+            started.elapsed().as_micros()
+        ));
+        Ok(eat.into())
     }
 
     fn OnKeyDown(&self, pic: Ref<ITfContext>, wparam: WPARAM, lparam: LPARAM) -> Result<BOOL> {
+        let started = Instant::now();
         let vk = wparam.0 as u32;
         if self.shared.take_injected_key(vk as u16) {
             return Ok(FALSE);
@@ -85,7 +94,12 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             return Ok(TRUE);
         }
         let event = self.key_event(vk);
-        Ok(self.handle_key(pic, event).into())
+        let handled = self.handle_key(pic, event);
+        crate::com::log::timing(format_args!(
+            "时序 down_us={} vk={vk} handled={handled}",
+            started.elapsed().as_micros()
+        ));
+        Ok(handled.into())
     }
 
     fn OnTestKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
@@ -305,6 +319,8 @@ impl TextService_Impl {
 
     /// 把按键送给 Server 并按结果更新文档；返回吃不吃。
     fn forward_key(&self, pic: Ref<ITfContext>, event: KeyEvent) -> bool {
+        let forward_started = Instant::now();
+        let vk = event.virtual_key;
         // 没连上 Server（没起、刚重启、转发失败后的退避期）：只吃「可能是在打拼音」的键，
         // 别让拼音字母漏进应用；标点 / 数字 / 英文与 Caps 下的字母本来就会原样交给应用，
         // 这里放行——一律吃掉会表现为「按了没反应」（连不上时按 `-`、数字都没反应）。
@@ -336,11 +352,16 @@ impl TextService_Impl {
                 return true;
             };
             // 组句被应用终止过：先让 Server 清掉残留的拼音（文本已在文档里，交出的丢弃）。
+            let key_started = Instant::now();
             let response = if self.shared.take_server_stale() {
                 client.commit().and_then(|_| client.key(event))
             } else {
                 client.key(event)
             };
+            crate::com::log::timing(format_args!(
+                "时序 keyrpc_us={} vk={vk}",
+                key_started.elapsed().as_micros()
+            ));
             match response {
                 Ok(response) => {
                     want_caret = response.want_caret;
@@ -451,6 +472,10 @@ impl TextService_Impl {
                 self.engine.clone(),
             );
         }
+        crate::com::log::timing(format_args!(
+            "时序 forward_us={} vk={vk} ate={ate}",
+            forward_started.elapsed().as_micros()
+        ));
         ate
     }
 }

@@ -2,12 +2,15 @@
 
 use cloudime_platform::protocol::{Frame, ScreenRect};
 
+use std::time::Instant;
+
 use crate::dispatch::{RenderSettings, StatusView};
 
 /// 交给 UI 线程执行的命令。`Frame` 较大，装箱免得枚举过胖。
 pub(super) enum UiCommand {
     /// 把候选窗口摆到组句矩形下方并按帧重绘；`badges` 是每个候选的来源角标。
-    Show(Box<(Frame, Vec<Option<char>>, ScreenRect)>),
+    /// `Instant` 是工人线程投递的时间，只用于 `CLOUDIME_TIMING` 打点。
+    Show(Box<(Frame, Vec<Option<char>>, ScreenRect, Instant)>),
 
     /// 收起候选窗口。
     Hide,

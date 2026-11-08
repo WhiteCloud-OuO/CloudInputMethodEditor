@@ -6,6 +6,7 @@ mod sink;
 
 use std::mem::ManuallyDrop;
 use std::rc::Rc;
+use std::time::Instant;
 
 use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_BACK, VK_DELETE};
 use windows::Win32::UI::TextServices::{
@@ -81,7 +82,9 @@ pub(crate) fn apply(
     if report_input {
         shared.set_context_reported(true);
     }
+    let context_started = Instant::now();
     let input = report_input.then(|| input_context(context, ec, super::service::want_document()));
+    let context_us = context_started.elapsed().as_micros();
 
     match update.commit.as_deref() {
         Some(text) => commit_text(
@@ -121,6 +124,7 @@ pub(crate) fn apply(
     } else {
         update_preedit(shared, context, ec, preedit)?;
     }
+    let mut surround_us = 0u128;
     if let Some(InputContext {
         private,
         before,
@@ -130,10 +134,17 @@ pub(crate) fn apply(
     {
         report_privacy(engine, private);
         if before.is_some() || document.is_some() {
+            let started = Instant::now();
             report_surrounding(engine, before.unwrap_or_default(), document, id);
+            surround_us = started.elapsed().as_micros();
         }
     }
+    let caret_started = Instant::now();
     report_caret(shared, engine, context, ec);
+    let caret_us = caret_started.elapsed().as_micros();
+    crate::com::log::timing(format_args!(
+        "时序 context_us={context_us} surround_us={surround_us} caret_us={caret_us} report_input={report_input}"
+    ));
     Ok(())
 }
 

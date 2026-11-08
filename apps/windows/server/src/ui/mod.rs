@@ -54,6 +54,7 @@ use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::mpsc::{self, Receiver, Sender};
 use std::thread;
+use std::time::Instant;
 
 use windows::Win32::Foundation::{E_FAIL, LPARAM, RECT, WPARAM};
 use windows::Win32::System::Threading::GetCurrentThreadId;
@@ -158,7 +159,12 @@ impl UiHandle {
 
 impl CandidateSink for UiHandle {
     fn show(&self, frame: Frame, badges: Vec<Option<char>>, rect: ScreenRect) {
-        self.post(UiCommand::Show(Box::new((frame, badges, rect))));
+        self.post(UiCommand::Show(Box::new((
+            frame,
+            badges,
+            rect,
+            std::time::Instant::now(),
+        ))));
     }
 
     fn hide(&self) {
@@ -367,10 +373,21 @@ fn apply(
 ) {
     match command {
         UiCommand::Show(payload) => {
-            let (frame, badges, rect) = *payload;
+            let (frame, badges, rect, posted) = *payload;
+            let queue_us = posted.elapsed().as_micros();
+            let started = Instant::now();
             window.set_content(&frame, &badges);
             // 宿主换了一帧：名下资产由它自己在 `show` 里摆好（见 `cloud_ui::auxiliary`）
             window.show(to_win_rect(rect));
+            if crate::timing::enabled() {
+                tracing::info!(
+                    target: "cloudime_timing",
+                    queue_us = queue_us as u64,
+                    render_us = started.elapsed().as_micros() as u64,
+                    candidates = frame.candidates.items.len(),
+                    "候选窗显示"
+                );
+            }
         }
         UiCommand::Hide => window.hide(),
         UiCommand::VModeHelp(on) => window.set_v_mode_help(on),
