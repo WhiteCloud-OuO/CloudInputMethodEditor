@@ -547,6 +547,16 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             ),
         ),
         KeyedView::new(
+            "special-input-word",
+            field(
+                "特殊输入模式时造词",
+                "开启后，组句里只要有字是在特殊输入模式下选的，上屏前会把整段收进用户词库；词库已有的词只增加权重。按主键盘 / 进入或退出特殊输入模式。",
+                ToggleSwitch::new()
+                    .is_on(input.special_input_word)
+                    .on_toggled(context.callback(Message::SpecialInputWord)),
+            ),
+        ),
+        KeyedView::new(
             "status-change-tip",
             field(
                 "状态切换提示",

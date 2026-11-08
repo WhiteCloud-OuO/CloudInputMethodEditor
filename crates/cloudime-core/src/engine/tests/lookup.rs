@@ -320,18 +320,18 @@ fn shortcuts_follow_the_first_local_candidate() {
 }
 
 #[test]
-fn shift_letters_join_the_buffer() {
-    let dictionary = Dictionary::parse("C盘\tc pan\t8000\n磁盘\tci pan\t249\n").unwrap();
+fn uppercase_letters_are_english_literals_not_pinyin() {
+    let dictionary =
+        Dictionary::parse("C盘\tc pan\t8000\n盘\tpan\t1000\n磁盘\tci pan\t249\n").unwrap();
     let mut engine = Engine::new(dictionary);
-    // 中文模式下按住 Shift 敲 C，再打 pan：大写按小写参与匹配（出「C盘」），
-    // 拼音行按敲的样子显示，回车原样上屏时保留大写。
+    // 全拼里大写 C 不参与拼音匹配：只有 pan 查候选（出「盘」），C 作为英文字面量保留在组句里。
     engine.push('C');
     for c in "pan".chars() {
         engine.push(c);
     }
     let query = engine.query().unwrap();
-    assert_eq!(query.candidates.items[0].text, "C盘");
-    assert_eq!(query.marked_text(), "C'pan");
+    assert_eq!(query.candidates.items[0].text, "盘");
+    assert_eq!(query.marked_text(), "Cpan");
     assert_eq!(engine.take_raw(), "Cpan");
     assert!(engine.composition().is_empty());
 }

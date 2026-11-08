@@ -205,6 +205,7 @@ impl Component for Settings {
             Message::HalfWideAfterDigit(on) => {
                 self.save("input", "use_half_wide_punctuation_marks_after_digital", on)
             }
+            Message::SpecialInputWord(on) => self.save("input", "special_input_word", on),
             Message::ShowStatusChangeTip(on) => self.save("input", "show_status_change_tip", on),
 
             // 候选页

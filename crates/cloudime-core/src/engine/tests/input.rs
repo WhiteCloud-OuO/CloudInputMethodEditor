@@ -69,6 +69,130 @@ fn special_input_walks_one_syllable_at_a_time() {
     assert_eq!(engine.commit(duo).as_deref(), Some("云多"));
 }
 
+/// 大写字母停在拼音串里但按顺序保留：`su'A'ni` 选完得到「苏A你」。
+#[test]
+fn uppercase_is_an_ordered_english_literal() {
+    let mut engine = Engine::new(Dictionary::parse("苏\tsu\t1000\n你\tni\t1000\n").unwrap());
+    engine.set_input("su'A'ni");
+    assert_eq!(engine.composition().text(), "suni");
+    let su = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .find(|candidate| candidate.text == "苏")
+        .expect("su 的单字候选");
+    assert_eq!(engine.commit(&su), None);
+    let ni = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .find(|candidate| candidate.text == "你")
+        .expect("ni 的单字候选");
+    assert_eq!(engine.commit(&ni).as_deref(), Some("苏A你"));
+}
+
+/// 特殊输入模式里选过字：整段上屏前造词；含大写英文时 K 整体算一个读音单位。
+#[test]
+fn special_input_creates_a_word_from_the_whole_commit() {
+    let learner = WordLearner::default();
+    let shared = learner.shared.clone();
+    let weights = learner.learned_weights.clone();
+    let mut engine = Engine::new(
+        Dictionary::parse(
+            "云\tyun\t1000\n朵\tduo\t1000\n输\tshu\t1000\n入\tru\t1000\n法\tfa\t1000\n\
+             去\tqu\t1000\n唱\tchang\t1000\n吧\tba\t1000\n",
+        )
+        .unwrap(),
+    )
+    .with_learner(Box::new(learner));
+    engine.set_special_input_word(true);
+    engine.set_special_input(true);
+
+    engine.set_input("qu'chang'K'ba");
+    assert_eq!(engine.composition().text(), "qu'changba");
+    for wanted in ["去", "唱"] {
+        let candidate = engine
+            .query()
+            .unwrap()
+            .candidates
+            .items
+            .into_iter()
+            .find(|candidate| candidate.text == wanted)
+            .unwrap_or_else(|| panic!("{wanted} 的单字候选"));
+        assert_eq!(engine.commit(&candidate), None);
+    }
+    let ba = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .find(|candidate| candidate.text == "吧")
+        .expect("K 跳过后应该匹配 ba");
+    assert_eq!(engine.commit(&ba).as_deref(), Some("去唱K吧"));
+    // 整段（含 K）收进用户词库，K 作为一个读音单位。
+    let words = shared.lock().unwrap().0.clone();
+    assert!(words.contains(&"去唱K吧".to_owned()), "{words:?}");
+    assert_eq!(weights.lock().unwrap().get("去唱K吧"), Some(&2000.0));
+}
+
+/// 词库里已经有的整段不重复收进用户词库，只走原有学习。
+#[test]
+fn special_input_word_does_not_duplicate_a_known_word() {
+    let learner = WordLearner::default();
+    let shared = learner.shared.clone();
+    let weights = learner.learned_weights.clone();
+    let mut engine = Engine::new(
+        Dictionary::parse(
+            "云\tyun\t1000\n朵\tduo\t1000\n输\tshu\t1000\n入\tru\t1000\n法\tfa\t1000\n\
+             云朵输入法\tyun duo shu ru fa\t5000\n",
+        )
+        .unwrap(),
+    )
+    .with_learner(Box::new(learner));
+    engine.set_special_input_word(true);
+    engine.set_special_input(true);
+    engine.set_input("yun'duo'shu'ru'fa");
+    let mut text = None;
+    while !engine.composition().text().is_empty() || !engine.composition().has_selected() {
+        let candidate = engine.query().unwrap().candidates.items[0].clone();
+        text = engine.commit(&candidate).or(text);
+        if engine.composition().is_empty() {
+            break;
+        }
+    }
+    assert_eq!(text.as_deref(), Some("云朵输入法"));
+    assert!(shared.lock().unwrap().0.is_empty());
+    assert!(weights.lock().unwrap().is_empty());
+}
+
+/// 没有在特殊模式下选过字（或中途 Esc / Insert / Enter）时不造词。
+#[test]
+fn special_input_word_needs_a_special_selection() {
+    let learner = WordLearner::default();
+    let shared = learner.shared.clone();
+    let mut engine =
+        Engine::new(Dictionary::parse("云\tyun\t1000\n").unwrap()).with_learner(Box::new(learner));
+    engine.set_special_input_word(true);
+    engine.set_special_input(true);
+
+    // 打开又关掉，没选字。
+    engine.set_special_input(false);
+    assert!(shared.lock().unwrap().0.is_empty());
+
+    // 选了一个字后 Esc。
+    engine.set_special_input(true);
+    engine.set_input("yun");
+    let yun = engine.query().unwrap().candidates.items[0].clone();
+    engine.commit(&yun);
+    engine.clear();
+    assert!(shared.lock().unwrap().0.is_empty());
+}
+
 /// 中英混输关掉后，中文模式不再掺英文词与英文补全。
 #[test]
 fn turning_mixture_input_off_hides_english_candidates() {

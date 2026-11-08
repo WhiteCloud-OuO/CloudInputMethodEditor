@@ -147,6 +147,7 @@ struct WordLearner {
     ngram: sentence::UserNgram,
     shared: Arc<Mutex<(Vec<String>, sentence::UserNgram)>>,
     choices: HashMap<String, u32>,
+    learned_weights: Arc<Mutex<HashMap<String, f64>>>,
 }
 
 impl Learner for WordLearner {
@@ -178,7 +179,11 @@ impl Learner for WordLearner {
         1.0 + f64::from(self.weight(text))
     }
 
-    fn learn_word(&mut self, text: &str, syllables: &[String], _weight: f64) {
+    fn learn_word(&mut self, text: &str, syllables: &[String], weight: f64) {
+        self.learned_weights
+            .lock()
+            .unwrap()
+            .insert(text.to_owned(), weight);
         self.words.push((text.to_owned(), syllables.to_vec()));
         let tsv: String = self
             .words

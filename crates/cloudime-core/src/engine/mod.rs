@@ -165,6 +165,12 @@ pub struct Engine {
     /// 特殊输入模式：逐音节只出单字候选，选完一个字再进入下一个音节。
     special_input: bool,
 
+    /// 特殊输入模式时造词（设置项，缺省关）。
+    special_input_word: bool,
+
+    /// 当前这段组句里有没有在特殊输入模式下选过字；决定上屏前要不要造词。
+    special_selected: bool,
+
     /// 选词模型（知意）：候选页重排与按音节出字。
     choice: Option<choice::ChoiceRanker>,
 
@@ -373,6 +379,8 @@ impl Engine {
             sentence_done: std::cell::Cell::new(0),
             neural_cache: std::cell::RefCell::new(rescoring::NeuralCache::default()),
             special_input: false,
+            special_input_word: false,
+            special_selected: false,
             choice: None,
             choice_tier: ChoiceTier::default(),
             choice_done: std::cell::Cell::new(0),

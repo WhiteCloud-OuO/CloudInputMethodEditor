@@ -388,6 +388,11 @@ impl Engine {
         self.special_input
     }
 
+    /// 特殊输入模式时造词（设置项，缺省关）。
+    pub fn set_special_input_word(&mut self, on: bool) {
+        self.special_input_word = on;
+    }
+
     pub fn calculator(&self) -> bool {
         self.calculator
     }

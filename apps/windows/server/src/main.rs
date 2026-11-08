@@ -227,6 +227,7 @@ fn main() {
     // 双键拼音自己的「中英混合输入」（`use_input_scheme.cfg` 的 `mixture_input`，不进 `config.toml`）
     engine.set_shuangpin_mixture_input(cloudime_platform::input_schemes::mixture_input());
     engine.set_mixture_input(config.input.mixture_input);
+    engine.set_special_input_word(config.input.special_input_word);
     engine.set_punctuation_mapping(config.input.punctuation_mapping());
     engine.set_half_wide_after_digit(config.input.use_half_wide_punctuation_marks_after_digital);
     engine.set_association_counts(config.candidate.association_counts());

@@ -145,6 +145,8 @@ impl Router {
             .set_auxiliary(cloudime_platform::input_schemes::key_map_layout());
         self.engine.set_mixture_input(config.input.mixture_input);
         self.engine
+            .set_special_input_word(config.input.special_input_word);
+        self.engine
             .set_punctuation_mapping(config.input.punctuation_mapping());
         self.engine
             .set_half_wide_after_digit(config.input.use_half_wide_punctuation_marks_after_digital);

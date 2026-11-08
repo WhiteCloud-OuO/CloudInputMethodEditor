@@ -157,7 +157,7 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 - 拼写纠错（`correction`）分两路，都按权重打折、原样读法的候选一直保留：
   ① 整段一处编辑（`engine/query/spelling.rs`）：拼音「不像话」（`unlikely_pinyin`）或末尾落单字母（`trailing_single_letter`）时，把**换位 / 键盘相邻键替换**
   能整段切分的纠正读法作为额外候选（`tier` 2，`correction::loose_segmentation` 允许换位末尾没敲完）；仅末尾落单字母触发时只试换位。折扣换位 0.75、替换 0.70。
-  原样输入本身能整段对上一个词 / 短语（`hit.exact` 且读法覆盖整段，或自定义短语 `p.code == scope`）时**不再加任何纠错读法**（否则 `Cpan` 会用补出来的
+  原样输入本身能整段对上一个词 / 短语（`hit.exact` 且读法覆盖整段，或自定义短语 `p.code == scope`）时**不再加任何纠错读法**（否则 `cpan` 会用补出来的
   字母凑成 磁盘 把 C盘 挤掉），折扣也保留不加回补；否则再乘 1.2 / 1.15。
   ② 音节级敲错边（`correction::typo`）：`Engine::expand_positions`（只给整句词图，词级候选不加）对每个完整音节补 **多敲 / 少敲** 仍是合法音节的写法
   （`gan` → `guan`），按 `TypoCosts::typo_cost`（个人敲错表打折）进词图，命中的词 `tier` 1，这样整段合法却不通的 `meiganxi` 也能转出 没关系；
@@ -169,6 +169,10 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 `EngineSession` 保存可挂起的组句、标点、历史与学习链，`Engine::swap_session` 在同一个引擎里交换输入状态，共用词库与落盘服务。切换上下文时清除查询及异步重排缓存，并由平台恢复各自私密状态。
 
 特殊输入模式（`Engine::set_special_input`）：查询生成完候选后只留**第一个音节的单字**（`keep_single_characters`；按第一切分的音节文本匹配，残缺音节按前缀），选一个字后 `Composition::select_prefix` 把该音节连同后面的 `'` 一起吃掉，剩余拼音进入下一个音节。拼音行由 `marked_parts(..., special)` 把最后一段拼音按第一音节切开：当前音节 `Typed`，剩余音节 `Rest`；renderer 把 `Rest` 画成角标色（`theme.colors.badge`）。主键盘 `/`（`VK_OEM_2` + 字符 `/`，不带 Ctrl / Alt / Win / Shift；小键盘除号不算）只在候选窗口显示（组句中）的中文状态、且当前方案是全拼 / 双拼时由 TSF `would_eat` 吃掉、送 Server 的 `special_input_key` 切换；`/` 在组句外走普通标点。形码等方案不切换；热加载换到不支持的方案时 Server 会 `set_special_input(false)`。右 Alt / AltGr 不再被输入法占用，原样交给应用。候选窗口销毁（`Composed` 变 `None` / `reset_composition`）时自动 `set_special_input(false)`。
+
+特殊输入模式时造词（`Engine::set_special_input_word`，缺省关）：`commit_with` 在特殊模式下选中中文时置 `special_selected`；整段正常上屏前若置位，`create_special_word` 把 `Composition::selected_text()` 整段当用户词：`knows_word` 为真只 `record` / `record_choice` 加重，否则 `learn_word` 初始权重 2000。`Esc` / `Enter` / `Insert` 不走这条路径；按 `/` 开关本身不改标记。
+
+全拼的英文字面量：`Engine::push` 遇到大写字母走 `Composition::push_literal`，大写不进拼音缓冲区（不参与匹配），按 `literals: Vec<Literal { at, text }>` 记在缓冲区字节偏移上；`select_prefix` 把开头 / 结尾的字面量并进已选文本（`su'A` → 「苏A」、`K'ba` → 「K吧」），`typed_text` / `typed_scope` 按位置插回去给拼音行；双拼辅助码仍走 `push_shifted`，大小写规则不变。
 
 `InputHistory`（`history.rs`）按应用分桶保存最近上屏的文本：每个应用 256 字、最多 16 个应用，默认 60 秒没上屏就过期；应用读不到光标前文时，整句模型与选词模型用它当前文。`Engine::set_application` 切桶，`Engine::enter_input_box` 清当前应用（DLL 送来的 TSF 上下文标识变了时由 Server 调）；时长由 `[candidate] context_memory_seconds` 控制，0 表示永不过期。
 

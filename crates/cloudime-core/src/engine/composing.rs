@@ -201,11 +201,17 @@ impl Engine {
             self.page_turns = 0;
             self.retype_snapshot = None;
             self.english_case = EnglishCase::Lower;
+            self.special_selected = false;
         }
-        // 中文模式下 Shift+字母固定收进缓冲区：按小写进缓冲区参与匹配（`Cpan` 与 `cpan` 一样出 C盘），
-        // 原样上屏（回车 / 无候选）时再还原大写；英文模式与英文直输段（`no-Way`）始终保留原样。
+        // 全拼里大写字母只当英文：记成拼音串里的英文字面量，不参与拼音匹配；
+        // 双键拼音的大写仍是辅助码（按小写进缓冲区，原样上屏时还原）。
+        // 英文模式与英文直输段（`no-Way`）始终原样保留。
         if c.is_ascii_uppercase() && !self.english_mode && !self.raw_mode() {
-            self.composition.push_shifted(c);
+            if self.shuangpin.is_some() {
+                self.composition.push_shifted(c);
+            } else {
+                self.composition.push_literal(c);
+            }
         } else {
             self.composition.push(c);
         }
@@ -247,6 +253,7 @@ impl Engine {
         self.composition_started = None;
         self.page_turns = 0;
         self.forced_expression = false;
+        self.special_selected = false;
         self.traditional_map.borrow_mut().clear();
     }
 

@@ -53,6 +53,10 @@ impl Engine {
         source: InputSource,
         translation: Option<&str>,
     ) -> Option<String> {
+        // 特殊输入模式里选过字：这段组句上屏前尝试造词（设置项在 Engine 上）。
+        if self.special_input && candidate.kind == CandidateKind::Chinese {
+            self.special_selected = true;
+        }
         let traditional_text = candidate.text.clone();
         let mut candidate_owned = candidate.clone();
         if self.traditional
@@ -193,6 +197,9 @@ impl Engine {
             None
         } else {
             // 整段转换完：已选文本（这次选择的文本已并进去）+ 本次一起交给应用，组句清空。
+            if self.special_input_word && self.special_selected && !self.private {
+                self.create_special_word();
+            }
             let selected = self.composition.selected_text();
             self.composition.clear();
             self.forced_expression = false;
@@ -615,6 +622,37 @@ impl Engine {
         max
     }
 
+    /// 特殊输入模式里选过字、整段即将上屏：把整段当作用户词处理。
+    /// 词库里已有 → 按原有学习规则加重；没有 → 以 2000 为初始权重收进用户词库。
+    fn create_special_word(&mut self) {
+        let text = self.composition.selected_text();
+        let pinyin = self.composition.selected_pinyin();
+        if text.is_empty() || pinyin.is_empty() {
+            return;
+        }
+        let syllables = special_word_syllables(&text, &pinyin, self.use_jian_pin);
+        if syllables.is_empty() {
+            return;
+        }
+        let candidate = Candidate {
+            text: text.clone(),
+            display: None,
+            kind: CandidateKind::Chinese,
+            syllables,
+            reading: None,
+            auxiliary: None,
+            auxiliary_typed: None,
+        };
+        let input = pinyin.replace('\'', "");
+        if self.knows_word(&candidate) {
+            self.learner.record(&candidate);
+            self.learner.record_choice(&input, &text);
+        } else {
+            tracing::debug!(text = %text, "特殊输入模式上屏前造词");
+            self.learner.learn_word(&text, &candidate.syllables, 2000.0);
+        }
+    }
+
     /// 主词库或用户词里是否已有这个词（同音节）。
     pub(super) fn knows_word(&self, candidate: &Candidate) -> bool {
         let syllables: Vec<&str> = candidate.syllables.iter().map(String::as_str).collect();
@@ -629,6 +667,44 @@ impl Engine {
         };
         self.all_dictionaries().into_iter().any(known)
     }
+}
+
+/// 特殊模式造词的读音：中文按拼音音节，连续大写英文整体当一个读音单位（`去唱K吧` →
+/// `qu` / `chang` / `K` / `ba`），其他 ASCII 标点各自一个单位。
+fn special_word_syllables(text: &str, pinyin: &str, use_jian_pin: bool) -> Vec<String> {
+    let syllables: Vec<String> = segment_longest_prefix(pinyin, use_jian_pin)
+        .ok()
+        .and_then(|(segmentations, _)| {
+            segmentations.first().map(|segmentation| {
+                segmentation
+                    .syllables
+                    .iter()
+                    .map(|syllable| syllable.text.clone())
+                    .collect()
+            })
+        })
+        .unwrap_or_default();
+    let mut units = Vec::new();
+    let mut index = 0;
+    let mut chars = text.chars().peekable();
+    while let Some(c) = chars.next() {
+        if c.is_ascii_alphabetic() {
+            let mut run = String::from(c);
+            while let Some(next) = chars.peek().copied().filter(char::is_ascii_alphabetic) {
+                run.push(next);
+                chars.next();
+            }
+            units.push(run);
+        } else if c.is_ascii() {
+            units.push(c.to_string());
+        } else if let Some(syllable) = syllables.get(index) {
+            units.push(syllable.clone());
+            index += 1;
+        } else {
+            units.push(c.to_string());
+        }
+    }
+    units
 }
 
 /// 整句路径上的词是英文词（`woxiangxuehaorust` 的 rust）：不是占位音节、全是字母。

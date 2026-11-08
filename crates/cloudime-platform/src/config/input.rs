@@ -248,6 +248,10 @@ pub struct InputConfig {
     /// 数字后标点符号使用半角：`23:06`、`2.36`、`25+9` 里的标点保持半角。
     pub use_half_wide_punctuation_marks_after_digital: bool,
 
+    /// 特殊输入模式时造词：只要这段组句里有字是在特殊模式下选的，上屏前把整段收进用户词库。
+    /// 缺省关。
+    pub special_input_word: bool,
+
     /// 状态切换提示：中 / 英、大写锁定、全 / 半角、简 / 繁、中文 / 西文标点变化时，
     /// 在输入光标附近弹一个停留 1 秒的提示条（只在处于输入状态时弹）。
     pub show_status_change_tip: bool,
@@ -267,6 +271,7 @@ impl Default for InputConfig {
             punctuation_marks_mapping: DEFAULT_PUNCTUATION_MAPPING,
             punctuation_marks_pairwise_completion: 0,
             use_half_wide_punctuation_marks_after_digital: true,
+            special_input_word: false,
             show_status_change_tip: true,
         }
     }

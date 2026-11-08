@@ -48,6 +48,8 @@ pub(crate) enum Message {
     /// 符号映射的位下标（见 `PUNCTUATION_MAPPING_BITS`）+ 新值。
     PunctuationMapping(usize, bool),
     HalfWideAfterDigit(bool),
+    /// 特殊输入模式时造词（`[input] special_input_word`）。
+    SpecialInputWord(bool),
     /// 状态切换提示（`[input] show_status_change_tip`）。
     ShowStatusChangeTip(bool),
 

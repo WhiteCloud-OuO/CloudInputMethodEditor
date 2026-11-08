@@ -96,7 +96,7 @@ impl Engine {
                 }
                 Query::custom_only(
                     &self.composition.typed_text(),
-                    self.composition.cursor(),
+                    self.composition.display_cursor(),
                     self.composition.scope(),
                     self.marked_rest(self.composition.rest()),
                 )
@@ -687,17 +687,22 @@ impl Engine {
             .as_ref()
             .filter(|_| head_wins)
             .map_or(tail, |t| &keys[t.head_len..]);
-        let typed_display = self.composition.has_shifted().then(|| {
-            // 中文模式下 Shift 敲的大写：匹配按小写算，拼音行仍按敲的样子显示（`Cpan`）
-            join_marked_typed(&self.composition.typed_scope(), &segmentations, tail)
-        });
+        let typed_display = if self.composition.has_literals() {
+            // 全拼的大写英文字面量：拼音行按敲的样子显示，候选只按小写拼音匹配。
+            Some(self.composition.typed_scope())
+        } else {
+            self.composition.has_shifted().then(|| {
+                // 双键拼音 Shift 敲的大写辅助码：匹配按小写算，拼音行仍按敲的样子显示。
+                join_marked_typed(&self.composition.typed_scope(), &segmentations, tail)
+            })
+        };
         Ok(Query {
             segmentations,
             candidates: CandidateList { items },
             weights,
             tail: tail.to_owned(),
-            text: self.composition.typed_text(),
-            cursor: self.composition.cursor(),
+            text: self.composition.display_text(),
+            cursor: self.composition.display_cursor(),
             rest,
             typed_display,
             expanded_pinyin: false,
@@ -760,8 +765,8 @@ impl Engine {
             candidates: CandidateList { items },
             weights: HashMap::new(),
             tail: scope.to_owned(),
-            text: self.composition.text().to_owned(),
-            cursor: self.composition.cursor(),
+            text: self.composition.display_text(),
+            cursor: self.composition.display_cursor(),
             rest,
             typed_display: None,
             expanded_pinyin: false,
@@ -791,8 +796,8 @@ impl Engine {
             candidates: CandidateList { items },
             weights: HashMap::new(),
             tail: scope.to_owned(),
-            text: self.composition.text().to_owned(),
-            cursor: self.composition.cursor(),
+            text: self.composition.display_text(),
+            cursor: self.composition.display_cursor(),
             rest,
             typed_display: None,
             expanded_pinyin: false,
@@ -832,8 +837,8 @@ impl Engine {
             candidates: CandidateList { items },
             weights: HashMap::new(),
             tail: scope.to_owned(),
-            text: self.composition.text().to_owned(),
-            cursor: self.composition.cursor(),
+            text: self.composition.display_text(),
+            cursor: self.composition.display_cursor(),
             rest,
             typed_display: None,
             expanded_pinyin: false,
@@ -1232,7 +1237,7 @@ impl Engine {
             weights,
             tail: keys.to_owned(),
             text: self.composition.typed_text(),
-            cursor: self.composition.cursor(),
+            cursor: self.composition.display_cursor(),
             rest,
             typed_display: None,
             expanded_pinyin: false,

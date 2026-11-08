@@ -14,7 +14,8 @@ fn raw_preedit_preserves_typed_text_without_automatic_separators() {
     }
     let mut engine = engine();
     engine.set_input("NiHao");
-    assert_eq!(engine.composition().text(), "nihao");
+    // N / H 是全拼里的英文字面量，不参与拼音匹配；缓冲区只剩小写拼音。
+    assert_eq!(engine.composition().text(), "iao");
     assert_raw(&mut engine, "NiHao", 5);
 }
 

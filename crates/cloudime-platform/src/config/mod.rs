@@ -107,6 +107,8 @@ mixture_input = true
 full_half_punctuation_marks_toggle = "follow"
 # 数字后标点使用半角：23:06、2.36、25+9 里的标点保持半角
 use_half_wide_punctuation_marks_after_digital = true
+# 特殊输入模式时造词：组句里只要有字是在特殊模式下选的，上屏前把整段收进用户词库
+special_input_word = false
 # 状态切换提示：中 / 英、大写锁定、全 / 半角、简 / 繁、中文 / 西文标点变化时，在输入光标附近弹一个停留 1 秒的提示条
 show_status_change_tip = true
 # 符号成对补全：敲左符号补上右符号、光标停在中间。勾选项数值相加 —— () 1、[] 2、{} 4、"" 8、
