@@ -120,12 +120,15 @@ impl Router {
                 // **只在应用真的变了时切会话**：同一个应用里可以有多个会话（资源管理器每个窗口 / 每个
                 // UI 线程一条连接），它们各自都会发 `SyncMode`；无条件切会把正在进行的组句清掉 ——
                 // 真机表现是「在资源管理器里重命名文件夹，每按一键候选窗闪一下就没」。
+                //
+                // 组句中也不切：后台应用（尤其旧 DLL）的 `SyncMode` 不该把前台正在输入的组句清掉、
+                // 把候选窗收起来。前台切换由失焦 `Commit` 或新应用的第一键处理。
                 let same_app = match (self.focused_app(), self.session_app(session)) {
                     (Some(current), Some(next)) => current.eq_ignore_ascii_case(next),
                     (None, None) => true,
                     _ => false,
                 };
-                if !same_app {
+                if !same_app && self.engine.composition().is_empty() {
                     self.ensure_focus(session);
                 }
                 self.handle_ime_active();

@@ -1852,9 +1852,10 @@ fn a_second_session_of_the_same_app_does_not_reset_the_composition() {
     assert_eq!(r.self_drawn_frame().candidates.items.len(), before);
 }
 
-/// 真的换了应用（`SyncMode` 报来另一个 app）时才切会话 / 清组句。
+/// 组句中收到**另一个应用**的 `SyncMode` 时先不切会话：后台应用（尤其旧 DLL）的轮询
+/// 不该把前台正在输入的组句清掉、把候选窗收起来。组句结束（失焦 `Commit`）后再切。
 #[test]
-fn a_sync_mode_from_another_app_moves_the_focus() {
+fn a_sync_mode_from_another_app_does_not_steal_an_active_composition() {
     let mut r = router(5);
     compose(&mut r, "ni", KeyModifiers::default());
     assert!(r.composing());
@@ -1868,7 +1869,22 @@ fn a_sync_mode_from_another_app_moves_the_focus() {
         in_text_input: true,
         caps: false,
     });
-    assert!(!r.composing(), "切到别的应用该清掉上一段的组句");
+    assert!(
+        r.composing(),
+        "组句中另一个应用的 SyncMode 不该清组句 / 收候选窗"
+    );
+
+    // 失焦 Commit 结束组句后，下一拍 SyncMode 才能改焦点。
+    r.handle(ClientMessage::Commit {
+        session: SessionId(1),
+    });
+    assert!(!r.composing());
+    r.handle(ClientMessage::SyncMode {
+        session: SessionId(2),
+        in_text_input: true,
+        caps: false,
+    });
+    assert!(!r.composing());
 }
 
 /// u 模式：全拼裸 u 进六类符号候选，第二个字母退出符号窗口接普通混输。
