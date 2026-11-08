@@ -224,11 +224,18 @@ TSV 解析路径也改成产出同样的结构，查询代码只有一份。
 **含章（candle）——CUDA 能跑，但不适合随包**：candle 0.11 的 `cuda` feature 会把权重放显存，但
 `candle-kernels` 的 build.rs 用 `cudaforge` 调 `nvcc` 编 PTX；本机只有驱动（CUDA 13.1），没装 CUDA Toolkit，
 `nvcc` 不在 PATH，所以这次没编出 CUDA 版。运行期还要 CUDA runtime + cuBLAS（几百 MB），随安装包不现实；
-candle 也没有 DirectML 后端。CPU 基线：加载 694 ms，`score` 8 条候选 39.7 ms（约 5 ms/条），权重 56 MB。
+candle 也没有 DirectML 后端。CPU 基线：加载 694 ms，8 条候选 77 ms（候选里有一条整句时长），权重 56 MB。
 
-**建议**：近期继续用 CPU（异步重排 40 ms 在 80 ms 防抖预算内，够用）。真要上 GPU，最省事的路线是
-**两份模型统一走 ONNX + DirectML**：把含章导出成 ONNX（输出与 candle 对拍）、知意按固定维度分桶 padding，
-运行时装 DirectML 版 ORT（只多 3 MB），显存合计约 300 MB；含章走 candle CUDA 只适合开发机自测。
+**含章 ONNX 导出 + 对拍（2026-11-08）**：`tools/model-export/` 把 `.qjm` 里的权重用 PyTorch 复刻后导出
+完整序列 ONNX（f32 139 MB，fp16 70 MB），并按 candle 的 `score` 规则逐条对拍。四组用例（空前文、短前文、
+8 候选、超过 128 token 的长前文）与 candle 的 `score` 总分最大差 **5.8e-4**（ONNX logits 最大差 6.5e-5），
+排序不受影响。DirectML 上 8 候选从 candle CPU 的 77.1 ms 降到 12.9 ms，长前文 38.7 → 28.6 ms；
+f32 模型显存约 +230 MB。fp16 更快更省，但 `score` 差会到 2.6e-2，适合“能用”而不是严格对拍。
+
+**建议**：近期继续用 CPU（异步重排 40–80 ms 在 80 ms 防抖预算内，够用）。真要上 GPU，最省事的路线是
+**两份模型统一走 ONNX + DirectML**：含章用 `tools/model-export/` 导出的模型（先按完整序列，之后可补 K/V
+缓存版），知意按固定维度分桶 padding，运行时装 DirectML 版 ORT（只多 3 MB），显存合计约 400 MB；
+含章走 candle CUDA 只适合开发机自测。
 
 ## 经验
 
