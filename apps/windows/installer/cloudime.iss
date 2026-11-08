@@ -145,6 +145,7 @@ Source: "{#Repo}\apps\windows\server\src\ui\status\icons\*.svg";           DestD
 ; —— Server 放最后：它一落地，旧版 DLL 就能把它拉起来并占住数据文件（见文件头）——
 Source: "{#Repo}\target\release\cloudime-server.exe";   DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Repo}\target\installer\onnxruntime\onnxruntime.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#Repo}\target\installer\onnxruntime\onnxruntime_providers_shared.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#Repo}\target\installer\onnxruntime\onnxruntime-LICENSE.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#Repo}\target\installer\onnxruntime\onnxruntime-ThirdPartyNotices.txt"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
 ; 只读 MCP Server：给外部 AI 客户端按需拉起，不注册服务、不开机启动。

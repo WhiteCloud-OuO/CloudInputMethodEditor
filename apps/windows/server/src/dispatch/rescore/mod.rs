@@ -122,11 +122,13 @@ impl Router {
         zhiyi: Option<(PathBuf, PathBuf)>,
         mode: LocalModelMode,
         zhiyi_threads: usize,
+        prefer_gpu: bool,
     ) {
         self.model_path = model_path;
         self.zhiyi_model = zhiyi;
         self.applied_model = mode;
         self.zhiyi_threads = zhiyi_threads;
+        self.prefer_gpu_model = prefer_gpu;
         self.effective_model = LocalModelMode::Off;
         self.lazy_sentence = None;
         self.sentence_ready = false;
@@ -136,22 +138,22 @@ impl Router {
         }
     }
 
-    /// 模型优先使用 GPU（实验性）：当前还没有 GPU 推理路径，只记录偏好；接上 DML 后由这里触发重载。
-    pub fn set_prefer_gpu_model(&mut self, prefer: bool) {
-        if prefer == self.prefer_gpu_model {
-            return;
-        }
-        self.prefer_gpu_model = prefer;
-        tracing::info!(prefer, "模型优先使用图形处理器（实验性）：当前版本仍用 CPU");
-    }
-
-    /// 热加载：模式或知意线程数变了才重载 / 卸载。
-    pub(super) fn apply_model_config(&mut self, mode: LocalModelMode, zhiyi_threads: usize) {
-        if mode == self.applied_model && zhiyi_threads == self.zhiyi_threads {
+    /// 热加载：模式、知意线程数或 GPU 偏好变了才重载 / 卸载。
+    pub(super) fn apply_model_config(
+        &mut self,
+        mode: LocalModelMode,
+        zhiyi_threads: usize,
+        prefer_gpu: bool,
+    ) {
+        if mode == self.applied_model
+            && zhiyi_threads == self.zhiyi_threads
+            && prefer_gpu == self.prefer_gpu_model
+        {
             return;
         }
         self.applied_model = mode;
         self.zhiyi_threads = zhiyi_threads;
+        self.prefer_gpu_model = prefer_gpu;
         self.unload_local_model();
         if mode != LocalModelMode::Off {
             self.load_local_model();
@@ -218,6 +220,7 @@ impl Router {
             dir,
             runtime,
             threads: self.zhiyi_threads,
+            prefer_gpu: self.prefer_gpu_model,
         });
         self.model_loader.is_some()
     }

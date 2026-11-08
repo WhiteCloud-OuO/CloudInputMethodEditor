@@ -1,17 +1,18 @@
-﻿# 取知意（ONNX）要的运行库到 target\installer\onnxruntime\：onnxruntime.dll 与许可。
-# ONNX Runtime 1.24.4 取自 NuGet 的 Microsoft.ML.OnnxRuntime（CPU 版），按包的 SHA-256 核对，已取过就跳过。
+﻿# 取知意（ONNX）要的运行库到 target\installer\onnxruntime\：onnxruntime.dll、providers_shared 与许可。
+# ONNX Runtime 1.24.4 取自 NuGet 的 Microsoft.ML.OnnxRuntime.DirectML（带 DirectML，同时含 CPU 回退），按包的 SHA-256 核对，已取过就跳过。
 # 打包脚本与 reconfigure.ps1 都从这里取；Server 按 exe 旁边的 onnxruntime.dll 动态加载。
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
 
 $Version = '1.24.4'
-$StampValue = "$Version-cpu"
+$StampValue = "$Version-directml"
 $Packages = @(
     @{
-        Url    = "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime/$Version/microsoft.ml.onnxruntime.$Version.nupkg"
-        Sha256 = '4b978d5065b85e7004b6c6f60ca494bd978fbe6836cbf0a0b52d82b61ab99638'
+        Url    = "https://api.nuget.org/v3-flatcontainer/microsoft.ml.onnxruntime.directml/$Version/microsoft.ml.onnxruntime.directml.$Version.nupkg"
+        Sha256 = '57e9f11b73437bef7a309496135d4c1f96b1a8e9ddba60013fa27bfc1d788681'
         Files  = @{
             'runtimes/win-x64/native/onnxruntime.dll' = 'onnxruntime.dll'
+            'runtimes/win-x64/native/onnxruntime_providers_shared.dll' = 'onnxruntime_providers_shared.dll'
             'LICENSE'                                 = 'onnxruntime-LICENSE.txt'
             'ThirdPartyNotices.txt'                   = 'onnxruntime-ThirdPartyNotices.txt'
         }

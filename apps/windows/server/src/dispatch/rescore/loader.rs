@@ -13,11 +13,12 @@ pub(super) enum ModelFiles {
     /// 基本：含章·知微整句模型。
     Sentence(PathBuf),
 
-    /// 增强：知意的 int8 ONNX 模型目录、运行库与 ORT 线程数。
+    /// 增强：知意的 int8 ONNX 模型目录、运行库、ORT 线程数与是否优先 GPU。
     Zhiyi {
         dir: PathBuf,
         runtime: PathBuf,
         threads: usize,
+        prefer_gpu: bool,
     },
 }
 
@@ -70,7 +71,8 @@ impl ModelLoader {
                         dir,
                         runtime,
                         threads,
-                    } => load_zhiyi(dir, runtime, *threads).map(LoadedModel::Choice),
+                        prefer_gpu,
+                    } => load_zhiyi(dir, runtime, *threads, *prefer_gpu).map(LoadedModel::Choice),
                 };
                 if loaded.is_ok() {
                     let total_ms = started.elapsed().as_millis();
@@ -80,9 +82,15 @@ impl ModelLoader {
                             total_ms,
                             "本地模型已加载并预热"
                         ),
-                        ModelFiles::Zhiyi { dir, threads, .. } => tracing::info!(
+                        ModelFiles::Zhiyi {
+                            dir,
+                            threads,
+                            prefer_gpu,
+                            ..
+                        } => tracing::info!(
                             path = %dir.display(),
                             threads,
+                            prefer_gpu,
                             total_ms,
                             "本地模型已加载并预热"
                         ),
@@ -123,9 +131,10 @@ fn load_zhiyi(
     dir: &Path,
     runtime: &Path,
     threads: usize,
+    prefer_gpu: bool,
 ) -> Result<Arc<dyn ChoiceModel>, NeuralError> {
     let cache = cloudime_platform::dirs::cache_dir().map(|dir| dir.join("onnx"));
-    let scorer = ChoiceScorer::load_onnx(dir, runtime, threads, cache.as_deref())?;
+    let scorer = ChoiceScorer::load_onnx(dir, runtime, threads, cache.as_deref(), prefer_gpu)?;
     // 预热：第一次前向要做图优化。
     let typed = scorer.letter_units("ni");
     scorer.score("", &typed, &["ni", "nin"])?;

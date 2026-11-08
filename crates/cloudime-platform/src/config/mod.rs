@@ -24,7 +24,8 @@ use crate::error::ConfigError;
 pub use candidate::{
     CandidateConfig, DEFAULT_CANDIDATE_BOX_MINIMUM_WIDTH, DEFAULT_FAMILY, DEFAULT_ZHIYI_THREADS,
     FontChoice, ItemNumberStyle, LocalModelMode, MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT,
-    MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MouseWordSelection,
+    MAX_ZHIYI_THREADS, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MIN_ZHIYI_THREADS,
+    MouseWordSelection,
 };
 pub use debugging::DebuggingConfig;
 pub use general::{GeneralConfig, MAX_PAGE_SIZE};

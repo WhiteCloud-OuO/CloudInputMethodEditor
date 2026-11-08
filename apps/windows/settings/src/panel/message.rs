@@ -190,6 +190,8 @@ pub(crate) enum Message {
     AutoHideFloatToolBar(bool),
     /// 模型优先使用图形处理器加载（`[debugging] prefer_gpu_model`）。
     PreferGpuModel(bool),
+    /// 知意模型最大允许线程数（`[candidate] zhiyi_threads`）。
+    ZhiyiThreads(f64),
     /// 不处于输入状态时自动禁用输入法（`[debugging] auto_disable_without_text_input`）。
     AutoDisableWithoutTextInput(bool),
     /// 「组件」入口：功能还没做，只记一条日志。设置里已不显示这个入口、代码留着，所以允许未构造。

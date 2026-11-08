@@ -17,6 +17,8 @@ accelerate = ["candle-core/accelerate", "candle-nn/accelerate"]
 metal = ["candle-core/metal", "candle-nn/metal"]
 # 知意选词模型（int8 ONNX，Windows 用；运行时按路径加载 onnxruntime.dll）
 zhiyi = ["dep:ort"]
+# 知意的 DirectML 执行提供器（需要 DirectML 版 onnxruntime.dll；不可用时回退 CPU）
+directml = ["ort/directml"]
 
 [dependencies]
 cloudime-core.workspace = true

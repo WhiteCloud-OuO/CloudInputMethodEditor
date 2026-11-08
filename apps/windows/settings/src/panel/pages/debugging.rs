@@ -5,11 +5,11 @@
 
 use cloudime_core::{Usage, UsageSummary, VocabularySummary};
 use cloudime_learning::{UsageStats, VocabularyBook};
-use cloudime_platform::{LogLevel, PhraseStore, WordBank};
+use cloudime_platform::{LogLevel, MAX_ZHIYI_THREADS, MIN_ZHIYI_THREADS, PhraseStore, WordBank};
 use jiff::Zoned;
 use windows_reactor::*;
 
-use crate::panel::controls::{field, note, page};
+use crate::panel::controls::{field, note, page, slider_field};
 use crate::panel::{Message, Settings};
 
 const COLUMNS: [&str; 4] = ["汉字", "中文词", "英文词", "上屏次数"];
@@ -202,10 +202,19 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
         ),
         field(
             "模型优先使用图形处理器加载（实验性功能）",
-            "让本地候选 / 整句模型优先在 GPU（DirectML）上加载，GPU 不可用时回退 CPU。当前版本只记录偏好，推理仍走 CPU。",
+            "让本地模型优先在 GPU（DirectML）上加载。启动时会校验 GPU 与 CPU 的结果和速度，数值差过大或 GPU 更慢时自动回退 CPU。",
             ToggleSwitch::new()
                 .is_on(d.prefer_gpu_model)
                 .on_toggled(context.callback(Message::PreferGpuModel)),
+        ),
+        slider_field(
+            "知意模型最大允许线程数（缺省为 4）",
+            "知意推理最多用几个 ONNX Runtime 线程（1–32）。线程多通常更快，但发热也更多；GPU 路径不可用、回退 CPU 时同样受这个上限约束。",
+            settings.config.candidate.zhiyi_threads(),
+            MIN_ZHIYI_THREADS,
+            MAX_ZHIYI_THREADS,
+            Message::ZhiyiThreads,
+            context,
         ),
         StackPanel::new()
             .orientation(Orientation::Horizontal)

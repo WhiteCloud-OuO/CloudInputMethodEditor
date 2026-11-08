@@ -47,14 +47,17 @@ pub struct ChoiceScorer {
 impl ChoiceScorer {
     /// int8 ONNX 版：`runtime` 是 ONNX Runtime 动态库，CPU 跑 `threads` 个线程。
     /// `cache_dir` 用来存优化后的计算图（下次启动直接读，省一秒图优化）；`None` 不缓存。
+    /// `prefer_gpu` 打开时优先 DirectML（需要 DML 版运行库与可选的 padaware 模型），失败回退 CPU。
     #[cfg(feature = "zhiyi")]
     pub fn load_onnx(
         dir: &Path,
         runtime: &Path,
         threads: usize,
         cache_dir: Option<&Path>,
+        prefer_gpu: bool,
     ) -> Result<Self, NeuralError> {
-        let forward = onnx_forward::OnnxForward::load(dir, runtime, threads, cache_dir)?;
+        let forward =
+            onnx_forward::OnnxForward::load(dir, runtime, threads, cache_dir, prefer_gpu)?;
         Self::with_forward(dir, Box::new(forward))
     }
 
@@ -154,7 +157,8 @@ mod tests {
             return;
         };
         let cache = std::env::var_os("CLOUDIME_ONNX_CACHE").map(std::path::PathBuf::from);
-        let scorer = ChoiceScorer::load_onnx(&dir, &runtime, 2, cache.as_deref()).unwrap();
+        let gpu = std::env::var_os("CLOUDIME_ZHIYI_GPU").is_some();
+        let scorer = ChoiceScorer::load_onnx(&dir, &runtime, 2, cache.as_deref(), gpu).unwrap();
         let typed = scorer.letter_units("nihao");
         let scores = scorer.score("今天", &typed, &["你好", "拟好"]).unwrap();
         assert_eq!(scores.len(), 2);

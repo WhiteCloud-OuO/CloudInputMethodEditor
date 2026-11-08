@@ -5,10 +5,10 @@ use std::sync::OnceLock;
 
 use cloudime_platform::{
     Config, FullHalfPunctuation, InputScheme, ItemNumberStyle, LayoutMode, LocalModelMode,
-    LogLevel, MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MAX_NEED_TIMES, MIN_ASSOCIATION_COUNTS,
-    MIN_CANDIDATE_COUNT, MIN_NEED_TIMES, MO_HU_YIN_BITS, MouseWordSelection,
-    PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PreeditMode, SimpTrad, ThemeColor,
-    ThemeFile,
+    LogLevel, MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MAX_NEED_TIMES, MAX_ZHIYI_THREADS,
+    MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MIN_NEED_TIMES, MIN_ZHIYI_THREADS, MO_HU_YIN_BITS,
+    MouseWordSelection, PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PreeditMode, SimpTrad,
+    ThemeColor, ThemeFile,
 };
 use windows_reactor::*;
 
@@ -476,6 +476,11 @@ impl Component for Settings {
             }
             Message::PreferGpuModel(on) => {
                 self.save("debugging", "prefer_gpu_model", on);
+            }
+            Message::ZhiyiThreads(value) => {
+                let threads = (value.round() as i64)
+                    .clamp(MIN_ZHIYI_THREADS as i64, MAX_ZHIYI_THREADS as i64);
+                self.save("candidate", "zhiyi_threads", threads);
             }
             Message::AutoDisableWithoutTextInput(on) => {
                 self.save("debugging", "auto_disable_without_text_input", on);

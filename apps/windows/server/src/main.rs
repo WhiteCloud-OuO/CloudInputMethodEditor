@@ -268,8 +268,8 @@ fn main() {
         zhiyi_model.clone(),
         config.candidate.resolved_local_model(),
         config.candidate.zhiyi_threads(),
+        config.debugging.prefer_gpu_model,
     );
-    router.set_prefer_gpu_model(config.debugging.prefer_gpu_model);
     if let Some(path) = config_path() {
         let user = user_dir();
         router.watch_config(

@@ -20,7 +20,7 @@ cloudime-core.workspace = true
 cloudime-dictionary.workspace = true
 cloudime-learning.workspace = true
 cloudime-lm.workspace = true
-cloudime-neural = { workspace = true, features = ["zhiyi"] }
+cloudime-neural = { workspace = true, features = ["zhiyi", "directml"] }
 cloudime-platform.workspace = true
 cloudime-mcp-client.workspace = true
 cloudime-render.workspace = true

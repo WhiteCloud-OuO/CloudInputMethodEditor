@@ -255,8 +255,13 @@ Engine 侧在 `engine/rescoring/`：接了打分器就取 Viterbi 前 `RESCORE_P
 异步的（`with_async_sentence_scorer`，后台线程 `RescoreWorker`）查询不等模型：缺分的记下来，壳停键后 `request_rescoring`、`poll_rescoring` 到了再 `query` 一次。
 前文优先用壳给的应用光标前文（`set_rescoring_context`），没有用本会话最近 64 个上屏字符。CLI `--neural <导出目录>`（`--neural-weight` / `--neural-context` / `--neural-async`）。
 
-`zhiyi`（feature `zhiyi`，Windows 用）是知意 1.4V2-Long-L12 的 int8 ONNX 选词模型：`ChoiceScorer::load_onnx(dir, onnxruntime.dll, threads)` 运行时动态加载
+`zhiyi`（feature `zhiyi`，Windows 用）是知意 1.4V2-Long-L12 的 int8 ONNX 选词模型：`ChoiceScorer::load_onnx(dir, onnxruntime.dll, threads, cache, prefer_gpu)` 运行时动态加载
 ONNX Runtime，读 `laya.int8g.onnx`、`tokenizer.json`、`unified_vocab.json`；`threads` 取 `[candidate] zhiyi_threads`（缺省 4，1–32）。
+开了 `[debugging] prefer_gpu_model` 且构建带 `directml` 时先建 DirectML 会话，用固定 128 序列探测：
+DML 与 CPU 的 logits / `char_logits` 差超过 5e-3，或 DML 比 CPU 慢 2 倍，就回退 CPU 并记一条警告。
+当前 int8 模型在 RTX 3060 上 logits 差约 0.07、char 约 0.5，动态维度约 97 ms（CPU 4 线程约 17 ms），
+所以探测会拒绝；固定桶 + padaware 在 DML 上数值更差（padding 后 char 差约 10），没有启用。
+开发时可用 `CLOUDIME_ZHIYI_DML_FORCE=1` 跳过探测强制走 DML（仅用于验证，结果与速度都不保证）。
 输入序列 `<bos> 前文 <eos> <mask>×拼音单元 <eos> <mask>候选… <eos>`，
 `f:zhong` / `p:g` 对音节完整 / 前缀；`score` 给每条候选一个 logit，`compose` 用 composition 头给每个音节一行字表 log 概率。
 `zhiyi::choice_model` 把它接到 Core 的 `ChoiceModel`。模型权重 Apache-2.0，随安装包放在 `Models\laya-zhen-long-l12-int8g\`
@@ -1195,7 +1200,7 @@ Chromium 把「物理键还按着时注入的同名键」当自动重复，宿�
 **启动可执行文件**不用接：完整标准库的 `os.execute('start notepad.exe')` 已经能做。
 
 改脚本要重启 Server 才生效（托盘右键「重启输入法服务」），没有热重载。
-本地模型：`dispatch/rescore/` 按 `[candidate] local_model` 在后台线程加载预热、停键后重排；`basic` 接含章·知微 `SentenceScorer`，`enhanced` 接知意 `ChoiceModel`（候选页重排 + 按音节出字），`hybrid` 启动只装知意：≤8 音节只走知意，输入到 6 音节后台补装含章（`HYBRID_PREFETCH_SYLLABLES`），≥9 音节含章先重排整句路径、知意再出字和重排候选（`Engine::set_sentence_scorer_min_syllables`）。缺模型按 `start_plan` 降级（混合 → 增强 / 基本 → 关闭），加载失败同样回退；知意 ORT 线程数取 `[candidate] zhiyi_threads`（缺省 4，热加载改了会重载），知意 ONNX 优化图缓存在 `%LOCALAPPDATA%\CloudIME\cache\onnx\`（`ChoiceScorer::load_onnx` 的 `cache_dir`），模型或 `onnxruntime.dll` 一变就重建；两个后台线程可能先后回来，`Engine::rescoring_in_flight` 让 Server 轮询到两边都收完再重画，见 `docs/design/architecture.md`「本地模型」。
+本地模型：`dispatch/rescore/` 按 `[candidate] local_model` 在后台线程加载预热、停键后重排；`basic` 接含章·知微 `SentenceScorer`，`enhanced` 接知意 `ChoiceModel`（候选页重排 + 按音节出字），`hybrid` 启动只装知意：≤8 音节只走知意，输入到 6 音节后台补装含章（`HYBRID_PREFETCH_SYLLABLES`），≥9 音节含章先重排整句路径、知意再出字和重排候选（`Engine::set_sentence_scorer_min_syllables`）。缺模型按 `start_plan` 降级（混合 → 增强 / 基本 → 关闭），加载失败同样回退；知意 ORT 线程数取 `[candidate] zhiyi_threads`（缺省 4，热加载改了会重载），`[debugging] prefer_gpu_model` 改了也会重载（DirectML 启动探测不达标就回退 CPU），知意 ONNX 优化图缓存在 `%LOCALAPPDATA%\CloudIME\cache\onnx\`（`ChoiceScorer::load_onnx` 的 `cache_dir`），模型或 `onnxruntime.dll` 一变就重建；两个后台线程可能先后回来，`Engine::rescoring_in_flight` 让 Server 轮询到两边都收完再重画，见 `docs/design/architecture.md`「本地模型」。
 热加载的 `WordBank\` 目录与启动同款（按 `WordBank\Dict.db` 与附加词库的 mtime / 长度快照重装）；
 短语库（安装目录 `Phrases\Phrase.db`）也按文件 mtime 单独热重读；`[phrase] use_default_phrases` 变了也重读一遍。不合成一个 crate，因为 DLL 不能带 Engine 的依赖树，见 `apps/windows/README.md`；
 协议类型在 `cloudime-platform::protocol`，设计见 `docs/design/architecture.md`「Windows：TSF」。

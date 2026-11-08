@@ -233,10 +233,18 @@ TSV 解析路径也改成产出同样的结构，查询代码只有一份。
 
 **现在的解法：padding 感知的动态量化**（`tools/zhiyi-padaware/`）：只改编码器里形状
 `[1, seq, hidden]` 的 DQL，用 `attention_mask` 把 padding 换成 ±inf 后再 `ReduceMin/Max`，按有效 token
-算 scale；scorer 里按 marker / slot gather 出来的 DQL 不动。结果不 padding 时与原模型**逐位一致**，
-padding 后有效位置也**逐位一致**（logits / char_logits 差都是 0）。DirectML 固定 seq 下
-64 / 128 / 256 / 320 分别约 6.6 / 8.5 / 13.3 / 16.6 ms，仍比 CPU 的 9.4 / 16.6 / 35.5 / 47.4 ms 快 2–3 倍。
-模型文件 84.5 MB（与原 int8 模型一样），可以直接按 `seq_len` 建桶了。
+算 scale；scorer 里按 marker / slot gather 出来的 DQL 不动。CPU 上不 padding 时与原模型**逐位一致**，
+padding 后有效位置也**逐位一致**（logits / char_logits 差都是 0）。
+
+**但 DirectML 上这份图数值不稳**：同一份 padaware 模型，DML 与 CPU 的 logits 差约 0.07、`char_logits`
+差约 0.5；padding 到 128 后差到 1.8 / 10。原模型在 DirectML 上也是 logits 差约 0.07、char 差约 0.5，
+而且 Rust 的 DML 动态维度跑真实输入约 97 ms（CPU 4 线程约 17 ms）。所以：
+- 固定桶 + padaware 在 DML 上**不能直接用**，没有启用；
+- `OnnxForward` 加了启动探测：GPU 与 CPU 的 logits / `char_logits` 差超过 5e-3，或 GPU 比 CPU 慢 2 倍，
+  就回退 CPU。当前 int8 模型在这台 RTX 3060 上会被探测拒绝；
+- `[debugging] prefer_gpu_model` 仍然保留，换模型 / 换 GPU / 以后解决数值问题后可以重新启用。
+DML 固定维度的速度参考（只说明性能，不代表能直接用）：64 / 128 / 256 / 320 约
+6.6 / 8.5 / 13.3 / 16.6 ms，仍比 CPU 的 9.4 / 16.6 / 35.5 / 47.4 ms 快 2–3 倍。
 
 **固定桶 + DML 的预期收益（2026-11-08）**：本机 `input-log.jsonl` 的 3.7 万条 commit 里，balanced
 （前文按 64 字）估算 seq p50 ≈ 97、p90 ≈ 103，accurate（128 字）p50 ≈ 161；候选通常 9 条。真实 Rust

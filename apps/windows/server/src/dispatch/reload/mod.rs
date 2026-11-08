@@ -208,8 +208,8 @@ impl Router {
         self.apply_model_config(
             config.candidate.resolved_local_model(),
             config.candidate.zhiyi_threads(),
+            config.debugging.prefer_gpu_model,
         );
-        self.set_prefer_gpu_model(config.debugging.prefer_gpu_model);
 
         let Some(reload) = &mut self.reload else {
             return;
