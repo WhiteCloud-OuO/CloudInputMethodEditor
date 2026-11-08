@@ -2,7 +2,8 @@
 
 use std::mem::ManuallyDrop;
 
-use windows::Win32::Foundation::{POINT, RECT};
+use windows::Win32::Foundation::{HWND, POINT, RECT};
+use windows::Win32::UI::HiDpi::LogicalToPhysicalPointForPerMonitorDPI;
 use windows::Win32::UI::TextServices::{
     ITfContext, ITfRange, TF_ANCHOR_END, TF_DEFAULT_SELECTION, TF_SELECTION,
 };
@@ -13,7 +14,9 @@ use cloudime_platform::protocol::ScreenRect;
 
 /// `range` 的屏幕矩形，拿不到（有些应用给全零 / 空矩形）退到鼠标处。
 pub(crate) fn anchor_rect(context: &ITfContext, ec: u32, range: &ITfRange) -> ScreenRect {
-    to_screen(range_rect(context, ec, range).unwrap_or_else(mouse_anchor))
+    let rect = range_rect(context, ec, range)
+        .unwrap_or_else(|| to_physical(mouse_anchor(), view_window(context)));
+    to_screen(rect)
 }
 
 /// 插入点（没有选区时是光标，有选区时是选区）的屏幕矩形。「只在候选窗口」模式应用里不放 marked text，
@@ -21,7 +24,7 @@ pub(crate) fn anchor_rect(context: &ITfContext, ec: u32, range: &ITfRange) -> Sc
 pub(crate) fn caret_rect(context: &ITfContext, ec: u32) -> ScreenRect {
     match selection_range(context, ec) {
         Some(range) => anchor_rect(context, ec, &range),
-        None => mouse_screen_rect(),
+        None => mouse_screen_rect(context),
     }
 }
 
@@ -33,7 +36,7 @@ pub(crate) fn insertion_rect(context: &ITfContext, ec: u32) -> ScreenRect {
             let _ = unsafe { range.Collapse(ec, TF_ANCHOR_END) };
             anchor_rect(context, ec, &range)
         }
-        None => mouse_screen_rect(),
+        None => mouse_screen_rect(context),
     }
 }
 
@@ -53,18 +56,56 @@ pub(crate) fn selection_range(context: &ITfContext, ec: u32) -> Option<ITfRange>
 }
 
 /// 没有可量的范围时的锚点：鼠标处一个零宽、约一行高的矩形。
-pub(crate) fn mouse_screen_rect() -> ScreenRect {
-    to_screen(mouse_anchor())
+pub(crate) fn mouse_screen_rect(context: &ITfContext) -> ScreenRect {
+    to_screen(to_physical(mouse_anchor(), view_window(context)))
 }
 
 fn range_rect(context: &ITfContext, ec: u32, range: &ITfRange) -> Option<RECT> {
     let mut rect = RECT::default();
     let mut clipped = BOOL(0);
-    unsafe {
-        let view = context.GetActiveView().ok()?;
-        view.GetTextExt(ec, range, &mut rect, &mut clipped).ok()?;
+    let view = unsafe { context.GetActiveView().ok()? };
+    unsafe { view.GetTextExt(ec, range, &mut rect, &mut clipped).ok()? };
+    (rect.right > rect.left || rect.bottom > rect.top)
+        .then(|| to_physical(rect, unsafe { view.GetWnd().ok() }))
+}
+
+/// 焦点输入框所属的窗口；拿不到为 `None`。
+fn view_window(context: &ITfContext) -> Option<HWND> {
+    unsafe { context.GetActiveView().ok()?.GetWnd().ok() }
+}
+
+/// 把宿主坐标系里的屏幕矩形换成物理像素。
+///
+/// TSF 的 `GetTextExt` / `GetCursorPos` 给的是**宿主进程**坐标空间里的屏幕坐标：宿主不是
+/// Per-Monitor DPI aware 时那是它自己的逻辑坐标（相当于 96 DPI），而 Server 是 PerMonitorV2、
+/// 按物理像素摆窗。混合 DPI 的多屏上不换算就会偏到别处（偏左 / 偏上或跑到另一块屏）。
+/// `LogicalToPhysicalPointForPerMonitorDPI` 按宿主窗口的 DPI 上下文换算，对已 aware 的宿主是恒等。
+fn to_physical(rect: RECT, window: Option<HWND>) -> RECT {
+    let Some(window) = window.filter(|hwnd| !hwnd.is_invalid()) else {
+        return rect;
+    };
+    let mut top_left = POINT {
+        x: rect.left,
+        y: rect.top,
+    };
+    let mut bottom_right = POINT {
+        x: rect.right,
+        y: rect.bottom,
+    };
+    let converted = unsafe {
+        LogicalToPhysicalPointForPerMonitorDPI(Some(window), &mut top_left).as_bool()
+            && LogicalToPhysicalPointForPerMonitorDPI(Some(window), &mut bottom_right).as_bool()
+    };
+    if converted {
+        RECT {
+            left: top_left.x,
+            top: top_left.y,
+            right: bottom_right.x,
+            bottom: bottom_right.y,
+        }
+    } else {
+        rect
     }
-    (rect.right > rect.left || rect.bottom > rect.top).then_some(rect)
 }
 
 fn mouse_anchor() -> RECT {

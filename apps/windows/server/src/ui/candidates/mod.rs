@@ -14,6 +14,7 @@ use std::sync::Arc;
 use std::time::{Duration, Instant};
 
 use windows::Win32::Foundation::{HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
+use windows::Win32::Graphics::Gdi::ScreenToClient;
 use windows::Win32::UI::Controls::WM_MOUSELEAVE;
 use windows::Win32::UI::HiDpi::{GetDpiForSystem, GetDpiForWindow};
 use windows::Win32::UI::Input::KeyboardAndMouse::{
@@ -21,9 +22,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     DefWindowProcW, HTCLIENT, HTTRANSPARENT, IDC_ARROW, KillTimer, LoadCursorW, MA_NOACTIVATE,
-    SW_HIDE, SW_SHOWNA, SetTimer, ShowWindow, WM_CONTEXTMENU, WM_LBUTTONDOWN, WM_MBUTTONDOWN,
-    WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_NCHITTEST, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_TIMER,
+    SPI_SETWORKAREA, SW_HIDE, SW_SHOWNA, SetTimer, ShowWindow, WM_CONTEXTMENU, WM_DISPLAYCHANGE,
+    WM_DPICHANGED, WM_LBUTTONDOWN, WM_MBUTTONDOWN, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_NCHITTEST, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETTINGCHANGE, WM_TIMER,
 };
 use windows::core::{PCWSTR, Result, w};
 
@@ -47,7 +48,7 @@ use cloud_ui::window_class::WindowClass;
 const CLASS_NAME: PCWSTR = w!("CloudIMECandidateWindow");
 static CLASS: WindowClass = WindowClass::new();
 
-/// 光标行与候选窗之间的间隙（逻辑像素）。
+/// 光标行与候选窗之间的间隙（逻辑点；按候选窗当前 DPI / 缩放折成物理像素）。
 const CARET_GAP: i32 = 2;
 
 /// 高亮条从旧格子滑到新格子的时长（毫秒）。
@@ -74,6 +75,13 @@ fn zoom_factor(step: i32) -> f32 {
 /// 滚一格之后的缩放级数（夹在上下限里）。
 fn next_zoom_step(current: i32, delta: i16) -> i32 {
     (current + if delta > 0 { 1 } else { -1 }).clamp(ZOOM_MIN_STEP, ZOOM_MAX_STEP)
+}
+
+/// 光标与候选窗的间隙折成物理像素：跟随显示 DPI 与 `Ctrl + 滚轮` / 脚本缩放。
+fn caret_gap(dpi: u32) -> i32 {
+    (CARET_GAP as f32 * dpi.max(96) as f32 / 96.0)
+        .round()
+        .max(1.0) as i32
 }
 
 /// 展开 / 收起「更多候选项」（Tab）的过渡时长（毫秒）。
@@ -505,6 +513,44 @@ impl CandidateWindow {
         let _ = unsafe { ShowWindow(self.template.hwnd(), SW_HIDE) };
     }
 
+    /// 鼠标点在内容区（文字与内容留白）还是四周阴影：阴影不接鼠标，让点击穿透到下面的窗口。
+    /// 窗口还没画出内容时按整窗接收，避免刚弹出那一瞬鼠标乱穿。
+    fn hits_content(&self, client: (i32, i32)) -> bool {
+        content_hit(self.margin.get(), self.last_content.get(), client)
+    }
+
+    /// 窗口换了显示器 / 缩放变了：按新 DPI 重画，位置仍按锚点重算（`WM_DPICHANGED` 不给系统
+    /// 默认处理，否则它会按建议矩形把分层窗挪走）。
+    fn on_dpi_changed(&self, dpi: u32) {
+        if dpi == 0 {
+            return;
+        }
+        let dpi = dpi.max(96);
+        if self.dpi.get() == dpi {
+            return;
+        }
+        self.dpi.set(dpi);
+        self.redraw_if_shown();
+    }
+
+    /// 显示器 / 工作区变了：重新取光标所在显示器与 DPI，再摆一遍（任务栏移动、换屏、缩放）。
+    fn on_display_change(&self) {
+        let Some(anchor) = self.anchor.get() else {
+            return;
+        };
+        self.sync_dpi(anchor);
+        self.redraw_if_shown();
+    }
+
+    /// 显示中才重画；隐藏时只更新状态，下次 `show` 会按最新 DPI 渲染。
+    fn redraw_if_shown(&self) {
+        if self.anchor.get().is_none() {
+            return;
+        }
+        self.redraw();
+        self.sync_assets();
+    }
+
     /// 定时器到点：按经过时间重画一帧，并决定还继不继续。
     fn on_slide_timer(&self) {
         if self.anchor.get().is_none() {
@@ -578,7 +624,7 @@ impl CandidateWindow {
             Some(frame) => frame.shown,
             None => content,
         });
-        let (content_x, content_y) = place(anchor, (content.0 as i32, content.1 as i32));
+        let (content_x, content_y) = place(anchor, (content.0 as i32, content.1 as i32), dpi);
         // 给窗口模板摆位用：把这次贴出去的**内容区**屏幕矩形记下来
         self.content_rect.set(Some(RECT {
             left: content_x,
@@ -788,7 +834,7 @@ impl CandidateWindow {
             x: anchor.left,
             y: anchor.top,
         };
-        let monitor_dpi = monitor::dpi_near(caret);
+        let monitor_dpi = monitor::dpi_near_rect(anchor);
         let window_dpi = unsafe { GetDpiForWindow(self.template.hwnd()) };
         let dpi = match (monitor_dpi, window_dpi) {
             (Some(dpi), _) => dpi,
@@ -824,6 +870,17 @@ fn region_index(regions: &[Region], x: f32, y: f32) -> Option<usize> {
         let index = region.name.strip_prefix("candidate_")?.parse().ok()?;
         region.shape.contains(x, y).then_some(index)
     })
+}
+
+/// 鼠标点是不是落在窗口的内容区（文字 + 内容留白）。四周阴影是透明的，不接鼠标。
+/// 还不知道内容尺寸时按整窗接收，免得刚弹出那一瞬鼠标穿到下面。
+fn content_hit(margin: (i32, i32), content: (u32, u32), client: (i32, i32)) -> bool {
+    if content.0 == 0 || content.1 == 0 {
+        return true;
+    }
+    let x = client.0 - margin.0;
+    let y = client.1 - margin.1;
+    x >= 0 && y >= 0 && x < content.0 as i32 && y < content.1 as i32
 }
 
 /// 候选窗口是名下资产（辅助窗口）的**所有者**：资产要什么只能经这条**桥接**路跟它要
@@ -932,38 +989,85 @@ fn plan_slide(
     SlidePlan::Start(Slide { from, started: now })
 }
 
-/// 内容左上角：贴光标下方，放不下放上方，再放不下贴屏幕内；都夹在所在显示器工作区里。
-fn place(anchor: RECT, content: (i32, i32)) -> (i32, i32) {
-    let work = monitor::work_area_near(POINT {
-        x: anchor.left,
-        y: anchor.top,
-    });
-    let x = anchor
-        .left
-        .clamp(work.left, (work.right - content.0).max(work.left));
-    let below = anchor.bottom + CARET_GAP;
-    let above = anchor.top - CARET_GAP - content.1;
-    let y = if below + content.1 <= work.bottom {
-        below
-    } else if above >= work.top {
-        above
+/// 内容左上角：优先贴在光标下方；下方放不下放上方；两边都放不下时放在空间更大的一侧，
+/// 最后夹进光标所在显示器的工作区。`gap` 是光标行与候选窗之间的物理像素。
+fn place(anchor: RECT, content: (i32, i32), dpi: u32) -> (i32, i32) {
+    let work = monitor::work_area_near_rect(anchor);
+    place_in(work, anchor, content, caret_gap(dpi))
+}
+
+/// [`place`] 的纯函数部分（工作区给死，便于单测）。
+fn place_in(work: RECT, anchor: RECT, content: (i32, i32), gap: i32) -> (i32, i32) {
+    let clamp_x = |x: i32| x.clamp(work.left, (work.right - content.0).max(work.left));
+    let clamp_y = |y: i32| y.clamp(work.top, (work.bottom - content.1).max(work.top));
+    let below = anchor.bottom + gap;
+    let above = anchor.top - gap - content.1;
+    let below_room = work.bottom - below;
+    let above_room = anchor.top - gap - work.top;
+    // 下方优先；下方不够再看上方。
+    if content.1 <= below_room {
+        return (clamp_x(anchor.left), below);
+    }
+    if content.1 <= above_room {
+        return (clamp_x(anchor.left), above);
+    }
+    // 上下都放不下：先看能不能摆在光标左右侧 —— 宁可盖住旁边，也别盖住正在输入的那一行。
+    let right = anchor.right + gap;
+    let left = anchor.left - gap - content.0;
+    let centered_y = clamp_y((anchor.top + anchor.bottom - content.1) / 2);
+    if right >= work.left && right + content.0 <= work.right {
+        return (right, centered_y);
+    }
+    if left >= work.left && left + content.0 <= work.right {
+        return (left, centered_y);
+    }
+    // 左右也放不下（窗口比屏幕还大）：放在垂直空间更大的一侧，尽量少盖。
+    let y = if below_room >= above_room {
+        clamp_y(below)
     } else {
-        (work.bottom - content.1).max(work.top)
+        clamp_y(above)
     };
-    (x, y)
+    (clamp_x(anchor.left), y)
 }
 
 /// 分层窗口无需 `WM_PAINT`；滑动动画的重画在 `WM_TIMER` 里做。
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     // 焦点被**指定**给名下资产时，自己这块窗整块让开：鼠标穿透到下面的窗口（点选、滚轮都不再是它的）。
-    // 焦点在自己身上（缺省，独立窗口创建并显示后总是如此）就照常接鼠标。
+    // 焦点在自己身上（缺省，独立窗口创建并显示后总是如此）就照常接鼠标，但四周的阴影留白仍然穿透：
+    // 那块像素是透明的，挡住下面应用的点击只会让人觉得「候选窗把那一圈吃了」。
     if msg == WM_NCHITTEST {
-        let ours = window_of(hwnd).is_none_or(|window| window.focused());
-        return LRESULT(if ours {
+        let Some(window) = window_of(hwnd) else {
+            return LRESULT(HTCLIENT as isize);
+        };
+        if !window.focused() {
+            return LRESULT(HTTRANSPARENT as isize);
+        }
+        // lparam 是屏幕坐标（低 16 位 x、高 16 位 y，各有符号）。
+        let mut point = POINT {
+            x: (lparam.0 & 0xFFFF) as i16 as i32,
+            y: ((lparam.0 >> 16) & 0xFFFF) as i16 as i32,
+        };
+        let _ = unsafe { ScreenToClient(hwnd, &mut point) };
+        return LRESULT(if window.hits_content((point.x, point.y)) {
             HTCLIENT as isize
         } else {
             HTTRANSPARENT as isize
         });
+    }
+    // 窗口换到另一块缩放不同的显示器：按新 DPI 重画，自己管位置（不让系统按建议矩形挪窗）。
+    if msg == WM_DPICHANGED {
+        if let Some(window) = window_of(hwnd) {
+            window.on_dpi_changed((wparam.0 & 0xFFFF) as u32);
+        }
+        return LRESULT(0);
+    }
+    // 换屏 / 改分辨率 / 任务栏挪了：重取光标所在显示器与 DPI 再摆一遍。
+    if msg == WM_DISPLAYCHANGE || (msg == WM_SETTINGCHANGE && wparam.0 as u32 == SPI_SETWORKAREA.0)
+    {
+        if let Some(window) = window_of(hwnd) {
+            window.on_display_change();
+        }
+        return LRESULT(0);
     }
     if msg == WM_TIMER && wparam.0 == SLIDE_TIMER_ID {
         if let Some(window) = window_of(hwnd) {
@@ -1022,11 +1126,12 @@ mod tests {
 
     use cloudime_platform::LayoutMode;
     use cloudime_render::{HighlightRect, HitRect, HitShape, Region, Row, TipSegment, Tone};
+    use windows::Win32::Foundation::RECT;
 
     use super::{
-        HIGHLIGHT_SLIDE_MS, RenderData, Slide, SlidePlan, TRANSITION_MS, ZOOM_MAX_STEP,
-        ZOOM_MIN_STEP, eased_progress, next_zoom_step, plan_slide, region_index, transition_frame,
-        transition_plan, visual_rect, zoom_factor,
+        CARET_GAP, HIGHLIGHT_SLIDE_MS, RenderData, Slide, SlidePlan, TRANSITION_MS, ZOOM_MAX_STEP,
+        ZOOM_MIN_STEP, caret_gap, content_hit, eased_progress, next_zoom_step, place_in,
+        plan_slide, region_index, transition_frame, transition_plan, visual_rect, zoom_factor,
     };
 
     fn rect(top: f32) -> HighlightRect {
@@ -1265,5 +1370,115 @@ mod tests {
             zoom_factor(next_zoom_step(next_zoom_step(0, 120), -120)),
             1.0
         );
+    }
+
+    fn screen_area(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
+        RECT {
+            left,
+            top,
+            right,
+            bottom,
+        }
+    }
+
+    fn caret_box(left: i32, top: i32, right: i32, bottom: i32) -> RECT {
+        screen_area(left, top, right, bottom)
+    }
+
+    /// 下方放得下就贴在下方，左边缘跟光标左边缘对齐。
+    #[test]
+    fn places_below_the_caret_when_it_fits() {
+        let work = screen_area(0, 0, 1920, 1040);
+        let anchor = caret_box(300, 400, 302, 420);
+        assert_eq!(place_in(work, anchor, (600, 300), 2), (300, 422));
+    }
+
+    /// 下方放不下就翻到上方，底部与光标行留出间隙。
+    #[test]
+    fn flips_above_when_below_does_not_fit() {
+        let work = screen_area(0, 0, 1920, 1040);
+        let anchor = caret_box(300, 800, 302, 820);
+        assert_eq!(place_in(work, anchor, (600, 300), 2), (300, 498));
+    }
+
+    /// 上下都放不下（候选窗比光标两侧的空间都高）：先摆到光标右侧，避开正在输入的那一行。
+    #[test]
+    fn both_sides_too_small_places_beside_the_caret() {
+        let work = screen_area(0, 0, 1920, 1040);
+        // 右边放得下：左边缘贴光标右侧，垂直居中
+        let anchor = caret_box(300, 400, 302, 420);
+        assert_eq!(place_in(work, anchor, (600, 700), 2), (304, 60));
+        // 靠右边缘：右边放不下，改摆左侧
+        let anchor = caret_box(1800, 400, 1802, 420);
+        assert_eq!(place_in(work, anchor, (600, 700), 2), (1198, 60));
+    }
+
+    /// 左右也放不下（窗口比工作区还宽）：放在垂直空间更大的一侧，并夹进工作区。
+    #[test]
+    fn no_room_on_any_side_uses_the_larger_vertical_side() {
+        let work = screen_area(0, 0, 300, 200);
+        let anchor = caret_box(100, 100, 102, 120);
+        assert_eq!(place_in(work, anchor, (600, 400), 2), (0, 0));
+    }
+
+    /// 右侧放不下时向左夹，但不越过工作区左边界；负坐标的显示器同样成立。
+    #[test]
+    fn clamps_inside_the_work_area_including_negative_origins() {
+        let work = screen_area(0, 0, 1920, 1040);
+        assert_eq!(
+            place_in(work, caret_box(1800, 100, 1802, 120), (400, 100), 2).0,
+            1520
+        );
+
+        let left_monitor = screen_area(-1920, 0, 0, 1040);
+        assert_eq!(
+            place_in(left_monitor, caret_box(-50, 100, -48, 120), (400, 100), 2).0,
+            -400
+        );
+        assert_eq!(
+            place_in(
+                left_monitor,
+                caret_box(-1900, 100, -1898, 120),
+                (400, 100),
+                2
+            )
+            .0,
+            -1900
+        );
+    }
+
+    /// 窗口比工作区还宽 / 高时贴左上角，不把窗口甩到工作区外面。
+    #[test]
+    fn oversized_content_pins_to_the_work_area_origin() {
+        let work = screen_area(0, 0, 300, 200);
+        assert_eq!(
+            place_in(work, caret_box(100, 100, 102, 120), (600, 400), 2),
+            (0, 0)
+        );
+    }
+
+    /// 间隙按 DPI 折成物理像素；100% 时仍是 2 像素。
+    #[test]
+    fn caret_gap_follows_the_render_scale() {
+        assert_eq!(CARET_GAP, 2);
+        assert_eq!(caret_gap(96), 2);
+        assert_eq!(caret_gap(120), 3);
+        assert_eq!(caret_gap(192), 4);
+        assert_eq!(caret_gap(288), 6);
+    }
+
+    /// 四周阴影不接鼠标（点击穿透），内容区与「还没画出内容」照常接。
+    #[test]
+    fn the_shadow_margin_is_click_through() {
+        let margin = (12, 10);
+        let content = (200, 100);
+        assert!(content_hit(margin, content, (12, 10)), "内容左上角");
+        assert!(content_hit(margin, content, (211, 109)), "内容右下角内侧");
+        assert!(!content_hit(margin, content, (11, 60)), "左阴影");
+        assert!(!content_hit(margin, content, (100, 9)), "上阴影");
+        assert!(!content_hit(margin, content, (212, 60)), "右阴影");
+        assert!(!content_hit(margin, content, (100, 110)), "下阴影");
+        // 还没画出内容：整窗接收，避免刚弹出时鼠标穿透
+        assert!(content_hit(margin, (0, 0), (0, 0)));
     }
 }

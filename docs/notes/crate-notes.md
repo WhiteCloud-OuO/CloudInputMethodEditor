@@ -539,6 +539,15 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 （缩小时倍数小于 1），`preferred_size` 里的最小宽度改成按点算（`m.px(theme.min_width_pixels)`，原来是
 `min_width_pixels / scale`，缩放时会朝反方向跑）。
 
+**DPI、多屏与摆位**（2026-11-08）：DLL 的 `GetTextExt` / `GetCursorPos` 给的是宿主进程坐标空间里的屏幕矩形；
+宿主不是 Per-Monitor DPI aware 时 Server（PerMonitorV2）不能直接当物理像素用，`com/edit/anchor.rs::to_physical`
+用 `LogicalToPhysicalPointForPerMonitorDPI(宿主窗口)` 换算，aware 宿主是恒等。Server 取光标**矩形**所在显示器
+（`monitor::work_area_near_rect` / `dpi_near_rect`，底层 `MonitorFromRect`），不再只拿左上角一个点；
+`WM_DPICHANGED` 按新 DPI 重画、`WM_DISPLAYCHANGE` / `WM_SETTINGCHANGE(SPI_SETWORKAREA)` 重新取显示器再摆。
+`place_in`：下方优先，放不下放上方；两边都放不下先摆光标左右侧（宁可盖旁边也不盖正在输入的那一行），
+再不行才按空间大的一侧夹进工作区；间隙 `caret_gap` 按有效 DPI / 缩放折成物理像素。窗口四周的阴影留白在
+`WM_NCHITTEST` 里返回 `HTTRANSPARENT`，点阴影会落到下面应用，不再被透明但可命中的分层窗吃掉。
+
 ## crates/cloud-ui-core
 
 页面树与布局核心（2026-10-21 建立）：放几何 / 约束 / 页面树节点 / measure-arrange 布局引擎，
