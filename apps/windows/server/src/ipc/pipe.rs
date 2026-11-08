@@ -78,6 +78,7 @@ pub fn serve_pipe(
                     break;
                 }
             }
+            Ok(Work::Disconnected(session)) => router.handle_session_closed(session),
             Ok(Work::Status(event)) => router.handle_status_event(event),
             Ok(Work::Candidate(event)) => router.handle_candidate_event(event),
             Ok(Work::ScriptWindow(event)) => router.handle_script_window_event(*event),
@@ -175,6 +176,7 @@ fn wait_client(stream: File) -> io::Result<File> {
 /// 服务一条连接：读消息 → 转给工人线程 → 写回，直到对端在帧边界关闭或出错。
 fn serve_connection(mut stream: File, sender: Sender<Work>) {
     let (reply_sender, reply_receiver) = mpsc::channel::<Option<ServerMessage>>();
+    let mut session = None;
     loop {
         let message = match read_message::<_, ClientMessage>(&mut stream) {
             Ok(Some(message)) => message,
@@ -184,6 +186,12 @@ fn serve_connection(mut stream: File, sender: Sender<Work>) {
                 break;
             }
         };
+        if let ClientMessage::OpenSession {
+            session: opened, ..
+        } = &message
+        {
+            session = Some(*opened);
+        }
         if sender
             .send(Work::Client(message, reply_sender.clone()))
             .is_err()
@@ -199,6 +207,10 @@ fn serve_connection(mut stream: File, sender: Sender<Work>) {
             Ok(None) => {}
             Err(_) => break,
         }
+    }
+    // 宿主进程退出 / 崩溃时不会发 CloseSession：连接一断就在这里补一条，让候选窗跟着收起。
+    if let Some(session) = session {
+        let _ = sender.send(Work::Disconnected(session));
     }
     let _ = unsafe { DisconnectNamedPipe(HANDLE(stream.as_raw_handle())) };
     tracing::debug!("客户端断开");

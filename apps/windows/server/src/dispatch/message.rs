@@ -14,6 +14,21 @@ use super::script::{ScriptActions, ThemeCommand};
 use super::session::SessionInfo;
 
 impl Router {
+    /// 会话断了（正常关闭或宿主进程退出）：清状态，聚焦会话还要把候选窗收掉。
+    pub(crate) fn handle_session_closed(&mut self, session: SessionId) {
+        self.sessions.remove(&session);
+        if self.focused == Some(session) {
+            self.reset_composition();
+            self.input_box = None;
+            self.focused = None;
+            self.sync_focused_app();
+        }
+        // 会话没了：文本快照也作废
+        self.document.clear();
+        self.flush_learning();
+        tracing::debug!(?session, "会话关闭");
+    }
+
     pub(super) fn dispatch(&mut self, message: ClientMessage) -> Option<ServerMessage> {
         match message {
             ClientMessage::OpenSession {
@@ -160,17 +175,7 @@ impl Router {
                 None
             }
             ClientMessage::CloseSession { session } => {
-                self.sessions.remove(&session);
-                if self.focused == Some(session) {
-                    self.reset_composition();
-                    self.input_box = None;
-                    self.focused = None;
-                    self.sync_focused_app();
-                }
-                // 会话没了：文本快照也作废
-                self.document.clear();
-                self.flush_learning();
-                tracing::debug!(?session, "会话关闭");
+                self.handle_session_closed(session);
                 None
             }
         }
