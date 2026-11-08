@@ -57,7 +57,9 @@ use std::thread;
 use std::time::Instant;
 
 use windows::Win32::Foundation::{E_FAIL, LPARAM, RECT, WPARAM};
-use windows::Win32::System::Threading::GetCurrentThreadId;
+use windows::Win32::System::Threading::{
+    GetCurrentThread, GetCurrentThreadId, SetThreadPriority, THREAD_PRIORITY_ABOVE_NORMAL,
+};
 use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
@@ -296,6 +298,9 @@ fn run(
 ) {
     // 按物理像素定位，与应用报来的组句屏幕矩形对齐；已设过会失败，忽略。
     let _ = unsafe { SetProcessDpiAwarenessContext(DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2) };
+    // 候选窗只在按键 / 移动光标时画几帧，是突发型 UI；CPU 被别的软件挤占时把渲染线程略抬高，
+    // 避免候选窗排队在后台任务后面（系统里所有线程都是普通优先级时，渲染帧会被拖到 10 ms 以上）。
+    let _ = unsafe { SetThreadPriority(GetCurrentThread(), THREAD_PRIORITY_ABOVE_NORMAL) };
     let thread_id = unsafe { GetCurrentThreadId() };
     // 装上时随 Configure 命令建。
     let painter: SharedPainter = Rc::new(RefCell::new(None));

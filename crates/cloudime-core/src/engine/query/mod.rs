@@ -10,7 +10,7 @@ mod spelling;
 
 /// 一两个字母的输入会命中十几万个词（`z` 有 17 万），全收下来再评分会把按键预算吃光。
 /// 每个音节键只取词频最高的前几条，足够排出前 500 条候选。
-const SHORT_PREFIX_PER_KEY: usize = 64;
+const SHORT_PREFIX_PER_KEY: usize = 128;
 
 pub(crate) use english_tail::EnglishTail;
 pub use result::Query;

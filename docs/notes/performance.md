@@ -321,7 +321,7 @@ AE 这个输入框的 TSF 上下文返回 0 字，`doc_us` 没被触发；要验
   （`lookup_pattern_alt_short` / `lookup_exact_alt_short`）；原有 `lookup_*` 走不限模式。
 - Core 只对「**一个还没打完的音节**」（`z` / `zh`，`last.complete == false`）用 `max_syllables = 1`：
   单音节的字 / 词全留，多音节词等这个音节打完再出；`ni` / `kai` 这类完整音节和 `zhangwei` 不受影响。
-- 一两个字母时每键最多取 64 条（`SHORT_PREFIX_PER_KEY`），更多只会在排序时被丢掉。
+- 一两个字母时每键最多取 128 条（`SHORT_PREFIX_PER_KEY`），更多只会在排序时被丢掉。
 
 `--typing` 实测（release，完整 data/generated/dict.tsv）：
 
@@ -335,6 +335,10 @@ AE 这个输入框的 TSF 上下文返回 0 字，`doc_us` 没被触发；要验
 AE 满载复测：`z` 的 Server `lookup` 从 20.4 ms 降到约 4–8 ms，按键处理回到 5–11 ms；
 剩余候选窗延迟主要是 UI 首帧渲染（3–12 ms，受 CPU 抢占影响）。注意这是有意改变：
 只打半个音节时不再出 `你好` / `你们` 这类多音节词；样例词库里的脚本重排用例因此从 `n` 改成 `kai`。
+
+**候选窗 UI 线程优先级（2026-11-08）：** 渲染帧是突发型工作（按键 / 移动光标才画几帧），
+UI 线程设为 `THREAD_PRIORITY_ABOVE_NORMAL`；CPU 被别的软件挤占时，避免候选窗排在后台任务后面。
+按键热路径仍在普通优先级的工人线程上，不抢宿主应用的 CPU。
 
 ## 经验
 
