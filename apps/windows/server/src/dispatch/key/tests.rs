@@ -543,6 +543,32 @@ fn reverse_vertical_flips_up_and_down_keys() {
     assert_eq!(key(&mut r, 0x28, None, normal).2.highlight, 0);
 }
 
+/// V 模式的日期 / 时间 / 车牌等快捷候选可以用数字键选；只有数学表达式 / 数字转换才把数字收进算式。
+#[test]
+fn v_mode_shortcuts_accept_digit_selection_but_expressions_do_not() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    compose(&mut r, "vrq", normal);
+    let (_, commit, _) = key(&mut r, 0x31, Some('1'), normal);
+    assert!(commit.is_some(), "vrq 的第 1 条应该能用主键盘 1 上屏");
+
+    let mut r = router(9);
+    compose(&mut r, "vsj", normal);
+    let (_, commit, _) = key(&mut r, 0x61, Some('1'), normal);
+    assert!(commit.is_some(), "vsj 的第 1 条应该能用小键盘 1 上屏");
+
+    let mut expression = router(9);
+    compose(&mut expression, "v1+2", normal);
+    let (_, commit, frame) = key(&mut expression, 0x33, Some('3'), normal);
+    assert!(commit.is_none(), "表达式里的 3 不能选候选");
+    let preedit: String = frame
+        .preedit
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect();
+    assert_eq!(preedit, "v1+23");
+}
+
 /// 组句里 Tab 展开「更多候选项」：一屏 = 5 × 候选项个数（竖排 5 列），序号不再画，
 /// 数字键改成跳页、方向键在格子里走；再按一次收起。
 #[test]

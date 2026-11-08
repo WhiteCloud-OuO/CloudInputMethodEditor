@@ -49,7 +49,7 @@ pub(crate) fn convert(input: &Path, out: &Path, metadata: Metadata) -> Result<()
                     province,
                     first.to_ascii_uppercase(),
                     &place,
-                    &short,
+                    short.as_deref(),
                 );
             } else {
                 province = Some(first);
@@ -59,7 +59,7 @@ pub(crate) fn convert(input: &Path, out: &Path, metadata: Metadata) -> Result<()
                         first,
                         letter.to_ascii_uppercase(),
                         &place,
-                        &short,
+                        short.as_deref(),
                     );
                 }
             }
@@ -86,7 +86,13 @@ fn cell_text(cell: &Data) -> Option<String> {
     (!text.is_empty()).then(|| text.to_owned())
 }
 
-fn push_row(rows: &mut Vec<PlateRow>, province: char, letter: char, full: &str, short: &str) {
+fn push_row(
+    rows: &mut Vec<PlateRow>,
+    province: char,
+    letter: char,
+    full: &str,
+    short: Option<&str>,
+) {
     let Some(pinyin) = province_pinyin(province) else {
         tracing::warn!(province = %province, "车牌里的省份简称没有拼音，跳过");
         return;
@@ -95,7 +101,7 @@ fn push_row(rows: &mut Vec<PlateRow>, province: char, letter: char, full: &str, 
         key: format!("{pinyin}{}", letter.to_ascii_lowercase()),
         plate: format!("{province}{letter}"),
         full: full.to_owned(),
-        short: short.to_owned(),
+        short: short.unwrap_or_default().to_owned(),
     });
 }
 
@@ -137,32 +143,144 @@ fn province_pinyin(province: char) -> Option<&'static str> {
     })
 }
 
-/// 完整地名 → 短地名：去掉括号备注、省 / 市等行政后缀。
-fn short_place(full: &str) -> String {
-    let mut short = full.trim().to_owned();
-    if let Some(index) = short.find(['（', '(']) {
-        short.truncate(index);
+/// 完整地名 → 短地名：只有 `xx省` / `xx市` / `xx自治州` / `xx地区` / `xx盟` 才有短地名；
+/// 出租车、公安系统、省直机关、片区、括号备注等一律没有。
+fn short_place(full: &str) -> Option<String> {
+    let full = full.trim();
+    if full.contains('（') || full.contains('(') {
+        return None;
     }
-    for suffix in [
-        "特别行政区",
-        "自治区",
-        "自治州",
-        "地区",
-        "盟",
-        "市",
-        "省",
-        "县",
-        "区",
-    ] {
+    let allowed = full.ends_with('省')
+        || full.ends_with('市')
+        || full.ends_with("自治州")
+        || full.ends_with("地区")
+        || full.ends_with("盟");
+    if !allowed {
+        return None;
+    }
+    let mut short = full.to_owned();
+    let mut autonomous = false;
+    for suffix in ["自治州", "地区", "盟", "市", "省"] {
         if short.ends_with(suffix) {
             short.truncate(short.len() - suffix.len());
+            autonomous = suffix == "自治州";
             break;
         }
     }
+    if autonomous {
+        short = strip_ethnic_suffix(short);
+    }
     let short = short.replace('省', "");
-    if short.is_empty() {
-        full.to_owned()
-    } else {
-        short
+    let short = short.trim();
+    (!short.is_empty()).then(|| short.to_owned())
+}
+
+/// 去掉自治州名字末尾的民族名（`昌吉回族` → `昌吉`、`海西蒙古族藏族` → `海西`）。
+fn strip_ethnic_suffix(mut name: String) -> String {
+    const ETHNIC: &[&str] = &[
+        "柯尔克孜",
+        "维吾尔",
+        "哈萨克",
+        "布依",
+        "朝鲜",
+        "土家",
+        "哈尼",
+        "傈僳",
+        "景颇",
+        "蒙古",
+        "达斡尔",
+        "鄂温克",
+        "鄂伦春",
+        "乌孜别克",
+        "俄罗斯",
+        "塔塔尔",
+        "仡佬",
+        "锡伯",
+        "门巴",
+        "珞巴",
+        "基诺",
+        "布朗",
+        "阿昌",
+        "普米",
+        "塔吉克",
+        "德昂",
+        "保安",
+        "裕固",
+        "独龙",
+        "撒拉",
+        "毛南",
+        "仫佬",
+        "东乡",
+        "纳西",
+        "拉祜",
+        "藏",
+        "回",
+        "彝",
+        "苗",
+        "侗",
+        "壮",
+        "白",
+        "傣",
+        "羌",
+        "满",
+        "瑶",
+        "畲",
+        "黎",
+        "水",
+        "土",
+        "怒",
+        "佤",
+        "京",
+    ];
+    loop {
+        let mut stripped = false;
+        for ethnic in ETHNIC {
+            for suffix in [format!("{ethnic}族"), (*ethnic).to_owned()] {
+                if name.ends_with(&suffix) {
+                    name.truncate(name.len() - suffix.len());
+                    stripped = true;
+                    break;
+                }
+            }
+            if stripped {
+                break;
+            }
+        }
+        if !stripped {
+            break;
+        }
+    }
+    name
+}
+
+#[cfg(test)]
+mod tests {
+    use super::short_place;
+
+    #[test]
+    fn short_names_only_for_administrative_places() {
+        assert_eq!(short_place("江苏省南京市").as_deref(), Some("江苏南京"));
+        assert_eq!(short_place("北京市").as_deref(), Some("北京"));
+        assert_eq!(
+            short_place("内蒙古呼和浩特市").as_deref(),
+            Some("内蒙古呼和浩特")
+        );
+        assert_eq!(short_place("内蒙古兴安盟").as_deref(), Some("内蒙古兴安"));
+        assert_eq!(
+            short_place("黑龙江省大兴安岭地区").as_deref(),
+            Some("黑龙江大兴安岭")
+        );
+        assert_eq!(
+            short_place("新疆昌吉回族自治州").as_deref(),
+            Some("新疆昌吉")
+        );
+        assert_eq!(
+            short_place("云南楚雄彝族自治州").as_deref(),
+            Some("云南楚雄")
+        );
+        assert_eq!(short_place("福建省直系统、平潭综合实验区"), None);
+        assert_eq!(short_place("北京市出租车"), None);
+        assert_eq!(short_place("上海市区"), None);
+        assert_eq!(short_place("原松花江地区（今哈尔滨部分）"), None);
     }
 }

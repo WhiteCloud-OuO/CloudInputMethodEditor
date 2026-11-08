@@ -335,6 +335,12 @@ fn v_mode_offers_plate_shortcuts() {
                 full: "江苏省无锡市".into(),
                 short: "江苏无锡".into(),
             },
+            cloudime_plate::PlateRow {
+                key: "mink".into(),
+                plate: "闽K".into(),
+                full: "福建省直系统、平潭综合实验区".into(),
+                short: String::new(),
+            },
         ],
         cloudime_format::Metadata::default(),
     )
@@ -364,6 +370,21 @@ fn v_mode_offers_plate_shortcuts() {
         .collect();
     assert!(texts.contains(&"苏A".to_owned()));
     assert!(texts.contains(&"苏B".to_owned()));
+
+    engine.set_input("v@mink");
+    let texts: Vec<String> = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect();
+    assert_eq!(
+        texts,
+        ["闽K", "福建省直系统、平潭综合实验区"],
+        "没有行政地名时不能硬造短地名"
+    );
     let _ = std::fs::remove_file(path);
 }
 

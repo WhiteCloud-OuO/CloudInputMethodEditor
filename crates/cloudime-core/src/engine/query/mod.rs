@@ -163,6 +163,9 @@ impl Engine {
         let mut items = Vec::new();
         for entry in plates.prefix(&normalized, 12) {
             for text in [entry.plate, entry.full, entry.short] {
+                if text.is_empty() {
+                    continue;
+                }
                 if seen.insert(text.to_owned()) {
                     items.push(Candidate {
                         text: text.to_owned(),

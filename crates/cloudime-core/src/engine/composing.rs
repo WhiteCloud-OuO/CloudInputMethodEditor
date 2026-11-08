@@ -337,6 +337,26 @@ impl Engine {
             && self.composition.text().starts_with(EXPRESSION_PREFIX)
     }
 
+    /// V 模式里当前是日期 / 时间 / 星期 / 现在 / 车牌这类快捷候选（不是数学表达式或数字转换）。
+    /// 壳据此把数字键留给「选候选」，而不是塞进算式。
+    pub fn v_mode_shortcut_active(&self) -> bool {
+        if !self.expression_mode() {
+            return false;
+        }
+        let body = self
+            .composition
+            .scope()
+            .strip_prefix(EXPRESSION_PREFIX)
+            .unwrap_or_default();
+        if body.starts_with('@') || body.starts_with('#') {
+            return !body.is_empty();
+        }
+        !body.is_empty()
+            && ["rq", "sj", "xq", "xz"]
+                .iter()
+                .any(|code| code.starts_with(body))
+    }
+
     /// 英文直输段：缓冲区里有拼音以外的字符（`no-way`），整段原样上屏、不解析拼音。
     /// 表达式模式优先于它。
     pub fn raw_mode(&self) -> bool {

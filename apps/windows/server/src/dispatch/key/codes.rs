@@ -53,7 +53,7 @@ pub(crate) fn page_key(event: &KeyEvent) -> Option<isize> {
 pub(crate) fn digit(event: &KeyEvent) -> Option<usize> {
     match event.character {
         Some(c) => ('1'..='9').contains(&c).then(|| c as usize - '0' as usize),
-        None => digit_key(event.virtual_key),
+        None => digit_virtual_key(event.virtual_key),
     }
 }
 
@@ -65,13 +65,6 @@ pub(crate) fn page_digit(event: &KeyEvent) -> Option<usize> {
             .contains(&event.virtual_key)
             .then(|| (event.virtual_key - 0x30) as usize),
     }
-}
-
-/// 主键盘区数字键 1–9 的键码（没有 `character` 时兜底认数字）。
-pub(crate) fn digit_key(virtual_key: u32) -> Option<usize> {
-    (0x31..=0x39)
-        .contains(&virtual_key)
-        .then(|| (virtual_key - 0x30) as usize)
 }
 
 /// 主键盘或小键盘数字键 1–9 的键码。按住 Ctrl 时 `character` 是控制字符（`\u{1}`），
