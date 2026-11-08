@@ -8,7 +8,8 @@ use std::path::{Path, PathBuf};
 use cloudime_core::Engine;
 use cloudime_platform::{Config, ConfigError, LogLevel, PhraseStore, WordBank, resources};
 use cloudime_windows_server::{
-    AssemblySpec, LanguageModelFiles, Router, RouterConfig, ServerError, assembly, dispatch,
+    AssemblySpec, LanguageModelFiles, NameFiles, Router, RouterConfig, ServerError, assembly,
+    dispatch,
 };
 
 /// 用户数据目录 `%APPDATA%\CloudIME`。非 Windows 拿不到。
@@ -39,6 +40,13 @@ fn load_config() -> Config {
 
 fn sample_dict(root: &Path) -> PathBuf {
     root.join("assets/sample/dict.tsv")
+}
+
+/// 取名用的两份 TSV 都在 `data\` 下才启用；缺一个就整个功能关掉（日志里会说明）。
+fn name_files(root: &Path) -> Option<NameFiles> {
+    let surnames = root.join("data/姓氏大全.tsv");
+    let names = root.join("data/名字大全.tsv");
+    (surnames.is_file() && names.is_file()).then_some(NameFiles { surnames, names })
 }
 
 /// 解析 `--wait-pid <pid>`：新起的 Server 用它等旧进程退出再占命名管道。没有这个参数、缺值或值不是
@@ -192,6 +200,7 @@ fn main() {
     let spec = AssemblySpec {
         language_model: LanguageModelFiles::find(&root.join("data/generated")),
         plates: Some(root.join("data/plates.qj")).filter(|path| path.is_file()),
+        names: name_files(&root),
         word_bank: Some(word_bank.clone()),
         user_dir: user_dir(),
         user_word_bank: Some(user_word_bank),

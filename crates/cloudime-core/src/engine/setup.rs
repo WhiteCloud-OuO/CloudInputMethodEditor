@@ -177,6 +177,18 @@ impl Engine {
         self.plates.as_ref().map(cloudime_plate::PlateTable::len)
     }
 
+    /// 挂上取名用的姓氏 / 名字表（Server 启动时读安装目录 `data\` 的两份 TSV）。
+    pub fn set_name_tables(&mut self, names: crate::name::NameTables) {
+        self.names = Some(names);
+    }
+
+    /// 当前取名表（姓氏条数, 名字条数）；没装为 `None`。
+    pub fn name_counts(&self) -> Option<(usize, usize)> {
+        self.names
+            .as_ref()
+            .map(|tables| (tables.surname_count(), tables.name_count()))
+    }
+
     /// 光标后剩余拼音的显示形式：能切就按音节用 `'` 连上，切不动就原样。
     pub(super) fn marked_rest(&self, rest: &str) -> String {
         marked_rest(rest, self.use_jian_pin)

@@ -13,7 +13,7 @@ use cloudime_learning::{FrequencyLearner, InputLog, UsageStats, VocabularyBook};
 use crate::error::ServerError;
 
 pub use self::language_model::LanguageModelFiles;
-pub use self::spec::AssemblySpec;
+pub use self::spec::{AssemblySpec, NameFiles};
 
 pub fn assemble(spec: &AssemblySpec) -> Result<Engine, ServerError> {
     let started = Instant::now();
@@ -60,6 +60,24 @@ pub fn assemble(spec: &AssemblySpec) -> Result<Engine, ServerError> {
         );
         engine = engine.with_rare(rare);
     }
+    if let Some(files) = &spec.names {
+        match read_name_tables(files) {
+            Ok(tables) => {
+                tracing::info!(
+                    surnames = tables.surname_count(),
+                    names = tables.name_count(),
+                    "姓氏 / 名字表已加载"
+                );
+                engine.set_name_tables(tables);
+            }
+            Err(error) => tracing::warn!(
+                %error,
+                surnames = %files.surnames.display(),
+                names = %files.names.display(),
+                "取名数据读不出来，V 模式 # 取名不可用"
+            ),
+        }
+    }
     if let Some(dir) = &spec.user_dir {
         engine = engine
             .with_usage_meter(Box::new(UsageStats::open(dir.join("usage.tsv"))))
@@ -102,6 +120,15 @@ pub fn assemble(spec: &AssemblySpec) -> Result<Engine, ServerError> {
         }
     }
     Ok(engine)
+}
+
+/// 读两份取名 TSV；失败只让 `#` 取名不可用，不影响 Server 启动。
+fn read_name_tables(files: &NameFiles) -> Result<cloudime_core::name::NameTables, String> {
+    let surnames = std::fs::read_to_string(&files.surnames)
+        .map_err(|error| format!("{}: {error}", files.surnames.display()))?;
+    let names = std::fs::read_to_string(&files.names)
+        .map_err(|error| format!("{}: {error}", files.names.display()))?;
+    cloudime_core::name::NameTables::from_tsv(&surnames, &names).map_err(|error| error.to_string())
 }
 
 /// 读不了就退回只在内存里学，不拿空表覆盖用户文件。

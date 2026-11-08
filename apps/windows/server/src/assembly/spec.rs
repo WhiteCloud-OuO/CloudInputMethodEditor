@@ -15,6 +15,9 @@ pub struct AssemblySpec {
     /// 车牌对照表 `data/plates.qj`；没有就少 `@` 车牌候选。
     pub plates: Option<PathBuf>,
 
+    /// 取名用的姓氏 / 名字表（安装目录 `data\` 下两份 TSV）；缺一个就都不装。
+    pub names: Option<NameFiles>,
+
     /// 词库目录（WordBank）：用户导入的附加词库从它读，主词库那一份跳过。
     pub word_bank: Option<WordBank>,
 
@@ -38,6 +41,7 @@ impl AssemblySpec {
             dict: dict.into(),
             language_model: None,
             plates: None,
+            names: None,
             word_bank: None,
             user_dir: None,
             user_word_bank: None,
@@ -45,4 +49,14 @@ impl AssemblySpec {
             load_rare: true,
         }
     }
+}
+
+/// 取名用的两份 TSV（安装目录 `data\姓氏大全.tsv`、`data\名字大全.tsv`）。
+#[derive(Debug, Clone)]
+pub struct NameFiles {
+    /// 姓氏表：汉字、拼音、排名。
+    pub surnames: PathBuf,
+
+    /// 名字表：汉字、拼音。
+    pub names: PathBuf,
 }

@@ -3,6 +3,7 @@
 use super::*;
 
 mod english_tail;
+mod name;
 mod result;
 mod snapshot;
 mod spelling;
@@ -104,6 +105,13 @@ fn plate_query(scope: &str) -> Option<&str> {
     scope
         .strip_prefix(shortcut::EXPRESSION_PREFIX)?
         .strip_prefix('@')
+}
+
+/// V 模式里 `#` 后面的姓名拼音；不是 `v#...` 就 `None`。
+fn name_query(scope: &str) -> Option<&str> {
+    scope
+        .strip_prefix(shortcut::EXPRESSION_PREFIX)?
+        .strip_prefix('#')
 }
 
 impl Engine {
@@ -853,7 +861,9 @@ impl Engine {
         }
         let mut items =
             shortcut::v_mode_candidates(scope, &jiff::Zoned::now(), self.v_mode_time_seconds);
-        if let Some(query) = plate_query(scope) {
+        if let Some(body) = name_query(scope) {
+            items.extend(self.name_candidates(body));
+        } else if let Some(query) = plate_query(scope) {
             items.extend(self.plate_candidates(query));
         } else if let Some(word) = self.english.as_ref().and_then(|english| english.get(scope)) {
             items.push(Candidate {

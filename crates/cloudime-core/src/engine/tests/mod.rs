@@ -6,6 +6,7 @@ mod english;
 mod input;
 mod learning;
 mod lookup;
+mod name;
 mod privacy;
 mod raw;
 mod segmented;

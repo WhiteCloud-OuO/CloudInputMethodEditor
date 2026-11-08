@@ -3,7 +3,7 @@ use std::sync::{Arc, Mutex};
 use std::time::{Duration, Instant};
 
 use crate::dispatch::{CandidateEvent, CandidateSink, RenderSettings, Router, RouterConfig};
-use cloudime_core::{CandidateKind, CustomPhrase, Engine};
+use cloudime_core::{CandidateKind, CustomPhrase, Engine, NameTables};
 use cloudime_dictionary::{Dictionary, WordList};
 use cloudime_platform::LayoutMode;
 use cloudime_platform::MouseWordSelection;
@@ -85,6 +85,30 @@ fn router(size: usize) -> Router {
     });
     router
 }
+fn name_router() -> Router {
+    let mut engine = Engine::new(Dictionary::parse("爨\tcuan\t100\n").unwrap());
+    engine.set_name_tables(
+        NameTables::from_tsv(
+            "王\twang\t1\n汪\twang\t50\n欧阳\tou yang\t401\n",
+            "伟\twei\n卫\twei\n建\tjian\n娜\tna\n洋\tyang\n",
+        )
+        .unwrap(),
+    );
+    let mut router = Router::new(
+        engine,
+        RouterConfig {
+            page_size: 9,
+            ..Default::default()
+        },
+    );
+    router.handle(ClientMessage::OpenSession {
+        session: SessionId(1),
+        app: None,
+        protocol: PROTOCOL_VERSION,
+    });
+    router
+}
+
 fn special_router() -> Router {
     let engine = Engine::new(
         Dictionary::parse(
@@ -567,6 +591,27 @@ fn v_mode_shortcuts_accept_digit_selection_but_expressions_do_not() {
         .map(|segment| segment.text.as_str())
         .collect();
     assert_eq!(preedit, "v1+23");
+}
+
+/// V 模式取名：选中姓氏不直接上屏，留在组句里（`v#王`），接着选名字才整段上屏。
+#[test]
+fn v_name_surname_keeps_composing_then_commits_the_full_name() {
+    let normal = KeyModifiers::default();
+    let mut r = name_router();
+    compose(&mut r, "v#wang", normal);
+    let (outcome, commit, frame) = key(&mut r, 0x31, Some('1'), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert!(commit.is_none(), "姓氏不能直接上屏");
+    let preedit: String = frame
+        .preedit
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect();
+    assert_eq!(preedit, "v#王");
+
+    compose(&mut r, "wei", normal);
+    let (_, commit, _) = key(&mut r, 0x31, Some('1'), normal);
+    assert_eq!(commit.as_deref(), Some("王伟"));
 }
 
 /// 组句里 Tab 展开「更多候选项」：一屏 = 5 × 候选项个数（竖排 5 列），序号不再画，

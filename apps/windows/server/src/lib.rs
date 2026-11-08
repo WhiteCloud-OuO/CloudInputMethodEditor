@@ -12,6 +12,6 @@ pub mod speech;
 #[cfg(windows)]
 pub mod ui;
 
-pub use assembly::{AssemblySpec, LanguageModelFiles};
+pub use assembly::{AssemblySpec, LanguageModelFiles, NameFiles};
 pub use dispatch::{Router, RouterConfig};
 pub use error::ServerError;

@@ -1,8 +1,9 @@
 //! 输入状态机：拼音缓冲区、已选文本与光标。
 //!
 //! 只维护「用户已经敲了什么、选了哪些、光标在哪」，不理解拼音，也不知道候选。
-//! 缓冲区只含未选拼音（ASCII 小写字母和 `'`，表达式模式下还有数字与运算符，见 `shortcut`），
-//! 所以字节下标即字符下标。全拼里 Shift+字母不进拼音缓冲区，按英文字面量（[`Literal`]）记在
+//! 缓冲区以未选拼音为主（ASCII 小写字母和 `'`，表达式模式下还有数字与运算符，见 `shortcut`），
+//! V 模式取名时也会放选中的汉字（`v#王`），所以光标移动 / 退格都按字符边界走。
+//! 光标与偏移都是字节下标，移动 / 删除时按字符边界对齐。全拼里 Shift+字母不进拼音缓冲区，按英文字面量（[`Literal`]）记在
 //! 缓冲区的字节偏移上；双键拼音的辅助码大写仍按小写进缓冲区，记在 `shifted` 里。
 //!
 //! 中文模式选中一个候选**不立刻上屏**：它并进 [`Composition::select_prefix`] 记下的已选段，
@@ -287,13 +288,19 @@ impl Composition {
         if self.cursor == 0 {
             return false;
         }
+        // 缓冲区里可能出现取名模式选中的汉字（`v#王`）：退格一次删一个完整字符，不能停在 UTF-8 中间。
+        let previous = self.buffer[..self.cursor]
+            .chars()
+            .next_back()
+            .map(char::len_utf8)
+            .unwrap_or(1);
         let index = self.char_index(self.cursor) - 1;
-        self.cursor -= 1;
+        self.cursor -= previous;
         self.buffer.remove(self.cursor);
         self.shifted.remove(index);
         for literal in &mut self.literals {
             if literal.at > self.cursor {
-                literal.at -= 1;
+                literal.at -= previous;
             }
         }
         true
@@ -317,32 +324,37 @@ impl Composition {
         if self.cursor >= self.buffer.len() {
             return false;
         }
+        let next = self.buffer[self.cursor..]
+            .chars()
+            .next()
+            .map(char::len_utf8)
+            .unwrap_or(1);
         let index = self.char_index(self.cursor);
         self.buffer.remove(self.cursor);
         self.shifted.remove(index);
         for literal in &mut self.literals {
             if literal.at > self.cursor {
-                literal.at -= 1;
+                literal.at -= next;
             }
         }
         true
     }
 
-    /// 光标左移一格。已在开头时返回 `false`。
+    /// 光标左移一个字符。已在开头时返回 `false`。
     pub fn move_left(&mut self) -> bool {
-        if self.cursor == 0 {
+        let Some(previous) = self.buffer[..self.cursor].chars().next_back() else {
             return false;
-        }
-        self.cursor -= 1;
+        };
+        self.cursor -= previous.len_utf8();
         true
     }
 
-    /// 光标右移一格。已在末尾时返回 `false`。
+    /// 光标右移一个字符。已在末尾时返回 `false`。
     pub fn move_right(&mut self) -> bool {
-        if self.cursor >= self.buffer.len() {
+        let Some(next) = self.buffer[self.cursor..].chars().next() else {
             return false;
-        }
-        self.cursor += 1;
+        };
+        self.cursor += next.len_utf8();
         true
     }
 
@@ -352,10 +364,12 @@ impl Composition {
         if len == 0 {
             return false;
         }
-        let from = self.char_index(self.cursor - len);
+        let start = self.floor_char_boundary(self.cursor - len);
+        let len = self.cursor - start;
+        let from = self.char_index(start);
         let to = self.char_index(self.cursor);
-        let new_cursor = self.cursor - len;
-        self.buffer.drain(self.cursor - len..self.cursor);
+        let new_cursor = start;
+        self.buffer.drain(start..self.cursor);
         self.shifted.drain(from..to);
         self.literals
             .retain(|literal| literal.at <= new_cursor || literal.at > self.cursor);
@@ -366,6 +380,15 @@ impl Composition {
         }
         self.cursor = new_cursor;
         true
+    }
+
+    /// 不落在字符边界上的字节下标向下取整（取名模式缓冲区里有汉字，按字节算时要先对齐）。
+    fn floor_char_boundary(&self, index: usize) -> usize {
+        let mut index = index.min(self.buffer.len());
+        while index > 0 && !self.buffer.is_char_boundary(index) {
+            index -= 1;
+        }
+        index
     }
 
     pub fn move_home(&mut self) {
@@ -387,7 +410,7 @@ impl Composition {
     /// 选中作用域前 `consumed` 字节的拼音为文本 `text`：拼音移出缓冲区、记进已选段，
     /// 光标随之落在剩余拼音里。选中只是并进组句，不立刻交给应用（见文件头）。
     pub fn select_prefix(&mut self, text: &str, consumed: usize) {
-        let mut len = consumed.min(self.buffer.len());
+        let mut len = self.floor_char_boundary(consumed.min(self.buffer.len()));
         // 选中音节后面的 `'` 跟着一起吃掉：`yun'duo` 选 云 之后剩 `duo`，
         // 不留下一个空的 `'`（特殊输入逐音节选字时会卡在最后一个 `'` 上）。
         if consumed > 0 && self.buffer[len..].starts_with('\'') {
@@ -465,7 +488,7 @@ impl Composition {
     /// 删掉开头 `len` 个字节（上屏消耗掉的拼音），光标随之前移；
     /// 被吃掉的部分盖过了光标（`ni|hao` 上屏了 你）时光标落到末尾，接着组句就是往后打。
     pub fn drain_prefix(&mut self, len: usize) {
-        let len = len.min(self.buffer.len());
+        let len = self.floor_char_boundary(len.min(self.buffer.len()));
         let removed = self.char_index(len);
         self.buffer.drain(..len);
         self.shifted.drain(..removed);
@@ -608,5 +631,25 @@ mod tests {
         composition.drain_prefix(10);
         assert!(composition.is_empty());
         assert_eq!(composition.cursor(), 0);
+    }
+
+    #[test]
+    fn multi_byte_characters_move_and_delete_as_one() {
+        // 取名模式会把选中的姓氏汉字放进缓冲区（`v#王`）。
+        let mut composition = typed("v#王w");
+        assert_eq!(composition.cursor(), composition.text().len());
+        assert!(composition.move_left());
+        assert_eq!(composition.scope(), "v#王");
+        assert!(composition.move_left());
+        assert_eq!(composition.scope(), "v#");
+        assert!(composition.move_right());
+        assert_eq!(composition.scope(), "v#王");
+        assert!(composition.backspace());
+        assert_eq!(composition.text(), "v#w");
+        composition.move_end();
+        assert!(!composition.delete_forward());
+        composition.move_home();
+        assert!(composition.delete_forward());
+        assert_eq!(composition.text(), "#w");
     }
 }

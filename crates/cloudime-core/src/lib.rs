@@ -14,6 +14,7 @@ pub mod engine;
 pub mod english;
 pub mod fuzzy;
 pub mod history;
+pub mod name;
 pub mod parser;
 pub mod punctuation;
 pub mod ranking;
@@ -39,6 +40,7 @@ pub use engine::{
 };
 pub use fuzzy::FuzzyRules;
 pub use history::{DEFAULT_FRESH_SECONDS, InputHistory};
+pub use name::{NameTableError, NameTables};
 pub use parser::{ParseError, Segmentation};
 pub use punctuation::{
     MappedSymbol, Mapping, Punctuation, SmartSymbol, smart_space_double, smart_space_single,

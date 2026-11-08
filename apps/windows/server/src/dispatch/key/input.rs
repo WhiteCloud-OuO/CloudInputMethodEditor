@@ -604,10 +604,11 @@ impl Router {
             return Effect::Changed(None);
         }
         let expression = self.engine.expression_mode();
+        let name_input = self.engine.name_mode() && c.is_ascii_alphabetic();
         let select_digit = self.engine.v_mode_shortcut_active()
             && (codes::digit(event).is_some()
                 || codes::digit_virtual_key(event.virtual_key).is_some());
-        if expression && shortcut::is_expression_char(c) && !select_digit {
+        if expression && (shortcut::is_expression_char(c) || name_input) && !select_digit {
             self.engine.push(c);
             return Effect::Changed(None);
         }

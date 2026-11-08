@@ -144,6 +144,8 @@ Source: "{#Repo}\apps\windows\server\src\ui\status\icons-arrangement.cfg"; DestD
 Source: "{#Repo}\apps\windows\server\src\ui\status\icons\*.svg";           DestDir: "{app}\data\icons"; Flags: ignoreversion
 ; 车牌对照表：生成到 data/generated/plates.qj，安装到 {app}\data\plates.qj（Server 按 exe 位置读）
 Source: "{#Repo}\data\generated\plates.qj"; DestDir: "{app}\data"; Flags: ignoreversion skipifsourcedoesntexist
+; 取名数据：姓氏 / 名字 TSV 装到 {app}\data\（Server 启动时读，V 模式 # 取名用）
+Source: "{#Repo}\assets\names\*.tsv"; DestDir: "{app}\data"; Flags: ignoreversion
 ; —— Server 放最后：它一落地，旧版 DLL 就能把它拉起来并占住数据文件（见文件头）——
 Source: "{#Repo}\target\release\cloudime-server.exe";   DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Repo}\target\installer\onnxruntime\onnxruntime.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist

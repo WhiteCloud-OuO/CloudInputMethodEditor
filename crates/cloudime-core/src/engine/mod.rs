@@ -268,6 +268,9 @@ pub struct Engine {
     /// 车牌对照表（`data/plates.qj`）；没装就是 `None`。
     plates: Option<cloudime_plate::PlateTable>,
 
+    /// 取名用的姓氏 / 名字表（`data/姓氏大全.tsv`、`data/名字大全.tsv`）；没装就是 `None`。
+    names: Option<crate::name::NameTables>,
+
     /// 繁体转换器。
     opencc: Option<ferrous_opencc::OpenCC>,
 
@@ -421,6 +424,7 @@ impl Engine {
             traditional: false,
             v_mode_time_seconds: false,
             plates: None,
+            names: None,
             opencc: None,
             traditional_map: std::cell::RefCell::new(HashMap::new()),
         }

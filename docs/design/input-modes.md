@@ -17,8 +17,10 @@
 中英混输的英文词仍然从模式前缀开始匹配：`v` 模式打 `very`、u 模式打 `undo`、i 模式打 `input`。
 
 `v` 模式当前内置：算式 / 数字转换、`vrq` / `vsj` / `vxq` / `vxz` 的日期 / 时间 / 星期 / 现在候选、
-`v@` 车牌（`data/plates.qj`，`cloudime_plate::PlateTable`），以及拼音串只有一个 `v` 时的 V 模式说明窗口。
-`#` 取名先写进说明窗口，候选生成等后续 V 模式改造。
+`v@` 车牌（`data/plates.qj`，`cloudime_plate::PlateTable`）、`v#` 取名（`data/姓氏大全.tsv`、
+`data/名字大全.tsv`，`cloudime_core::name::NameTables`），以及拼音串只有一个 `v` 时的 V 模式说明窗口。
+取名先按姓氏表排名匹配姓氏（复姓优先），再按名字表顺序出单字 / 双字名；表里没有的罕姓与名字字退回词库。
+选中姓氏时它留在组句里（`v#王`），选到完整姓名才上屏。
 
 以后把表达式 / 快捷候选的接口开放给 Lua 脚本：
 

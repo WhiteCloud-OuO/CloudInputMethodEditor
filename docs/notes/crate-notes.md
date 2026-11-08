@@ -37,10 +37,12 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 ## crates/cloudime-core
 
 模块：`composition`（未选拼音缓冲区、已选文本段与光标；中文模式下 Shift+字母按小写进 `buffer` 参与匹配、大写记在 `shifted`，`typed_text` 还原后用于原样上屏；选中一个候选不立刻落文档，`select_prefix` 把「显示文本 + 它消耗的原样拼音」并进 `selected`，`unselect_last` 供退格撤回）/ `parser` / `correction`（拼写纠错：一处编辑的换位 / 相邻键替换读法进候选池按权重打折，`typo` 音节级变体的多敲 / 少敲写法还进整句词图，见下）/
-`candidate` / `ranking`（候选排序：结构键 + 权重，见下） / `shortcut` / `sentence` / `fuzzy` /
+`candidate` / `ranking`（候选排序：结构键 + 权重，见下） / `shortcut` / `name`（V 模式取名的姓氏 / 名字 TSV 解析） / `sentence` / `fuzzy` /
 `english`（英文候选：中文模式里的中英混输与前缀补全）/ `engine`（`query::EnglishTail`：句末英文词并入整句，`woxiangxuehaorust` → 我想学好rust，尾段也像拼音时按分数与拼音读法比）。
 
 切分展示：解析器先按音节数 / 残缺数 / 长音节给出候选切分；`query_reading` 查完词库后再按“有没有正好覆盖整个切分的词”重排一次，词库能证明更像词的切分排到最前（`shangou` 的 `shan gou` / 山沟 压过 `shang ou`），拼音行和整句都用这份顺序。单字候选不乘按字累计的全局用户权重，只保留当前输入串的 `choice_weight`，避免常选 `de` 的「的」把罕见读音 `di` 一起抬高。表达式：`shortcut::v_mode_candidates` 以固定前缀 `v`（`EXPRESSION_PREFIX`）认 V 模式，算四则运算与中文数字，并出 `vrq` / `vsj` / `vxq` / `vxz` 的日期 / 时间 / 星期 / 现在候选（`[input] v_mode_time_seconds` 控制秒数）；候选是 `CandidateKind::Shortcut`，上屏吃掉整段作用域。普通输入不再插这些日期 / 时间快捷候选。`Engine::expression_mode` 决定组句中数字与运算符进缓冲区还是选词。
+
+**V 模式取名**（`name` + `engine/query/name.rs`）：`v#` 后面是「姓拼音 + 名拼音」连写，姓氏按 `NameTables` 的排名匹配、复姓拼音长的优先；名字先查名字表（表内行序），表里没有该读音才退回 `all_dictionaries()` 的单字词频。`v#wang` 这类只匹配到姓氏时出的是「姓」候选，壳在 `commit_index` 里用 `Engine::name_selection_is_surname` 认出来，调 `select_name_surname` 把缓冲区换成 `v#王`（不直接上屏），接着输名或直接选完整姓名；`v#王` 空着名时按名字表前几个字给单字名与少量双字名。名字候选最多 60 条。姓氏 / 名字表是安装目录 `data\姓氏大全.tsv` / `data\名字大全.tsv`，Server 装配时读入（缺一个就整个功能关掉）；`NameTables::from_tsv` 兼容 CRLF、BOM、重复字（留第一次出现）与复姓空格拼音。
 
 `shortcut::evaluator` 是**复数内核**（实部 + 虚部，`Complex`）：`+ - * / % ^ ! @`、括号、一元正负号，
 **不做隐式乘法**（`6i`、`2(3+4)`、`2x3` 都是语法错，`x` 也不当乘号）；函数见 `call`（三角函数收角度、
