@@ -384,6 +384,8 @@ DLL 据此在**组句里**把这一个键送来问一趟（`eats_key` 里那条�
 **v23** 给 `ClientMessage::Surrounding` 加了 `context`（DLL 侧 `ITfContext` 指针）：Server 发现它变了就
 `Engine::enter_input_box()`，把当前应用的上下文历史清掉。老 DLL 不带、读成 `0`，只少这个重置，不坏已有输入；
 按规矩 +1 并重装 DLL。
+Server 对低于 `PROTOCOL_VERSION` 的会话仍照常服务（老 DLL 忽略新增字段），并在该会话第一次出候选时
+在候选窗顶部提示「输入法已升级，请重启 app」；每个会话只提示一次。
 
 **主题文件**（`theme.rs`）：`Themes\*.json` 装候选窗口 / 悬浮工具栏 / 状态切换提示三个窗口的 21 个颜色，分 `candidate`（15 项）/ `bar`（背景 / 图标 / 阴影）/ `tip`（同三项）三组；`ThemeColor` 是一个 `#AARRGGBB`（也认 `#RRGGBB`，serde 走字符串、缺键回缺省，`Default` 对齐现有观感）。`ThemeFile::{load, save}`（`save` 建父目录 + 美化 JSON）；`theme_dirs(bundled_root)` 给出两个候选目录 —— 用户目录 `%APPDATA%\CloudIME\Themes`（可写）与随包目录 `<安装目录>\Themes`（只读），`list_themes` 两处都扫、**用户目录优先**（同名盖掉随包的）、按名字排序，`find_theme` 在它上面按名字找（可带 / 不带 `.json`、大小写不敏感）；`DEFAULT_THEME_FILE` = `Default.json`（随包另有一份 `Panic.json`，两份都是内置主题）、`THEMES_DIR` = `Themes`。`[theme]` 只有一个 `curr_theme`（文件名，不是路径；缺省 `Default.json`），设置页「主题」页写它、Server 靠它选主题。注解色（`gloss` / `pos` / `fresh`）暂不进主题文件。
 

@@ -2,7 +2,7 @@
 
 mod info;
 
-use cloudime_platform::protocol::SessionId;
+use cloudime_platform::protocol::{PROTOCOL_VERSION, SessionId};
 
 pub(super) use self::info::SessionInfo;
 use super::Router;
@@ -10,6 +10,20 @@ use super::Router;
 impl Router {
     pub fn session_count(&self) -> usize {
         self.sessions.len()
+    }
+
+    /// 旧协议 DLL 第一次出候选时给一条「请重启这个应用」的提示；每个会话只给一次。
+    pub(super) fn take_restart_notice(&mut self, session: SessionId) -> Option<String> {
+        if self.focused != Some(session) {
+            return None;
+        }
+        let info = self.sessions.get_mut(&session)?;
+        if info.protocol >= PROTOCOL_VERSION || info.restart_notice_shown {
+            return None;
+        }
+        info.restart_notice_shown = true;
+        let app = info.app.as_deref().unwrap_or("当前应用").to_owned();
+        Some(format!("输入法已升级，请重启 {app}"))
     }
 
     /// 聚焦会话所在应用的 exe 名；DLL 没报时为 `None`。

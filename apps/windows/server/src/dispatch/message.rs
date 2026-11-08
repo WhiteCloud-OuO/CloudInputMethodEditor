@@ -44,6 +44,7 @@ impl Router {
                         app,
                         private: false,
                         protocol,
+                        restart_notice_shown: false,
                     },
                 );
                 // 按键行为设置回一次，让 DLL 不必自己读配置文件。**只回给会读这条回包的 DLL**：
@@ -263,6 +264,13 @@ impl Router {
         // 脚本设的候选窗尺寸（`cloudime.candidate.set_*`）：本组句内有效
         let size = self.scripts.take_size_request();
         self.apply_size_request(size);
+        // 旧协议 DLL（应用升级后还没重启）第一次出候选时提示重启；每个会话只提示一次。
+        if self.notice.is_none()
+            && self.composing()
+            && let Some(notice) = self.take_restart_notice(session)
+        {
+            self.notice = Some(notice);
+        }
         // 自绘窗吃未降级的帧；发给 DLL 的那份按老协议降级（见 composed 的 current_frame）
         let shown = self.self_drawn_frame();
         self.reconcile_candidates(&shown);

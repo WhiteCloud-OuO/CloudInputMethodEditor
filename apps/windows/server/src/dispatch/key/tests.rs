@@ -211,6 +211,29 @@ fn slash_toggles_special_input_and_commits_one_character_at_a_time() {
     assert!(!r.engine.special_input());
 }
 
+/// 旧协议 DLL 仍照常服务，但第一次出候选时提示重启这个应用，且每个会话只提示一次。
+#[test]
+fn old_dll_session_gets_a_restart_notice_once() {
+    let normal = KeyModifiers::default();
+    let mut r = special_router();
+    r.handle(ClientMessage::OpenSession {
+        session: SessionId(1),
+        app: Some("notepad.exe".to_owned()),
+        protocol: PROTOCOL_VERSION - 1,
+    });
+    let frame = key(&mut r, u32::from(b'y'), Some('y'), normal).2;
+    assert!(
+        frame
+            .notice
+            .as_deref()
+            .is_some_and(|notice| notice.contains("重启") && notice.contains("notepad.exe")),
+        "第一次出候选要提示重启：{:?}",
+        frame.notice
+    );
+    let frame = key(&mut r, u32::from(b'u'), Some('u'), normal).2;
+    assert!(frame.notice.is_none(), "同一会话只提示一次");
+}
+
 /// 特殊输入模式只对全拼 / 双拼开放：`RouterConfig::special_input` 跟着输入方案走。
 #[test]
 fn special_input_support_follows_the_input_scheme() {

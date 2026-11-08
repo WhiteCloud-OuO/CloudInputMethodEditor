@@ -9,7 +9,10 @@ pub(crate) struct SessionInfo {
     /// 该会话当前落在私密输入框里（DLL 随 `ClientMessage::Privacy` 报来）；焦点切回来时按它重设 Engine。
     pub(crate) private: bool,
 
-    /// DLL 报来的协议版本。比 Server 低的（应用还没重启、加载着旧 DLL）要按老协议发帧，
-    /// 见 composed 里的 downgrade_for_old_dll。
+    /// DLL 报来的协议版本。比 Server 低的（应用还没重启、加载着旧 DLL）仍照常服务，
+    /// 但要按老协议能力做降级，并在第一次出候选时提示重启这个应用。
     pub(crate) protocol: u32,
+
+    /// 这条会话是否已经提示过「应用需重启」（旧协议 DLL 只提示一次）。
+    pub(crate) restart_notice_shown: bool,
 }
