@@ -42,6 +42,7 @@ struct CandidateLayout {
     footer: Option<usize>,
     columns: Columns,
     content: (f32, f32),
+    rows_top: f32,
     highlight_rects: Vec<HighlightRect>,
 }
 
@@ -106,10 +107,7 @@ impl Renderer {
             .and_then(|id| candidate_rect(&candidate.rects, id))
             .map_or(margin + metrics.padding(), |rect| margin + rect.y);
         self.draw_candidate_top(&mut recorder, view, &metrics, margin, top_y);
-        let rows_y = candidate
-            .highlight_rects
-            .first()
-            .map_or(margin + metrics.padding(), |rect| margin + rect.top);
+        let rows_y = margin + candidate.rows_top;
         self.draw_candidate_rows(&mut recorder, view, &metrics, &candidate, margin, rows_y);
         if let Some(id) = candidate.footer
             && let Some(rect) = candidate_rect(&candidate.rects, id)
@@ -296,10 +294,16 @@ impl Renderer {
         };
         let mut rows = Vec::with_capacity(view.rows.len());
         for index in 0..view.rows.len() {
+            // 反向后第 1 个候选在最下面（贴近拼音行），序号从下往上 1..n。
+            let slot = if view.reverse_vertical {
+                view.rows.len() - 1 - index
+            } else {
+                index
+            };
             rows.push(add_absolute(
                 &mut tree,
                 m.padding(),
-                rows_top + columns.row_height * index as f32,
+                rows_top + columns.row_height * slot as f32,
                 width,
                 columns.row_height,
             ));
@@ -342,6 +346,7 @@ impl Renderer {
             footer,
             columns,
             content: (width, height),
+            rows_top,
             highlight_rects,
         })
     }
@@ -520,7 +525,13 @@ impl Renderer {
             );
         }
         for (index, row) in view.rows.iter().enumerate() {
-            let top = y + columns.row_height * index as f32 + m.row_padding();
+            // 反向后显示槽位也倒过来：第 1 个候选在最下面，序号从下往上 1..n。
+            let slot = if view.reverse_vertical {
+                view.rows.len() - 1 - index
+            } else {
+                index
+            };
+            let top = y + columns.row_height * slot as f32 + m.row_padding();
             let small_offset = m.small_offset(m.px(m.theme.text_font.line_height));
             render.text(
                 &row.index,
@@ -983,24 +994,50 @@ impl Renderer {
         let m = Metrics { theme, scale };
         let cells = self.matrix_cells(view, &m, layout_mode);
         let grid_rows = view.rows.len().div_ceil(cells.columns.max(1));
+        let reverse = view.reverse_vertical && layout_mode == Layout::Vertical;
         let inset = m.px(super::HIGHLIGHT_INSET);
         let top_size = self.candidate_top_size(view, &m);
         let info_height = self.candidate_info_height(view, &m);
         let width = cells.width(m.column_gap()) + inset * 2.0 + m.padding() * 2.0;
         let height =
             m.padding() * 2.0 + top_size.1 + cells.row_height * grid_rows as f32 + info_height;
+        let rows_height = cells.row_height * grid_rows as f32;
+        let (top_y, rows_top, footer_top) = if reverse {
+            let info_draw_height = if info_height > 0.0 {
+                info_height - m.row_padding()
+            } else {
+                0.0
+            };
+            let info_top = m.padding()
+                + if info_height > 0.0 {
+                    m.row_padding()
+                } else {
+                    0.0
+                };
+            let rows_top = info_top + info_draw_height;
+            (rows_top + rows_height, rows_top, info_top)
+        } else {
+            let rows_top = m.padding() + top_size.1;
+            (
+                m.padding(),
+                rows_top,
+                rows_top + rows_height + m.row_padding(),
+            )
+        };
         let mut tree = PageTree::new(Node::new(NodeKind::Page));
         tree.node_mut(tree.root).width = SizeSpec::Fixed(width);
         tree.node_mut(tree.root).height = SizeSpec::Fixed(height);
         let top = (top_size.1 > 0.0)
-            .then(|| add_absolute(&mut tree, m.padding(), m.padding(), width, top_size.1));
-        let rows_top = m.padding() + top_size.1;
+            .then(|| add_absolute(&mut tree, m.padding(), top_y, width, top_size.1));
         let mut rows = Vec::with_capacity(view.rows.len());
         let mut highlight_rects = Vec::with_capacity(view.rows.len());
         for index in 0..view.rows.len() {
             let column = index % cells.columns.max(1);
+            let row = index / cells.columns.max(1);
+            // 反向竖排：第 1 个候选在最下面一行，往上一行接 6..10。
+            let slot = if reverse { grid_rows - 1 - row } else { row };
             let x = m.padding() + inset + cells.offset(column, m.column_gap());
-            let y = rows_top + cells.row_height * (index / cells.columns.max(1)) as f32;
+            let y = rows_top + cells.row_height * slot as f32;
             rows.push(add_absolute(
                 &mut tree,
                 x,
@@ -1015,7 +1052,6 @@ impl Renderer {
                 y + cells.row_height,
             ));
         }
-        let footer_top = rows_top + cells.row_height * grid_rows as f32 + m.row_padding();
         let footer = (info_height > 0.0).then(|| {
             add_absolute(
                 &mut tree,
@@ -1045,7 +1081,7 @@ impl Renderer {
             m.corner_radius(),
             theme.colors.background,
         );
-        self.draw_candidate_top(&mut recorder, view, &m, margin, margin + m.padding());
+        self.draw_candidate_top(&mut recorder, view, &m, margin, margin + top_y);
         if let Some(rect) = highlight_rect(view, &highlight_rects) {
             recorder.round_rect(
                 margin + rect.left,
@@ -1100,14 +1136,18 @@ impl Renderer {
                 top,
             );
         }
-        self.draw_candidate_info(
-            &mut recorder,
-            view,
-            &m,
-            margin,
-            margin + rows_top + cells.row_height * grid_rows as f32 + m.row_padding(),
-            width,
-        );
+        if reverse {
+            self.draw_candidate_info_reversed(
+                &mut recorder,
+                view,
+                &m,
+                margin,
+                margin + footer_top,
+                width,
+            );
+        } else {
+            self.draw_candidate_info(&mut recorder, view, &m, margin, margin + footer_top, width);
+        }
         let panel = SelfDrawingPanel {
             x: 0.0,
             y: 0.0,
@@ -1252,6 +1292,44 @@ mod tests {
         assert!(row_top(&normal) < footer(&normal).y);
         assert!(footer(&reverse).y < row_top(&reverse));
         assert!(row_top(&reverse) < top(&reverse).y);
+        // 第 1 个候选在最下面，序号从下往上 1..n。
+        assert!(
+            reverse.highlight_rects[0].top > reverse.highlight_rects[2].top,
+            "反向后第 1 个候选应排在最下面"
+        );
         assert_eq!(normal.content.1, reverse.content.1);
+    }
+
+    /// 展开成网格后反向：第 1 个候选同样在最下面一行，往上一行接后面的候选。
+    #[test]
+    fn reverse_vertical_grid_fills_from_the_bottom() {
+        use crate::fonts::FontLibrary;
+        use crate::theme::Theme;
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let theme = Theme::new();
+        let mut view = CandidateView::from(&frame());
+        view.rows = (0..6)
+            .map(|index| crate::frame::Row::plain(index, format!("候选{index}")))
+            .collect();
+        view.columns = 3;
+        view.reverse_vertical = true;
+        let rendered = renderer
+            .render_candidate_view(&view, Layout::Vertical, &theme, 1.0, None)
+            .unwrap();
+        assert!(
+            rendered.highlight_rects[0].top > rendered.highlight_rects[3].top,
+            "网格反向后第一行应在最下面"
+        );
+        assert_eq!(
+            rendered.highlight_rects[0].top,
+            rendered.highlight_rects[2].top
+        );
+        assert_eq!(
+            rendered.highlight_rects[3].top,
+            rendered.highlight_rects[5].top
+        );
     }
 }

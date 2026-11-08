@@ -602,7 +602,6 @@ impl CandidateWindow {
         if let Some(first) = &rendered
             && self.auto_reverse_candidate_order.get()
             && layout == cloudime_platform::LayoutMode::Vertical
-            && view.columns == 0
         {
             let (_, side) = place_with_side(
                 anchor,

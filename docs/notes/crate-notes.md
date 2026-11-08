@@ -471,11 +471,12 @@ Server 对低于 `PROTOCOL_VERSION` 的会话仍照常服务（老 DLL 忽略新
 
 **反向竖排 / 紧凑横排**（`[candidate] auto_reverse_candidate_order` / `compact_candidate_window`，缺省都关）：
 `CandidateView` 多了 `reverse_vertical` / `compact_horizontal` 两个展示开关，由 Server 的候选窗按配置填。
-反向竖排只在非展开的竖排生效：Server 先按正常顺序画一帧、用 `place_with_side` 拿到「上方 / 下方 / 侧面」，
-在光标上方再按 `reverse_vertical` 重画一帧（两种排法高度相同，不会改变上下判断）。反向时从上到下依次是
-额外内容、Tip（含页码）、候选行、拼音行；`draw_candidate_info_reversed` 把在线翻译放到 Tip 上面。
+反向竖排（含展开成网格）只在竖排生效：Server 先按正常顺序画一帧、用 `place_with_side` 拿到「上方 / 下方 / 侧面」，
+在光标上方再按 `reverse_vertical` 重画一帧（两种排法高度相同，不会改变上下判断）。收起态从上到下依次是
+额外内容、Tip（含页码）、候选行、拼音行；候选序号从下往上 1..n，默认高亮的第 1 个贴着拼音行。
+展开成网格后同样翻转整块顺序，并从最下面一行开始填、往上递增。`draw_candidate_info_reversed` 把在线翻译放到 Tip 上面。
 紧凑横排只在非展开的横排生效：`horizontal_top_size` 把 Tip 算进拼音行宽度并在右侧右对齐，
-页码画在候选行最右侧并垂直居中，`horizontal_info_height` 只给额外内容留高度。展开成网格后两种开关都不生效
+页码画在候选行最右侧并垂直居中，`horizontal_info_height` 只给额外内容留高度。展开成网格后紧凑开关不生效
 （网格排行由 `columns` 决定）。
 
 底部那一行（`Frame::tip` + `Frame::footer`）：**左侧翻译 Tip、右侧页码**，由 `Renderer::bottom_line_height` /

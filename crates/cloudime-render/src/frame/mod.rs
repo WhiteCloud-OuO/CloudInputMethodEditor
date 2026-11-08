@@ -65,7 +65,7 @@ pub struct CandidateView {
     pub status: Option<String>,
 
     /// 竖排时反向排列（候选窗在光标上方）：从下到上依次拼音串、候选项、Tip（含页码）、额外内容。
-    /// 只对非展开的竖排（`columns == 0`）生效；横排 / 网格忽略。
+    /// 候选序号从下往上 1..n；展开成网格时同样从最下面一行开始填。
     pub reverse_vertical: bool,
 
     /// 横排紧凑：翻译 Tip 放到拼音行右侧、页码放到候选行右侧，原 Tip 行只留额外内容。
