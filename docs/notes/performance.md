@@ -226,8 +226,17 @@ TSV 解析路径也改成产出同样的结构，查询代码只有一份。
 模型里有 64 个 `DynamicQuantizeLinear`，量化 scale 是按整个激活张量（含 padding）算的；同一段真实输入
 后面补 0 再跑，`attention_mask` 已经正确标 0、编码器 mask 也是 `-inf`，logits 仍会变约 0.1、
 `char_logits` 变约 1.0 —— 动态量化 scale 被 padding 拉变了。rank 可能被改，不能当固定维度直接用。
-要用固定桶，得先做**静态量化 / 导出 float 模型**（让 padding 不再影响量化 scale），或者只用动态维度
-（长输入仍比 CPU 快，短输入不如 CPU）。
+
+**静态量化校准试过，不够用**：80 个校准样本、20 个验证样本，把 64 个 DQL 换成固定 scale
+（全局 min/max、99.9% / 99% 截断都试了），验证集 logits 平均差 0.42–0.49、最大 0.91–1.05，
+候选 top1 翻转 5–7 / 20。静态 per-tensor 比原来的 per-input 动态 scale 粗太多，不能接。
+
+**现在的解法：padding 感知的动态量化**（`tools/zhiyi-padaware/`）：只改编码器里形状
+`[1, seq, hidden]` 的 DQL，用 `attention_mask` 把 padding 换成 ±inf 后再 `ReduceMin/Max`，按有效 token
+算 scale；scorer 里按 marker / slot gather 出来的 DQL 不动。结果不 padding 时与原模型**逐位一致**，
+padding 后有效位置也**逐位一致**（logits / char_logits 差都是 0）。DirectML 固定 seq 下
+64 / 128 / 256 / 320 分别约 6.6 / 8.5 / 13.3 / 16.6 ms，仍比 CPU 的 9.4 / 16.6 / 35.5 / 47.4 ms 快 2–3 倍。
+模型文件 84.5 MB（与原 int8 模型一样），可以直接按 `seq_len` 建桶了。
 
 **含章（candle）——CUDA 能跑，但不适合随包**：candle 0.11 的 `cuda` feature 会把权重放显存，但
 `candle-kernels` 的 build.rs 用 `cudaforge` 调 `nvcc` 编 PTX；本机只有驱动（CUDA 13.1），没装 CUDA Toolkit，
