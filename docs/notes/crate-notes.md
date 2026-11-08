@@ -1185,7 +1185,7 @@ Chromium 把「物理键还按着时注入的同名键」当自动重复，宿�
 **启动可执行文件**不用接：完整标准库的 `os.execute('start notepad.exe')` 已经能做。
 
 改脚本要重启 Server 才生效（托盘右键「重启输入法服务」），没有热重载。
-本地模型：`dispatch/rescore/` 按 `[candidate] local_model` 在后台线程加载预热、停键后重排；`basic` 接含章·知微 `SentenceScorer`，`enhanced` 接知意 `ChoiceModel`（候选页重排 + 按音节出字），`hybrid` 两份都接：≤8 音节只走知意，≥9 音节含章先重排整句路径、知意再出字和重排候选（`Engine::set_sentence_scorer_min_syllables`）；两个后台线程可能先后回来，`Engine::rescoring_in_flight` 让 Server 轮询到两边都收完再重画，见 `docs/design/architecture.md`「本地模型」。
+本地模型：`dispatch/rescore/` 按 `[candidate] local_model` 在后台线程加载预热、停键后重排；`basic` 接含章·知微 `SentenceScorer`，`enhanced` 接知意 `ChoiceModel`（候选页重排 + 按音节出字），`hybrid` 启动只装知意：≤8 音节只走知意，输入到 6 音节后台补装含章（`HYBRID_PREFETCH_SYLLABLES`），≥9 音节含章先重排整句路径、知意再出字和重排候选（`Engine::set_sentence_scorer_min_syllables`）。缺模型按 `start_plan` 降级（混合 → 增强 / 基本 → 关闭），加载失败同样回退；知意 ONNX 优化图缓存在 `%LOCALAPPDATA%\CloudIME\cache\onnx\`（`ChoiceScorer::load_onnx` 的 `cache_dir`），模型或 `onnxruntime.dll` 一变就重建；两个后台线程可能先后回来，`Engine::rescoring_in_flight` 让 Server 轮询到两边都收完再重画，见 `docs/design/architecture.md`「本地模型」。
 热加载的 `WordBank\` 目录与启动同款（按 `WordBank\Dict.db` 与附加词库的 mtime / 长度快照重装）；
 短语库（安装目录 `Phrases\Phrase.db`）也按文件 mtime 单独热重读；`[phrase] use_default_phrases` 变了也重读一遍。不合成一个 crate，因为 DLL 不能带 Engine 的依赖树，见 `apps/windows/README.md`；
 协议类型在 `cloudime-platform::protocol`，设计见 `docs/design/architecture.md`「Windows：TSF」。

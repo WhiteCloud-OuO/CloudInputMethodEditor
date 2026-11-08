@@ -244,6 +244,18 @@ impl Engine {
         self.composition.unselect_last();
     }
 
+    /// 当前拼音作用域能切出的音节数；用于混合档判断要不要补装含章模型。
+    pub fn composition_syllables(&self) -> usize {
+        super::segment_longest_prefix(self.composition.scope(), self.use_jian_pin)
+            .ok()
+            .and_then(|(segmentations, _)| {
+                segmentations
+                    .first()
+                    .map(|segmentation| segmentation.syllables.len())
+            })
+            .unwrap_or(0)
+    }
+
     pub fn clear(&mut self) {
         self.composition.clear();
         self.chain.leave_buffer();

@@ -67,7 +67,7 @@ fn model_field(settings: &Settings, context: &mut ViewContext<Settings>) -> View
     let mode = settings.config.candidate.resolved_local_model();
     let row = field(
         "本地模型",
-        "关闭只用词库与短语匹配；基本使用含章整句模型；增强使用知意，读光标前文重排候选并按音节出字；混合同时加载两个模型，短输入走知意、长句两个一起用。",
+        "关闭只用词库与短语匹配；基本使用含章整句模型；增强使用知意，读光标前文重排候选并按音节出字；混合启动只装知意，输入到 6 个音节才在后台补装含章，长输入两个一起用。",
         mode_combo(
             &LocalModelMode::ALL,
             mode,
@@ -80,21 +80,21 @@ fn model_field(settings: &Settings, context: &mut ViewContext<Settings>) -> View
     let warning = match mode {
         LocalModelMode::Off => None,
         LocalModelMode::Basic if !basic_present => Some(
-            "未找到基本模型文件：把 .qjm 模型放进 %APPDATA%\\CloudIME\\local_models\\，或让安装包带上 Models\\。",
+            "未找到基本模型文件，本地模型将保持关闭：把 .qjm 模型放进 %APPDATA%\\CloudIME\\local_models\\，或让安装包带上 Models\\。",
         ),
         LocalModelMode::Enhanced if !zhiyi_present => Some(
-            "未找到知意模型或 onnxruntime.dll：确认安装目录下有 Models\\laya-zhen-long-l12-int8g\\ 与 onnxruntime.dll。",
+            "未找到知意模型或 onnxruntime.dll，会退到基本模型（基本模型也不在则只用词库）：确认安装目录下有 Models\\laya-zhen-long-l12-int8g\\ 与 onnxruntime.dll。",
         ),
         LocalModelMode::Hybrid => match (basic_present, zhiyi_present) {
             (true, true) => None,
             (false, false) => Some(
-                "混合模式需要基本模型和知意模型：确认安装目录 Models\\ 里的 .qjm 与 Models\\laya-zhen-long-l12-int8g\\、onnxruntime.dll 都在。",
+                "混合模式需要基本模型和知意模型，两个都没有时只用词库：确认安装目录 Models\\ 里的 .qjm 与 Models\\laya-zhen-long-l12-int8g\\、onnxruntime.dll 都在。",
             ),
             (false, true) => Some(
-                "混合模式缺少基本模型：把 .qjm 模型放进 %APPDATA%\\CloudIME\\local_models\\，或让安装包带上 Models\\。",
+                "混合模式缺少基本模型，会先按增强（知意）工作：把 .qjm 模型放进 %APPDATA%\\CloudIME\\local_models\\，或让安装包带上 Models\\。",
             ),
             (true, false) => Some(
-                "混合模式缺少知意模型或 onnxruntime.dll：确认安装目录下有 Models\\laya-zhen-long-l12-int8g\\ 与 onnxruntime.dll。",
+                "混合模式缺少知意模型或 onnxruntime.dll，会先按基本（含章）工作：确认安装目录下有 Models\\laya-zhen-long-l12-int8g\\ 与 onnxruntime.dll。",
             ),
         },
         _ => None,

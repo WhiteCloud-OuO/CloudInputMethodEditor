@@ -16,13 +16,69 @@ use cloudime_platform::LocalModelMode;
 use cloudime_platform::protocol::SessionId;
 
 pub(crate) use self::loader::ModelLoader;
-use self::loader::{Loaded, LoadedModel, ModelFiles};
+use self::loader::{Loaded, LoadedModel, ModelFiles, ModelKind};
 pub(crate) use self::state::RescoreState;
 use super::Router;
 use super::composed::{Composed, marked_parts};
 
 /// 混合档：这么多音节以上才让含章参与整句重打分；更短只走知意。
 const HYBRID_SENTENCE_MIN_SYLLABLES: usize = 9;
+
+/// 混合档输入到这么多音节就先补装含章，给 9 音节正式使用留出加载时间。
+const HYBRID_PREFETCH_SYLLABLES: usize = 6;
+
+/// 启动时先装哪个模型。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum StartModel {
+    /// 只装含章。
+    Sentence,
+
+    /// 只装知意。
+    Zhiyi,
+
+    /// 混合档：先装知意，含章等输入变长再补。
+    ZhiyiThenSentence,
+
+    /// 一个可用模型都没有。
+    None,
+}
+
+/// 按请求档位与现有模型文件，决定先装哪个、实际能生效到哪一档。
+///
+/// 缺文件的降级顺序：混合 → 增强 / 基本 → 关闭；增强 → 基本 → 关闭。
+/// 混合档两个文件都在时先报「增强」——含章还没装，补装成功后才真正按混合工作。
+fn start_plan(
+    mode: LocalModelMode,
+    has_sentence: bool,
+    has_zhiyi: bool,
+) -> (StartModel, LocalModelMode) {
+    let off = (StartModel::None, LocalModelMode::Off);
+    let basic = |has: bool| {
+        if has {
+            (StartModel::Sentence, LocalModelMode::Basic)
+        } else {
+            off
+        }
+    };
+    let enhanced = || {
+        if has_zhiyi {
+            (StartModel::Zhiyi, LocalModelMode::Enhanced)
+        } else {
+            basic(has_sentence)
+        }
+    };
+    match mode {
+        LocalModelMode::Off => off,
+        LocalModelMode::Basic => basic(has_sentence),
+        LocalModelMode::Enhanced => enhanced(),
+        LocalModelMode::Hybrid => match (has_sentence, has_zhiyi) {
+            (true, true) => (StartModel::ZhiyiThenSentence, LocalModelMode::Enhanced),
+            (false, true) => (StartModel::Zhiyi, LocalModelMode::Enhanced),
+            (true, false) => (StartModel::Sentence, LocalModelMode::Basic),
+            (false, false) => off,
+        },
+    }
+}
 
 /// 找模型（`.qjm` 单文件，或开发时的三件套目录）：用户目录 `local_models/` 优先（用户自己的模型），
 /// 否则随包 `Models/`（旧的 `data/local_models/` 只作开发兜底）；都没有为 `None`。
@@ -69,6 +125,10 @@ impl Router {
         self.model_path = model_path;
         self.zhiyi_model = zhiyi;
         self.applied_model = mode;
+        self.effective_model = LocalModelMode::Off;
+        self.lazy_sentence = None;
+        self.sentence_ready = false;
+        self.choice_ready = false;
         if mode != LocalModelMode::Off {
             self.load_local_model();
         }
@@ -86,57 +146,89 @@ impl Router {
         }
     }
 
-    /// 在后台线程加载模型；没有模型文件就什么都不做。
+    /// 在后台线程加载模型；没有模型文件就按可用档位回退。
+    ///
+    /// 混合档先只装知意：含章只在输入达到 [`HYBRID_PREFETCH_SYLLABLES`] 个音节时才在后台补装，
+    /// 平时不占那份内存。知意缺失 / 加载失败时退到基本，基本也没有才退到关闭。
     fn load_local_model(&mut self) {
         if self.model_loader.is_some() {
             return;
         }
-        match self.applied_model {
-            LocalModelMode::Off => {}
-            LocalModelMode::Basic => {
-                let Some(path) = &self.model_path else {
-                    tracing::info!("没有基本本地模型文件，不重排");
-                    return;
-                };
-                self.model_loader = ModelLoader::spawn(ModelFiles::Sentence(path.clone()));
-            }
-            LocalModelMode::Enhanced => {
-                let Some((dir, runtime)) = &self.zhiyi_model else {
-                    tracing::info!("没有知意模型 / onnxruntime.dll，不重排");
-                    return;
-                };
-                self.model_loader = ModelLoader::spawn(ModelFiles::Zhiyi {
-                    dir: dir.clone(),
-                    runtime: runtime.clone(),
-                });
-            }
-            LocalModelMode::Hybrid => match (&self.model_path, &self.zhiyi_model) {
-                (Some(sentence), Some((dir, runtime))) => {
-                    self.model_loader = ModelLoader::spawn(ModelFiles::Both {
-                        sentence: sentence.clone(),
-                        dir: dir.clone(),
-                        runtime: runtime.clone(),
-                    });
-                }
-                (Some(path), None) => {
-                    tracing::warn!("混合模式缺少知意模型 / onnxruntime.dll，先只用基本模型");
-                    self.model_loader = ModelLoader::spawn(ModelFiles::Sentence(path.clone()));
-                }
-                (None, Some((dir, runtime))) => {
-                    tracing::warn!("混合模式缺少基本模型，先只用知意模型");
-                    self.model_loader = ModelLoader::spawn(ModelFiles::Zhiyi {
-                        dir: dir.clone(),
-                        runtime: runtime.clone(),
-                    });
-                }
-                (None, None) => tracing::info!("混合模式没有可用模型，不重排"),
-            },
+        let (start, effective) = start_plan(
+            self.applied_model,
+            self.model_path.is_some(),
+            self.zhiyi_model.is_some(),
+        );
+        if effective != self.applied_model {
+            tracing::warn!(
+                requested = ?self.applied_model,
+                effective = ?effective,
+                "本地模型按可用文件降级"
+            );
         }
+        let started = match start {
+            StartModel::None => false,
+            StartModel::Sentence => self
+                .model_path
+                .clone()
+                .is_some_and(|path| self.spawn_sentence(path)),
+            StartModel::Zhiyi => self
+                .zhiyi_model
+                .clone()
+                .is_some_and(|(dir, runtime)| self.spawn_zhiyi(dir, runtime)),
+            StartModel::ZhiyiThenSentence => {
+                let spawned = self
+                    .zhiyi_model
+                    .clone()
+                    .is_some_and(|(dir, runtime)| self.spawn_zhiyi(dir, runtime));
+                if spawned {
+                    // 含章等第一次长输入再补，平时不占那份内存。
+                    self.lazy_sentence = self.model_path.clone();
+                }
+                spawned
+            }
+        };
+        self.effective_model = if started {
+            effective
+        } else {
+            LocalModelMode::Off
+        };
+    }
+
+    /// 起后台加载线程；起不来返回 `false`（调用方据此别把档位说成已生效）。
+    fn spawn_sentence(&mut self, path: PathBuf) -> bool {
+        self.model_loader = ModelLoader::spawn(ModelFiles::Sentence(path));
+        self.model_loader.is_some()
+    }
+
+    fn spawn_zhiyi(&mut self, dir: PathBuf, runtime: PathBuf) -> bool {
+        self.model_loader = ModelLoader::spawn(ModelFiles::Zhiyi { dir, runtime });
+        self.model_loader.is_some()
+    }
+
+    /// 混合档输入变长时补装含章；只起一次，失败就继续用知意。
+    pub(super) fn ensure_lazy_sentence(&mut self) {
+        if self.applied_model != LocalModelMode::Hybrid
+            || self.sentence_ready
+            || self.model_loader.is_some()
+            || self.engine.composition_syllables() < HYBRID_PREFETCH_SYLLABLES
+        {
+            return;
+        }
+        let Some(path) = self.lazy_sentence.take() else {
+            return;
+        };
+        tracing::info!("混合模式输入变长，后台补装含章模型");
+        self.spawn_sentence(path);
     }
 
     /// 卸掉模型（配置关掉或换模式）。
     fn unload_local_model(&mut self) {
         self.model_loader = None;
+        self.lazy_sentence = None;
+        self.sentence_ready = false;
+        self.choice_ready = false;
+        self.effective_model = LocalModelMode::Off;
         self.engine.set_async_sentence_scorer(None);
         self.engine.set_sentence_scorer_min_syllables(0);
         self.engine.set_choice_model(None);
@@ -149,36 +241,93 @@ impl Router {
         let Some(loader) = &self.model_loader else {
             return;
         };
+        let kind = loader.kind();
         match loader.poll() {
             Loaded::Pending => {}
             Loaded::Done(result) => {
+                self.model_loader = None;
                 match *result {
                     Ok(LoadedModel::Sentence(scorer)) => {
-                        self.engine.set_sentence_scorer_min_syllables(0);
+                        self.sentence_ready = true;
                         self.engine.set_async_sentence_scorer(Some(scorer));
+                        if self.applied_model == LocalModelMode::Hybrid && self.choice_ready {
+                            // 混合档的含章补装好了：9 音节以上两者协作。
+                            self.engine
+                                .set_sentence_scorer_min_syllables(HYBRID_SENTENCE_MIN_SYLLABLES);
+                            self.effective_model = LocalModelMode::Hybrid;
+                        } else {
+                            self.engine.set_sentence_scorer_min_syllables(0);
+                            self.effective_model = LocalModelMode::Basic;
+                        }
                         // 模型上线了：日志里补一条会话信息，之后的条目知道重排开着
-                        self.engine
-                            .log_session(env!("CARGO_PKG_VERSION"), "windows");
+                        self.log_model_ready();
                     }
                     Ok(LoadedModel::Choice(model)) => {
+                        self.choice_ready = true;
                         self.engine.set_sentence_scorer_min_syllables(0);
                         self.engine.set_choice_model(Some(model));
-                        self.engine
-                            .log_session(env!("CARGO_PKG_VERSION"), "windows");
+                        // 混合档的含章还没补装：先按增强档工作。
+                        self.effective_model = if self.applied_model == LocalModelMode::Hybrid
+                            && self.sentence_ready
+                        {
+                            LocalModelMode::Hybrid
+                        } else {
+                            LocalModelMode::Enhanced
+                        };
+                        self.log_model_ready();
                     }
-                    Ok(LoadedModel::Both { sentence, choice }) => {
-                        self.engine.set_async_sentence_scorer(Some(sentence));
-                        self.engine
-                            .set_sentence_scorer_min_syllables(HYBRID_SENTENCE_MIN_SYLLABLES);
-                        self.engine.set_choice_model(Some(choice));
-                        self.engine
-                            .log_session(env!("CARGO_PKG_VERSION"), "windows");
+                    Err(error) => {
+                        tracing::warn!(%error, ?kind, "本地模型加载失败");
+                        self.fallback_after_load_failure(kind);
                     }
-                    Err(error) => tracing::warn!(%error, "本地模型加载失败，不重排"),
                 }
-                self.model_loader = None;
             }
-            Loaded::Gone => self.model_loader = None,
+            Loaded::Gone => {
+                self.model_loader = None;
+                self.fallback_after_load_failure(kind);
+            }
+        }
+    }
+
+    /// 模型上线了：日志里补一条会话信息，之后的条目知道重排开着。
+    fn log_model_ready(&mut self) {
+        tracing::info!(
+            requested = ?self.applied_model,
+            effective = ?self.effective_model,
+            "本地模型已就绪"
+        );
+        self.engine
+            .log_session(env!("CARGO_PKG_VERSION"), "windows");
+    }
+
+    /// 一档模型加载失败：按可用文件退到更低一档，别让设置里选着「混合」却完全没模型。
+    fn fallback_after_load_failure(&mut self, kind: ModelKind) {
+        match kind {
+            ModelKind::Zhiyi => {
+                self.choice_ready = false;
+                self.lazy_sentence = None;
+                if let Some(path) = &self.model_path {
+                    tracing::warn!("知意加载失败，回退到基本模型");
+                    self.effective_model = if self.spawn_sentence(path.clone()) {
+                        LocalModelMode::Basic
+                    } else {
+                        LocalModelMode::Off
+                    };
+                } else {
+                    self.effective_model = LocalModelMode::Off;
+                }
+            }
+            ModelKind::Sentence => {
+                self.sentence_ready = false;
+                if self.choice_ready {
+                    // 混合档的含章补装失败：知意还在，继续按增强档工作。
+                    tracing::warn!("含章加载失败，混合档先按知意工作");
+                    self.engine.set_sentence_scorer_min_syllables(0);
+                    self.effective_model = LocalModelMode::Enhanced;
+                } else {
+                    self.effective_model = LocalModelMode::Off;
+                }
+            }
         }
     }
 
@@ -247,6 +396,7 @@ impl Router {
 
     /// 到点了：接上加载好的模型、推进重排、看一眼配置文件。工人循环超时与 DLL 的 `Poll` 都会调。
     pub fn tick(&mut self) {
+        self.ensure_lazy_sentence();
         self.attach_loaded_model();
         self.advance_rescoring();
         self.poll_config_reload();
@@ -325,5 +475,64 @@ impl Router {
         self.reconcile_candidates(&frame);
         // 前文在结果回来之前换过（Surrounding 晚到）：这次查询又记下了一批要打分的，再来一轮
         self.schedule_rescoring();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// 没有模型文件时：任何档位都退到关闭，不赌「加载了但其实是空的」。
+    #[test]
+    fn missing_models_fall_back_to_off() {
+        for mode in LocalModelMode::ALL {
+            assert_eq!(
+                start_plan(mode, false, false),
+                (StartModel::None, LocalModelMode::Off),
+                "{mode:?}"
+            );
+        }
+    }
+
+    /// 只有含章：基本照用，增强 / 混合退到基本。
+    #[test]
+    fn sentence_only_falls_back_to_basic() {
+        assert_eq!(
+            start_plan(LocalModelMode::Basic, true, false),
+            (StartModel::Sentence, LocalModelMode::Basic)
+        );
+        for mode in [LocalModelMode::Enhanced, LocalModelMode::Hybrid] {
+            assert_eq!(
+                start_plan(mode, true, false),
+                (StartModel::Sentence, LocalModelMode::Basic),
+                "{mode:?}"
+            );
+        }
+    }
+
+    /// 只有知意：增强照用，混合退到增强，基本仍要求含章（没有就关闭）。
+    #[test]
+    fn zhiyi_only_falls_back_to_enhanced() {
+        assert_eq!(
+            start_plan(LocalModelMode::Enhanced, false, true),
+            (StartModel::Zhiyi, LocalModelMode::Enhanced)
+        );
+        assert_eq!(
+            start_plan(LocalModelMode::Hybrid, false, true),
+            (StartModel::Zhiyi, LocalModelMode::Enhanced)
+        );
+        assert_eq!(
+            start_plan(LocalModelMode::Basic, false, true),
+            (StartModel::None, LocalModelMode::Off)
+        );
+    }
+
+    /// 两个都在：混合先装知意（先报增强），含章等输入变长再补。
+    #[test]
+    fn hybrid_starts_with_zhiyi_and_lazy_sentence() {
+        assert_eq!(
+            start_plan(LocalModelMode::Hybrid, true, true),
+            (StartModel::ZhiyiThenSentence, LocalModelMode::Enhanced)
+        );
     }
 }

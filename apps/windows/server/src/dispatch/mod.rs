@@ -172,6 +172,16 @@ pub struct Router {
     /// `[candidate] local_model`；变了才重载 / 卸载。
     applied_model: LocalModelMode,
 
+    /// 实际生效的档位：请求的档位缺模型 / 加载失败时可能降到更低一档。
+    effective_model: LocalModelMode,
+
+    /// 混合档的含章模型：先不加载，等输入变长再在后台装（省内存）。
+    lazy_sentence: Option<PathBuf>,
+
+    /// 含章 / 知意是否已经接上 Engine。
+    sentence_ready: bool,
+    choice_ready: bool,
+
     /// 重排的防抖 / 轮询进行态。
     rescore: RescoreState,
 
@@ -344,6 +354,10 @@ impl Router {
             zhiyi_model: None,
             model_loader: None,
             applied_model: LocalModelMode::Off,
+            effective_model: LocalModelMode::Off,
+            lazy_sentence: None,
+            sentence_ready: false,
+            choice_ready: false,
             rescore: RescoreState::default(),
             caret_shift: 0,
             delete_before: 0,

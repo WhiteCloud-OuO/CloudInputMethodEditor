@@ -46,9 +46,15 @@ pub struct ChoiceScorer {
 
 impl ChoiceScorer {
     /// int8 ONNX 版：`runtime` 是 ONNX Runtime 动态库，CPU 跑 `threads` 个线程。
+    /// `cache_dir` 用来存优化后的计算图（下次启动直接读，省一秒图优化）；`None` 不缓存。
     #[cfg(feature = "zhiyi")]
-    pub fn load_onnx(dir: &Path, runtime: &Path, threads: usize) -> Result<Self, NeuralError> {
-        let forward = onnx_forward::OnnxForward::load(dir, runtime, threads)?;
+    pub fn load_onnx(
+        dir: &Path,
+        runtime: &Path,
+        threads: usize,
+        cache_dir: Option<&Path>,
+    ) -> Result<Self, NeuralError> {
+        let forward = onnx_forward::OnnxForward::load(dir, runtime, threads, cache_dir)?;
         Self::with_forward(dir, Box::new(forward))
     }
 
@@ -147,7 +153,8 @@ mod tests {
         ) else {
             return;
         };
-        let scorer = ChoiceScorer::load_onnx(&dir, &runtime, 2).unwrap();
+        let cache = std::env::var_os("CLOUDIME_ONNX_CACHE").map(std::path::PathBuf::from);
+        let scorer = ChoiceScorer::load_onnx(&dir, &runtime, 2, cache.as_deref()).unwrap();
         let typed = scorer.letter_units("nihao");
         let scores = scorer.score("今天", &typed, &["你好", "拟好"]).unwrap();
         assert_eq!(scores.len(), 2);

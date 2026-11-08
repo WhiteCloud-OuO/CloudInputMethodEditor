@@ -7,6 +7,7 @@
 //!   AppContainer 应用（任务栏搜索 / 设置）时写不了漫游目录，Server 启动时会给这个目录授权。
 //! - **本机状态** `%LOCALAPPDATA%\CloudIME`：现在只有设置窗口的位置 / 尺寸
 //!   （[`settings_window_path`]）——与日志同理，换机器不该带着走，删掉即回到默认。
+//! - **缓存** `%LOCALAPPDATA%\CloudIME\cache`：模型优化后的计算图（[`cache_dir`]），删掉会重建。
 //!
 //! 只查环境变量、不碰系统 API（拿不到为 `None`）。
 
@@ -35,4 +36,10 @@ pub fn settings_window_path() -> Option<PathBuf> {
             .join("CloudIME")
             .join("settings-window.toml")
     })
+}
+
+/// 模型缓存目录 `%LOCALAPPDATA%\CloudIME\cache`，不负责创建。放本机目录：优化图与机器上的
+/// `onnxruntime.dll` 版本绑定，换机器 / 换运行库都应重建，跟着账户漫游没有意义。
+pub fn cache_dir() -> Option<PathBuf> {
+    std::env::var_os("LOCALAPPDATA").map(|base| PathBuf::from(base).join("CloudIME").join("cache"))
 }
