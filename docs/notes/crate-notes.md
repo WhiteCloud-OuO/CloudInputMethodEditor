@@ -262,6 +262,9 @@ DML 与 CPU 的 logits / `char_logits` 差超过 5e-3，或 DML 比 CPU 慢 2 �
 当前 int8 模型在 RTX 3060 上 logits 差约 0.07、char 约 0.5，动态维度约 97 ms（CPU 4 线程约 17 ms），
 所以探测会拒绝；固定桶 + padaware 在 DML 上数值更差（padding 后 char 差约 10），没有启用。
 开发时可用 `CLOUDIME_ZHIYI_DML_FORCE=1` 跳过探测强制走 DML（仅用于验证，结果与速度都不保证）。
+**GPU 接入状态（2026-11-08）**：DirectML 路径、DML 版运行库、启动探测和设置里的两个开关都已接入；
+当前 int8 模型被探测拒绝，实际仍走 CPU。后续优化方向（含章 float ONNX / 知意 float 或静态量化 / 固定桶）
+见 `docs/notes/performance.md`「GPU 可行性」，这一轮先不再改。
 输入序列 `<bos> 前文 <eos> <mask>×拼音单元 <eos> <mask>候选… <eos>`，
 `f:zhong` / `p:g` 对音节完整 / 前缀；`score` 给每条候选一个 logit，`compose` 用 composition 头给每个音节一行字表 log 概率。
 `zhiyi::choice_model` 把它接到 Core 的 `ChoiceModel`。模型权重 Apache-2.0，随安装包放在 `Models\laya-zhen-long-l12-int8g\`

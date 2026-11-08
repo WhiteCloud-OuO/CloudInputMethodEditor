@@ -271,10 +271,17 @@ f32 模型显存约 +230 MB。fp16 更快更省，但 `score` 差会到 2.6e-2�
 序列更省。DirectML 上缓存模型的 step 因为 `past` 还是动态维度，反而要 26–33 ms，目前不如 DirectML 完整
 序列（8 候选 13.2 ms / 长前文 27.8 ms）；要把 DML 缓存也压下来，下一步得把 `past` 也做固定桶。
 
-**建议**：近期继续用 CPU（异步重排 40–80 ms 在 80 ms 防抖预算内，够用）。真要上 GPU，最省事的路线是
-**两份模型统一走 ONNX + DirectML**：含章用 `tools/model-export/` 导出的模型（先按完整序列，之后可补 K/V
-缓存版），知意按固定维度分桶 padding，运行时装 DirectML 版 ORT（只多 3 MB），显存合计约 400 MB；
-含章走 candle CUDA 只适合开发机自测。
+**当前状态（2026-11-08）：GPU 接入先到这里，后续再优化。** 设置 → 调试的两个开关保留：
+`prefer_gpu_model` 默认关，打开后先做启动探测，数值 / 速度不达标自动回退 CPU；`zhiyi_threads` 默认 4（1–32）。
+DirectML 路径与 DML 版运行库已接入，但当前知意 int8 模型会被探测拒绝，实际仍走 CPU。后续可选方向：
+
+1. **含章 float ONNX + DirectML**：实测准确、8 候选 12.9 ms（candle CPU 77 ms），下一步要接 Server 并解决
+   模型体积 / 安装包（f32 139 MB，fp16 70 MB）。
+2. **知意换 float / 静态量化模型**后重新验证 DirectML；当前 int8 DML 数值差约 logits 0.07 / char 0.5，
+   动态维度约 97 ms（CPU 4 线程约 17 ms）。
+3. **固定桶 + padaware** 在 DML 上不可用（padding 后 char 差约 10），除非先解决 DML 对动态量化的数值问题。
+
+在数值问题解决前不要把 `prefer_gpu_model` 设为默认；`CLOUDIME_ZHIYI_DML_FORCE=1` 只用于开发验证。
 
 ## 经验
 
