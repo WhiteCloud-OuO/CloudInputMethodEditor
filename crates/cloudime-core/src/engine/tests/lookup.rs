@@ -316,6 +316,58 @@ fn normal_input_does_not_offer_calendar_shortcuts() {
 }
 
 #[test]
+fn v_mode_offers_plate_shortcuts() {
+    let dir = std::env::temp_dir().join("cloudime-core-plate-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("plates-{}.qj", std::process::id()));
+    cloudime_plate::write_qj(
+        &path,
+        [
+            cloudime_plate::PlateRow {
+                key: "sua".into(),
+                plate: "苏A".into(),
+                full: "江苏省南京市".into(),
+                short: "江苏南京".into(),
+            },
+            cloudime_plate::PlateRow {
+                key: "sub".into(),
+                plate: "苏B".into(),
+                full: "江苏省无锡市".into(),
+                short: "江苏无锡".into(),
+            },
+        ],
+        cloudime_format::Metadata::default(),
+    )
+    .unwrap();
+
+    let mut engine = engine();
+    engine.set_plates(cloudime_plate::PlateTable::open(&path).unwrap());
+    engine.set_input("v@sua");
+    let texts: Vec<String> = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect();
+    assert_eq!(texts, ["苏A", "江苏省南京市", "江苏南京"]);
+
+    engine.set_input("v@su");
+    let texts: Vec<String> = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect();
+    assert!(texts.contains(&"苏A".to_owned()));
+    assert!(texts.contains(&"苏B".to_owned()));
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn v_mode_offers_calendar_shortcuts() {
     for (input, count) in [("vrq", 12), ("vsj", 8), ("vxq", 3), ("vxz", 14)] {
         let mut engine = engine();

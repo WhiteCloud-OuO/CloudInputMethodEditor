@@ -16,6 +16,9 @@ pub enum Kind {
 
     /// 本地整句模型（`cloudime-neural::CharScorer`，扩展名 `.qjm`）。
     Model = 6,
+
+    /// 车牌简称 → 车牌 / 所在地对照表（`cloudime-plate::PlateTable`）。
+    Plate = 7,
 }
 
 impl Kind {
@@ -26,6 +29,7 @@ impl Kind {
             3 => Self::Glossary,
             5 => Self::WordList,
             6 => Self::Model,
+            7 => Self::Plate,
             _ => return None,
         })
     }

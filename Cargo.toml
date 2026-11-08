@@ -3,6 +3,7 @@ resolver = "3"
 members = [
     "crates/cloudime-core",
     "crates/cloudime-dictionary",
+    "crates/cloudime-plate",
     "crates/cloudime-learning",
     "crates/cloudime-platform",
     "crates/cloudime-lm",
@@ -33,6 +34,7 @@ all = "warn"
 # 内部 crate
 cloudime-core = { path = "crates/cloudime-core" }
 cloudime-dictionary = { path = "crates/cloudime-dictionary" }
+cloudime-plate = { path = "crates/cloudime-plate" }
 cloudime-learning = { path = "crates/cloudime-learning" }
 cloudime-platform = { path = "crates/cloudime-platform" }
 cloudime-lm = { path = "crates/cloudime-lm" }
@@ -60,6 +62,7 @@ toml = "1.1.5"
 toml_edit = "0.25"
 # 快捷候选的日期 / 时间（本地时区）
 jiff = "0.2.35"
+calamine = "0.38.0"
 # 热路径上的字符串键哈希表（词频 / 语言模型 / 个人 n-gram）：SipHash 一次查表几十纳秒，单字母简拼一键要查几万次
 foldhash = "0.2.0"
 # 繁体输出（OpenCC s2tw，内置词表）；只要简→繁那半

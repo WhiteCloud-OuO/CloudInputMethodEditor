@@ -1,0 +1,15 @@
+[package]
+name = "cloudime-plate"
+description = "车牌简称（省份简称拼音 + 字母）到车牌 / 所在地的 .qj mmap 对照表"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+cloudime-format.workspace = true
+thiserror.workspace = true
+zerocopy.workspace = true
+
+[lints]
+workspace = true

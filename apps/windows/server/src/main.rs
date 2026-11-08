@@ -191,6 +191,7 @@ fn main() {
     let user_word_bank = word_bank.user_file(&config.word_bank);
     let spec = AssemblySpec {
         language_model: LanguageModelFiles::find(&root.join("data/generated")),
+        plates: Some(root.join("data/plates.qj")).filter(|path| path.is_file()),
         word_bank: Some(word_bank.clone()),
         user_dir: user_dir(),
         user_word_bank: Some(user_word_bank),

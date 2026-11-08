@@ -167,6 +167,16 @@ impl Engine {
         self.v_mode_time_seconds = on;
     }
 
+    /// 挂上车牌对照表（Server 启动时读 `data/plates.qj`）。
+    pub fn set_plates(&mut self, plates: cloudime_plate::PlateTable) {
+        self.plates = Some(plates);
+    }
+
+    /// 当前车牌表条数；没装为 `None`。
+    pub fn plate_count(&self) -> Option<usize> {
+        self.plates.as_ref().map(cloudime_plate::PlateTable::len)
+    }
+
     /// 光标后剩余拼音的显示形式：能切就按音节用 `'` 连上，切不动就原样。
     pub(super) fn marked_rest(&self, rest: &str) -> String {
         marked_rest(rest, self.use_jian_pin)

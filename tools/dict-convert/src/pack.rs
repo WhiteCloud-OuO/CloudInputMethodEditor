@@ -68,6 +68,11 @@ pub fn pack(
                 started,
             );
         }
+        DataKind::Plate => {
+            return Err(ConvertError::Verify(
+                "车牌数据用 `plate` 子命令从 xlsx 生成，不走 `pack`".to_owned(),
+            ));
+        }
     }
     Ok(())
 }

@@ -99,6 +99,13 @@ struct Reading {
     spans: Vec<usize>,
 }
 
+/// V 模式里 `@` 后面的省份拼音 + 字母；不是 `v@...` 就 `None`。
+fn plate_query(scope: &str) -> Option<&str> {
+    scope
+        .strip_prefix(shortcut::EXPRESSION_PREFIX)?
+        .strip_prefix('@')
+}
+
 impl Engine {
     /// 把候选统一成简体，并去掉转换后重复的条目：保留排名靠前的那条（候选已排好序），
     /// 同时把 `weights` 的键跟着改过去（多个异体合并时取较大的权重）。
@@ -136,6 +143,40 @@ impl Engine {
             items.push(candidate);
         }
         query.candidates.items = items;
+    }
+
+    /// `v@...` 的车牌候选：`@sua` → `苏A` / `江苏省南京市` / `江苏南京`。
+    /// 只按 key 前缀匹配；同一 key 有多个省份时全都列出。
+    fn plate_candidates(&self, query: &str) -> Vec<Candidate> {
+        let Some(plates) = &self.plates else {
+            return Vec::new();
+        };
+        let normalized: String = query
+            .chars()
+            .filter(char::is_ascii_alphanumeric)
+            .map(|ch| ch.to_ascii_lowercase())
+            .collect();
+        if normalized.is_empty() {
+            return Vec::new();
+        }
+        let mut seen = HashSet::new();
+        let mut items = Vec::new();
+        for entry in plates.prefix(&normalized, 12) {
+            for text in [entry.plate, entry.full, entry.short] {
+                if seen.insert(text.to_owned()) {
+                    items.push(Candidate {
+                        text: text.to_owned(),
+                        display: None,
+                        kind: CandidateKind::Shortcut,
+                        syllables: Vec::new(),
+                        reading: None,
+                        auxiliary: None,
+                        auxiliary_typed: None,
+                    });
+                }
+            }
+        }
+        items
     }
 
     /// 解析当前缓冲区并生成排好序的候选。**不带译文**，译文由 [`Self::annotate`] 补。
@@ -809,7 +850,9 @@ impl Engine {
         }
         let mut items =
             shortcut::v_mode_candidates(scope, &jiff::Zoned::now(), self.v_mode_time_seconds);
-        if let Some(word) = self.english.as_ref().and_then(|english| english.get(scope)) {
+        if let Some(query) = plate_query(scope) {
+            items.extend(self.plate_candidates(query));
+        } else if let Some(word) = self.english.as_ref().and_then(|english| english.get(scope)) {
             items.push(Candidate {
                 text: word.to_owned(),
                 display: None,

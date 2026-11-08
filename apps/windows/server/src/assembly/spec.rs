@@ -12,6 +12,9 @@ pub struct AssemblySpec {
     /// 语言模型；没有就退化成一元词频整句。
     pub language_model: Option<LanguageModelFiles>,
 
+    /// 车牌对照表 `data/plates.qj`；没有就少 `@` 车牌候选。
+    pub plates: Option<PathBuf>,
+
     /// 词库目录（WordBank）：用户导入的附加词库从它读，主词库那一份跳过。
     pub word_bank: Option<WordBank>,
 
@@ -34,6 +37,7 @@ impl AssemblySpec {
         Self {
             dict: dict.into(),
             language_model: None,
+            plates: None,
             word_bank: None,
             user_dir: None,
             user_word_bank: None,

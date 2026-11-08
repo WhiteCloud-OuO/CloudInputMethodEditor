@@ -29,14 +29,14 @@ done
 
 # 运行时数据（安装包用得到的）：语言模型与英文词表（CLI 也读）。english-frequency.tsv 只是打英文词表的
 # 构建输入，正本在 assets/lexicon/english-frequency.tsv，不进包。
-PRODUCT_FILES=(lm.qj english.tsv)
+PRODUCT_FILES=(lm.qj english.tsv plates.qj)
 LLM_FILES=(pinyin-llm.jsonl)
 # 词库：主词库 Dict.db（中文 + 英文合一份）与用户导入的附加词库都在 WordBank/ 下（SQLite 存档）
 WORDBANK_FILES=()
 for f in WordBank/*.db; do [[ -f "$f" ]] && WORDBANK_FILES+=("$f"); done
 
 for f in "${PRODUCT_FILES[@]}"; do
-  [[ -f "data/generated/$f" ]] || { echo "缺少 data/generated/$f，先按 assets/lexicon/CLOUDIME.md 生成" >&2; exit 1; }
+  [[ -f "data/generated/$f" ]] || { echo "缺少 data/generated/$f，先按 assets/lexicon/CLOUDIME.md 与 assets/plates/README.md 生成" >&2; exit 1; }
 done
 [[ ${#WORDBANK_FILES[@]} -gt 0 ]] || { echo "缺少 WordBank/*.db（主词库 Dict.db），先跑 tools/dict-convert word-bank" >&2; exit 1; }
 
@@ -50,7 +50,7 @@ for f in data/local_models/*.qjm; do [[ -f "$f" ]] && MODEL_FILES+=("$f"); done
 # 魔数必须是 CLOUDIME：改名前的 QINGJIAN 读端虽然兼容，但发出去的 data.lock 就一直钉着要靠兼容垫着的旧数据。
 # 词库是 SQLite 存档，没有这个头，不查。
 legacy=()
-for f in data/generated/lm.qj "${MODEL_FILES[@]}"; do
+for f in data/generated/lm.qj data/generated/plates.qj "${MODEL_FILES[@]}"; do
   [[ -f "$f" ]] || continue
   [[ "$(head -c 8 "$f")" == "CLOUDIME" ]] || legacy+=("$f")
 done
@@ -61,6 +61,8 @@ if [[ ${#legacy[@]} -gt 0 ]]; then
     for f in "${legacy[@]}"; do
       if [[ "$f" == data/generated/lm.qj ]]; then
         echo "  cargo run --release -p cloudime-dict-convert -- rehead lm $f"
+      elif [[ "$f" == data/generated/plates.qj ]]; then
+        echo "  cargo run --release -p cloudime-dict-convert -- rehead plate $f"
       else
         echo "  cargo run --release -p cloudime-dict-convert -- rehead model $f"
       fi

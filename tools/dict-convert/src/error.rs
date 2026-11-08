@@ -9,6 +9,9 @@ pub enum ConvertError {
     Json(#[from] serde_json::Error),
 
     #[error(transparent)]
+    Spreadsheet(#[from] calamine::Error),
+
+    #[error(transparent)]
     Dictionary(#[from] cloudime_dictionary::DictionaryError),
 
     #[error(transparent)]
@@ -35,10 +38,21 @@ pub enum ConvertError {
     Translate(#[from] cloudime_translate::TranslateError),
 
     #[error(transparent)]
+    Plate(#[from] cloudime_plate::PlateError),
+
+    #[error(transparent)]
     Sqlite(#[from] rusqlite::Error),
 
     #[error("写完自查没通过：{0}")]
     Verify(String),
+
+    /// 车牌 xlsx 一张表都没有。
+    #[error("车牌表 {0} 里没有工作表")]
+    PlateSheet(PathBuf),
+
+    /// 车牌 xlsx 解析出来是空表。
+    #[error("车牌表 {0} 没有可用的行")]
+    PlateEmpty(PathBuf),
 
     /// `phrase-db` 要覆盖已有文件，但没给 `--force`。
     #[error(

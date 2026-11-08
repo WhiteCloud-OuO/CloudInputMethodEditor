@@ -7,6 +7,7 @@
 //! - `phrases`：bigram 表的相邻两词 + 语料的相邻三词 → `phrases.tsv`（我的 / 不知道 这类短语层，读音由成分词拼出，同样用 `lexicon --extra-words` 并入）
 //! - `pack dict|lm|model`：TSV → 词库存档 / `.qj` 容器（`dict` 写 SQLite `.db`，`lm` 写 `lm.qj`），带名称 / 许可证 / 署名元数据；
 //!   `model` 把本地整句模型的三件套目录打成一个 `model.qjm`
+//! - `plate`：车牌一览 xlsx → `data/generated/plates.qj`（省份简称拼音 + 字母 → 车牌 / 地名）
 //! - `word-bank`：合并中文 / 英文 / 品牌 / 中英混杂词源，写出 `WordBank\Dict.db`（引擎按 `language` 分流加载）
 //! - `phrase-db`：写出空的自定义短语库 `Phrases\Phrase.db`（`user` / `cloudime_default` 两张空表）
 //! - `glossary-db`：青简那套释义表 `.qj` → 翻译 Tip 用的 `.db`（总表 `words` + 副表 `contents`，拼音从词库填）
@@ -23,6 +24,7 @@ mod lexicon;
 mod oov_filter;
 mod pack;
 mod phrases;
+mod plate;
 mod rehead;
 
 use clap::Parser;
@@ -135,6 +137,26 @@ fn run() -> Result<(), ConvertError> {
             &args.out_dir,
         ),
         Command::Rehead { kind, input } => rehead::rehead(kind, &input),
+        Command::Plate {
+            input,
+            out,
+            name,
+            license,
+            attribution,
+            source,
+            data_version,
+        } => plate::convert(
+            &input,
+            &out,
+            cloudime_format::Metadata {
+                name,
+                license,
+                attribution,
+                source,
+                version: data_version,
+                ..cloudime_format::Metadata::default()
+            },
+        ),
         Command::GlossaryDb {
             input,
             word_bank,

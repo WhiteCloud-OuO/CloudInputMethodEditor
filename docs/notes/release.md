@@ -83,12 +83,12 @@ cargo 命令全 `--locked`（含 `build.ps1`）。普通 CI 只有 `contents: re
 跟用到新数据的代码同一个提交进去：checkout 哪个提交就拿到它对应的那版数据，离线自编译的人不会因为我们改了数据而编出坏包。
 如果 `data.lock` 里还没有 tag（还没发过 `data-vN`），`data-fetch.sh` 会直接报错并提示先跑 `data-bundle.sh`——构建机不会静默拿到错数据。
 
-- `tools/release/data-bundle.sh`：把 `WordBank/*.db`（词库：主词库与领域词库）、`data/generated/` 里的语言模型与英文词表打成
+- `tools/release/data-bundle.sh`：把 `WordBank/*.db`（词库：主词库与领域词库）、`data/generated/` 里的语言模型、英文词表与车牌对照表 `plates.qj` 打成
   `cloudime-data.tar.gz`（包里是**仓库根相对路径**），本地整句模型 `data/local_models/*.qjm`（可能多份；训练仓库导出三件套到
   `data/local_models/`，`tools/release/pack-model.sh` 打成一个 `.qj` 容器，fp16 约 56 MB，元数据也写在那个脚本里）打成
   `cloudime-models.tar.gz`——模型单列一份，只重训模型时不用重传词库；
   连同 LLM 续跑中间产物 `cloudime-llm-intermediates.tar.gz` 发到 `WhiteCloud-OuO/CloudInputMethodEditor` 的下一个 `data-vN`（`--tag` 可指定，已存在就拒绝），然后改写 `data.lock`；数据 tag 指向当前提交，所以那个提交要先 push。
-  打包前检查 `lm.qj` 与 `*.qjm` 的魔数必须是 `CLOUDIME`（词库是 SQLite 存档，没有这个头，不查），还是改名前的 `QINGJIAN` 就拒绝（报错里给出下面 `rehead` 的完整命令）。
+  打包前检查 `lm.qj` / `plates.qj` 与 `*.qjm` 的魔数必须是 `CLOUDIME`（词库是 SQLite 存档，没有这个头，不查），还是改名前的 `QINGJIAN` 就拒绝（报错里给出下面 `rehead` 的完整命令）。
 - `tools/release/data-fetch.sh`：按 `data.lock` 下载（有 gh 用 gh，没有就 curl 直连）、按锁文件里的哈希校验（不信 Release 自己那份 `SHA256SUMS`），
   两份包都解到**仓库根**（`WordBank/`、`data/generated/`、`data/local_models/` 各就各位）。`release.yml` 的打包 job 和离线自编译走同一个脚本；
   `cloudime.iss` 把 `WordBank\*.db`（主词库 `Dict.db`）装进 `{app}\WordBank`、`data\generated` 与 `assets` 里的文件按仓库相对路径装进 `{app}`，模型装进 `{app}\Models`：含章 `data\local_models\*.qjm` 与知意 `Models\laya-zhen-long-l12-int8g\`（没有就不装，Server 不重排）。

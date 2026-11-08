@@ -38,6 +38,21 @@ pub fn assemble(spec: &AssemblySpec) -> Result<Engine, ServerError> {
         "词库与学习数据已加载"
     );
     let mut engine = Engine::new(dictionary).with_learner(Box::new(learner));
+    if let Some(path) = &spec.plates {
+        match cloudime_plate::PlateTable::open(path) {
+            Ok(table) => {
+                tracing::info!(
+                    path = %path.display(),
+                    entries = table.len(),
+                    "车牌对照表已加载"
+                );
+                engine.set_plates(table);
+            }
+            Err(error) => {
+                tracing::warn!(%error, path = %path.display(), "车牌对照表读不出来，@ 车牌候选不可用")
+            }
+        }
+    }
     if !rare.is_empty() {
         tracing::info!(
             words = rare.len(),

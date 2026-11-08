@@ -146,6 +146,37 @@ pub enum Command {
         max_chars: usize,
     },
 
+    /// 车牌一览 xlsx → `data/generated/plates.qj`：按省份简称拼音 + 字母建 mmap 对照表
+    Plate {
+        /// 原始 xlsx（`车牌一览.xlsx`，第一张表两列：车牌、对应地名）
+        #[arg(default_value = "assets/plates/车牌一览.xlsx")]
+        input: PathBuf,
+
+        /// 输出 `.qj`
+        #[arg(long, default_value = "data/generated/plates.qj")]
+        out: PathBuf,
+
+        /// 元数据：名称
+        #[arg(long, default_value = "车牌一览")]
+        name: String,
+
+        /// 元数据：许可证（SPDX 标识）
+        #[arg(long, default_value = "")]
+        license: String,
+
+        /// 元数据：署名 / 版权行
+        #[arg(long, default_value = "")]
+        attribution: String,
+
+        /// 元数据：来源
+        #[arg(long, default_value = "")]
+        source: String,
+
+        /// 元数据：数据版本（上游版本号或日期）
+        #[arg(long, default_value = "")]
+        data_version: String,
+    },
+
     /// 把 TSV 打包成词库存档 / `.qj` 容器：`dict` 读一个 TSV 写单份中文 `.db`，`lm` 读 lm-unigram/bigram.tsv 写 lm.qj；    /// `model` 把训练仓库导出的三件套目录（缺省 data/local_models）打成一个 model.qjm（`--out-dir data/local_models` 就写回原目录，随包带该目录下的全部 `*.qjm`）
     Pack {
         /// 打包哪种数据
@@ -265,6 +296,9 @@ pub enum DataKind {
 
     /// 本地整句模型（三件套目录 → model.qjm）
     Model,
+
+    /// 车牌对照表
+    Plate,
 }
 
 impl DataKind {
@@ -274,6 +308,7 @@ impl DataKind {
             Self::Dict => "dict",
             Self::Lm => "lm",
             Self::Model => "model",
+            Self::Plate => "plate",
         }
     }
 
@@ -283,6 +318,7 @@ impl DataKind {
             Self::Dict => cloudime_format::Kind::Dictionary,
             Self::Lm => cloudime_format::Kind::LanguageModel,
             Self::Model => cloudime_format::Kind::Model,
+            Self::Plate => cloudime_format::Kind::Plate,
         }
     }
 }

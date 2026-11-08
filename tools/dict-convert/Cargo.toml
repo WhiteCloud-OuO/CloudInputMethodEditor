@@ -7,11 +7,13 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+calamine.workspace = true
 clap.workspace = true
 jiff.workspace = true
 cloudime-core.workspace = true
 cloudime-dictionary.workspace = true
 cloudime-format.workspace = true
+cloudime-plate.workspace = true
 cloudime-lm.workspace = true
 cloudime-neural.workspace = true
 cloudime-platform.workspace = true

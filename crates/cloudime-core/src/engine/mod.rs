@@ -265,6 +265,9 @@ pub struct Engine {
     /// V 模式的时间 / 现在候选是否带秒数（`sj` / `xz`）。
     v_mode_time_seconds: bool,
 
+    /// 车牌对照表（`data/plates.qj`）；没装就是 `None`。
+    plates: Option<cloudime_plate::PlateTable>,
+
     /// 繁体转换器。
     opencc: Option<ferrous_opencc::OpenCC>,
 
@@ -417,6 +420,7 @@ impl Engine {
             fuzzy: FuzzyRules::default(),
             traditional: false,
             v_mode_time_seconds: false,
+            plates: None,
             opencc: None,
             traditional_map: std::cell::RefCell::new(HashMap::new()),
         }

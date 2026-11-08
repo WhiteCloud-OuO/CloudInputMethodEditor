@@ -14,9 +14,11 @@ ferrous-opencc.workspace = true
 foldhash.workspace = true
 jiff.workspace = true
 cloudime-dictionary.workspace = true
+cloudime-plate.workspace = true
 serde.workspace = true
 thiserror.workspace = true
 tracing.workspace = true
 
 [dev-dependencies]
+cloudime-format.workspace = true
 toml.workspace = true

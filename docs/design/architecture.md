@@ -183,7 +183,7 @@ CSR 偏移与后继）原样落盘，打开时 mmap 整个文件、校验一遍�
 - 文件 = 32 字节头（魔数 `CLOUDIME`、格式版本、数据种类 `Kind`、分节数）+ 分节表（4 字节标签 + 偏移 + 长度，正文 8 字节对齐）
   + 各分节。第一节固定是 `META`：TOML 的 `Metadata`（名称、许可证 SPDX、署名、来源、版本、条数、生成者），
   设置 → 词库页的列表直接显示它，第三方词库各带各的许可证靠的就是这一节。
-- 数据种类：词库、语言模型、英文词表，以及本地整句模型 `Kind::Model`——扩展名换成 `.qjm`，
+- 数据种类：词库、语言模型、英文词表、车牌对照表 `Kind::Plate`，以及本地整句模型 `Kind::Model`——扩展名换成 `.qjm`，
   三节 `CONF` / `VOCB` / `SAFT` 原样装训练仓库导出的 `config.json` / `vocab.json` / `model.safetensors`（safetensors 是不透明载荷，
   mmap 后切片给 candle，张量搬上设备后容器即丢；`META.entries` 记参数量）。`cloudime-neural::find_model(dir)` 先找 `.qjm`、没有再认三件套目录，
   所以开发直接加载训练直出的目录，随包与用户目录只有一个文件；`dict-convert pack model`（`tools/release/pack-model.sh` 带元数据调它）打包。

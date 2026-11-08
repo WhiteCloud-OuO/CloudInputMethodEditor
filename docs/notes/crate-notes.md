@@ -212,6 +212,13 @@ V 模式本身不再往翻译 Tip 里写「输入数字或表达式」。面板�
 语言模型能 `write_qj` / 从 `.qj` 打开，启动 50 ms；`cargo run --release -p cloudime-dict-convert -- pack lm --name … --license …`
 生成 `data/generated/lm.qj`，Windows 打包（`apps/windows/installer/build.ps1`）在 TSV 更新时自动重打并只把 `.qj` 与 `WordBank\Dict.db` 打进包。词库改走 SQLite（`word-bank` 子命令写 `WordBank\Dict.db`）。设计见 `docs/design/architecture.md`「数据文件：`.qj` 容器」。
 
+## crates/cloudime-plate
+
+车牌对照表：`Kind::Plate = 7` 的 `.qj`，`PLAT` 定长记录（key / 车牌 / 完整地名 / 短地名的 `TEXT` 偏移与长度）+ `TEXT` 字符串 arena，打开即 mmap。
+key 是「省份简称拼音 + 字母」小写（`苏A` → `sua`），记录按 key 排序，`PlateTable::lookup` 精确查、`prefix` 前缀查（最多 `limit` 条）。
+生成：`cargo run --release -p cloudime-dict-convert -- plate --out data/generated/plates.qj`，原始 xlsx 在 `assets/plates/`；
+安装包把它装到 `{app}\data\plates.qj`，Server 装配时读进 `Engine::set_plates`，V 模式 `v@` 用它出「苏A / 江苏省南京市 / 江苏南京」。
+
 ## crates/cloudime-translate
 
 本地词典与翻译 Tip：查词条释义（`.qj` 青简容器按 `Kind::Glossary = 3` 映射读取，或 `.db` SQLite），
@@ -1883,6 +1890,9 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
   中文行 `language` = `中文`、`pinyin` 是音节空格分隔；英文行 `language` = `英文`、`text` 是小写编码、`pinyin` 是原样写法、进 `words_english`。
   同一 `(text, pinyin, language)` 先去重（权重大的胜出、相同则先到先得）再归表。命令：
   `cargo run --release -p cloudime-dict-convert -- word-bank --name 云朵基础词库 --license "MIT AND Unicode-3.0" --source assets/lexicon`。
+- `plate --input assets/plates/车牌一览.xlsx --out data/generated/plates.qj`：拆 `京A、C、E` / `苏E、苏U` 这类多字母格，
+  按省份简称拼音 + 字母建 key，写出 `Kind::Plate` 的 `.qj`（完整地名去掉行政后缀得到短地名）。
+  `cargo run --release -p cloudime-dict-convert -- plate --out data/generated/plates.qj`。
 - `phrase-db [路径] [--force]`：写出一份空的自定义短语库（缺省 `Phrases/Phrase.db`，含 `user` / `cloudime_default` 两张空表），
   只用来第一次生成这份文件。仓库根的 `Phrases/Phrase.db` 是**随仓库追踪的产品数据**（`cloudime_default` 表里的内置短语直接在里面手写），
   所以已存在时拒绝覆盖（加 `--force` 才整份换成空库，会丢掉内置短语）。安装包按 `onlyifdoesntexist` 装它。
