@@ -52,8 +52,8 @@ const INDEX_GAP: f32 = 3.0;
 /// 横排时高亮底色在候选两侧多出的宽度（点）。
 const HIGHLIGHT_INSET: f32 = 5.0;
 
-/// 候选右侧来源角标与候选格右边缘之间的间距（点）。竖排（角标在自己的列里）用它；
-/// 横排改用 [`HORIZONTAL_BADGE_GAP_EMS`] 个候选字宽。
+/// 来源角标与相邻内容的间距（点）：竖排是角标与格右边缘的距离，横排是角标与候选词
+/// （有辅助码时是辅助码）的距离。横排必须小于项间距，否则角标会看着挂到下一项上。
 const BADGE_GAP: f32 = 4.0;
 
 /// 量「一个候选字有多宽」用的样字：一个汉字 ≈ 一个 em。
@@ -66,9 +66,6 @@ const BADGE_CHAR: &str = "造";
 /// 括号自己不带下划线（只有已经敲上的那几位带）。
 const AUXILIARY_OPEN: &str = "[";
 const AUXILIARY_CLOSE: &str = "]";
-
-/// 横排里候选词与来源角标之间的最小间隔（字宽数）。
-const HORIZONTAL_BADGE_GAP_EMS: f32 = 2.0;
 
 /// 横排展开成网格时每格最小宽度里的候选字宽数（另加角标宽度）。
 const HORIZONTAL_CELL_MIN_EMS: f32 = 6.0;
@@ -747,12 +744,6 @@ impl Renderer {
         self.measure(SINGLE_CHAR, &m.text_style()).width
     }
 
-    /// 横排里候选词与来源角标之间的**最小**间隔：两个候选字宽（比原来的 4pt 宽得多，角标不贴词）。
-    /// 竖排的角标在自己的列里，仍用 [`BADGE_GAP`]。
-    pub(super) fn horizontal_badge_gap(&self, m: &Metrics) -> f32 {
-        HORIZONTAL_BADGE_GAP_EMS * self.char_width(m)
-    }
-
     /// 横排展开成网格时每格的**最小**宽度：6 个候选字 + 角标宽度（角标不能把候选词挤没）。
     pub(super) fn horizontal_min_cell_width(&self, m: &Metrics, badge_width: f32) -> f32 {
         HORIZONTAL_CELL_MIN_EMS * self.char_width(m) + badge_width
@@ -764,7 +755,7 @@ impl Renderer {
     }
 
     /// 把来源角标画在 `left` 处（调用方定它在哪：竖排是「格右边缘往里让 `BADGE_GAP`」，
-    /// 横排是「候选文字右边再加 2 个字宽」），与序号一样垂直居中。
+    /// 横排是「候选词 / 辅助码右边再加 `BADGE_GAP`」），与序号一样垂直居中。
     pub(super) fn draw_badge(
         &self,
         render: &mut impl ControlRender,
@@ -1951,6 +1942,93 @@ mod tests {
             .filter(|(a, b)| a != b)
             .count();
         assert_eq!(differing, 0, "页面树候选路径应与横排直接绘制一致");
+    }
+
+    /// 横排有拼音行、没有译文时，页码要排在候选行**下面**；同时角标要紧挨自己的候选。
+    #[test]
+    fn horizontal_footer_stays_below_and_badge_stays_with_its_candidate() {
+        use crate::frame::CandidateView;
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let mut frame = Frame {
+            preedit: Some(Preedit::plain("jie'tu", 6)),
+            rows: vec![
+                Row {
+                    index: "1".to_owned(),
+                    text: "截图".to_owned(),
+                    annotation: Vec::new(),
+                    badge: None,
+                    auxiliary: None,
+                },
+                Row {
+                    index: "2".to_owned(),
+                    text: "册".to_owned(),
+                    annotation: Vec::new(),
+                    badge: Some("造".to_owned()),
+                    auxiliary: Some(Auxiliary::split("RS", "R")),
+                },
+            ],
+            highlighted: Some(0),
+            footer: Some("1/30".to_owned()),
+            ..Frame::default()
+        };
+        let theme = Theme::new();
+        let direct = renderer
+            .render_direct(&frame, Layout::Horizontal, &theme, 1.0, None)
+            .unwrap();
+        let page_tree = renderer
+            .render_candidate_view(
+                &CandidateView::from(&frame),
+                Layout::Horizontal,
+                &theme,
+                1.0,
+                None,
+            )
+            .unwrap();
+        assert_eq!(
+            (direct.content_width, direct.content_height),
+            (page_tree.content_width, page_tree.content_height)
+        );
+        assert_eq!(
+            direct
+                .pixmap
+                .pixels()
+                .iter()
+                .zip(page_tree.pixmap.pixels())
+                .filter(|(a, b)| a != b)
+                .count(),
+            0,
+            "拼音行 + 页码的横排应与直接绘制一致（页码不能压到候选行）"
+        );
+
+        // 角标只占 BADGE_GAP + 角标宽；间隔必须比项间距窄，才不会看起来挂到下一项。
+        let metrics = super::Metrics {
+            theme: &theme,
+            scale: 1.0,
+        };
+        let badge = renderer.badge_width(Some("造"), &metrics);
+        frame.rows[1].badge = None;
+        let no_badge = renderer
+            .render_candidate_view(
+                &CandidateView::from(&frame),
+                Layout::Horizontal,
+                &theme,
+                1.0,
+                None,
+            )
+            .unwrap();
+        let gap =
+            page_tree.highlight_rects[1].width() - no_badge.highlight_rects[1].width() - badge;
+        assert!(
+            (gap - super::BADGE_GAP).abs() <= 0.5,
+            "横排角标与自己的候选之间应留 BADGE_GAP，实际 {gap}"
+        );
+        assert!(
+            super::BADGE_GAP < theme.column_gap,
+            "横排角标间距必须小于项间距"
+        );
     }
 
     #[test]

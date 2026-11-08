@@ -444,11 +444,11 @@ Server 对低于 `PROTOCOL_VERSION` 的会话仍照常服务（老 DLL 忽略新
 矩阵：`Frame::columns` 不为 0 时走 `renderer/matrix.rs`（展开「更多候选项」就是这条；竖排 5 列 / 横排 5 行都是它），
 每格一样宽——取收起时那条高亮条的宽度（`Frame::min_cell_width`），比它长的候选截尾加「…」；没给这个宽度时
 （这次组句还没画过收起态）退回「一屏里最长的那条」、单格封顶 `MAX_CELL_EMS` = 4 字宽。候选不够一屏时不补空列。
-**展开态另有两条按候选字宽算的下限**（`Renderer::char_width` 量一个汉字，`horizontal_badge_gap` /
+**展开态另有两条按候选字宽算的下限**（`Renderer::char_width` 量一个汉字，
 `horizontal_min_cell_width` / `badge_char_width`）：
 
-- **横排**：每格最小宽度 = 6 个字宽 + 该屏最宽的角标；**收起**时候选词与来源角标之间的最小间隔是 2 个字宽
-  （竖排收起仍用 `BADGE_GAP` = 4pt——角标在自己的列里）。
+- **横排**：每格最小宽度 = 6 个字宽 + 该屏最宽的角标；**收起**时来源角标离自己的候选词（有辅助码时是辅助码）
+  也只留 `BADGE_GAP` = 4pt——必须小于项间距 `column_gap`（8pt），否则角标会看着挂到下一项上。
 - **竖排**：每格最小宽度 = 这一屏最长的候选 + 2 个字宽 + **一个角标字宽**（`badge_char_width` 量「造」，
   不管这一屏有没有角标都算），所以格子一定装得下最长那条、不会被截断。
 
@@ -471,6 +471,8 @@ Server 对低于 `PROTOCOL_VERSION` 的会话仍照常服务（老 DLL 忽略新
 
 底部那一行（`Frame::tip` + `Frame::footer`）：**左侧翻译 Tip、右侧页码**，由 `Renderer::bottom_line_height` /
 `draw_bottom_line` 统一画，竖排 / 横排 / 矩阵三条路都走它（矩阵原来那行「被截断候选的全文 + 译文」被它取代）。
+横排没有译文时它排在候选行**下面**：`render_candidate_horizontal` 的 `info_top` 要从候选行顶 `top` 起算，
+漏掉拼音行高就会把页码画到候选行上（有译文时则从候选行 + 译文高度起算）。
 页码一直显示（只有一页也是 `1/1`，由壳决定内容），颜色用 `colors.footer`（主题里的「候选窗口页码颜色」，缺省 `#888888`）。
 Tip 是 `Vec<TipSegment>`（文本 + 深浅 + 是否斜体）：词性、释义之间的分隔符、读音括号统一走
 [`Tone::TranslateMeta`]（词性再叠斜体；统一 `colors.translate_meta` —— 主题里的「翻译 Tip 词性和分号颜色」，缺省 `#333333`），

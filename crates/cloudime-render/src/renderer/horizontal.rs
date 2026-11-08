@@ -1,15 +1,16 @@
 //! 横排：候选排成一行，高亮那个下面单独一行译文，页码在行尾。
 
 use super::item::Item;
-use super::{HIGHLIGHT_INSET, INDEX_GAP, Metrics, Renderer, highlight_rect};
+use super::{BADGE_GAP, HIGHLIGHT_INSET, INDEX_GAP, Metrics, Renderer, highlight_rect};
 use crate::elements::ControlRender;
 use crate::frame::{Frame, HighlightRect, Row};
 
 /// 一项的内容宽度：序号 + 候选词 +（有辅助码时）一个空格 + 码 +（有角标时）间隔 + 角标。
-/// `badge_gap` 是候选词与角标之间的间隔（横排用两个候选字宽，见 `Renderer::horizontal_badge_gap`）。
-pub(super) fn item_width(item: &Item, m: &Metrics, badge_gap: f32) -> f32 {
+/// 角标与候选词 / 辅助码之间用和竖排一样的 [`BADGE_GAP`]，必须小于项间距 `column_gap`，
+/// 否则角标离下一项比离自己那一项还近，看起来会「挂错」。
+pub(super) fn item_width(item: &Item, m: &Metrics) -> f32 {
     let badge = if item.badge_width > 0.0 {
-        badge_gap + item.badge_width
+        m.px(BADGE_GAP) + item.badge_width
     } else {
         0.0
     };
@@ -21,12 +22,8 @@ impl Renderer {
         if frame.rows.is_empty() {
             return (0.0, 0.0);
         }
-        let badge_gap = self.horizontal_badge_gap(m);
         let (items, row_height) = self.items(&frame.rows, m);
-        let mut width: f32 = items
-            .iter()
-            .map(|item| item_width(item, m, badge_gap))
-            .sum::<f32>()
+        let mut width: f32 = items.iter().map(|item| item_width(item, m)).sum::<f32>()
             + m.column_gap() * items.len().saturating_sub(1) as f32
             + m.px(HIGHLIGHT_INSET) * 2.0;
         if let Some(footer) = frame.footer.as_deref() {
@@ -99,7 +96,6 @@ impl Renderer {
         }
         // 量尺寸时已整形过一遍，这里再整形一遍；等渲染器定型再把结果从 render 传下来。
         let (items, row_height) = self.items(&frame.rows, m);
-        let badge_gap = self.horizontal_badge_gap(m);
         let top = y + m.row_padding();
         let text_height = m.px(m.theme.text_font.line_height);
         let inset = m.px(HIGHLIGHT_INSET);
@@ -109,7 +105,7 @@ impl Renderer {
         let rects: Vec<HighlightRect> = items
             .iter()
             .map(|item| {
-                let width = item_width(item, m, badge_gap);
+                let width = item_width(item, m);
                 let rect = HighlightRect::new(
                     x - inset,
                     y - left,
@@ -125,7 +121,7 @@ impl Renderer {
         }
         let mut x = left + m.padding() + inset;
         for (i, (row, item)) in frame.rows.iter().zip(&items).enumerate() {
-            let width = item_width(item, m, badge_gap);
+            let width = item_width(item, m);
             render.text(
                 &row.index,
                 &m.index_style(frame.highlighted == Some(i)),

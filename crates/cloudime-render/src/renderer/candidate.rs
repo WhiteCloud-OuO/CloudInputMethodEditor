@@ -626,9 +626,7 @@ impl Renderer {
                 text_x + item.text_width + self.space_width(&m),
                 text_top,
             );
-            let badge_x =
-                x + super::horizontal::item_width(item, &m, self.horizontal_badge_gap(&m))
-                    - item.badge_width;
+            let badge_x = x + super::horizontal::item_width(item, &m) - item.badge_width;
             self.draw_badge(&mut recorder, &m, row.badge.as_deref(), badge_x, text_top);
         }
         if let Some(row) = view.highlighted.and_then(|index| view.rows.get(index)) {
@@ -642,7 +640,9 @@ impl Renderer {
         let info_top = if laid.annotation_height > 0.0 {
             top + laid.row_height + laid.annotation_height
         } else {
-            y + m.row_padding() + laid.row_height
+            // 没有译文时，底部信息区排在候选行下方（与旧 `draw_horizontal` 一致）；
+            // `top` 已经含拼音行，漏掉它页码会画到候选行上。
+            top + m.row_padding() + laid.row_height
         };
         self.draw_candidate_info(&mut recorder, view, &m, margin, info_top, laid.content.0);
 
@@ -700,11 +700,10 @@ impl Renderer {
 
     fn candidate_horizontal_layout(&self, view: &CandidateView, m: &Metrics) -> HorizontalLayout {
         let (items, row_height) = self.items(&view.rows, m);
-        let badge_gap = self.horizontal_badge_gap(m);
         let inset = m.px(super::HIGHLIGHT_INSET);
         let mut width = items
             .iter()
-            .map(|item| super::horizontal::item_width(item, m, badge_gap))
+            .map(|item| super::horizontal::item_width(item, m))
             .sum::<f32>()
             + m.column_gap() * items.len().saturating_sub(1) as f32
             + inset * 2.0
@@ -736,7 +735,7 @@ impl Renderer {
         let mut rows = Vec::with_capacity(items.len());
         let mut highlight_rects = Vec::with_capacity(items.len());
         for item in &items {
-            let item_width = super::horizontal::item_width(item, m, badge_gap);
+            let item_width = super::horizontal::item_width(item, m);
             rows.push(add_absolute(&mut tree, x, rows_top, item_width, row_height));
             highlight_rects.push(HighlightRect::new(
                 x - inset,
