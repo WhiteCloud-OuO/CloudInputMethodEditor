@@ -617,6 +617,17 @@ fn v_name_surname_keeps_composing_then_commits_the_full_name() {
 /// 组句里 Tab 展开「更多候选项」：一屏 = 5 × 候选项个数（竖排 5 列），序号不再画，
 /// 数字键改成跳页、方向键在格子里走；再按一次收起。
 #[test]
+fn closing_a_session_clears_candidates() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    compose(&mut r, "ni", normal);
+    assert!(r.candidate_count() > 0);
+    r.handle_session_closed(SessionId(1));
+    assert!(!r.composing());
+    assert_eq!(r.candidate_count(), 0);
+}
+
+#[test]
 fn tab_expands_the_candidate_window() {
     let normal = KeyModifiers::default();
     let mut r = router(5);
