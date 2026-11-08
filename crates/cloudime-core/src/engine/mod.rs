@@ -348,6 +348,8 @@ impl Engine {
     pub fn new(dictionary: Dictionary) -> Self {
         // 敲错变体表按全部音节算一次（几毫秒）：构造时预热，别让第一个用到敲错边的按键买单。
         correction::typo::warm();
+        // 简体转换器也预热：词库里简繁异体要统一，第一次按键不该等建表。
+        query::warm_simplified();
         Self {
             dictionary,
             rare: None,

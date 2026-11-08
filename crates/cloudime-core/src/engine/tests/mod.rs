@@ -36,6 +36,52 @@ fn texts(input: &str) -> Vec<String> {
         .collect()
 }
 
+/// 简体模式：词库里混进来的繁体异体要收敛成简体，并且只留一条（按原排名保留靠前的那条）。
+#[test]
+fn simplified_mode_converts_and_dedupes_traditional_variants() {
+    let mut engine = Engine::new(
+        Dictionary::parse("册\tce\t3275\n冊\tce\t310\n侧\tce\t3342\n側\tce\t279\n").unwrap(),
+    );
+    engine.set_input("ce");
+    let texts: Vec<String> = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect();
+    assert!(
+        !texts
+            .iter()
+            .any(|text| text.contains('冊') || text.contains('側'))
+    );
+    assert_eq!(texts.iter().filter(|text| *text == "册").count(), 1);
+    assert_eq!(texts.iter().filter(|text| *text == "侧").count(), 1);
+}
+
+/// 繁体模式：先归一成简体去重，再整体转回繁体，不要留下「册 / 冊」两条。
+#[test]
+fn traditional_mode_still_outputs_traditional_without_duplicates() {
+    let mut engine = Engine::new(
+        Dictionary::parse("册\tce\t3275\n冊\tce\t310\n侧\tce\t3342\n側\tce\t279\n").unwrap(),
+    );
+    engine.set_traditional_mode(true);
+    engine.set_input("ce");
+    let texts: Vec<String> = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect();
+    assert!(texts.iter().any(|text| text == "冊"));
+    assert!(texts.iter().any(|text| text == "側"));
+    assert_eq!(texts.iter().filter(|text| *text == "冊").count(), 1);
+    assert_eq!(texts.iter().filter(|text| *text == "側").count(), 1);
+}
+
 struct CountingLearner(HashMap<String, u32>);
 
 impl Learner for CountingLearner {

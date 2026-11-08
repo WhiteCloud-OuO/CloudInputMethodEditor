@@ -14,6 +14,29 @@ pub(super) use result::join_marked_typed;
 pub(super) use snapshot::QuerySnapshot;
 
 use std::collections::{HashMap, HashSet};
+use std::sync::OnceLock;
+
+/// 简体转换器：把词库里混进来的繁体异体收敛成简体。全局只建一次（建表有成本），
+/// 简繁两种模式都先用它归一，再按需走 S2T；这样词库里的「册 / 冊」不会重复出现。
+fn simplified_converter() -> Option<&'static ferrous_opencc::OpenCC> {
+    static CONVERTER: OnceLock<Option<ferrous_opencc::OpenCC>> = OnceLock::new();
+    CONVERTER
+        .get_or_init(|| {
+            match ferrous_opencc::OpenCC::from_config(ferrous_opencc::config::BuiltinConfig::T2s) {
+                Ok(converter) => Some(converter),
+                Err(error) => {
+                    tracing::warn!(%error, "简体转换器初始化失败，候选可能混入繁体");
+                    None
+                }
+            }
+        })
+        .as_ref()
+}
+
+/// 启动时预热简体转换器，别让第一次查询等建表。
+pub(super) fn warm_simplified() {
+    let _ = simplified_converter();
+}
 
 /// 候选右侧要显示的辅助码：`related` 是**光标前那个音节**在候选里的字下标，取那个字的码。
 /// 单字表里没有（表里只有整词码）时按「一格一位」切开取那一位 —— 与 [`crate::shuangpin::keeps`]
@@ -77,6 +100,44 @@ struct Reading {
 }
 
 impl Engine {
+    /// 把候选统一成简体，并去掉转换后重复的条目：保留排名靠前的那条（候选已排好序），
+    /// 同时把 `weights` 的键跟着改过去（多个异体合并时取较大的权重）。
+    fn simplify_candidates(&self, query: &mut Query) {
+        let Some(converter) = simplified_converter() else {
+            return;
+        };
+        let mut seen = HashSet::new();
+        let mut converted = HashSet::new();
+        let mut items = Vec::with_capacity(query.candidates.items.len());
+        for mut candidate in std::mem::take(&mut query.candidates.items) {
+            let original = candidate.text.clone();
+            let simplified = converter.convert(&original);
+            let changed = simplified != original;
+            if changed {
+                candidate.text.clone_from(&simplified);
+            }
+            if let Some(display) = candidate.display.as_mut() {
+                *display = converter.convert(display);
+            }
+            if let Some(weight) = query.weights.remove(&original) {
+                query
+                    .weights
+                    .entry(simplified.clone())
+                    .and_modify(|current| *current = current.max(weight))
+                    .or_insert(weight);
+            }
+            let duplicate = !seen.insert(simplified.clone());
+            if changed {
+                converted.insert(simplified.clone());
+            }
+            if duplicate && (changed || converted.contains(&simplified)) {
+                continue;
+            }
+            items.push(candidate);
+        }
+        query.candidates.items = items;
+    }
+
     /// 解析当前缓冲区并生成排好序的候选。**不带译文**，译文由 [`Self::annotate`] 补。
     ///
     /// 光标停在拼音中间时只按光标前的那段算候选（`ni|hao` 出 你），光标后的拼音留着，
@@ -121,6 +182,8 @@ impl Engine {
         }
         // 选词模型重排完只留前 SENTENCE_CANDIDATES 条整句，别把第一页的词挤走。
         trim_sentence_alternates(&mut query.candidates.items);
+        // 词库里同时有简繁异体（`册` / `冊`）：先统一成简体并去重，繁体模式后面再整体转回去。
+        self.simplify_candidates(&mut query);
         // 给输入日志留个摘要：上屏时才知道选了什么，这里才知道看到了什么
         let pinyin = match &query.correction {
             Some(correction) => correction.segmentation.joined("'"),
