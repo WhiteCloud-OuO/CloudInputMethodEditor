@@ -217,7 +217,7 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 本地词典与翻译 Tip：查词条释义（`.qj` 青简容器按 `Kind::Glossary = 3` 映射读取，或 `.db` SQLite），
 以及「这个词条学没学会」的学习状态。词典在安装目录 `LocalDictionary\`（清单 `dictionaries.list` 一行
 `显示名=文件名`，[`Manifest`](../../crates/cloudime-translate/src/manifest.rs) 解析；坏行警告跳过，文件不在就是空清单），
-词典文件只读、学习状态在用户数据目录的 `translate.db`：
+词典文件只读、学习状态在用户数据目录的 `translate.db`。安装包目前只带英文 `glossary-en.db`，西 / 日词典文件留在仓库、后续接入下载：
 
 ```sql
 CREATE TABLE entries (dictionary TEXT, word TEXT, input_times INTEGER, learned INTEGER,

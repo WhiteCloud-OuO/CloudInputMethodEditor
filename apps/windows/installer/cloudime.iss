@@ -72,7 +72,7 @@ OutputDir={#OutputDir}
 OutputBaseFilename=cloudime-{#AppVersion}-windows-x86_64-setup
 SetupIconFile={#Repo}\apps\windows\tsf\resources\cloudime.ico
 UninstallDisplayIcon={app}\cloudime.ico
-Compression=lzma2
+Compression=lzma2/ultra64
 SolidCompression=yes
 WizardStyle=modern
 
@@ -98,10 +98,11 @@ Source: "{#Repo}\apps\windows\tsf\resources\cloudime.ico"; DestDir: "{app}"; Fla
 ; 特殊字符输入器：随仓库带的 VFB 成品（apps\windows\ssi\release64\，构建时只拷不编），装在 {app} 根目录。
 ; Server 按自己 exe 旁的固定名起它（悬浮状态条「特殊字符」按钮，ui/mod.rs 的 open_spec_chars）。
 Source: "{#Repo}\apps\windows\ssi\release64\SpecialSymbolsInserter.exe"; DestDir: "{app}"; Flags: ignoreversion
-; —— 本地词典（翻译 Tip 用）：词典文件（`.qj` / `.db`）与清单 `dictionaries.list` 一起装进 {app}\LocalDictionary\ ——
+; —— 本地词典（翻译 Tip 用）：只随包英文词典；西 / 日后续接入下载，仓库里仍保留文件 ——
 ; 文件随仓库带（与 cwt-gui、SpecialSymbolsInserter 一样，构建时只拷不编）；Server 与设置程序都从这儿读，
-; 设置页「翻译 → 本地词典」的选项就是清单里的显示名。体积不小（三份约 50 MB），换词典直接替换这里的文件即可。
-Source: "{#Repo}\LocalDictionary\*"; DestDir: "{app}\LocalDictionary"; Flags: ignoreversion
+; 设置页「翻译 → 本地词典」的选项就是清单里的显示名。
+Source: "{#Repo}\LocalDictionary\glossary-en.db"; DestDir: "{app}\LocalDictionary"; Flags: ignoreversion
+Source: "{#Repo}\LocalDictionary\dictionaries.list"; DestDir: "{app}\LocalDictionary"; Flags: ignoreversion
 ; —— 命令行工具：exe 与「工具」菜单清单装进 {app}\tools；清单只在没有时铺一份，用户自己加的工具与改过的清单升级时留着 ——
 Source: "{#Repo}\target\release\cwt.exe"; DestDir: "{app}\tools"; Flags: ignoreversion
 ; cwt-gui.exe 是随仓库带的可执行文件（VB6 编的成品，放在 cwt-gui\release64\，构建时只拷不编）
@@ -129,9 +130,8 @@ Source: "{#Repo}\Phrases\Phrase.db"; DestDir: "{app}\Phrases"; Flags: onlyifdoes
 Source: "{#Repo}\Phrases\Phrase.db"; DestDir: "{app}\data"; DestName: "phrase-default.db"; Flags: ignoreversion
 ; —— 本地模型统一装在 {app}\Models\：知意（增强档）随包，不需要用户再下载 ——
 Source: "{#Repo}\Models\laya-zhen-long-l12-int8g\*"; DestDir: "{app}\Models\laya-zhen-long-l12-int8g"; Flags: ignoreversion recursesubdirs createallsubdirs
-; —— 含章基本模型（仓库 data\local_models\ 下的 *.qjm；没有就不装，Server 不重排）——
-; 目录里可以有多份（不同用途），Server 自己优先词表含汉字的字级模型（见 cloudime-neural 的 find_model），所以整目录带上。
-Source: "{#Repo}\data\local_models\*.qjm"; DestDir: "{app}\Models"; Flags: ignoreversion skipifsourcedoesntexist
+; —— 含章基本模型：只装实际加载的 zhiwei；tongbian 只留作开发备选，不进安装包 ——
+Source: "{#Repo}\data\local_models\hanzhang-zhiwei-small.qjm"; DestDir: "{app}\Models"; Flags: ignoreversion skipifsourcedoesntexist
 ; —— 随 git 的资源 ——
 Source: "{#Repo}\tutorial.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Repo}\lua.md"; DestDir: "{app}"; Flags: ignoreversion
@@ -235,6 +235,11 @@ Type: filesandordirs; Name: "{app}\data\model"
 ; 知意与基本模型统一搬到 Models\：旧的 Model\ 与 data\local_models\ 都整棵删掉。
 Type: filesandordirs; Name: "{app}\Model"
 Type: filesandordirs; Name: "{app}\data\local_models"
+; 安装包不再带 tongbian 备选模型与西 / 日词典：升级时清掉旧版本随包的那几份。
+; （用户自己放在同名位置的文件也会被清掉。）
+Type: files; Name: "{app}\Models\hanzhang-tongbian-small.qjm"
+Type: files; Name: "{app}\LocalDictionary\glossary-es.db"
+Type: files; Name: "{app}\LocalDictionary\glossary-ja.db"
 ; 0.0.1 开发版的随包码表旧位置
 Type: filesandordirs; Name: "{app}\codes"
 ; 词库搬进 WordBank\ 之前的旧位置（主词库与领域词库）
