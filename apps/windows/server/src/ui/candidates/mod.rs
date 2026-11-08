@@ -989,7 +989,7 @@ fn plan_slide(
     SlidePlan::Start(Slide { from, started: now })
 }
 
-/// 内容左上角：优先贴在光标下方；下方放不下放上方；两边都放不下时放在空间更大的一侧，
+/// 内容左上角：优先贴在光标下方；下方放不下放上方；两边都放不下时先摆到光标左右侧，
 /// 最后夹进光标所在显示器的工作区。`gap` 是光标行与候选窗之间的物理像素。
 fn place(anchor: RECT, content: (i32, i32), dpi: u32) -> (i32, i32) {
     let work = monitor::work_area_near_rect(anchor);
