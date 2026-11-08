@@ -191,6 +191,12 @@ pub struct CandidateConfig {
     /// 候选项排布方向。
     pub candidate_arrangement_direction: LayoutMode,
 
+    /// 竖排时，候选窗在光标上方就自动反向排列（拼音行贴近光标在最下）。
+    pub auto_reverse_candidate_order: bool,
+
+    /// 横排时压紧成两行：翻译 Tip 放到拼音行右侧、页码放到候选行右侧。
+    pub compact_candidate_window: bool,
+
     /// 候选项个数（5–9）。
     pub candidate_count: usize,
 
@@ -255,6 +261,8 @@ impl Default for CandidateConfig {
             legacy_local_model_enabled: None,
             context_memory_seconds: cloudime_core::DEFAULT_FRESH_SECONDS,
             candidate_arrangement_direction: LayoutMode::default(),
+            auto_reverse_candidate_order: false,
+            compact_candidate_window: false,
             candidate_count: MAX_CANDIDATE_COUNT,
             candidate_association_counts: 2,
             pinyin_font: FontChoice::new(DEFAULT_FAMILY, 11.0),
@@ -337,6 +345,13 @@ mod tests {
         assert_eq!(LocalModelMode::Basic.label(), "基本（含章）");
         assert_eq!(LocalModelMode::Hybrid.key(), "hybrid");
         assert_eq!(LocalModelMode::Hybrid.label(), "混合（含章+知意）");
+    }
+
+    #[test]
+    fn compact_and_reverse_default_to_off() {
+        let config = CandidateConfig::default();
+        assert!(!config.auto_reverse_candidate_order);
+        assert!(!config.compact_candidate_window);
     }
 
     #[test]

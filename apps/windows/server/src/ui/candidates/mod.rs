@@ -209,6 +209,12 @@ pub(crate) struct CandidateWindow {
     /// 在候选项显示辅助码（`use_input_scheme.cfg` 的 `candidate_auxiliary`，配置变了重设）。
     candidate_auxiliary: Cell<bool>,
 
+    /// 竖排时在光标上方自动反向排列（配置变了重设）。
+    auto_reverse_candidate_order: Cell<bool>,
+
+    /// 横排时使用更紧凑的两行布局（配置变了重设）。
+    compact_candidate_window: Cell<bool>,
+
     /// 上次绘制时内容区左上角在位图里的位置（阴影留白）：客户区坐标换内容区坐标用。
     margin: Cell<(i32, i32)>,
 
@@ -297,6 +303,8 @@ impl CandidateWindow {
             painter,
             index_style: Cell::new(ItemNumberStyle::default()),
             candidate_auxiliary: Cell::new(false),
+            auto_reverse_candidate_order: Cell::new(false),
+            compact_candidate_window: Cell::new(false),
             margin: Cell::new((0, 0)),
             hover: Cell::new(None),
             collapsed_width: Cell::new(0.0),
@@ -402,6 +410,10 @@ impl CandidateWindow {
     pub(crate) fn configure(&self, settings: &RenderSettings) {
         self.index_style.set(settings.item_number_style);
         self.candidate_auxiliary.set(settings.candidate_auxiliary);
+        self.auto_reverse_candidate_order
+            .set(settings.auto_reverse_candidate_order);
+        self.compact_candidate_window
+            .set(settings.compact_candidate_window);
         // 脚本要的缩放（`cloudime.candidate.set_scale`）：配置一变就跟着刷新
         self.script_scale.set(settings.scale);
     }
@@ -567,15 +579,41 @@ impl CandidateWindow {
             return;
         };
         let dpi = self.effective_dpi();
-        let rendered = {
+        let (mut view, layout) = {
             let animation = self.current_animation();
             let data = self.data.borrow();
-            let view = data.candidate_view(animation, self.collapsed_width.get());
+            (
+                data.candidate_view(animation, self.collapsed_width.get()),
+                data.layout,
+            )
+        };
+        view.compact_horizontal = self.compact_candidate_window.get()
+            && layout == cloudime_platform::LayoutMode::Horizontal
+            && view.columns == 0;
+        let render = |view: &cloudime_render::CandidateView| {
             self.painter
                 .borrow_mut()
                 .as_mut()
-                .and_then(|painter| painter.render_candidate(&view, data.layout, dpi))
+                .and_then(|painter| painter.render_candidate(view, layout, dpi))
         };
+        let mut rendered = render(&view);
+        // 竖排 + 自动反向：先按正常顺序量出高度，确认窗口会摆在光标上方后再重画一帧。
+        // 正反两种排法高度相同，重画不会改变上下判断。
+        if let Some(first) = &rendered
+            && self.auto_reverse_candidate_order.get()
+            && layout == cloudime_platform::LayoutMode::Vertical
+            && view.columns == 0
+        {
+            let (_, side) = place_with_side(
+                anchor,
+                (first.content_width as i32, first.content_height as i32),
+                dpi,
+            );
+            if side == Placement::Above {
+                view.reverse_vertical = true;
+                rendered = render(&view).or(rendered);
+            }
+        }
         let Some(rendered) = rendered else {
             // 字体库加载失败或渲染出错（已记日志）：不贴图、不显示。
             self.hide();
@@ -989,15 +1027,41 @@ fn plan_slide(
     SlidePlan::Start(Slide { from, started: now })
 }
 
+/// 候选窗相对光标的位置。
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum Placement {
+    /// 光标下方。
+    Below,
+    /// 光标上方（竖排自动反向只认这一种）。
+    Above,
+    /// 上下都放不下，摆在光标左右侧。
+    Side,
+}
+
 /// 内容左上角：优先贴在光标下方；下方放不下放上方；两边都放不下时先摆到光标左右侧，
 /// 最后夹进光标所在显示器的工作区。`gap` 是光标行与候选窗之间的物理像素。
 fn place(anchor: RECT, content: (i32, i32), dpi: u32) -> (i32, i32) {
+    place_with_side(anchor, content, dpi).0
+}
+
+/// 同 [`place`]，并告诉调用方最后落在光标上方、下方还是侧面。
+fn place_with_side(anchor: RECT, content: (i32, i32), dpi: u32) -> ((i32, i32), Placement) {
     let work = monitor::work_area_near_rect(anchor);
-    place_in(work, anchor, content, caret_gap(dpi))
+    place_in_with_side(work, anchor, content, caret_gap(dpi))
 }
 
 /// [`place`] 的纯函数部分（工作区给死，便于单测）。
+#[cfg(test)]
 fn place_in(work: RECT, anchor: RECT, content: (i32, i32), gap: i32) -> (i32, i32) {
+    place_in_with_side(work, anchor, content, gap).0
+}
+
+fn place_in_with_side(
+    work: RECT,
+    anchor: RECT,
+    content: (i32, i32),
+    gap: i32,
+) -> ((i32, i32), Placement) {
     let clamp_x = |x: i32| x.clamp(work.left, (work.right - content.0).max(work.left));
     let clamp_y = |y: i32| y.clamp(work.top, (work.bottom - content.1).max(work.top));
     let below = anchor.bottom + gap;
@@ -1006,20 +1070,20 @@ fn place_in(work: RECT, anchor: RECT, content: (i32, i32), gap: i32) -> (i32, i3
     let above_room = anchor.top - gap - work.top;
     // 下方优先；下方不够再看上方。
     if content.1 <= below_room {
-        return (clamp_x(anchor.left), below);
+        return ((clamp_x(anchor.left), below), Placement::Below);
     }
     if content.1 <= above_room {
-        return (clamp_x(anchor.left), above);
+        return ((clamp_x(anchor.left), above), Placement::Above);
     }
     // 上下都放不下：先看能不能摆在光标左右侧 —— 宁可盖住旁边，也别盖住正在输入的那一行。
     let right = anchor.right + gap;
     let left = anchor.left - gap - content.0;
     let centered_y = clamp_y((anchor.top + anchor.bottom - content.1) / 2);
     if right >= work.left && right + content.0 <= work.right {
-        return (right, centered_y);
+        return ((right, centered_y), Placement::Side);
     }
     if left >= work.left && left + content.0 <= work.right {
-        return (left, centered_y);
+        return ((left, centered_y), Placement::Side);
     }
     // 左右也放不下（窗口比屏幕还大）：放在垂直空间更大的一侧，尽量少盖。
     let y = if below_room >= above_room {
@@ -1027,7 +1091,7 @@ fn place_in(work: RECT, anchor: RECT, content: (i32, i32), gap: i32) -> (i32, i3
     } else {
         clamp_y(above)
     };
-    (clamp_x(anchor.left), y)
+    ((clamp_x(anchor.left), y), Placement::Side)
 }
 
 /// 分层窗口无需 `WM_PAINT`；滑动动画的重画在 `WM_TIMER` 里做。
@@ -1129,9 +1193,10 @@ mod tests {
     use windows::Win32::Foundation::RECT;
 
     use super::{
-        CARET_GAP, HIGHLIGHT_SLIDE_MS, RenderData, Slide, SlidePlan, TRANSITION_MS, ZOOM_MAX_STEP,
-        ZOOM_MIN_STEP, caret_gap, content_hit, eased_progress, next_zoom_step, place_in,
-        plan_slide, region_index, transition_frame, transition_plan, visual_rect, zoom_factor,
+        CARET_GAP, HIGHLIGHT_SLIDE_MS, Placement, RenderData, Slide, SlidePlan, TRANSITION_MS,
+        ZOOM_MAX_STEP, ZOOM_MIN_STEP, caret_gap, content_hit, eased_progress, next_zoom_step,
+        place_in, place_in_with_side, plan_slide, region_index, transition_frame, transition_plan,
+        visual_rect, zoom_factor,
     };
 
     fn rect(top: f32) -> HighlightRect {
@@ -1391,6 +1456,10 @@ mod tests {
         let work = screen_area(0, 0, 1920, 1040);
         let anchor = caret_box(300, 400, 302, 420);
         assert_eq!(place_in(work, anchor, (600, 300), 2), (300, 422));
+        assert_eq!(
+            place_in_with_side(work, anchor, (600, 300), 2).1,
+            Placement::Below
+        );
     }
 
     /// 下方放不下就翻到上方，底部与光标行留出间隙。
@@ -1399,6 +1468,10 @@ mod tests {
         let work = screen_area(0, 0, 1920, 1040);
         let anchor = caret_box(300, 800, 302, 820);
         assert_eq!(place_in(work, anchor, (600, 300), 2), (300, 498));
+        assert_eq!(
+            place_in_with_side(work, anchor, (600, 300), 2).1,
+            Placement::Above
+        );
     }
 
     /// 上下都放不下（候选窗比光标两侧的空间都高）：先摆到光标右侧，避开正在输入的那一行。

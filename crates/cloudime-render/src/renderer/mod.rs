@@ -2031,6 +2031,81 @@ mod tests {
         );
     }
 
+    /// 横排紧凑：没有额外内容时少掉「Tip + 页码」那一行；有额外内容时只留额外内容那一行。
+    #[test]
+    fn compact_horizontal_drops_the_tip_line() {
+        use crate::frame::CandidateView;
+
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let mut frame = Frame {
+            preedit: Some(Preedit::plain("nihao", 5)),
+            rows: (0..3)
+                .map(|index| Row {
+                    index: (index + 1).to_string(),
+                    text: format!("候选{index}"),
+                    annotation: Vec::new(),
+                    badge: None,
+                    auxiliary: None,
+                })
+                .collect(),
+            highlighted: Some(0),
+            footer: Some("1/2".to_owned()),
+            tip: Some(vec![TipSegment::new(
+                "int. hello",
+                Tone::TranslateFresh,
+                false,
+            )]),
+            ..Frame::default()
+        };
+        let theme = Theme::new();
+        let normal = renderer
+            .render_candidate_view(
+                &CandidateView::from(&frame),
+                Layout::Horizontal,
+                &theme,
+                1.0,
+                None,
+            )
+            .unwrap();
+        let mut view = CandidateView::from(&frame);
+        view.compact_horizontal = true;
+        let compact = renderer
+            .render_candidate_view(&view, Layout::Horizontal, &theme, 1.0, None)
+            .unwrap();
+        assert!(
+            compact.content_height < normal.content_height,
+            "紧凑横排应少一行：normal={} compact={}",
+            normal.content_height,
+            compact.content_height
+        );
+
+        frame.online = Some(vec![TipSegment::new("online", Tone::Online, false)]);
+        let normal_online = renderer
+            .render_candidate_view(
+                &CandidateView::from(&frame),
+                Layout::Horizontal,
+                &theme,
+                1.0,
+                None,
+            )
+            .unwrap();
+        let mut view = CandidateView::from(&frame);
+        view.compact_horizontal = true;
+        let compact_online = renderer
+            .render_candidate_view(&view, Layout::Horizontal, &theme, 1.0, None)
+            .unwrap();
+        assert!(
+            compact_online.content_height > compact.content_height
+                && compact_online.content_height < normal_online.content_height,
+            "有额外内容时紧凑版只多额外内容那一行：compact={} compact+online={} normal+online={}",
+            compact.content_height,
+            compact_online.content_height,
+            normal_online.content_height
+        );
+    }
+
     #[test]
     fn the_page_tree_candidate_matches_the_matrix_render() {
         use crate::frame::CandidateView;

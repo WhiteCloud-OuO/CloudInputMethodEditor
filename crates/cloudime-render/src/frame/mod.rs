@@ -63,6 +63,14 @@ pub struct CandidateView {
     pub tip: Option<Vec<TipSegment>>,
     pub online: Option<Vec<TipSegment>>,
     pub status: Option<String>,
+
+    /// 竖排时反向排列（候选窗在光标上方）：从下到上依次拼音串、候选项、Tip（含页码）、额外内容。
+    /// 只对非展开的竖排（`columns == 0`）生效；横排 / 网格忽略。
+    pub reverse_vertical: bool,
+
+    /// 横排紧凑：翻译 Tip 放到拼音行右侧、页码放到候选行右侧，原 Tip 行只留额外内容。
+    /// 只对非展开的横排（`columns == 0`）生效；展开成网格后忽略。
+    pub compact_horizontal: bool,
 }
 
 impl From<&Frame> for CandidateView {
@@ -78,6 +86,8 @@ impl From<&Frame> for CandidateView {
             tip: frame.tip.clone(),
             online: frame.online.clone(),
             status: frame.status.clone(),
+            reverse_vertical: false,
+            compact_horizontal: false,
         }
     }
 }

@@ -16,6 +16,12 @@ pub struct RouterConfig {
     /// 候选排布（`[candidate] candidate_arrangement_direction`）。
     pub layout: LayoutMode,
 
+    /// 竖排时，候选窗在光标上方就自动反向排列（`[candidate] auto_reverse_candidate_order`）。
+    pub auto_reverse_candidate_order: bool,
+
+    /// 横排时使用更紧凑的两行布局（`[candidate] compact_candidate_window`）。
+    pub compact_candidate_window: bool,
+
     /// 拼音串字体：字族名（空为系统界面字体）+ 字号（点）。
     pub pinyin_font: (String, f32),
 
@@ -212,6 +218,8 @@ impl RouterConfig {
             scale: self.script_scale,
             max_cell_width: self.max_cell_width,
             candidate_auxiliary: self.candidate_auxiliary,
+            auto_reverse_candidate_order: self.auto_reverse_candidate_order,
+            compact_candidate_window: self.compact_candidate_window,
             theme: load_theme(self.script_theme.as_deref().unwrap_or(&self.curr_theme)),
         }
     }
@@ -276,6 +284,8 @@ impl From<&Config> for RouterConfig {
         Self {
             page_size: candidate.candidate_count(),
             layout: candidate.candidate_arrangement_direction,
+            auto_reverse_candidate_order: candidate.auto_reverse_candidate_order,
+            compact_candidate_window: candidate.compact_candidate_window,
             pinyin_font: (
                 candidate.pinyin_font.family.clone(),
                 candidate.pinyin_font.size,

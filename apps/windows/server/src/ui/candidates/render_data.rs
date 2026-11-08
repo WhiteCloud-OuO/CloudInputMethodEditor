@@ -161,6 +161,8 @@ impl RenderData {
             tip: (!self.tip.is_empty()).then(|| self.tip.clone()),
             online: (!self.online.is_empty()).then(|| self.online.clone()),
             status: self.notice.clone(),
+            reverse_vertical: false,
+            compact_horizontal: false,
         }
     }
 }

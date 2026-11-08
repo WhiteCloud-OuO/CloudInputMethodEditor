@@ -505,6 +505,8 @@ mod tests {
             scale: None,
             max_cell_width: 0.0,
             candidate_auxiliary: false,
+            auto_reverse_candidate_order: false,
+            compact_candidate_window: false,
             theme: Default::default(),
         }
     }

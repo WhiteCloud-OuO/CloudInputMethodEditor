@@ -263,7 +263,7 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
     // 「展示更多候选项」与它下面两行（使用鼠标选词、展开后每个候选项的最大宽度）只对全键拼音有意义：
     // 其他方案下三项一起置灰（U / V 模式本身另有 Ctrl+Alt+U / Ctrl+Alt+V 入口，见那一行的说明）。
     let full_pinyin = settings.config.input.input_schemes == InputScheme::FullPinyin;
-    let rows = [
+    let mut rows: Vec<View> = vec![
         model_field(settings, context),
         field(
             "候选项排布方向",
@@ -277,6 +277,26 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
                 context,
             ),
         ),
+    ];
+    if c.candidate_arrangement_direction == LayoutMode::Vertical {
+        rows.push(field(
+            "自动使用反向排列",
+            "候选窗位于光标上方时，把拼音串放到最下面贴近光标，候选项、翻译 Tip（含页码）、额外内容依次往上排；位于光标下方时保持现在的顺序。",
+            ToggleSwitch::new()
+                .is_on(c.auto_reverse_candidate_order)
+                .on_toggled(context.callback(Message::AutoReverseCandidates)),
+        ));
+    }
+    if c.candidate_arrangement_direction == LayoutMode::Horizontal {
+        rows.push(field(
+            "使用更紧凑的候选窗口",
+            "把翻译 Tip 移到拼音串那一行右侧、页码移到候选项行最右侧，原来的 Tip 行只留给额外内容；没有额外内容时窗口少一行。",
+            ToggleSwitch::new()
+                .is_on(c.compact_candidate_window)
+                .on_toggled(context.callback(Message::CompactCandidates)),
+        ));
+    }
+    rows.extend([
         slider_field(
             "候选项个数",
             "",
@@ -386,6 +406,11 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             ),
         ),
         crate::panel::controls::feedback(&settings.notice),
-    ];
-    page("候选", StackPanel::new().spacing(16.0).children(rows))
+    ]);
+    let rows: Vec<KeyedView> = rows
+        .into_iter()
+        .enumerate()
+        .map(|(index, row)| KeyedView::new(format!("candidate-row-{index}"), row))
+        .collect();
+    page("候选", StackPanel::new().spacing(16.0).keyed_children(rows))
 }

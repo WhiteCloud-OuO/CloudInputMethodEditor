@@ -101,22 +101,39 @@ impl Renderer {
             metrics.corner_radius(),
             theme.colors.background,
         );
-        let mut y = margin + metrics.padding();
-        self.draw_candidate_top(&mut recorder, view, &metrics, margin, y);
-        y += candidate
+        let top_y = candidate
             .top
             .and_then(|id| candidate_rect(&candidate.rects, id))
-            .map_or(0.0, |rect| rect.height);
-        self.draw_candidate_rows(&mut recorder, view, &metrics, &candidate, margin, y);
-        if candidate.footer.is_some() {
-            self.draw_candidate_info(
-                &mut recorder,
-                view,
-                &metrics,
-                margin,
-                y + candidate.columns.row_height * view.rows.len() as f32 + metrics.row_padding(),
-                candidate.content.0,
-            );
+            .map_or(margin + metrics.padding(), |rect| margin + rect.y);
+        self.draw_candidate_top(&mut recorder, view, &metrics, margin, top_y);
+        let rows_y = candidate
+            .highlight_rects
+            .first()
+            .map_or(margin + metrics.padding(), |rect| margin + rect.top);
+        self.draw_candidate_rows(&mut recorder, view, &metrics, &candidate, margin, rows_y);
+        if let Some(id) = candidate.footer
+            && let Some(rect) = candidate_rect(&candidate.rects, id)
+        {
+            let footer_y = margin + rect.y;
+            if view.reverse_vertical {
+                self.draw_candidate_info_reversed(
+                    &mut recorder,
+                    view,
+                    &metrics,
+                    margin,
+                    footer_y,
+                    candidate.content.0,
+                );
+            } else {
+                self.draw_candidate_info(
+                    &mut recorder,
+                    view,
+                    &metrics,
+                    margin,
+                    footer_y,
+                    candidate.content.0,
+                );
+            }
         }
 
         let scale = scale.max(f32::EPSILON);
@@ -239,6 +256,30 @@ impl Renderer {
             + top_size.1
             + columns.row_height * view.rows.len() as f32
             + info_height;
+        let rows_height = columns.row_height * view.rows.len() as f32;
+        // 反向竖排：拼音行贴底（靠近光标），往上依次候选行、Tip / 页码、额外内容。
+        let (top_y, rows_top, footer_top) = if view.reverse_vertical {
+            let info_draw_height = if info_height > 0.0 {
+                info_height - m.row_padding()
+            } else {
+                0.0
+            };
+            let info_top = m.padding()
+                + if info_height > 0.0 {
+                    m.row_padding()
+                } else {
+                    0.0
+                };
+            let rows_top = info_top + info_draw_height;
+            (rows_top + rows_height, rows_top, info_top)
+        } else {
+            let rows_top = m.padding() + top_size.1;
+            (
+                m.padding(),
+                rows_top,
+                rows_top + rows_height + m.row_padding(),
+            )
+        };
         let mut tree = PageTree::new(Node::new(NodeKind::Page));
         tree.node_mut(tree.root).width = SizeSpec::Fixed(width);
         tree.node_mut(tree.root).height = SizeSpec::Fixed(height);
@@ -246,14 +287,13 @@ impl Renderer {
             Some(add_absolute(
                 &mut tree,
                 m.padding(),
-                m.padding(),
+                top_y,
                 width,
                 top_size.1,
             ))
         } else {
             None
         };
-        let rows_top = m.padding() + top_size.1;
         let mut rows = Vec::with_capacity(view.rows.len());
         for index in 0..view.rows.len() {
             rows.push(add_absolute(
@@ -264,7 +304,6 @@ impl Renderer {
                 columns.row_height,
             ));
         }
-        let footer_top = rows_top + columns.row_height * view.rows.len() as f32 + m.row_padding();
         let footer = (info_height > 0.0).then(|| {
             add_absolute(
                 &mut tree,
@@ -350,6 +389,44 @@ impl Renderer {
         (width, style.line_height + m.row_padding() * 2.0)
     }
 
+    /// 横排紧凑时顶部那一行还要放翻译 Tip（靠右）；不紧凑时就是普通拼音行。
+    fn horizontal_top_size(&self, view: &CandidateView, m: &Metrics) -> (f32, f32) {
+        let (mut width, mut height) = self.candidate_top_size(view, m);
+        if view.compact_horizontal
+            && let Some(tip) = view.tip.as_deref()
+        {
+            if view.has_top_line() {
+                width += m.column_gap();
+            }
+            width += self.tip_segments_width(tip, m);
+            height = height.max(m.px(m.theme.translate_font.line_height) + m.row_padding() * 2.0);
+        }
+        (width, height)
+    }
+
+    fn tip_segments_width(&self, segments: &[TipSegment], m: &Metrics) -> f32 {
+        segments
+            .iter()
+            .map(|segment| {
+                let style = m.translate_style(m.tone_color(segment.tone), segment.italic);
+                self.measure(&segment.text, &style).width
+            })
+            .sum()
+    }
+
+    /// 横排底部信息区的高度：紧凑时只剩额外内容，Tip / 页码已经挪到上面两行。
+    fn horizontal_info_height(&self, view: &CandidateView, m: &Metrics) -> f32 {
+        if view.compact_horizontal {
+            if view.online.is_some() {
+                self.candidate_online_height(view, m) + m.row_padding()
+            } else {
+                0.0
+            }
+        } else {
+            self.candidate_info_height(view, m)
+        }
+    }
+
     fn candidate_info_height(&self, view: &CandidateView, m: &Metrics) -> f32 {
         let mut height = if view.tip.is_none() && view.footer.is_none() {
             0.0
@@ -360,11 +437,17 @@ impl Renderer {
             }
             bottom + m.row_padding()
         };
-        if let Some(online) = view.online.as_deref() {
-            height += m.px(m.theme.translate_font.line_height) * online_lines(online).len() as f32;
-            height += m.row_padding();
+        if view.online.is_some() {
+            height += self.candidate_online_height(view, m) + m.row_padding();
         }
         height
+    }
+
+    /// 在线翻译（额外内容）那一块的高度（不含与上面 Tip 行之间的留白）。
+    fn candidate_online_height(&self, view: &CandidateView, m: &Metrics) -> f32 {
+        view.online.as_deref().map_or(0.0, |online| {
+            m.px(m.theme.translate_font.line_height) * online_lines(online).len() as f32
+        })
     }
 
     fn draw_candidate_top(
@@ -487,6 +570,41 @@ impl Renderer {
         y: f32,
         content_width: f32,
     ) {
+        self.draw_candidate_bottom_line(render, view, m, left, y, content_width);
+        let bottom = self.candidate_bottom_height(view, m);
+        self.draw_candidate_online(render, view, m, left, y + bottom, content_width);
+    }
+
+    /// 竖排反向时：额外内容在上、Tip（含页码）在下，其余不变。
+    fn draw_candidate_info_reversed(
+        &self,
+        render: &mut DrawRecorder,
+        view: &CandidateView,
+        m: &Metrics,
+        left: f32,
+        y: f32,
+        content_width: f32,
+    ) {
+        let online_height = self.candidate_online_height(view, m);
+        self.draw_candidate_online(render, view, m, left, y, content_width);
+        let tip_y = if online_height > 0.0 {
+            y + online_height + m.row_padding()
+        } else {
+            y
+        };
+        self.draw_candidate_bottom_line(render, view, m, left, tip_y, content_width);
+    }
+
+    /// 底部那一行：左侧翻译 Tip、右侧页码。
+    fn draw_candidate_bottom_line(
+        &self,
+        render: &mut DrawRecorder,
+        view: &CandidateView,
+        m: &Metrics,
+        left: f32,
+        y: f32,
+        content_width: f32,
+    ) {
         let right = left + content_width - m.padding();
         let mut budget = right - left - m.padding() * 2.0;
         if let Some(footer) = view.footer.as_deref() {
@@ -498,20 +616,61 @@ impl Renderer {
         if let Some(segments) = view.tip.as_deref() {
             self.draw_candidate_segments(render, segments, m, left + m.padding(), y, budget);
         }
-        if let Some(online) = view.online.as_deref() {
-            let bottom = self.candidate_bottom_height(view, m);
-            let line_height = m.px(m.theme.translate_font.line_height);
-            let budget = content_width - m.padding() * 2.0;
-            for (index, line) in online_lines(online).into_iter().enumerate() {
-                self.draw_candidate_segments(
-                    render,
-                    &line,
-                    m,
-                    left + m.padding(),
-                    y + bottom + line_height * index as f32,
-                    budget,
-                );
-            }
+    }
+
+    /// 在线翻译（额外内容）那一块，逐行左对齐。
+    fn draw_candidate_online(
+        &self,
+        render: &mut DrawRecorder,
+        view: &CandidateView,
+        m: &Metrics,
+        left: f32,
+        y: f32,
+        content_width: f32,
+    ) {
+        let Some(online) = view.online.as_deref() else {
+            return;
+        };
+        let line_height = m.px(m.theme.translate_font.line_height);
+        let budget = content_width - m.padding() * 2.0;
+        for (index, line) in online_lines(online).into_iter().enumerate() {
+            self.draw_candidate_segments(
+                render,
+                &line,
+                m,
+                left + m.padding(),
+                y + line_height * index as f32,
+                budget,
+            );
+        }
+    }
+
+    /// 紧凑横排：把翻译 Tip 靠右画在拼音行上；放不下时退回左对齐并截断。
+    fn draw_candidate_tip_right(
+        &self,
+        render: &mut DrawRecorder,
+        segments: &[TipSegment],
+        m: &Metrics,
+        left: f32,
+        right: f32,
+        y: f32,
+    ) {
+        let total: f32 = segments
+            .iter()
+            .map(|segment| {
+                let style = m.translate_style(m.tone_color(segment.tone), segment.italic);
+                render.measure(&segment.text, &style).width
+            })
+            .sum();
+        let budget = right - left;
+        if total > budget {
+            self.draw_candidate_segments(render, segments, m, left, y, budget);
+            return;
+        }
+        let mut x = right - total;
+        for segment in segments {
+            let style = m.translate_style(m.tone_color(segment.tone), segment.italic);
+            x += render.text(&segment.text, &style, x, y);
         }
     }
 
@@ -587,7 +746,21 @@ impl Renderer {
         );
         let y = margin + m.padding();
         self.draw_candidate_top(&mut recorder, view, &m, margin, y);
-        let top = y + self.candidate_top_size(view, &m).1;
+        let top_size = self.horizontal_top_size(view, &m);
+        if view.compact_horizontal
+            && let Some(tip) = view.tip.as_deref()
+        {
+            let right = margin + laid.content.0 - m.padding();
+            self.draw_candidate_tip_right(
+                &mut recorder,
+                tip,
+                &m,
+                margin + m.padding(),
+                right,
+                y + m.row_padding(),
+            );
+        }
+        let top = y + top_size.1;
         let inset = m.px(super::HIGHLIGHT_INSET);
         if let Some(rect) = highlight_rect(view, &laid.highlight_rects) {
             recorder.round_rect(
@@ -637,14 +810,27 @@ impl Renderer {
                 x += recorder.text(segment, &style, x, annotation_top);
             }
         }
-        let info_top = if laid.annotation_height > 0.0 {
-            top + laid.row_height + laid.annotation_height
+        if view.compact_horizontal {
+            // 页码贴候选行最右侧，垂直居中。
+            if let Some(footer) = view.footer.as_deref() {
+                let style = m.footer_style();
+                let size = recorder.measure(footer, &style);
+                let right = margin + laid.content.0 - m.padding();
+                let footer_top = top + (laid.row_height - size.height).max(0.0) / 2.0;
+                recorder.text(footer, &style, right - size.width, footer_top);
+            }
+            let info_top = top + laid.row_height + laid.annotation_height + m.row_padding();
+            self.draw_candidate_online(&mut recorder, view, &m, margin, info_top, laid.content.0);
         } else {
-            // 没有译文时，底部信息区排在候选行下方（与旧 `draw_horizontal` 一致）；
-            // `top` 已经含拼音行，漏掉它页码会画到候选行上。
-            top + m.row_padding() + laid.row_height
-        };
-        self.draw_candidate_info(&mut recorder, view, &m, margin, info_top, laid.content.0);
+            let info_top = if laid.annotation_height > 0.0 {
+                top + laid.row_height + laid.annotation_height
+            } else {
+                // 没有译文时，底部信息区排在候选行下方（与旧 `draw_horizontal` 一致）；
+                // `top` 已经含拼音行，漏掉它页码会画到候选行上。
+                top + m.row_padding() + laid.row_height
+            };
+            self.draw_candidate_info(&mut recorder, view, &m, margin, info_top, laid.content.0);
+        }
 
         let scale = scale.max(f32::EPSILON);
         let panel = SelfDrawingPanel {
@@ -701,16 +887,27 @@ impl Renderer {
     fn candidate_horizontal_layout(&self, view: &CandidateView, m: &Metrics) -> HorizontalLayout {
         let (items, row_height) = self.items(&view.rows, m);
         let inset = m.px(super::HIGHLIGHT_INSET);
-        let mut width = items
+        let items_width = items
             .iter()
             .map(|item| super::horizontal::item_width(item, m))
             .sum::<f32>()
             + m.column_gap() * items.len().saturating_sub(1) as f32
             + inset * 2.0
             + m.padding() * 2.0;
-        let top_size = self.candidate_top_size(view, m);
-        if let Some(footer) = view.footer.as_deref() {
-            width = width.max(m.column_gap() + self.measure(footer, &m.footer_style()).width);
+        let top_size = self.horizontal_top_size(view, m);
+        let footer_width = view
+            .footer
+            .as_deref()
+            .map(|footer| self.measure(footer, &m.footer_style()).width);
+        let mut width = items_width;
+        if view.compact_horizontal {
+            // 页码要放在候选行最右侧，给它留出间隔 + 宽度。
+            if let Some(footer_width) = footer_width {
+                width = width.max(items_width + m.column_gap() + footer_width);
+            }
+            width = width.max(top_size.0 + m.padding() * 2.0);
+        } else if let Some(footer_width) = footer_width {
+            width = width.max(m.column_gap() + footer_width);
         }
         width = width.max(m.px(m.theme.min_width_pixels));
         let annotation_height = view
@@ -720,11 +917,8 @@ impl Renderer {
             .map_or(0.0, |_| {
                 m.px(m.theme.annotation_font.line_height) + m.row_padding()
             });
-        let height = m.padding() * 2.0
-            + top_size.1
-            + row_height
-            + annotation_height
-            + self.candidate_info_height(view, m);
+        let info_height = self.horizontal_info_height(view, m);
+        let height = m.padding() * 2.0 + top_size.1 + row_height + annotation_height + info_height;
         let mut tree = PageTree::new(Node::new(NodeKind::Page));
         tree.node_mut(tree.root).width = SizeSpec::Fixed(width);
         tree.node_mut(tree.root).height = SizeSpec::Fixed(height);
@@ -746,13 +940,13 @@ impl Renderer {
             x += item_width + m.column_gap();
         }
         let footer_top = rows_top + row_height + annotation_height + m.row_padding();
-        let footer = (self.candidate_info_height(view, m) > 0.0).then(|| {
+        let footer = (!view.compact_horizontal && info_height > 0.0).then(|| {
             add_absolute(
                 &mut tree,
                 m.padding(),
                 footer_top,
                 width - m.padding() * 2.0,
-                self.candidate_info_height(view, m),
+                info_height,
             )
         });
         let mut children = Vec::new();
@@ -993,4 +1187,71 @@ fn highlight_rect(view: &CandidateView, rects: &[HighlightRect]) -> Option<Highl
         target,
         animation.progress,
     ))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::fonts::FontLibrary;
+    use crate::frame::{CandidateView, Frame, Preedit, Row, TipSegment, Tone};
+    use crate::layout::Layout;
+    use crate::theme::Theme;
+
+    fn frame() -> Frame {
+        Frame {
+            preedit: Some(Preedit::plain("nihao", 5)),
+            rows: (0..3)
+                .map(|index| Row {
+                    index: (index + 1).to_string(),
+                    text: format!("候选{index}"),
+                    annotation: Vec::new(),
+                    badge: None,
+                    auxiliary: None,
+                })
+                .collect(),
+            highlighted: Some(0),
+            footer: Some("1/2".to_owned()),
+            tip: Some(vec![TipSegment::new(
+                "int. hello",
+                Tone::TranslateFresh,
+                false,
+            )]),
+            ..Frame::default()
+        }
+    }
+
+    /// 反向竖排：从上到下变成「额外内容 / Tip / 候选行 / 拼音」，高度不变。
+    #[test]
+    fn reverse_vertical_swaps_the_top_and_info_blocks() {
+        let Some(renderer) = FontLibrary::system("zh-CN").ok().map(Renderer::new) else {
+            return;
+        };
+        let theme = Theme::new();
+        let metrics = Metrics {
+            theme: &theme,
+            scale: 1.0,
+        };
+        let normal_view = CandidateView::from(&frame());
+        let mut reverse_view = normal_view.clone();
+        reverse_view.reverse_vertical = true;
+        let normal = renderer
+            .candidate_layout(&normal_view, Layout::Vertical, &metrics)
+            .unwrap();
+        let reverse = renderer
+            .candidate_layout(&reverse_view, Layout::Vertical, &metrics)
+            .unwrap();
+        let top = |layout: &CandidateLayout| {
+            candidate_rect(&layout.rects, layout.top.expect("有拼音行")).expect("量到拼音行")
+        };
+        let footer = |layout: &CandidateLayout| {
+            candidate_rect(&layout.rects, layout.footer.expect("有 Tip / 页码行"))
+                .expect("量到 Tip / 页码行")
+        };
+        let row_top = |layout: &CandidateLayout| layout.highlight_rects[0].top;
+        assert!(top(&normal).y < row_top(&normal));
+        assert!(row_top(&normal) < footer(&normal).y);
+        assert!(footer(&reverse).y < row_top(&reverse));
+        assert!(row_top(&reverse) < top(&reverse).y);
+        assert_eq!(normal.content.1, reverse.content.1);
+    }
 }

@@ -58,6 +58,10 @@ pub(crate) enum Message {
     LocalModel(Option<usize>),
     /// 候选项排布方向（`LayoutMode::ALL` 的下标）。
     Arrangement(Option<usize>),
+    /// 竖排时在光标上方自动反向排列。
+    AutoReverseCandidates(bool),
+    /// 横排时使用更紧凑的两行布局。
+    CompactCandidates(bool),
     /// 候选项个数（滑轨）。
     CandidateCount(f64),
     /// 联想候选项目上限（滑轨）。

@@ -226,6 +226,12 @@ impl Component for Settings {
                     LayoutMode::ALL[i].key(),
                 );
             }
+            Message::AutoReverseCandidates(on) => {
+                self.save("candidate", "auto_reverse_candidate_order", on);
+            }
+            Message::CompactCandidates(on) => {
+                self.save("candidate", "compact_candidate_window", on);
+            }
             Message::CandidateCount(value) => {
                 let count = (value.round() as i64)
                     .clamp(MIN_CANDIDATE_COUNT as i64, MAX_CANDIDATE_COUNT as i64);

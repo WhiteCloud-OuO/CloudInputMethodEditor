@@ -41,6 +41,12 @@ pub struct RenderSettings {
     /// 候选词右边隔一个空格画上那个候选的辅助码（Core 已经把码填在候选里，见 `Candidate::auxiliary`）。
     pub candidate_auxiliary: bool,
 
+    /// 竖排时，候选窗在光标上方就自动反向排列（拼音行贴近光标在最下）。
+    pub auto_reverse_candidate_order: bool,
+
+    /// 横排时压紧成两行：翻译 Tip 放到拼音行右侧、页码放到候选行右侧。
+    pub compact_candidate_window: bool,
+
     /// 当前主题（`Themes\` 里那份的三个窗口配色）；读不到就是缺省主题。
     pub theme: ThemeFile,
 }
@@ -59,6 +65,8 @@ impl Default for RenderSettings {
             scale: None,
             max_cell_width: 0.0,
             candidate_auxiliary: false,
+            auto_reverse_candidate_order: false,
+            compact_candidate_window: false,
             theme: Default::default(),
         }
     }
