@@ -204,6 +204,18 @@ fn report_caret(shared: &Shared, engine: &SharedClient, context: &ITfContext, ec
     }
 }
 
+/// 这个宿主的成对补全要不要整段注入文本（而不是 TSF 插入 + 方向键）。
+///
+/// QQ 的聊天输入框是 Chromium / Electron：TSF 插入后选区仍停在插入前，注入方向键只挪可见光标，
+/// 下一次组句从符号左边插入。整段 Unicode 注入由应用自己处理文本与光标，选区不会和 TSF 脱节。
+fn host_uses_injected_commit() -> bool {
+    wants_injected_commit(crate::com::host_app_name().as_deref())
+}
+
+fn wants_injected_commit(host: Option<&str>) -> bool {
+    host.is_some_and(|name| name.eq_ignore_ascii_case("QQ.exe"))
+}
+
 /// 有组句就把组句范围替换成 `text` 再结束组句，否则在选区插入；`caret_shift` / `delete_before` 见 [`apply`]。
 fn commit_text(
     shared: &Shared,
@@ -237,6 +249,16 @@ fn commit_text(
                 }
                 return Ok(());
             }
+            // QQ（Chromium / Electron 输入框）的 TSF 选区在上屏后不跟随应用光标：`InsertTextAtSelection`
+            // 把 `()` 插进去、注入的左箭头只挪了可见光标，下一次组句仍从符号左边插入。成对补全改走
+            // 整段 Unicode 注入（文本 + 方向键一起交给应用），让应用自己维护插入点；注入被拒再退回 TSF。
+            if caret_shift != 0 && host_uses_injected_commit() && inject_text(text, caret_shift) {
+                super::log::log(&format!(
+                    "成对补全改走注入文本 host={:?} shift={caret_shift}",
+                    crate::com::host_app_name()
+                ));
+                return Ok(());
+            }
             let insert: ITfInsertAtSelection = context.cast()?;
             // 标志不能用 NOQUERY：它不回传 range，windows-rs 会把 NULL 当失败。
             let range = unsafe {
@@ -252,6 +274,7 @@ fn commit_text(
 /// 落光标。成对补全（`caret_shift` 不为 0）优先**注入方向键**：TSF 的 `SetSelection` 在部分宿主里会被应用
 /// 自己改回来（真机上成对补全的光标一直停在末尾，而同一个应用对方向键的响应是好的）；注入不了
 ///（AppContainer / UIPI 拦下来）再退回 TSF 位移。普通上屏（`caret_shift == 0`）只走 TSF。
+/// QQ 的输入框是例外：TSF 选区不跟随，成对补全在 [`commit_text`] 里整段注入文本 + 方向键。
 fn settle_caret(
     context: &ITfContext,
     ec: u32,
@@ -691,4 +714,17 @@ fn set_selection(context: &ITfContext, ec: u32, caret: ITfRange) -> Result<()> {
     let result = unsafe { context.SetSelection(ec, std::slice::from_ref(&selection)) };
     drop(ManuallyDrop::into_inner(selection.range));
     result
+}
+
+#[cfg(test)]
+mod tests {
+    use super::wants_injected_commit;
+
+    #[test]
+    fn qq_uses_injected_pair_commit() {
+        assert!(wants_injected_commit(Some("QQ.exe")));
+        assert!(wants_injected_commit(Some("qq.EXE")));
+        assert!(!wants_injected_commit(Some("notepad.exe")));
+        assert!(!wants_injected_commit(None));
+    }
 }

@@ -1356,6 +1356,9 @@ Server `dispatch/key/input.rs::ctrl_digit` 按键码认数字（按住 Ctrl 时 
 （`SendInput` 左 / 右，在编辑会话里发、会话返回后应用才处理，那时文本已落好），因为部分宿主会覆盖 TSF 的
 `SetSelection`（真机上光标一直停在末尾，而同一应用对方向键的响应是好的）；`SendInput` 被拒（AppContainer / UIPI）
 才退回 TSF 位移。两条路失败都只记日志，不把这一键的上屏带崩。
+QQ（Chromium / Electron 输入框）的 TSF 选区在上屏后不跟随应用光标：`InsertTextAtSelection` 插入 `()` 后选区还停在
+起点，注入方向键只挪了可见光标，下一次组句仍从符号左边插入。`QQ.exe` 的成对补全因此改走 `inject_text`
+（Unicode 文本 + 方向键整段注入），让应用自己维护插入点；注入被拒时仍退回 TSF。
 
 全角字符（状态条「全角 / 半角」）：开关是 Server 的会话内状态（`RouterConfig.full_width_chars`），随 `InputSettings.full_width_chars`
 下发给 DLL；DLL 开着时把字母也吃掉送来（`key_sink.rs::eats_key`，英文模式本来送都不送），Server 在直通那条路上问 Core
