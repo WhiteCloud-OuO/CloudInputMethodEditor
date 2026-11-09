@@ -28,14 +28,15 @@ pub use radix::conversion_forms;
 /// 表达式模式的固定前缀。`v` 不是任何拼音音节的开头，用它不会和拼音冲突。
 pub const EXPRESSION_PREFIX: char = 'v';
 
-/// 表达式模式下允许敲进缓冲区的非字母字符：数字、四则运算、求余 `%`、阶乘 `!`、复数模 `@`、
-/// 幂 `^`、`,`（函数参数分隔）、`#` 取名前缀、`=` / `>` 进制转换前缀。字母（函数名、虚数单位 `i`）
-/// 本来就能进缓冲区，不在此列；`x` 不是乘号，乘要敲 `*`。
+/// 表达式模式下允许敲进缓冲区的非字母字符：数字、四则运算（`-` 除外，V 模式里它是翻页键）、
+/// 求余 `%`、阶乘 `!`、复数模 `@`、幂 `^`、`,`（函数参数分隔）、`#` 取名前缀。
+/// 字母（函数名、虚数单位 `i`）本来就能进缓冲区；`x` 不是乘号，乘要敲 `*`。
+/// `=` / `>` 只在高级计算界面里由“所有可打印 ASCII 都进算式”那条路进入，V 模式里 `=` 是翻页键。
 pub fn is_expression_char(c: char) -> bool {
     c.is_ascii_digit()
         || matches!(
             c,
-            '+' | '-' | '*' | '/' | '%' | '!' | '@' | '#' | '=' | '>' | '(' | ')' | ',' | '.' | '^'
+            '+' | '*' | '/' | '%' | '!' | '@' | '#' | '(' | ')' | ',' | '.' | '^'
         )
 }
 
@@ -241,8 +242,14 @@ mod tests {
         assert_eq!(texts("v2^10", false), ["1024", "2^10=1024"]);
         assert_eq!(texts("v5!", false), ["120", "5!=120"]);
         assert_eq!(texts("v7%3", false), ["1", "7%3=1"]);
-        // `=>` 进制转换：源进制之外三种
-        assert_eq!(texts("v=>255", false), ["0b11111111", "0o377", "0xff"]);
+        // `=>` 进制转换：源进制之外三种（只在高级计算界面里能输入 `=` / `>`）
+        assert_eq!(
+            result_candidates("=>255")
+                .into_iter()
+                .map(|candidate| candidate.text)
+                .collect::<Vec<_>>(),
+            ["0b11111111", "0o377", "0xff"]
+        );
         assert_eq!(
             result_candidates("sin(30)")
                 .into_iter()
@@ -284,8 +291,9 @@ mod tests {
     fn expression_chars() {
         assert!(is_expression_char('7'));
         assert!(is_expression_char('('));
-        assert!(is_expression_char('='));
-        assert!(is_expression_char('>'));
+        assert!(!is_expression_char('='));
+        assert!(!is_expression_char('-'));
+        assert!(!is_expression_char('>'));
         assert!(!is_expression_char('x'));
     }
 }

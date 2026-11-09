@@ -62,13 +62,14 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 `apply_printable` 在面板里把**所有可打印 ASCII**都 `push` 进算式（标点按西文，忽略全角 / 符号映射）；
 面板不再往翻译 Tip 里写「按Tab/Esc退出表达式计算」，改为候选窗旁挂「高级数学计算界面」说明窗口
 （标题用候选项颜色、函数列表用额外内容颜色、底部「按Tab/Esc退出高级数学计算」用角标颜色）。
-V 模式本身只允许基础运算（`+ - * / % ^ !` 与括号 / 一元正负号，`shortcut::evaluate_basic`）；
+V 模式本身只允许基础运算（`+ * / % ^ !` 与括号 / 一元正负号，`shortcut::evaluate_basic`；
+`-` / `=` 是翻页键，不进 `is_expression_char`，所以 V 模式也算不了减法）；
 函数、`i`、`@` 只在面板里走 `shortcut::evaluate`。面板里回车走 `calculator_expression`：算得出来就上屏「算式=结果」
 （`5*6=30`），否则原样上屏（`take_raw` 顺手清组句，`calculator` 由 `handle_key` 的空组句那一拍清掉）。
 
 **进制转换**（`shortcut::radix`）：`=>` + `0b` / `0o` / `0x` / 无前缀整数，解析成 `u128` 后给其余三种进制
-（2 / 8 / 10 / 16；非十进制带小写前缀）。`=>` 的两个字符进了表达式字符集（`=` / `>`），V 模式与高级面板都能用；
-普通算式里的 `0x` 不按十六进制解析。
+（2 / 8 / 10 / 16；非十进制带小写前缀）。`=` / `>` 只在高级面板里由「所有可打印 ASCII 都进算式」接收；
+V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通算式里的 `0x` 不按十六进制解析。
 
 **双键拼音**（`shuangpin.rs`，2026-10-10；方案文件与规范见 `docs/design/input-schemes.md`）：`Table`（`zero_initials` / `remapping` / `exchange` / `auxiliary` / `raw_input`）把按键还原成完整拼音。
 `expand(keys)` 两键一个音节、`'` 强制分词（不上屏）、开了辅助码时**小写是拼音键、大写是辅助码**

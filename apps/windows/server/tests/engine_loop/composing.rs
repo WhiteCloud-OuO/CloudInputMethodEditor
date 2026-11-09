@@ -232,7 +232,7 @@ fn minus_and_equals_are_page_keys_outside_expression() {
     assert_eq!(preedit(&frame), "ni");
     press(&mut router, KeyEvent::new(0x1B, None, Default::default()));
 
-    // V 模式里 `=` 现在属于表达式字符（`=>` 进制转换），不再当翻页键。
+    // V 模式里主键盘 `=` / `-` 仍然是翻页键：不进算式，缓冲区不变。
     let (_, _, frame) = type_letters(&mut router, "v");
     assert_eq!(preedit(&frame), "v");
     let (outcome, commit, frame) = press(
@@ -240,7 +240,13 @@ fn minus_and_equals_are_page_keys_outside_expression() {
         KeyEvent::new(0xBB, Some('='), Default::default()),
     );
     assert_eq!((outcome, commit), (KeyOutcome::Consumed, None));
-    assert_eq!(preedit(&frame), "v=");
+    assert_eq!(preedit(&frame), "v", "V 模式里 `=` 该翻页，不进算式");
+    let (outcome, commit, frame) = press(
+        &mut router,
+        KeyEvent::new(0xBD, Some('-'), Default::default()),
+    );
+    assert_eq!((outcome, commit), (KeyOutcome::Consumed, None));
+    assert_eq!(preedit(&frame), "v", "V 模式里 `-` 该翻页，不进算式");
 }
 
 #[test]

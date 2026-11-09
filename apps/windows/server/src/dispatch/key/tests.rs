@@ -371,7 +371,8 @@ fn expression_mode_does_not_add_a_tip() {
 
 /// V 模式里只有拼音串是 `v` 时按 Tab 才进高级数学计算界面；候选固定成结果那一条、
 /// 拼音行显示算式（没有 `v`）、标点按西文进算式；Tab / Esc 退出回 V 模式。
-/// `v` 模式的基础算式只到四则 / 取余 / 幂 / 阶乘；函数只在高级面板里。`=>` 进制转换走 `=` `>` 两个键。
+/// `v` 模式的基础算式只到四则 / 取余 / 幂 / 阶乘；函数只在高级面板里。
+/// V 模式里主键盘 `=` / `-` 是翻页键，`=>` 进制转换只能在高级界面输入。
 #[test]
 fn v_mode_basic_expressions_and_radix_conversion() {
     let normal = KeyModifiers::default();
@@ -383,8 +384,22 @@ fn v_mode_basic_expressions_and_radix_conversion() {
         "V 模式没进高级面板时不出函数结果"
     );
 
+    // V 模式里 `=` / `-` 翻页：不进算式、缓冲区不变
+    let mut paging = router(9);
+    compose(&mut paging, "v", normal);
+    let (outcome, commit, frame) = key(&mut paging, 0xBB, Some('='), normal);
+    assert_eq!((outcome, commit), (KeyOutcome::Consumed, None));
+    assert_eq!(paging.engine.composition().text(), "v", "`=` 该翻页");
+    assert_eq!(preedit(&frame), "v");
+    let (outcome, commit, _) = key(&mut paging, 0xBD, Some('-'), normal);
+    assert_eq!((outcome, commit), (KeyOutcome::Consumed, None));
+    assert_eq!(paging.engine.composition().text(), "v", "`-` 该翻页");
+
+    // 高级界面里 `=` / `-` 不再是翻页键：正常进算式
     let mut radix = router(9);
-    compose(&mut radix, "v=>0x33ccff", normal);
+    compose(&mut radix, "v", normal);
+    key(&mut radix, 0x09, Some('\t'), normal); // 进高级界面
+    compose(&mut radix, "=>0x33ccff", normal);
     let texts: Vec<String> = radix
         .self_drawn_frame()
         .candidates
@@ -393,6 +408,28 @@ fn v_mode_basic_expressions_and_radix_conversion() {
         .map(|candidate| candidate.text)
         .collect();
     assert_eq!(texts, ["0b1100111100110011111111", "0o14746377", "3394815"]);
+
+    // 高级界面里 `-` / `=` 也不再翻页：正常进算式
+    let mut calc = router(9);
+    compose(&mut calc, "v", normal);
+    key(&mut calc, 0x09, Some('\t'), normal); // 进高级界面
+    compose(&mut calc, "2-1", normal);
+    let frame = calc.self_drawn_frame();
+    assert_eq!(
+        frame
+            .candidates
+            .items
+            .first()
+            .map(|candidate| candidate.text.as_str()),
+        Some("1"),
+        "高级界面里 `-` 该进算式"
+    );
+    key(&mut calc, 0xBB, Some('='), normal);
+    assert_eq!(
+        calc.engine.raw_preedit().text,
+        "v2-1=",
+        "高级界面里 `=` 该进算式"
+    );
 
     // 有算式时 Tab 不进面板；只有 v 才进
     let mut tab = router(9);
