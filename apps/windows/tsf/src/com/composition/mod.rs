@@ -8,7 +8,10 @@ use std::mem::ManuallyDrop;
 use std::rc::Rc;
 use std::time::Instant;
 
-use windows::Win32::UI::Input::KeyboardAndMouse::{VIRTUAL_KEY, VK_BACK, VK_DELETE};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetAsyncKeyState, VIRTUAL_KEY, VK_BACK, VK_CONTROL, VK_DELETE, VK_LWIN, VK_MENU, VK_RWIN,
+    VK_SHIFT,
+};
 use windows::Win32::UI::TextServices::{
     INSERT_TEXT_AT_SELECTION_FLAGS, ITfComposition, ITfCompositionSink, ITfContext,
     ITfContextComposition, ITfInsertAtSelection, ITfRange, ITfRangeACP, TF_AE_END, TF_ANCHOR_END,
@@ -50,6 +53,10 @@ pub(crate) struct Update {
 
     /// 上屏前先删掉光标后几个字符（U 模式 Delete）。
     pub delete_after: u16,
+
+    /// 这一拍是 Chromium 宿主的成对补全：在按键上下文里同步提交，跳过读前文 / 报光标这些
+    /// 额外操作，只做插入 + 落光标。
+    pub sync_pair: bool,
 }
 
 impl Update {
@@ -78,7 +85,7 @@ pub(crate) fn apply(
     // 读放在上屏之前，至少和「起组句时读」的语义一致。
     // 一段组句里只问一次。行内模式看组句刚起；`preedit = window` 模式应用里根本没有组句，
     // 得另用一个标记，否则每敲一键都要重读一遍光标前文、重报一次私密状态。
-    let report_input = !shared.has_composition() && !shared.context_reported();
+    let report_input = !update.sync_pair && !shared.has_composition() && !shared.context_reported();
     if report_input {
         shared.set_context_reported(true);
     }
@@ -94,6 +101,7 @@ pub(crate) fn apply(
             text,
             update.caret_shift,
             update.delete_before,
+            update.sync_pair,
         )?,
         // 没有要上屏的文本：先按 Server 要求删光标前字符（u 模式 Backspace），再挪补全光标。
         None if update.delete_before > 0 => {
@@ -103,7 +111,7 @@ pub(crate) fn apply(
             }
             delete_before_caret(shared, context, ec, update.delete_before)?;
             if update.caret_shift != 0 {
-                shift_caret(context, ec, update.caret_shift)?;
+                shift_caret(shared, context, ec, update.caret_shift)?;
             }
         }
         None if update.delete_after > 0 => {
@@ -112,10 +120,10 @@ pub(crate) fn apply(
             }
             delete_after_caret(shared, context, ec, update.delete_after)?;
             if update.caret_shift != 0 {
-                shift_caret(context, ec, update.caret_shift)?;
+                shift_caret(shared, context, ec, update.caret_shift)?;
             }
         }
-        None if update.caret_shift != 0 => shift_caret(context, ec, update.caret_shift)?,
+        None if update.caret_shift != 0 => shift_caret(shared, context, ec, update.caret_shift)?,
         None => {}
     }
     let preedit = &update.preedit;
@@ -140,7 +148,9 @@ pub(crate) fn apply(
         }
     }
     let caret_started = Instant::now();
-    report_caret(shared, engine, context, ec);
+    if !update.sync_pair {
+        report_caret(shared, engine, context, ec);
+    }
     let caret_us = caret_started.elapsed().as_micros();
     crate::com::log::timing(format_args!(
         "时序 context_us={context_us} surround_us={surround_us} caret_us={caret_us} report_input={report_input}"
@@ -204,18 +214,6 @@ fn report_caret(shared: &Shared, engine: &SharedClient, context: &ITfContext, ec
     }
 }
 
-/// 这个宿主的成对补全要不要整段注入文本（而不是 TSF 插入 + 方向键）。
-///
-/// QQ 的聊天输入框是 Chromium / Electron：TSF 插入后选区仍停在插入前，注入方向键只挪可见光标，
-/// 下一次组句从符号左边插入。整段 Unicode 注入由应用自己处理文本与光标，选区不会和 TSF 脱节。
-fn host_uses_injected_commit() -> bool {
-    wants_injected_commit(crate::com::host_app_name().as_deref())
-}
-
-fn wants_injected_commit(host: Option<&str>) -> bool {
-    host.is_some_and(|name| name.eq_ignore_ascii_case("QQ.exe"))
-}
-
 /// 有组句就把组句范围替换成 `text` 再结束组句，否则在选区插入；`caret_shift` / `delete_before` 见 [`apply`]。
 fn commit_text(
     shared: &Shared,
@@ -224,13 +222,22 @@ fn commit_text(
     text: &str,
     caret_shift: i16,
     delete_before: u16,
+    sync_pair: bool,
 ) -> Result<()> {
     let utf16: Vec<u16> = text.encode_utf16().collect();
     match shared.composition() {
         Some(composition) => {
             let range = unsafe { composition.GetRange()? };
             unsafe { range.SetText(ec, 0, &utf16)? };
-            settle_caret(context, ec, &range, utf16.len(), caret_shift);
+            settle_caret(
+                shared,
+                context,
+                ec,
+                &range,
+                utf16.len(),
+                caret_shift,
+                sync_pair,
+            );
             unsafe { composition.EndComposition(ec)? };
             shared.set_composition(None);
         }
@@ -249,23 +256,21 @@ fn commit_text(
                 }
                 return Ok(());
             }
-            // QQ（Chromium / Electron 输入框）的 TSF 选区在上屏后不跟随应用光标：`InsertTextAtSelection`
-            // 把 `()` 插进去、注入的左箭头只挪了可见光标，下一次组句仍从符号左边插入。成对补全改走
-            // 整段 Unicode 注入（文本 + 方向键一起交给应用），让应用自己维护插入点；注入被拒再退回 TSF。
-            if caret_shift != 0 && host_uses_injected_commit() && inject_text(text, caret_shift) {
-                super::log::log(&format!(
-                    "成对补全改走注入文本 host={:?} shift={caret_shift}",
-                    crate::com::host_app_name()
-                ));
-                return Ok(());
-            }
             let insert: ITfInsertAtSelection = context.cast()?;
             // 标志不能用 NOQUERY：它不回传 range，windows-rs 会把 NULL 当失败。
             let range = unsafe {
                 insert.InsertTextAtSelection(ec, INSERT_TEXT_AT_SELECTION_FLAGS(0), &utf16)?
             };
             // 不移光标的话下一次插入又落在原处，字会从右往左堆。
-            settle_caret(context, ec, &range, utf16.len(), caret_shift);
+            settle_caret(
+                shared,
+                context,
+                ec,
+                &range,
+                utf16.len(),
+                caret_shift,
+                sync_pair,
+            );
         }
     }
     Ok(())
@@ -274,16 +279,26 @@ fn commit_text(
 /// 落光标。成对补全（`caret_shift` 不为 0）优先**注入方向键**：TSF 的 `SetSelection` 在部分宿主里会被应用
 /// 自己改回来（真机上成对补全的光标一直停在末尾，而同一个应用对方向键的响应是好的）；注入不了
 ///（AppContainer / UIPI 拦下来）再退回 TSF 位移。普通上屏（`caret_shift == 0`）只走 TSF。
-/// QQ 的输入框是例外：TSF 选区不跟随，成对补全在 [`commit_text`] 里整段注入文本 + 方向键。
+/// Shift / Ctrl / Alt 还按着时方向键延后到抬起（[`flush_pending_caret_shift`]），不然会变成选中。
 fn settle_caret(
+    shared: &Shared,
     context: &ITfContext,
     ec: u32,
     range: &ITfRange,
     text_chars: usize,
     caret_shift: i16,
+    sync_pair: bool,
 ) {
-    if caret_shift != 0 && nudge_caret_by_key(i32::from(caret_shift)) {
-        return;
+    if caret_shift != 0 {
+        // Chromium 宿主的同步提交：TSF 选区在上屏后可能还停在起点，直接把选区设到两符号之间。
+        // 宿主认 SetSelection 时不再发方向键，避免“选区已对、方向键又挪一格”。
+        if sync_pair && move_selection(context, ec, range, text_chars, caret_shift).is_ok() {
+            super::log::log(&format!("成对补全: TSF 选区已设到中间 shift={caret_shift}"));
+            return;
+        }
+        if nudge_caret_by_key(shared, i32::from(caret_shift), sync_pair) {
+            return;
+        }
     }
     place_caret(context, ec, range, text_chars, caret_shift);
 }
@@ -305,7 +320,34 @@ fn place_caret(
 ///
 /// 在编辑会话里调：注入的输入先排进应用的消息队列，会话返回后应用才处理，那时文本已经落好了。
 /// AppContainer（商店应用）里 `SendInput` 会被拒，返回不够数，调用方退回 TSF 位移并记日志。
-fn nudge_caret_by_key(steps: i32) -> bool {
+///
+/// 修饰键还按着时先记进 `Shared`，等抬起再发：`Shift + 9` 打 `(` 时立刻发 `VK_LEFT` 会被
+/// 宿主看成 `Shift + Left`（选中），光标落不到两个符号中间。
+fn nudge_caret_by_key(shared: &Shared, steps: i32, defer: bool) -> bool {
+    if steps == 0 {
+        return true;
+    }
+    if defer && modifiers_held() {
+        shared.defer_caret_shift(steps as i16);
+        super::log::log(&format!("方向键延后到修饰键抬起 shift={steps}"));
+        return true;
+    }
+    send_caret_keys(steps)
+}
+
+/// 修饰键抬起后执行延后的方向键；由按键 sink 的抬起回调调用。
+pub(crate) fn flush_pending_caret_shift(shared: &Shared) {
+    if !shared.has_pending_caret_shift() || modifiers_held() {
+        return;
+    }
+    let steps = shared.take_pending_caret_shift();
+    if !send_caret_keys(i32::from(steps)) {
+        super::log::log(&format!("延后的方向键没送进，光标留在末尾 shift={steps}"));
+    }
+}
+
+/// 一次 `SendInput` 发完所有方向键（分多次发会被真实输入从中间穿插）。
+fn send_caret_keys(steps: i32) -> bool {
     use windows::Win32::UI::Input::KeyboardAndMouse::{
         INPUT, INPUT_0, INPUT_KEYBOARD, KEYBD_EVENT_FLAGS, KEYBDINPUT, KEYEVENTF_KEYUP, SendInput,
         VK_LEFT, VK_RIGHT,
@@ -337,6 +379,13 @@ fn nudge_caret_by_key(steps: i32) -> bool {
         ));
     }
     ok
+}
+
+/// Shift / Ctrl / Alt / Win 有没有按着。注入方向键前查一次，按着就延后。
+fn modifiers_held() -> bool {
+    [VK_SHIFT, VK_CONTROL, VK_MENU, VK_LWIN, VK_RWIN]
+        .into_iter()
+        .any(|key| unsafe { GetAsyncKeyState(i32::from(key.0)) } < 0)
 }
 
 /// 补发一个真正给应用的退格 / 删除键，并让按键回调放行它。
@@ -653,8 +702,8 @@ fn move_selection(
 /// 没有要走文本的这一拍（成对补全跳过右半边）：把当前光标右移几个字符。
 ///
 /// 先试注入方向键（应用自己的光标逻辑永远可用），注入不了再走 TSF：收成**末尾**再 `ShiftEnd`。
-fn shift_caret(context: &ITfContext, ec: u32, caret_shift: i16) -> Result<()> {
-    if nudge_caret_by_key(i32::from(caret_shift)) {
+fn shift_caret(shared: &Shared, context: &ITfContext, ec: u32, caret_shift: i16) -> Result<()> {
+    if nudge_caret_by_key(shared, i32::from(caret_shift), false) {
         return Ok(());
     }
     // GetSelection 给的 range 归调用方释放：借它当光标，挪好这一轮就放掉
@@ -714,17 +763,4 @@ fn set_selection(context: &ITfContext, ec: u32, caret: ITfRange) -> Result<()> {
     let result = unsafe { context.SetSelection(ec, std::slice::from_ref(&selection)) };
     drop(ManuallyDrop::into_inner(selection.range));
     result
-}
-
-#[cfg(test)]
-mod tests {
-    use super::wants_injected_commit;
-
-    #[test]
-    fn qq_uses_injected_pair_commit() {
-        assert!(wants_injected_commit(Some("QQ.exe")));
-        assert!(wants_injected_commit(Some("qq.EXE")));
-        assert!(!wants_injected_commit(Some("notepad.exe")));
-        assert!(!wants_injected_commit(None));
-    }
 }

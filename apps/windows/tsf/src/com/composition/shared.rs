@@ -32,6 +32,10 @@ pub(crate) struct Shared {
 
     /// 刚用 `SendInput` 补发的退格 / 删除键：TSF 这层要放行，别再送回 Server（否则递归）。
     injected_key: Cell<Option<(u16, Instant)>>,
+
+    /// 因 Shift / Ctrl / Alt 还按着而延后的光标移动（负左、正右）；0 = 没有。
+    /// 成对补全在 `Shift + 9` 这类键上会碰到：立刻注入方向键会被宿主看成 Shift+方向键。
+    pending_caret_shift: Cell<i16>,
 }
 
 impl Shared {
@@ -45,6 +49,7 @@ impl Shared {
             foreground: Cell::new(false),
             client,
             injected_key: Cell::new(None),
+            pending_caret_shift: Cell::new(0),
         })
     }
 
@@ -86,6 +91,21 @@ impl Shared {
     /// 补发失败：撤销标记。
     pub(crate) fn clear_injected_key(&self) {
         self.injected_key.set(None);
+    }
+
+    /// 延后一次光标移动（修饰键还按着时用）；后来的覆盖前面的，和只认最后一次配对定位一致。
+    pub(crate) fn defer_caret_shift(&self, shift: i16) {
+        self.pending_caret_shift.set(shift);
+    }
+
+    /// 还有没有延后的光标移动。
+    pub(crate) fn has_pending_caret_shift(&self) -> bool {
+        self.pending_caret_shift.get() != 0
+    }
+
+    /// 取走延后的光标移动；没有则返回 0。
+    pub(crate) fn take_pending_caret_shift(&self) -> i16 {
+        self.pending_caret_shift.replace(0)
     }
 
     pub(crate) fn last_context(&self) -> Option<ITfContext> {

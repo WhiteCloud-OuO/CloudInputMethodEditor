@@ -14,7 +14,7 @@ use cloudime_platform::protocol::{IndicatorCommand, KeyEvent, KeyOutcome};
 
 use super::TextService_Impl;
 use super::next::Next;
-use crate::com::composition::{Update, preedit_string};
+use crate::com::composition::{Update, flush_pending_caret_shift, preedit_string};
 use crate::com::key::event::{
     caps_lock_on, clear_caps_lock, ctrl_down, is_edit, is_letter, is_nav, shift_down, to_key_event,
 };
@@ -104,11 +104,14 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
 
     fn OnTestKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
         self.note_key_up(wparam.0 as u32);
+        // 成对补全的方向键如果被修饰键挡住，等键抬起再发（`Shift + 9` 打 `(` 的常见路径）。
+        flush_pending_caret_shift(&self.shared);
         Ok(FALSE)
     }
 
     fn OnKeyUp(&self, _pic: Ref<ITfContext>, wparam: WPARAM, _lparam: LPARAM) -> Result<BOOL> {
         self.note_key_up(wparam.0 as u32);
+        flush_pending_caret_shift(&self.shared);
         Ok(FALSE)
     }
 
@@ -458,6 +461,7 @@ impl TextService_Impl {
                         caret_shift,
                         delete_before,
                         delete_after,
+                        sync_pair: false,
                     },
                 );
                 true
