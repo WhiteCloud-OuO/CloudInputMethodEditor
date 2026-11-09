@@ -21,6 +21,9 @@ pub(super) enum UiCommand {
     /// 高级数学计算界面的说明窗口开关。
     CalculatorHelp(bool),
 
+    /// 候选窗显示时 Caps Lock 是否临时当退格（`[input] caps_lock_as_backspace`）。
+    CapsLockBackspace(bool),
+
     /// 显示 / 更新悬浮状态条。
     StatusShow(Box<StatusView>),
 

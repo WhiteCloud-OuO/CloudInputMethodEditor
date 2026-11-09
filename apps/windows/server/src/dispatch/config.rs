@@ -122,6 +122,9 @@ pub struct RouterConfig {
     /// 状态切换提示（`[input] show_status_change_tip`）：状态一变在光标附近弹一个 1 秒的提示条。
     pub show_status_change_tip: bool,
 
+    /// 候选窗显示时 Caps Lock 临时当退格（`[input] caps_lock_as_backspace`）。缺省关。
+    pub caps_lock_as_backspace: bool,
+
     /// 「键位映射参考」什么时候显示、用哪套组合键（`use_input_scheme.cfg` 的 `key_map_reference` /
     /// `key_map_hotkey`，设置页写）：
     ///
@@ -333,6 +336,7 @@ impl From<&Config> for RouterConfig {
             auto_hide_float_tool_bar: config.debugging.auto_hide_float_tool_bar,
             auto_disable_without_text_input: config.debugging.auto_disable_without_text_input,
             show_status_change_tip: input.show_status_change_tip,
+            caps_lock_as_backspace: input.caps_lock_as_backspace,
             // 值在方案目录的 `.cfg` 里（与辅助码方案同一处），不走 `config.toml`；只有双键拼音才认它
             key_map_reference: if input.input_schemes
                 == cloudime_platform::InputScheme::DualKeyPinyin

@@ -256,6 +256,9 @@ pub struct InputConfig {
     /// 在输入光标附近弹一个停留 1 秒的提示条（只在处于输入状态时弹）。
     pub show_status_change_tip: bool,
 
+    /// 候选窗口显示时把 Caps Lock 临时当退格用（不切换大写锁定）。缺省关。
+    pub caps_lock_as_backspace: bool,
+
     /// V 模式的时间 / 现在候选是否带秒数（`sj` / `xz`）。缺省关。
     pub v_mode_time_seconds: bool,
 }
@@ -276,6 +279,7 @@ impl Default for InputConfig {
             use_half_wide_punctuation_marks_after_digital: true,
             special_input_word: false,
             show_status_change_tip: true,
+            caps_lock_as_backspace: false,
             v_mode_time_seconds: false,
         }
     }
@@ -371,6 +375,15 @@ mod tests {
         assert!(!config.show_raw_input);
         let config: InputConfig = toml::from_str("").unwrap();
         assert!(config.show_raw_input, "配置里没这一项也按缺省");
+    }
+
+    #[test]
+    fn caps_lock_as_backspace_defaults_to_off() {
+        assert!(!InputConfig::default().caps_lock_as_backspace, "缺省关");
+        let config: InputConfig = toml::from_str("caps_lock_as_backspace = true\n").unwrap();
+        assert!(config.caps_lock_as_backspace);
+        let config: InputConfig = toml::from_str("").unwrap();
+        assert!(!config.caps_lock_as_backspace, "配置里没这一项也按缺省");
     }
 
     #[test]

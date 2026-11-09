@@ -35,6 +35,10 @@ pub trait CandidateSink: Send {
     /// 高级数学计算界面的说明窗口开关。不画的实现默认什么都不做。
     fn set_calculator_help(&self, _on: bool) {}
 
+    /// 候选窗显示时把 Caps Lock 临时当退格（`[input] caps_lock_as_backspace`）。
+    /// 不画的实现默认什么都不做。
+    fn set_caps_lock_backspace(&self, _on: bool) {}
+
     /// 开关「辅助窗口」（`auxiliary_window`，眼下是键位映射参考）：挂在配置的组合键上。
     /// 不画的实现（[`NoopSink`]）默认什么都不做。
     fn auxiliary_toggle(&self) {}

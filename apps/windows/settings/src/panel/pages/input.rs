@@ -567,6 +567,16 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             ),
         ),
         KeyedView::new(
+            "caps-lock-as-backspace",
+            field(
+                "候选窗口显示时使用大写锁定键重映射退格键",
+                "候选窗口显示期间，单独按 Caps Lock 等于 Backspace：删光标前一个拼音字母或撤回上一次选择，不会切换大写锁定。Shift / Ctrl / Alt / Win 与 Caps Lock 同按时仍交给应用。缺省关闭。",
+                ToggleSwitch::new()
+                    .is_on(input.caps_lock_as_backspace)
+                    .on_toggled(context.callback(Message::CapsLockAsBackspace)),
+            ),
+        ),
+        KeyedView::new(
             "v-mode-time-seconds",
             field(
                 "V 模式的时间显示秒数",

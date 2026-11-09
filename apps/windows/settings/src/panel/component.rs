@@ -207,6 +207,7 @@ impl Component for Settings {
             }
             Message::SpecialInputWord(on) => self.save("input", "special_input_word", on),
             Message::ShowStatusChangeTip(on) => self.save("input", "show_status_change_tip", on),
+            Message::CapsLockAsBackspace(on) => self.save("input", "caps_lock_as_backspace", on),
             Message::VModeTimeSeconds(on) => self.save("input", "v_mode_time_seconds", on),
 
             // 候选页

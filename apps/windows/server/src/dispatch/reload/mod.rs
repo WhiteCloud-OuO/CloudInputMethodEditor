@@ -177,6 +177,9 @@ impl Router {
         // 脚本换的主题也是会话内状态（这次运行一直有效），别被热加载抹掉
         let script_theme = self.config.script_theme.clone();
         self.config = RouterConfig::from(config);
+        // 候选窗 Caps Lock 退格开关跟着配置热加载走
+        self.candidates
+            .set_caps_lock_backspace(self.config.caps_lock_as_backspace);
         // 换成不支持特殊输入模式的方案（形码等）时，把已经开着的模式关掉。
         if !self.config.special_input {
             self.engine.set_special_input(false);

@@ -112,6 +112,8 @@ use_half_wide_punctuation_marks_after_digital = true
 special_input_word = false
 # 状态切换提示：中 / 英、大写锁定、全 / 半角、简 / 繁、中文 / 西文标点变化时，在输入光标附近弹一个停留 1 秒的提示条
 show_status_change_tip = true
+# 候选窗口显示时把 Caps Lock 临时当退格用：不切换大写锁定；缺省关
+caps_lock_as_backspace = false
 # 符号成对补全：敲左符号补上右符号、光标停在中间。勾选项数值相加 —— () 1、[] 2、{} 4、"" 8、
 # （） 16、【】 32、｛｝ 64、《》 128、“” 256、‘‘ 512；0 为关闭
 punctuation_marks_pairwise_completion = 0

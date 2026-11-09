@@ -31,11 +31,27 @@ thread_local! {
 /// 候选窗显示着没有。UI 线程在 `show` / `hide` 时写，钩子回调在同一线程读。
 static ACTIVE: AtomicBool = AtomicBool::new(false);
 
+/// 设置里的开关（`[input] caps_lock_as_backspace`）。关着时候选窗显示也不装钩子。
+static ENABLED: AtomicBool = AtomicBool::new(false);
+
 /// 候选窗弹出时所在的前台窗口：切到别的程序后候选窗还没收干净时，别把 Caps Lock 吞掉。
 static FOREGROUND: AtomicIsize = AtomicIsize::new(0);
 
 /// 上一次 Caps Lock 按下被吃掉了：配对的抬起也要吃，别把半截按键还给应用。
 static SWALLOW_UP: AtomicBool = AtomicBool::new(false);
+
+/// 设置项开关。关掉时如果候选窗正开着，立刻卸钩子。
+pub(crate) fn set_enabled(on: bool) {
+    ENABLED.store(on, Ordering::Relaxed);
+    if on {
+        if ACTIVE.load(Ordering::Relaxed) {
+            install();
+        }
+    } else {
+        SWALLOW_UP.store(false, Ordering::Relaxed);
+        uninstall();
+    }
+}
 
 /// 候选窗显示 / 收起时更新开关。钩子只在显示期间存在，避免在没组句时也拦截系统按键。
 pub(crate) fn set_active(on: bool) {
@@ -45,7 +61,9 @@ pub(crate) fn set_active(on: bool) {
             unsafe { GetForegroundWindow().0 as isize },
             Ordering::Relaxed,
         );
-        install();
+        if ENABLED.load(Ordering::Relaxed) {
+            install();
+        }
     } else {
         FOREGROUND.store(0, Ordering::Relaxed);
         SWALLOW_UP.store(false, Ordering::Relaxed);
@@ -81,6 +99,7 @@ fn uninstall() {
 /// UI 线程退出前收尾；候选窗先收的话这里通常已经是空的。
 pub(crate) fn shutdown() {
     ACTIVE.store(false, Ordering::Relaxed);
+    ENABLED.store(false, Ordering::Relaxed);
     FOREGROUND.store(0, Ordering::Relaxed);
     SWALLOW_UP.store(false, Ordering::Relaxed);
     uninstall();
