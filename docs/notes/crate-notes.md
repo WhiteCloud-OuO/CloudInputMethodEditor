@@ -1391,6 +1391,15 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 约 150 ms 的 cubic ease-out 后收尾。
 窗口过程按 HWND 从 UI 线程的表里找回窗口（`attach`）。纯展示，不改窗口位置大小、不涉及协议。
 
+候选窗显示期间 **Caps Lock 临时当退格**（`server/src/ui/caps_lock.rs`）：`WH_KEYBOARD_LL` 装在跑消息循环的
+UI 线程上，`UiCommand::Show` / `Hide` 时装 / 卸钩子（只在候选窗开着时存在，不组句时完全不拦系统按键）。
+系统在按键消息送到 TSF 之前就翻了大写状态，TSF 的 `OnTestKeyDown` 里吃掉 `VK_CAPITAL` 也拦不住，
+所以低级钩子返回 1 才不会切换；命中后 `SendInput` 注入 `VK_BACK`，退格仍走 TSF → Server 那条链路
+（行内拼音与候选一起更新）。钩子还要求前台窗口与候选窗弹出时一致，切到别的程序后不误吞。
+TSF 的 `clear_caps_lock` 补发的是**扫描码 0 的注入 Caps Lock**，钩子放行，避免「Caps 亮着时单击 Shift 解锁」
+变成退格；`Shift` / `Ctrl` / `Alt` / `Win` 按着时也放行。普通权限的钩子看不到提权窗口里的按键（UIPI），
+游戏 / 反作弊也可能屏蔽，装不上时只记日志、不影响候选窗。
+
 **两个模板**（都是从 `general_window` 那一个拆出来的；模板只给「某一类窗口」共用，本身不是窗口）：
 
 - **独立窗口模板**（`crates/cloud-ui/src/independent_window_template/`，`IndependentWindowTemplate`）：注册窗口类 + 建一块

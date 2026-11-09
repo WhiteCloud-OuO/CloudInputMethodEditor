@@ -36,6 +36,7 @@
 //!   应用弄丢）。
 
 mod candidates;
+mod caps_lock;
 mod command;
 mod key_map;
 mod measure;
@@ -370,6 +371,7 @@ fn run(
             DispatchMessageW(&msg);
         }
     }
+    caps_lock::shutdown();
 }
 
 fn apply(
@@ -388,6 +390,7 @@ fn apply(
             window.set_content(&frame, &badges);
             // 宿主换了一帧：名下资产由它自己在 `show` 里摆好（见 `cloud_ui::auxiliary`）
             window.show(to_win_rect(rect));
+            caps_lock::set_active(true);
             if crate::timing::enabled() {
                 tracing::info!(
                     target: "cloudime_timing",
@@ -402,7 +405,10 @@ fn apply(
                 );
             }
         }
-        UiCommand::Hide => window.hide(),
+        UiCommand::Hide => {
+            caps_lock::set_active(false);
+            window.hide();
+        }
         UiCommand::VModeHelp(on) => window.set_v_mode_help(on),
         UiCommand::CalculatorHelp(on) => window.set_calculator_help(on),
         UiCommand::AuxiliaryToggle => {
