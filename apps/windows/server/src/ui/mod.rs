@@ -65,10 +65,12 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    ASFW_ANY, AllowSetForegroundWindow, DispatchMessageW, GetMessageW, MSG, PostThreadMessageW,
-    TranslateMessage, WM_APP,
+    ASFW_ANY, AllowSetForegroundWindow, DispatchMessageW, GetMessageW, KillTimer, MSG,
+    PostThreadMessageW, SetTimer, TranslateMessage, WM_APP, WM_TIMER,
 };
 use windows::core::{Error, Result};
+
+use crate::fullscreen::{self, FullscreenKind};
 
 use cloudime_platform::input_schemes::KeyMapLayout;
 use cloudime_platform::input_schemes::KeyMapReference;
@@ -295,6 +297,11 @@ pub(crate) fn open_spec_chars() {
     }
 }
 
+/// UI 线程自己记的前台全屏形态；定时器变化时决定候选窗压制 / 恢复。
+struct UiState {
+    fullscreen: FullscreenKind,
+}
+
 /// UI 线程主体：建窗口、报回线程 id、跑消息循环。
 fn run(
     commands: Receiver<UiCommand>,
@@ -324,6 +331,14 @@ fn run(
     };
     // 登记给窗口过程：高亮滑动动画的定时器要按 HWND 找回它。
     window.attach();
+    // 前台全屏形态：先探一次（UI 线程），之后 300ms 一次；工人线程只读缓存。
+    let mut ui_state = UiState {
+        fullscreen: fullscreen::kind(),
+    };
+    let fullscreen_timer = unsafe { SetTimer(None, 0, 300, None) };
+    if fullscreen_timer == 0 {
+        tracing::warn!("全屏检测定时器没建起来，只靠候选窗显示前兜底");
+    }
     let status = match StatusBar::new(on_status, painter.clone()) {
         Ok(status) => Some(status),
         Err(error) => {
@@ -359,8 +374,33 @@ fn run(
                     tip.as_ref(),
                     &painter,
                     &mut script_windows,
+                    &mut ui_state,
                     command,
                 );
+            }
+            continue;
+        }
+        if msg.message == WM_TIMER && fullscreen_timer != 0 && msg.wParam.0 == fullscreen_timer {
+            let kind = fullscreen::kind();
+            if kind != ui_state.fullscreen {
+                ui_state.fullscreen = kind;
+                match kind {
+                    FullscreenKind::D3dExclusive => {
+                        window.suppress();
+                        if let Some(tip) = &tip {
+                            tip.hide();
+                        }
+                        caps_lock::set_active(false);
+                    }
+                    _ => {
+                        if window.restore() {
+                            caps_lock::set_active(true);
+                        }
+                        if let Some(tip) = &tip {
+                            tip.hide();
+                        }
+                    }
+                }
             }
             continue;
         }
@@ -375,6 +415,9 @@ fn run(
             DispatchMessageW(&msg);
         }
     }
+    if fullscreen_timer != 0 {
+        let _ = unsafe { KillTimer(None, fullscreen_timer) };
+    }
     caps_lock::shutdown();
 }
 
@@ -384,6 +427,7 @@ fn apply(
     tip: Option<&StatusTip>,
     painter: &SharedPainter,
     script_windows: &mut ScriptWindows,
+    state: &mut UiState,
     command: UiCommand,
 ) {
     match command {
@@ -391,10 +435,23 @@ fn apply(
             let (frame, badges, rect, posted) = *payload;
             let queue_us = posted.elapsed().as_micros();
             let started = Instant::now();
+            let kind = fullscreen::kind();
+            state.fullscreen = kind;
+            let win_rect = to_win_rect(rect);
             window.set_content(&frame, &badges);
-            // 宿主换了一帧：名下资产由它自己在 `show` 里摆好（见 `cloud_ui::auxiliary`）
-            window.show(to_win_rect(rect));
-            caps_lock::set_active(true);
+            if kind == FullscreenKind::D3dExclusive {
+                // 独占全屏下不显示：先把内容 / 锚点准备好，退出全屏由定时器恢复。
+                window.prepare(win_rect);
+                window.suppress();
+                if let Some(tip) = tip {
+                    tip.hide();
+                }
+                caps_lock::set_active(false);
+            } else {
+                // 宿主换了一帧：名下资产由它自己在 `show` 里摆好（见 `cloud_ui::auxiliary`）
+                window.show(win_rect);
+                caps_lock::set_active(true);
+            }
             if crate::timing::enabled() {
                 tracing::info!(
                     target: "cloudime_timing",
@@ -457,6 +514,13 @@ fn apply(
         }
         UiCommand::StatusTip(payload) => {
             let (view, caps, rect) = *payload;
+            // 全屏（独占或铺满）下不弹状态切换提示，避免盖在游戏 / 视频上。
+            if fullscreen::kind() != FullscreenKind::None {
+                if let Some(tip) = tip {
+                    tip.hide();
+                }
+                return;
+            }
             if let Some(tip) = tip {
                 let status_rect = status.and_then(StatusBar::window_rect);
                 tip.show(&view, caps, to_win_rect(rect), status_rect);

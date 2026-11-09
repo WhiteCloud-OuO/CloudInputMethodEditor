@@ -425,6 +425,11 @@ impl Router {
             .unwrap_or_default()
     }
 
+    /// 全屏独占下候选窗不显示，编码必须留在组合区：不管用户配的是 `both` / `window`，一律 inline。
+    fn effective_preedit_mode(&self, configured: PreeditMode) -> PreeditMode {
+        preedit_mode_for(configured, crate::fullscreen::exclusive_cached())
+    }
+
     fn raw_frame(&self) -> Frame {
         match &self.composed {
             None => Frame::default(),
@@ -433,7 +438,7 @@ impl Router {
                     text: text.clone(),
                     kind: PreeditKind::Typed,
                 }],
-                preedit_mode: self.config.preedit,
+                preedit_mode: self.effective_preedit_mode(self.config.preedit),
                 cursor: *cursor,
                 candidates: CandidateList { items: Vec::new() },
                 highlight: usize::MAX,
@@ -461,9 +466,9 @@ impl Router {
                 // 符号窗口期间不放行内组句：TSF 的组句会把宿主上下文收成一小段，退格 / 删除
                 // 就删不到已经上屏的符号（记事本实测）。当前模式由符号窗口本身提示。
                 let preedit_mode = if self.u_mode.is_some_and(|u| u.symbol_ui) {
-                    PreeditMode::Window
+                    self.effective_preedit_mode(PreeditMode::Window)
                 } else {
-                    self.config.preedit
+                    self.effective_preedit_mode(self.config.preedit)
                 };
                 Frame {
                     preedit: preedit.clone(),
@@ -496,6 +501,15 @@ fn hint_tip(text: &str) -> cloudime_translate::Tip {
             text: text.to_owned(),
             reading: None,
         }],
+    }
+}
+
+/// 全屏独占时不管用户怎么配，都强制行内编码，避免候选窗和编码栏同时消失。
+fn preedit_mode_for(configured: PreeditMode, exclusive_fullscreen: bool) -> PreeditMode {
+    if exclusive_fullscreen {
+        PreeditMode::Inline
+    } else {
+        configured
     }
 }
 
@@ -577,5 +591,21 @@ mod tests {
         split_special_rest(&mut segments, 3);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].text, "duo");
+    }
+
+    #[test]
+    fn exclusive_fullscreen_forces_inline_preedit() {
+        assert_eq!(
+            preedit_mode_for(PreeditMode::Window, true),
+            PreeditMode::Inline
+        );
+        assert_eq!(
+            preedit_mode_for(PreeditMode::Both, true),
+            PreeditMode::Inline
+        );
+        assert_eq!(
+            preedit_mode_for(PreeditMode::Window, false),
+            PreeditMode::Window
+        );
     }
 }

@@ -1,23 +1,23 @@
 //! 前台是全屏应用（游戏、看视频、演示）时收起状态条，退出全屏再放出来。
-//! 按 F11 进全屏不换前台窗口、没有事件可等，状态条显示期间每秒看一次。
+//!
+//! F11 进全屏不换前台窗口、没有事件可等，状态条显示期间每 300ms 看一次；判定和候选窗共用
+//! [`crate::fullscreen`] 的缓存（D3D 独占 + 普通铺满都收）。
 
 use core::cell::Cell;
 
-use windows::Win32::Foundation::{HWND, RECT};
-use windows::Win32::Graphics::Gdi::{
-    GetMonitorInfoW, MONITOR_DEFAULTTONEAREST, MONITORINFO, MonitorFromWindow,
-};
+use windows::Win32::Foundation::HWND;
 use windows::Win32::UI::WindowsAndMessaging::{
-    GWL_STYLE, GetForegroundWindow, GetShellWindow, GetWindowLongW, GetWindowRect, IsZoomed,
-    KillTimer, SW_HIDE, SW_SHOWNA, SetTimer, ShowWindow, WS_CAPTION,
+    KillTimer, SW_HIDE, SW_SHOWNA, SetTimer, ShowWindow,
 };
+
+use crate::fullscreen::{self, FullscreenKind};
 
 /// 状态条窗口上的定时器编号。
 pub(super) const TIMER_ID: usize = 1;
 
-const INTERVAL_MS: u32 = 1000;
+const INTERVAL_MS: u32 = 300;
 
-/// 显示状态条；`auto_hide` 开着时前台正全屏就先收着并开始每秒检查，关着则一直显示、不检查。
+/// 显示状态条；`auto_hide` 开着时前台正全屏就先收着并开始检查，关着则一直显示、不检查。
 pub(super) fn show(hwnd: HWND, hidden: &Cell<bool>, auto_hide: bool) {
     if !auto_hide {
         let _ = unsafe { KillTimer(Some(hwnd), TIMER_ID) };
@@ -40,45 +40,12 @@ pub(super) fn hide(hwnd: HWND, hidden: &Cell<bool>) {
     let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
 }
 
-/// 每秒一次：进全屏收起，出全屏放回。
+/// 每 300ms 一次：进全屏收起，出全屏放回。
 pub(super) fn on_timer(hwnd: HWND, hidden: &Cell<bool>) {
-    let fullscreen = foreground_is_fullscreen();
+    let fullscreen = fullscreen::kind() != FullscreenKind::None;
     if fullscreen != hidden.get() {
         hidden.set(fullscreen);
         let command = if fullscreen { SW_HIDE } else { SW_SHOWNA };
         let _ = unsafe { ShowWindow(hwnd, command) };
     }
-}
-
-/// 前台窗口盖满了它所在的整个显示器（连任务栏一起）。带标题栏的最大化窗口不算：
-/// 任务栏自动隐藏时它也盖满整屏，但用户要的是照常显示。
-fn foreground_is_fullscreen() -> bool {
-    let hwnd = unsafe { GetForegroundWindow() };
-    if hwnd.is_invalid() || hwnd == unsafe { GetShellWindow() } {
-        return false;
-    }
-    let zoomed_with_caption = unsafe { IsZoomed(hwnd) }.as_bool()
-        && unsafe { GetWindowLongW(hwnd, GWL_STYLE) } as u32 & WS_CAPTION.0 == WS_CAPTION.0;
-    if zoomed_with_caption {
-        return false;
-    }
-    let mut window = RECT::default();
-    let mut info = MONITORINFO {
-        cbSize: size_of::<MONITORINFO>() as u32,
-        ..Default::default()
-    };
-    unsafe {
-        if GetWindowRect(hwnd, &mut window).is_err() {
-            return false;
-        }
-        let monitor = MonitorFromWindow(hwnd, MONITOR_DEFAULTTONEAREST);
-        if !GetMonitorInfoW(monitor, &mut info).as_bool() {
-            return false;
-        }
-    }
-    let screen = info.rcMonitor;
-    window.left <= screen.left
-        && window.top <= screen.top
-        && window.right >= screen.right
-        && window.bottom >= screen.bottom
 }

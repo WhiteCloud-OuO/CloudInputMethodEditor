@@ -3,6 +3,9 @@
 pub mod assembly;
 pub mod dispatch;
 pub mod error;
+/// 前台全屏形态判定（D3D 独占 / 铺满）；仅 Windows。
+#[cfg(windows)]
+pub(crate) mod fullscreen;
 pub mod ipc;
 /// MCP Client sidecar 代理（`cloudime.mcp.*` 的传输层）。
 pub mod mcp;

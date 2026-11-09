@@ -264,6 +264,10 @@ pub(crate) struct CandidateWindow {
     /// 辅助窗口模板按它（宿主内容区矩形）把自己摆在候选窗旁边。
     content_rect: Cell<Option<RECT>>,
 
+    /// 全屏独占等场景下的临时压制：窗口和资产都藏起来，但内容、锚点、开关全部保留，
+    /// 退出全屏后可以原样恢复（与 [`Self::hide`] 的“这次组句结束”不同）。
+    suppressed: Cell<bool>,
+
     /// 名下资产（辅助窗口）的开关：组句里按配置的组合键切，候选窗一收就归零。
     assets_on: Cell<bool>,
 
@@ -342,6 +346,7 @@ impl CandidateWindow {
             v_mode_help,
             calculator_help,
             content_rect: Cell::new(None),
+            suppressed: Cell::new(false),
             assets_on: Cell::new(false),
             assets_mode: Cell::new(KeyMapReference::Off),
             symbol_assets_on: Cell::new(false),
@@ -464,6 +469,10 @@ impl CandidateWindow {
     ///
     /// 桥接：把自己（所有者）借给它们用一下 —— 资产要什么经 [`Bridge`] 回来要，够不着别的窗口。
     fn sync_assets(&self) {
+        if self.suppressed.get() {
+            self.template.hide_assets();
+            return;
+        }
         self.template.assets().sync(self);
     }
 
@@ -529,19 +538,47 @@ impl CandidateWindow {
 
     /// 按光标矩形定位并显示：贴光标下方（放不下放上方），四周留出阴影。
     pub(crate) fn show(&self, anchor: RECT) {
-        self.anchor.set(Some(anchor));
-        self.sync_dpi(anchor);
-        // 「始终跟随候选窗口」：候选窗一出现就把资产带上（不用按键；收起时照旧归零）
-        if self.assets_mode.get() == KeyMapReference::Always {
-            self.assets_on.set(true);
-        }
+        self.suppressed.set(false);
+        self.prepare(anchor);
         self.redraw();
         self.sync_timer();
         // 宿主换了一帧：名下资产按新形状摆一遍（关着时 sync 会自己收起它们）
         self.sync_assets();
     }
 
+    /// 记下锚点与 DPI，但不真正显示。全屏独占下先准备内容，退出全屏再 [`Self::restore`]。
+    pub(crate) fn prepare(&self, anchor: RECT) {
+        self.anchor.set(Some(anchor));
+        self.sync_dpi(anchor);
+        // 「始终跟随候选窗口」：候选窗一出现就把资产带上（不用按键；收起时照旧归零）
+        if self.assets_mode.get() == KeyMapReference::Always {
+            self.assets_on.set(true);
+        }
+    }
+
+    /// 全屏独占等场景：只把窗口和资产藏起来，保留内容 / 锚点 / 开关，退出全屏可原样恢复。
+    pub(crate) fn suppress(&self) {
+        if self.suppressed.replace(true) {
+            return;
+        }
+        self.template.hide_assets();
+        self.stop_animation();
+        let _ = unsafe { ShowWindow(self.template.hwnd(), SW_HIDE) };
+    }
+
+    /// 退出全屏后恢复：有锚点才重画、重新显示；没有就保持隐藏。返回是否真的恢复了。
+    pub(crate) fn restore(&self) -> bool {
+        if !self.suppressed.replace(false) || self.anchor.get().is_none() {
+            return false;
+        }
+        self.redraw();
+        self.sync_timer();
+        self.sync_assets();
+        true
+    }
+
     pub(crate) fn hide(&self) {
+        self.suppressed.set(false);
         self.reversed.store(false, Ordering::Relaxed);
         self.v_mode_help.set(false);
         self.calculator_help.set(false);
@@ -597,7 +634,7 @@ impl CandidateWindow {
 
     /// 显示中才重画；隐藏时只更新状态，下次 `show` 会按最新 DPI 渲染。
     fn redraw_if_shown(&self) {
-        if self.anchor.get().is_none() {
+        if self.anchor.get().is_none() || self.suppressed.get() {
             return;
         }
         self.redraw();
