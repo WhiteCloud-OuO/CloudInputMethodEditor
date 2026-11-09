@@ -34,6 +34,9 @@ pub(super) struct Placement {
     /// 前台全屏、暂时收起了（见 [`super::fullscreen`]）。
     pub(super) fullscreen_hidden: Cell<bool>,
 
+    /// 用户开了「自动隐藏悬浮工具栏」没有；独占全屏不受它影响，始终收。
+    pub(super) auto_hide_fullscreen: Cell<bool>,
+
     /// 点格 / 拖动结束回给 Router。
     events: StatusEvents,
 }
@@ -47,6 +50,7 @@ impl Placement {
             regions: RefCell::new(Vec::new()),
             caps: Cell::new(super::caps_lock_on()),
             fullscreen_hidden: Cell::new(false),
+            auto_hide_fullscreen: Cell::new(false),
             events,
         }
     }

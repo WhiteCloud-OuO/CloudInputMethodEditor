@@ -325,8 +325,9 @@ Core 侧 `engine/choice/`：`ChoiceTier`（省电 5 条 / 32 字、均衡 9 / 64
 `Theme.max_cell_width` ← `RenderSettings.max_cell_width`）、`program_list_of_hiding_candidate`（名单里的 exe 完全不接管，
 `InputSettings.raw_input` 通知 DLL）、`preedit`；`[status_bar]` 只剩位置（开关删了，状态条常开，只跟「当前输入法是不是云朵输入法」走）；
 `[status_bar]` 有 `show_status_bar`（缺省开；`StatusBarConfig` 手写 `Default`——`#[serde(default)]` 取的是结构体的 `Default`，不写就变成 `bool::default()` = 关，老配置会莫名其妙不显示工具条）：关掉后 Server 的 `reconcile_status` 始终收起，桌面上不再出现那条工具条（按钮位置 `x` / `y` 照旧）。
-`[debugging]` 只有 `auto_hide_float_tool_bar`（缺省关）：开着时前台全屏（`ui/status/fullscreen.rs` → `crate::fullscreen`，300ms 缓存）收起悬浮工具栏，
-关掉后全屏也不收；切到别的输入法 / 云朵被禁用时始终收起，与这一项无关（`RouterConfig.auto_hide_float_tool_bar` → `StatusView.auto_hide_fullscreen`）。
+`[debugging]` 只有 `auto_hide_float_tool_bar`（缺省关）：开着时前台**铺满**全屏（`ui/status/fullscreen.rs` → `crate::fullscreen`，300ms 缓存）收起悬浮工具栏，
+关掉后铺满也不收；切到别的输入法 / 云朵被禁用时始终收起，与这一项无关（`RouterConfig.auto_hide_float_tool_bar` → `StatusView.auto_hide_fullscreen`）。
+**D3D 独占全屏不受这个开关控制，始终收起**（物理上盖不上去）。
 `crate::fullscreen` 用 `SHQueryUserNotificationState` 的 `QUNS_RUNNING_D3D_FULL_SCREEN` / `QUNS_PRESENTATION_MODE`
 判 **D3D 独占**，再用前台窗口矩形铺满显示器判 **Covering**（无边框 / F11）。独占时 `CandidateWindow::suppress` 收起候选窗并隐藏资产，
 `StatusTip` 也不弹；退出全屏 `restore` 按保留的锚点原样恢复。压制期间 `Frame.preedit_mode` 强制 inline（`composed::preedit_mode_for`），

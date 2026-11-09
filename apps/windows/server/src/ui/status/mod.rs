@@ -280,6 +280,9 @@ impl StatusBar {
         );
         drop(arrangement);
         if updated.is_ok() {
+            self.placement
+                .auto_hide_fullscreen
+                .set(view.auto_hide_fullscreen);
             fullscreen::show(
                 self.hwnd,
                 &self.placement.fullscreen_hidden,
@@ -410,7 +413,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
         }
         WM_TIMER if wparam.0 == fullscreen::TIMER_ID => {
             if let Some(placement) = placement_of(hwnd) {
-                fullscreen::on_timer(hwnd, &placement.fullscreen_hidden);
+                fullscreen::on_timer(
+                    hwnd,
+                    &placement.fullscreen_hidden,
+                    placement.auto_hide_fullscreen.get(),
+                );
             }
             LRESULT(0)
         }

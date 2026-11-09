@@ -17,17 +17,11 @@ pub(super) const TIMER_ID: usize = 1;
 
 const INTERVAL_MS: u32 = 300;
 
-/// 显示状态条；`auto_hide` 开着时前台正全屏就先收着并开始检查，关着则一直显示、不检查。
+/// 显示状态条；`auto_hide` 只决定“普通铺满”收不收，D3D 独占始终收（物理上盖不上去）。
 pub(super) fn show(hwnd: HWND, hidden: &Cell<bool>, auto_hide: bool) {
-    if !auto_hide {
-        let _ = unsafe { KillTimer(Some(hwnd), TIMER_ID) };
-        hidden.set(false);
-        let _ = unsafe { ShowWindow(hwnd, SW_SHOWNA) };
-        return;
-    }
     unsafe { SetTimer(Some(hwnd), TIMER_ID, INTERVAL_MS, None) };
     hidden.set(false);
-    on_timer(hwnd, hidden);
+    on_timer(hwnd, hidden, auto_hide);
     if !hidden.get() {
         let _ = unsafe { ShowWindow(hwnd, SW_SHOWNA) };
     }
@@ -40,12 +34,14 @@ pub(super) fn hide(hwnd: HWND, hidden: &Cell<bool>) {
     let _ = unsafe { ShowWindow(hwnd, SW_HIDE) };
 }
 
-/// 每 300ms 一次：进全屏收起，出全屏放回。
-pub(super) fn on_timer(hwnd: HWND, hidden: &Cell<bool>) {
-    let fullscreen = fullscreen::kind() != FullscreenKind::None;
-    if fullscreen != hidden.get() {
-        hidden.set(fullscreen);
-        let command = if fullscreen { SW_HIDE } else { SW_SHOWNA };
+/// 每 300ms 一次：D3D 独占始终收起；普通铺满只在用户开了自动隐藏时收。
+pub(super) fn on_timer(hwnd: HWND, hidden: &Cell<bool>, auto_hide: bool) {
+    let kind = fullscreen::kind();
+    let should_hide =
+        kind == FullscreenKind::D3dExclusive || (auto_hide && kind == FullscreenKind::Covering);
+    if should_hide != hidden.get() {
+        hidden.set(should_hide);
+        let command = if should_hide { SW_HIDE } else { SW_SHOWNA };
         let _ = unsafe { ShowWindow(hwnd, command) };
     }
 }
