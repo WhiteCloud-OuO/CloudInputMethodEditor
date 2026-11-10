@@ -19,6 +19,7 @@ use windows::core::{Error, PCWSTR, Result, w};
 
 use self::context::PollContext;
 use super::composition::Shared;
+use super::edit::{clear_pending_candidate, pending_candidate, retry_pending_candidate};
 use super::log::log;
 use super::service::SharedClient;
 use super::window_class::WindowClass;
@@ -114,6 +115,7 @@ fn poll_once(context: &PollContext) {
     let tick = context.ticks.get().wrapping_add(1);
     context.ticks.set(tick);
     if !context.shared.composing() {
+        clear_pending_candidate();
         if tick.is_multiple_of(MODE_SYNC_EVERY) && in_foreground(context) {
             sync_mode(context);
             // 「不处于输入状态时自动禁用输入法」：跟着这一拍顺手看一眼焦点（改设置时也是这一拍生效）。
@@ -127,6 +129,13 @@ fn poll_once(context: &PollContext) {
     let Some(client) = guard.as_mut() else {
         return;
     };
+    // 组句第一个键没量到光标（游戏常这样）时候选窗先不摆；等系统 IME 小窗出现，这一拍补报位置。
+    if pending_candidate()
+        && let Some(active) = context.shared.last_context()
+        && let Some(rect) = retry_pending_candidate(&active)
+    {
+        let _ = client.position_candidates(rect);
+    }
     let reply = match client.poll() {
         Ok(reply) => reply,
         Err(error) => {

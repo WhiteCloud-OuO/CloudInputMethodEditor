@@ -23,7 +23,7 @@ use cloudime_platform::protocol::{Frame, PreeditKind};
 
 pub(crate) use self::shared::Shared;
 use self::sink::CompositionSink;
-use super::edit::{InputContext, anchor_rect, caret_rect, input_context};
+use super::edit::{InputContext, candidate_anchor, input_context};
 use super::service::SharedClient;
 
 /// 内联要显示的拼音行（跳过被纠错划掉的原字母）；空串表示没有组句内容。
@@ -190,16 +190,18 @@ pub(crate) fn report_surrounding(
 
 /// 组句进行中才报位置；组句已收 Server 会按空帧 / `Commit` 自行收窗口。
 fn report_caret(shared: &Shared, engine: &SharedClient, context: &ITfContext, ec: u32) {
-    let rect = match shared.composition() {
-        Some(composition) => {
-            let Ok(range) = (unsafe { composition.GetRange() }) else {
-                return;
-            };
-            anchor_rect(context, ec, &range)
-        }
+    let range = match shared.composition() {
+        Some(composition) => match unsafe { composition.GetRange() } {
+            Ok(range) => Some(range),
+            Err(_) => return,
+        },
         // 「只在候选窗口」模式应用里不放行内拼音：没有组句范围可量，量插入点。
-        None if shared.composing() => caret_rect(context, ec),
+        None if shared.composing() => None,
         None => return,
+    };
+    // 量不到光标、系统 IME 小窗也还没出现时先不报位置（候选窗保持原样），轮询定时器稍后补报。
+    let Some(rect) = candidate_anchor(context, ec, range.as_ref()) else {
+        return;
     };
     // 引擎正被别处借着（罕见）就跳过这拍，Server 保持上次位置。
     crate::com::log::timing(format_args!(

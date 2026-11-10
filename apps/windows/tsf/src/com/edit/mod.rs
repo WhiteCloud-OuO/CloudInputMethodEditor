@@ -6,7 +6,9 @@ mod caret;
 mod surrounding;
 mod update;
 
-pub(crate) use self::anchor::{anchor_rect, caret_rect};
+pub(crate) use self::anchor::{
+    candidate_anchor, clear_pending_candidate, pending_candidate, retry_pending_candidate,
+};
 pub(crate) use self::caret::request_caret_now;
 pub(crate) use self::surrounding::{InputContext, input_context, request_surrounding_now};
 pub(crate) use self::update::request_update;

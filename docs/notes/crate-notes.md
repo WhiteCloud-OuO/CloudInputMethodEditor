@@ -332,6 +332,10 @@ Core 侧 `engine/choice/`：`ChoiceTier`（省电 5 条 / 32 字、均衡 9 / 64
 判 **D3D 独占**，再用前台窗口矩形铺满显示器判 **Covering**（无边框 / F11）。独占时 `CandidateWindow::suppress` 收起候选窗并隐藏资产，
 `StatusTip` 也不弹；退出全屏 `restore` 按保留的锚点原样恢复。压制期间 `Frame.preedit_mode` 强制 inline（`composed::preedit_mode_for`），
 编码留在宿主组合区；否则候选窗和编码栏会同时消失。探测只在 UI 线程、结果缓存 300ms，工人线程只读 `exclusive_cached()`，按键路径不查 shell。
+**Civ VI（DX12，2026-11-10 实测）**：存档名输入框走 IMM32 桥接，`SHQueryUserNotificationState` 绝大多数时间是
+`QUNS_BUSY`（2，只说明有全屏应用），只有真正切独占时短暂返回 3；第一次按键时游戏自己从独占切到无边框（黑屏闪一下，
+微软拼音同样闪），候选窗是在切换之后才恢复显示的，不是我们的窗口把游戏踢出去。游戏进程里还会多一个
+`CiceroUIWndFrame`（系统默认 IME 界面，右上角，显示当前编码），不是我们的窗口，留给 P1/P2 的 per-app 兼容。
 `auto_disable_without_text_input`（缺省关）的判断与动作都在 DLL，见 TSF 那一节。
 
 **装机默认值**（`Config::default` 与 [`TEMPLATE`]，两者一致由 `template_parses_to_defaults` 盯着；这是产品定的起点，改要一起改）：
@@ -594,6 +598,14 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 `place_in`：下方优先，放不下放上方；两边都放不下先摆光标左右侧（宁可盖旁边也不盖正在输入的那一行），
 再不行才按空间大的一侧夹进工作区；间隙 `caret_gap` 按有效 DPI / 缩放折成物理像素。窗口四周的阴影留白在
 `WM_NCHITTEST` 里返回 `HTTRANSPARENT`，点阴影会落到下面应用，不再被透明但可命中的分层窗吃掉。
+
+**游戏宿主的光标矩形**（2026-11-10，Civ VI 实测）：每段组合的**第一个键** `GetTextExt` 返回屏幕右下角
+`(2559,1439)-(2560,1439)` 的 1×0 假矩形，第二个键起才给有效矩形。`com/edit/anchor.rs::range_rect` 把零高度矩形
+判为无效；退路依次是**本进程里可见的 `CiceroUIWndFrame`**（TSF 桥接层的默认 IME 小窗，候选窗正好落在它下方，和清风一致）
+→ **同窗口 10 秒内的上次有效矩形**（`LAST_VALID`，`thread_local`、按宿主进程隔离、换窗口作废）→ 鼠标。
+三个都没有时**先不报位置**（候选窗保持原样，不会先闪到鼠标处），由轮询定时器每 80ms 补报一次
+（`retry_pending_candidate`，组句期间本来就在跑）；等满 500ms 还没等到小窗才退回鼠标。等待/补报都写 TSF 日志
+（`候选锚点：…`），方便对照不同宿主。
 
 ## crates/cloud-ui-core
 
