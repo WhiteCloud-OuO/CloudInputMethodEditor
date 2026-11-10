@@ -5922,6 +5922,11 @@ mod tests {
 
         // 文件改了（尺寸变了）：必须重读，并把旧的那份从缓存里换掉
         Pixmap::new(5, 5).unwrap().save_png(&path).unwrap();
+        // 有些文件系统 / 负载下连续两次写可能拿到同一个 mtime，缓存键是 `len + mtime`，
+        // 会把这次写当成“没改过”。显式把 mtime 推后，保证测试不依赖时间戳粒度。
+        let file = std::fs::OpenOptions::new().write(true).open(&path).unwrap();
+        file.set_modified(std::time::SystemTime::now() + std::time::Duration::from_secs(1))
+            .unwrap();
         let third = cache.load(&path).expect("读得出来");
         assert!(!Arc::ptr_eq(&first, &third), "文件变了要重读");
         assert_eq!((third.width(), third.height()), (5, 5));
