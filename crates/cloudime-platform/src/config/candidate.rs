@@ -247,6 +247,10 @@ pub struct CandidateConfig {
 
     /// 在下列程序中不显示候选框（完全不接管输入，按键原样交给应用）。
     pub program_list_of_hiding_candidate: Vec<String>,
+
+    /// 在下列程序中让出候选绘制权：宿主读走候选串（`GetString`）后收我们自己的候选窗。
+    /// 只给 UI-less / IMM32 桥接这类真的会自己画候选的宿主用；普通宿主不要加（读候选串是常态）。
+    pub host_drawn_candidates: Vec<String>,
 }
 
 fn default_zhiyi_threads() -> usize {
@@ -278,6 +282,7 @@ impl Default for CandidateConfig {
             mouse_word_selection: MouseWordSelection::default(),
             candidate_item_maximum_width: DEFAULT_CANDIDATE_ITEM_MAXIMUM_WIDTH,
             program_list_of_hiding_candidate: Vec::new(),
+            host_drawn_candidates: Vec::new(),
         }
     }
 }
@@ -319,6 +324,16 @@ impl CandidateConfig {
         !program.is_empty()
             && self
                 .program_list_of_hiding_candidate
+                .iter()
+                .any(|name| name.trim().eq_ignore_ascii_case(program))
+    }
+
+    /// 这个程序（exe 文件名，不区分大小写）在不在 `host_drawn_candidates` 名单里。
+    pub fn host_draws_candidates_for(&self, program: &str) -> bool {
+        let program = program.trim();
+        !program.is_empty()
+            && self
+                .host_drawn_candidates
                 .iter()
                 .any(|name| name.trim().eq_ignore_ascii_case(program))
     }
@@ -403,6 +418,18 @@ mod tests {
         assert!(config.hides_candidate_for(" Code.EXE "));
         assert!(!config.hides_candidate_for("notepad.exe"));
         assert!(!config.hides_candidate_for(""));
+    }
+
+    #[test]
+    fn host_drawn_list_matches_program_names_case_insensitively() {
+        let config = CandidateConfig {
+            host_drawn_candidates: vec!["MapleStory.exe".to_owned()],
+            ..CandidateConfig::default()
+        };
+        assert!(config.host_draws_candidates_for("maplestory.exe"));
+        assert!(config.host_draws_candidates_for(" MapleStory.EXE "));
+        assert!(!config.host_draws_candidates_for("notepad.exe"));
+        assert!(!config.host_draws_candidates_for(""));
     }
 
     #[test]

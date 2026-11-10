@@ -16,6 +16,19 @@ pub struct DocumentText {
     pub caret: usize,
 }
 
+/// 宿主对候选元素的动作（UI-less / 自绘宿主调用）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+pub enum CandidateAction {
+    /// 选中当页第几个候选（页内下标，从 0 起）。
+    Select(usize),
+
+    /// 定稿：把当前高亮的候选上屏。
+    Finalize,
+
+    /// 放弃这次组句。
+    Abort,
+}
+
 /// DLL（客户端，每个应用进程里一个）发给 Server 的消息。
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub enum ClientMessage {
@@ -86,6 +99,35 @@ pub enum ClientMessage {
 
         /// 现在是私密输入。
         private: bool,
+    },
+
+    /// 宿主的 UIElement 状态（v24）：声明 UI-less、自己画候选、或读走过候选串。
+    /// 只在任一标志变化时发，不等回话；Server 按 `focused` 会话决定要不要收自己的候选窗。
+    UiElementState {
+        /// 会话标识。
+        session: SessionId,
+
+        /// 宿主在 `BeginUIElement` 回了 `pbShow=FALSE`（或之后 `Show(FALSE)`）：它自己画。
+        #[serde(default)]
+        host_draws: bool,
+
+        /// 宿主线程以 `TF_TMAE_UIELEMENTENABLEDONLY` 激活：从第一个组合起就不该弹我们的窗。
+        #[serde(default)]
+        ui_less: bool,
+
+        /// 宿主调用过 `GetString` 把候选串读走（推断，不等于会画；只有名单里的程序才据此收窗）。
+        #[serde(default)]
+        host_reads: bool,
+    },
+
+    /// 宿主对候选元素的操作（v24）：选页内第几个、定稿、放弃。
+    /// 同步请求，Server 处理完回 [`super::ServerMessage::Update`]。
+    UiElementAction {
+        /// 会话标识。
+        session: SessionId,
+
+        /// 宿主点 / 选的动作。
+        action: CandidateAction,
     },
 
     /// 组句更新后，DLL 在编辑会话里量到组句范围的屏幕矩形，发来让 Server 把候选窗口摆到光标下方。

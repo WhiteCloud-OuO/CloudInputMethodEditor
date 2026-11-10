@@ -11,7 +11,7 @@ use super::Router;
 use super::key::Effect;
 use super::key::input::reserved_combo;
 use super::script::{ScriptActions, ThemeCommand};
-use super::session::SessionInfo;
+use super::session::{SessionInfo, UiElementFlags};
 
 impl Router {
     /// 会话断了（正常关闭或宿主进程退出）：清状态，聚焦会话还要把候选窗收掉。
@@ -62,6 +62,7 @@ impl Router {
                         private: false,
                         protocol,
                         restart_notice_shown: false,
+                        ui_element: UiElementFlags::default(),
                     },
                 );
                 // 按键行为设置回一次，让 DLL 不必自己读配置文件。**只回给会读这条回包的 DLL**：
@@ -173,6 +174,30 @@ impl Router {
                 tracing::debug!(?session, ?command, "任务栏图标菜单");
                 self.handle_indicator(command);
                 None
+            }
+            ClientMessage::UiElementState {
+                session,
+                host_draws,
+                ui_less,
+                host_reads,
+            } => {
+                tracing::debug!(?session, host_draws, ui_less, host_reads, "UIElement 状态");
+                if let Some(info) = self.sessions.get_mut(&session) {
+                    info.ui_element = UiElementFlags {
+                        host_draws,
+                        ui_less,
+                        host_reads,
+                    };
+                }
+                None
+            }
+            ClientMessage::UiElementAction { session, .. } => {
+                // P1-D3 接入动作前先回当前帧，别让宿主的同步请求悬着。
+                Some(ServerMessage::Update {
+                    session,
+                    frame: self.current_frame(),
+                    commit: None,
+                })
             }
             ClientMessage::CloseSession { session } => {
                 self.handle_session_closed(session);

@@ -53,6 +53,11 @@ pub struct InputSettings {
     #[serde(default)]
     pub raw_input: bool,
 
+    /// 这个程序在 `[candidate] host_drawn_candidates` 名单里：DLL 据此为它创建 UIElement，
+    /// 观察宿主是否读走了候选串（`host_reads`）。`false` = 不创建，普通宿主行为不变。
+    #[serde(default)]
+    pub host_reads_opt_in: bool,
+
     /// 不处于输入状态时自动禁用输入法（`[debugging] auto_disable_without_text_input`）：焦点不在
     /// 可输入文本区域时关掉系统的「输入法开 / 关」，回到文本区域再放回来。DLL 需要它才能在焦点变化时动作。
     #[serde(default)]
@@ -107,6 +112,7 @@ impl Default for InputSettings {
             full_width_chars: false,
             smart_symbols: false,
             raw_input: false,
+            host_reads_opt_in: false,
             auto_disable_without_text_input: false,
             script_key_modifiers: 0,
             script_global_hotkeys: false,

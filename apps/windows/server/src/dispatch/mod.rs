@@ -437,6 +437,7 @@ impl Router {
             .get(&session)
             .and_then(|info| info.app.as_deref());
         let raw_input = app.is_some_and(|app| self.config.hides_candidate_for(app));
+        let host_reads_opt_in = app.is_some_and(|app| self.config.host_draws_candidates_for(app));
         InputSettings {
             switch_mode: SwitchKeys::default(),
             english_mode: true,
@@ -444,6 +445,7 @@ impl Router {
             full_width_chars: self.config.full_width_chars,
             smart_symbols: self.config.smart_symbols,
             raw_input,
+            host_reads_opt_in,
             auto_disable_without_text_input: self.config.auto_disable_without_text_input,
             // 组合键脚本在清单里声明的那几套修饰键（`combination_modifiers`）的并集：DLL 据此把命中的
             // 组合键（组句与否都算）送来问一趟；一个这类脚本都没有时是 0，按键路径与以前逐字节一致。

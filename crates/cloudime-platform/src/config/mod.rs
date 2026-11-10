@@ -153,6 +153,9 @@ mouse_word_selection = "off"
 candidate_item_maximum_width = 420
 # 在下列程序中不显示候选框：这些程序里输入法完全不接管、按键原样交给应用（写 exe 文件名，不区分大小写）
 program_list_of_hiding_candidate = []
+# 在下列程序中让出候选绘制权：宿主读走候选串后不再弹我们自己的候选窗（写 exe 文件名，不区分大小写）。
+# 只给 UI-less / IMM32 桥接这类真的会自己画候选的宿主用；普通宿主不要加（读候选串是常态）
+host_drawn_candidates = []
 # 组句中的拼音显示在哪：both 行内和候选窗口 / inline 只在行内 / window 只在候选窗口（应用里不放 marked text）
 preedit = "both"
 # u 模式符号窗口的补充字体：主字体缺字时用它显示符号（只写字体名）

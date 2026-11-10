@@ -82,6 +82,10 @@ pub struct RouterConfig {
     /// 在「不显示候选框」名单里的程序（`[candidate] program_list_of_hiding_candidate`，exe 文件名）。
     pub hiding_candidates: Vec<String>,
 
+    /// 让出候选绘制权的程序（`[candidate] host_drawn_candidates`，exe 文件名）：
+    /// 宿主读走候选串后不再弹我们自己的候选窗。
+    pub host_drawn_candidates: Vec<String>,
+
     /// 中文模式下不在组句时的标点转全角；不进配置文件，状态条 / 右键菜单可切，会话内有效、重启回缺省（开）。
     /// 初值来自 `[input] full_half_punctuation_marks_toggle`（follow 中文全角、英文半角）。
     pub full_width_punctuation: bool,
@@ -236,6 +240,16 @@ impl RouterConfig {
                 .iter()
                 .any(|name| name.trim().eq_ignore_ascii_case(program))
     }
+
+    /// 这个程序在不在 `host_drawn_candidates` 名单里（宿主读走候选串后让出绘制权）。
+    pub fn host_draws_candidates_for(&self, program: &str) -> bool {
+        let program = program.trim();
+        !program.is_empty()
+            && self
+                .host_drawn_candidates
+                .iter()
+                .any(|name| name.trim().eq_ignore_ascii_case(program))
+    }
 }
 
 /// 主题文件的内容缓存：同一个文件、mtime 没变就直接用上次读的，省掉一次读盘 + JSON 解析。
@@ -323,6 +337,7 @@ impl From<&Config> for RouterConfig {
             translate_need_times: config.translate.need_times(),
             translate_reset_counter: config.translate.reset_counter,
             hiding_candidates: candidate.program_list_of_hiding_candidate.clone(),
+            host_drawn_candidates: candidate.host_drawn_candidates.clone(),
             // 「标点全 / 半角」的初值：follow 中文全角、英文半角，full / half 一律；之后还能用状态条那一格会话内切
             full_width_punctuation: punctuation.full_width(false),
             english_full_width_punctuation: punctuation.full_width(true),
@@ -367,5 +382,22 @@ impl From<&Config> for RouterConfig {
 impl Default for RouterConfig {
     fn default() -> Self {
         Self::from(&Config::default())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::RouterConfig;
+
+    #[test]
+    fn host_drawn_candidates_matches_program_names_case_insensitively() {
+        let config = RouterConfig {
+            host_drawn_candidates: vec!["MapleStory.exe".to_owned()],
+            ..RouterConfig::default()
+        };
+        assert!(config.host_draws_candidates_for("maplestory.exe"));
+        assert!(config.host_draws_candidates_for(" MapleStory.EXE "));
+        assert!(!config.host_draws_candidates_for("notepad.exe"));
+        assert!(!config.host_draws_candidates_for(""));
     }
 }

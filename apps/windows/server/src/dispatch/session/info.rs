@@ -1,5 +1,18 @@
 //! 会话信息。
 
+/// UIElement 状态（P1 UI-less）：宿主声明 UI-less、自己画候选、或读走过候选串。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub(crate) struct UiElementFlags {
+    /// 宿主在 `BeginUIElement` 回了 `pbShow=FALSE` / 之后 `Show(FALSE)`。
+    pub(crate) host_draws: bool,
+
+    /// 宿主线程以 `TF_TMAE_UIELEMENTENABLEDONLY` 激活。
+    pub(crate) ui_less: bool,
+
+    /// 宿主调用过 `GetString` 把候选串读走（推断，不等于会画）。
+    pub(crate) host_reads: bool,
+}
+
 /// 一个活跃会话在 Server 侧记下的信息，开会话时由 DLL 报来。
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct SessionInfo {
@@ -15,4 +28,7 @@ pub(crate) struct SessionInfo {
 
     /// 这条会话是否已经提示过「应用需重启」（旧协议 DLL 只提示一次）。
     pub(crate) restart_notice_shown: bool,
+
+    /// UIElement 状态（P1 UI-less）；`ClientMessage::UiElementState` 更新它。
+    pub(crate) ui_element: UiElementFlags,
 }

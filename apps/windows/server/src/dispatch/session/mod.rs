@@ -4,7 +4,7 @@ mod info;
 
 use cloudime_platform::protocol::{PROTOCOL_VERSION, SessionId};
 
-pub(super) use self::info::SessionInfo;
+pub(super) use self::info::{SessionInfo, UiElementFlags};
 use super::Router;
 
 impl Router {

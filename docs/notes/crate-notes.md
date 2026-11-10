@@ -323,7 +323,8 @@ Core 侧 `engine/choice/`：`ChoiceTier`（省电 5 条 / 32 字、均衡 9 / 64
 `candidate_item_maximum_width`
 （展开后每格的最大宽度，物理像素 / 点；缺省 420，0 不限 —— 在 `matrix_cells` 里给格宽封顶，超出的候选截尾加「…」；
 `Theme.max_cell_width` ← `RenderSettings.max_cell_width`）、`program_list_of_hiding_candidate`（名单里的 exe 完全不接管，
-`InputSettings.raw_input` 通知 DLL）、`preedit`；`[status_bar]` 只剩位置（开关删了，状态条常开，只跟「当前输入法是不是云朵输入法」走）；
+`InputSettings.raw_input` 通知 DLL）、`host_drawn_candidates`（名单里的 exe 在宿主读走候选串后让出候选绘制权，
+`InputSettings.host_reads_opt_in` 通知 DLL 为它创建 UIElement；普通宿主不要加）、`preedit`；`[status_bar]` 只剩位置（开关删了，状态条常开，只跟「当前输入法是不是云朵输入法」走）；
 `[status_bar]` 有 `show_status_bar`（缺省开；`StatusBarConfig` 手写 `Default`——`#[serde(default)]` 取的是结构体的 `Default`，不写就变成 `bool::default()` = 关，老配置会莫名其妙不显示工具条）：关掉后 Server 的 `reconcile_status` 始终收起，桌面上不再出现那条工具条（按钮位置 `x` / `y` 照旧）。
 `[debugging]` 只有 `auto_hide_float_tool_bar`（缺省关）：开着时前台**铺满**全屏（`ui/status/fullscreen.rs` → `crate::fullscreen`，300ms 缓存）收起悬浮工具栏，
 关掉后铺满也不收；切到别的输入法 / 云朵被禁用时始终收起，与这一项无关（`RouterConfig.auto_hide_float_tool_bar` → `StatusView.auto_hide_fullscreen`）。
@@ -373,7 +374,7 @@ f/h 32、u/ü 64、uo/o 128、an/ang 256、en/eng 512、in/ing 1024、wang/huang
 `[dictionaries] domains / disabled` 删，写回前留一份 `config.toml.bak`；重写用 `config::write_with_template`（从模板起步保住注释，再把序列化出来的值覆盖上去）；
 `protocol` 模块是 Windows Server ↔ TSF DLL 的 IPC 协议类型
 （`ClientMessage` / `ServerMessage` / `Frame` / `PreeditSegment`，全 serde，两端共用，见 `docs/design/architecture.md`「Windows：TSF」；
-`PROTOCOL_VERSION` = 15（v9 删掉 `CandidateKind::Emoji` 变体——删枚举变体老 DLL 同样整条帧解析失败；
+`PROTOCOL_VERSION` 目前是 24；下面按时间记每次 +1 的原因（v9 删掉 `CandidateKind::Emoji` 变体——删枚举变体老 DLL 同样整条帧解析失败；
 v10 给 `InputSettings` 加了 `full_width_chars`；v11 给 `ServerMessage::KeyResult` 加了 `caret_shift` 与 `delete_before`
 （成对补全把光标停在括号中间、两键符号规则撤掉上一个键的输出）；v12 给 `InputSettings` 加了 `raw_input`（「不显示候选框」名单里的
 程序完全不接管）；v13 去掉 `CandidateKind::Custom` 的固定位置载荷（短语改成按权重整体排在最前）；
@@ -421,6 +422,13 @@ DLL 据此在**组句里**把这一个键送来问一趟（`eats_key` 里那条�
 **v23** 给 `ClientMessage::Surrounding` 加了 `context`（DLL 侧 `ITfContext` 指针）：Server 发现它变了就
 `Engine::enter_input_box()`，把当前应用的上下文历史清掉。老 DLL 不带、读成 `0`，只少这个重置，不坏已有输入；
 按规矩 +1 并重装 DLL。
+
+**v24** 新增 `ClientMessage::UiElementState`（宿主 UI-less / 自绘 / 读走过候选串的状态，变化时才发、
+不等回话）与 `ClientMessage::UiElementAction`（宿主的 `Select` / `Finalize` / `Abort`，同步回
+`ServerMessage::Update`），并给 `InputSettings` 加了 `host_reads_opt_in`（服务端按会话 exe 查
+`[candidate] host_drawn_candidates`）。老 DLL 不认识这两条消息、也不会创建 UIElement，
+UI-less 游戏里仍会弹我们自己的候选窗；按规矩 +1 并重装 DLL。
+
 Server 对低于 `PROTOCOL_VERSION` 的会话仍照常服务（老 DLL 忽略新增字段），并在该会话第一次出候选时
 在候选窗顶部提示「输入法已升级，请重启 app」；每个会话只提示一次。
 

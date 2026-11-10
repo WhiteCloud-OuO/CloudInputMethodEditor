@@ -81,7 +81,12 @@ mod session;
 ///
 /// v23 给 [`ClientMessage::Surrounding`] 加了 `context`（DLL 侧 TSF 文本上下文标识）：
 /// Server 据此在换输入框时丢掉上下文历史；老 DLL 不带、读成 `0`，只会少这个重置，不坏已有输入。
-pub const PROTOCOL_VERSION: u32 = 23;
+///
+/// v24 新增 [`ClientMessage::UiElementState`]（宿主 UI-less / 自绘 / 读走过候选串的状态）与
+/// [`ClientMessage::UiElementAction`]（宿主的选词 / 定稿 / 放弃），并给 [`InputSettings`] 加了
+/// `host_reads_opt_in`：老 DLL 不认识这两条消息、也不会创建 UIElement，表现成「UI-less 游戏里还是弹
+/// 我们自己的候选窗」；必须 +1 并重装 DLL。
+pub const PROTOCOL_VERSION: u32 = 24;
 
 /// 从哪个协议版本起 DLL 会在 `OpenSession` 后阻塞读一条 [`ServerMessage::SessionOpened`]。
 /// 门槛是固定值而不是当前版本：以后版本再升，没重启的应用里那些旧 DLL 仍在等这条回包，
@@ -95,7 +100,7 @@ pub const CANDIDATE_CLICK_SINCE: u32 = 16;
 pub mod frame;
 pub mod key;
 
-pub use client::{ClientMessage, DocumentText};
+pub use client::{CandidateAction, ClientMessage, DocumentText};
 pub use codec::{CodecError, DEFAULT_PIPE_NAME, read_message, write_message};
 pub use frame::{Frame, OnlineLine, OnlineState, PreeditKind, PreeditSegment, TipChoices};
 pub use indicator::{IndicatorCommand, IndicatorState};
@@ -104,3 +109,44 @@ pub use mode::InputMode;
 pub use screen_rect::ScreenRect;
 pub use server::{InputSettings, MAX_SCRIPT_HOTKEYS, ScriptHotkey, ServerMessage};
 pub use session::SessionId;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn ui_element_messages_round_trip() {
+        let state = ClientMessage::UiElementState {
+            session: SessionId(7),
+            host_draws: true,
+            ui_less: false,
+            host_reads: true,
+        };
+        let encoded = serde_json::to_vec(&state).expect("encode");
+        assert_eq!(
+            serde_json::from_slice::<ClientMessage>(&encoded).expect("decode"),
+            state
+        );
+
+        for action in [
+            CandidateAction::Select(3),
+            CandidateAction::Finalize,
+            CandidateAction::Abort,
+        ] {
+            let message = ClientMessage::UiElementAction {
+                session: SessionId(9),
+                action,
+            };
+            let encoded = serde_json::to_vec(&message).expect("encode");
+            assert_eq!(
+                serde_json::from_slice::<ClientMessage>(&encoded).expect("decode"),
+                message
+            );
+        }
+    }
+
+    #[test]
+    fn input_settings_host_reads_opt_in_defaults_to_false() {
+        assert!(!InputSettings::default().host_reads_opt_in);
+    }
+}
