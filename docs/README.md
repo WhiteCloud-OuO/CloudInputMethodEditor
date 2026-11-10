@@ -26,10 +26,12 @@ README.md 只介绍项目，所有技术内容放在这里，分四类：前三�
 | [design/input-modes.md](design/input-modes.md) | v / u / i 模式（2026-10-19）：进入方式（全拼裸键 / 非全拼 `Ctrl+Alt`）、u 模式六类符号、符号输入窗口与按键、日文假名 Tab、中英混输规则，以及 v 模式将来开放 Lua 接口的 TODO |
 | [design/input-schemes.md](design/input-schemes.md) | 输入方案（2026-10-10）：三种方案单选、**永不混输**；双键拼音的方案文件格式（INI/TOML 双格式与「同名认 toml」、目录与 `use_input_scheme.cfg`、Info / Auxiliary / Shengmu / Exchange / Remapping 五节、零声母写死在 `[Shengmu]` 里、按键变换流水线、校验与报错）与内置样例（首道 / 小鹤 / 自然码） |
 | [design/windows.md](design/windows.md) | Server 侧自绘窗口的模型（2026-10-14）：两类窗口（独立窗口 / 辅助窗口）、所有者唯一且不转移、桥接（bridging）、焦点（focus，2026-10-17：一组里任何时刻恰好一个 / 默认不具备焦点 / 允许获取焦点 / 指定资产获取焦点 / 同一所有者的两件资产经桥接转移 / 聚焦与失焦 / 归还给所有者 / 克隆窃取来的不抢焦点）、画法：渲染（rendering）与取舍、资产克隆与资产窃取（暂不用，先定规则）、两个模板与实现落点 |
+| [design/game-compat-tsf-uielement.md](design/game-compat-tsf-uielement.md) | 游戏兼容（2026-11-10 设计，未实施）：P1 TSF UI-less（`ITfTextInputProcessorEx` / `ITfUIElement` / `ITfCandidateListUIElement` 与 Behavior、复用 DLL 的 Frame 缓存、状态/动作两条新协议、`host_drawn_candidates` per-app opt-in、本地测试宿主）；P2 系统目录部署 + 签名（**仅签名版**提供「推荐安装 / 完整安装」选择，完整安装才写 `System32\IME\CloudIME` / `SysWOW64\` 并注册，Program Files 兜底、`InstallDir`、安装/升级/卸载、杀软误报门槛、CS2 Trusted Mode）；Dota 2 兼容名不做 |
 | [plan/roadmap.md](plan/roadmap.md) | 分阶段路线图、各阶段的依赖关系与已完成项 |
 | [plan/todo.md](plan/todo.md) | 待办清单，按「从自用到能给别人用」排 |
 | [plan/mcp-server.md](plan/mcp-server.md) | 只读 stdio MCP Server（2026-10-28）：给外部 AI 客户端查询词库的边界、工具契约、数据来源、发布与验证 |
 | [plan/mcp-client.md](plan/mcp-client.md) | MCP Client（2026-10-28）：独立 sidecar + 命名管道 + Lua 异步调用，配置、生命周期与验收 |
+| [plan/game-compat-tsf-uielement.md](plan/game-compat-tsf-uielement.md) | 游戏兼容 P1/P2 实施计划（2026-11-10）：协议 v24、DLL 帧缓存、UIElement COM、服务端抑制与动作、本地测试宿主；安装方式选择、系统目录/兜底副本、开发脚本、签名门槛与 CS2 验收 |
 | [notes/crate-notes.md](notes/crate-notes.md) | 各 crate / app / tool 的实现要点：入口类型、数据文件、常数、生成命令 |
 | [notes/performance.md](notes/performance.md) | 历次性能优化：起因、定位方法、改法、数字前后对比与经验 |
 | [notes/release.md](notes/release.md) | 发版流程：CHANGELOG、标签触发的 CI 打包、产品数据包、签名的 Secrets、官网用的 `releases.json` |
