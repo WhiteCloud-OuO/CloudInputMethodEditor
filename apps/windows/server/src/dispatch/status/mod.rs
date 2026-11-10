@@ -184,6 +184,7 @@ impl Router {
             || !self.ime_active
             || self.mode.disabled()
             || !self.in_text_input
+            || self.ui_suppressed_by_host()
         {
             return;
         }

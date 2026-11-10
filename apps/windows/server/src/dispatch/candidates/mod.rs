@@ -141,6 +141,13 @@ impl Router {
 
     /// 空帧收窗口；非空且已知光标矩形就重绘；还没收到矩形（组句刚起）先不显示，免得在旧位置闪一下。
     pub(super) fn reconcile_candidates(&mut self, frame: &Frame) {
+        if self.ui_suppressed_by_host() {
+            // 宿主自己画：收窗但保留 last_rect，宿主交还绘制权时还能按原位置弹回来。
+            self.last_shown = None;
+            self.hover_cell = None;
+            self.candidates.hide();
+            return;
+        }
         if frame.is_empty() {
             self.engine.note_displayed(std::iter::empty());
             self.hide_candidate_window();

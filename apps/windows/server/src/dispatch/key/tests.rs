@@ -2670,3 +2670,17 @@ fn i_mode_shift_digit_runs_in_background_and_forwards_windows() {
         "后台脚本的建窗请求应回到 UI：{requests:?}"
     );
 }
+
+#[test]
+fn ui_element_select_and_finalize_drive_the_composition() {
+    let mut router = special_router();
+    compose(&mut router, "yun", KeyModifiers::default());
+    let frame = router.self_drawn_frame();
+    assert!(frame.candidates.items.len() >= 2, "至少要有两个候选");
+    let expected = frame.candidates.items[1].text.clone();
+
+    router.ui_element_select(1);
+    let (frame, commit) = router.ui_element_finalize();
+    assert_eq!(commit.as_deref(), Some(expected.as_str()));
+    assert!(frame.is_empty(), "整段提交后帧应为空");
+}

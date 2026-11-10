@@ -377,6 +377,36 @@ impl Router {
         self.engine.commit(&candidate)
     }
 
+    /// 宿主 UIElement 的 `SetSelection`：页内下标落到当前页的绝对高亮。
+    pub(super) fn ui_element_select(&mut self, index: usize) {
+        let count = self.candidate_count();
+        let page_size = self.page_size().max(1);
+        if count == 0 {
+            return;
+        }
+        let page_start = (self.highlight / page_size) * page_size;
+        let page_len = (count - page_start).min(page_size);
+        if index < page_len {
+            self.highlight = page_start + index;
+            self.navigated = true;
+        }
+    }
+
+    /// 宿主 UIElement 的 `Finalize`：提交当前高亮；整段提交时返回空帧 + 上屏文本。
+    pub(super) fn ui_element_finalize(&mut self) -> (Frame, Option<String>) {
+        let index = self.highlight;
+        let text = (self.candidate_count() > 0)
+            .then(|| self.commit_index(index))
+            .flatten();
+        if text.is_some() {
+            self.reset_composition();
+            (Frame::default(), text)
+        } else {
+            self.recompose();
+            (self.current_frame(), None)
+        }
+    }
+
     /// 按当前状态生成一帧：没在组句给空帧；否则给高亮所在的那一页。
     pub(super) fn current_frame(&self) -> Frame {
         self.raw_frame()
@@ -425,9 +455,13 @@ impl Router {
             .unwrap_or_default()
     }
 
-    /// 全屏独占下候选窗不显示，编码必须留在组合区：不管用户配的是 `both` / `window`，一律 inline。
+    /// 独占全屏或宿主接管候选绘制时候选窗不显示，编码必须留在组合区：不管用户配的是
+    /// `both` / `window`，一律 inline。
     fn effective_preedit_mode(&self, configured: PreeditMode) -> PreeditMode {
-        preedit_mode_for(configured, crate::fullscreen::exclusive_cached())
+        preedit_mode_for(
+            configured,
+            crate::fullscreen::exclusive_cached() || self.ui_suppressed_by_host(),
+        )
     }
 
     fn raw_frame(&self) -> Frame {

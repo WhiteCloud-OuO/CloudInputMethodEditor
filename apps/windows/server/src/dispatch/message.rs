@@ -3,8 +3,8 @@
 use std::time::Instant;
 
 use cloudime_platform::protocol::{
-    ClientMessage, Frame, KeyEvent, KeyOutcome, PROTOCOL_VERSION, SESSION_OPENED_SINCE,
-    ServerMessage, SessionId,
+    CandidateAction, ClientMessage, Frame, KeyEvent, KeyOutcome, PROTOCOL_VERSION,
+    SESSION_OPENED_SINCE, ServerMessage, SessionId,
 };
 
 use super::Router;
@@ -189,14 +189,32 @@ impl Router {
                         host_reads,
                     };
                 }
+                // 状态翻转要立刻生效：宿主接管时收窗，交还时按保留的锚点弹回来。
+                if self.focused == Some(session) {
+                    let frame = self.self_drawn_frame();
+                    self.reconcile_candidates(&frame);
+                }
                 None
             }
-            ClientMessage::UiElementAction { session, .. } => {
-                // P1-D3 接入动作前先回当前帧，别让宿主的同步请求悬着。
+            ClientMessage::UiElementAction { session, action } => {
+                if self.focused != Some(session) {
+                    return None;
+                }
+                let (frame, commit) = match action {
+                    CandidateAction::Select(index) => {
+                        self.ui_element_select(index);
+                        (self.current_frame(), None)
+                    }
+                    CandidateAction::Finalize => self.ui_element_finalize(),
+                    CandidateAction::Abort => {
+                        self.reset_composition();
+                        (Frame::default(), None)
+                    }
+                };
                 Some(ServerMessage::Update {
                     session,
-                    frame: self.current_frame(),
-                    commit: None,
+                    frame,
+                    commit,
                 })
             }
             ClientMessage::CloseSession { session } => {

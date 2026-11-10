@@ -40,6 +40,24 @@ impl Router {
             .and_then(|info| info.app.as_deref())
     }
 
+    /// 焦点所在会话的宿主是否接管了候选绘制（UI-less / 自绘 / 名单内读取者）。
+    ///
+    /// `ui_less`（宿主声明）和 `host_draws`（`pbShow=FALSE`）是事实，直接信任；
+    /// `host_reads` 是推断，只有 `[candidate] host_drawn_candidates` 名单里的 exe 才据此收窗。
+    pub(super) fn ui_suppressed_by_host(&self) -> bool {
+        let Some(session) = self.focused else {
+            return false;
+        };
+        let Some(info) = self.sessions.get(&session) else {
+            return false;
+        };
+        let opt_in = info
+            .app
+            .as_deref()
+            .is_some_and(|app| self.config.host_draws_candidates_for(app));
+        suppresses_host_ui(info.ui_element, opt_in)
+    }
+
     pub(super) fn ensure_focus(&mut self, session: SessionId) {
         if self.focused != Some(session) {
             self.reset_composition();
@@ -122,5 +140,32 @@ impl Router {
         self.hide_candidate_window();
         // 候选窗关掉了：脚本在组句里要换的主题这时才补上
         self.flush_pending_theme();
+    }
+}
+
+/// 三个压制条件：`ui_less` / `host_draws` 是事实；`host_reads` 只在名单 opt-in 时算。
+fn suppresses_host_ui(flags: UiElementFlags, host_reads_opt_in: bool) -> bool {
+    flags.ui_less || flags.host_draws || (flags.host_reads && host_reads_opt_in)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{UiElementFlags, suppresses_host_ui};
+
+    fn flags(ui_less: bool, host_draws: bool, host_reads: bool) -> UiElementFlags {
+        UiElementFlags {
+            ui_less,
+            host_draws,
+            host_reads,
+        }
+    }
+
+    #[test]
+    fn suppression_follows_declaration_and_opt_in() {
+        assert!(!suppresses_host_ui(flags(false, false, false), false));
+        assert!(suppresses_host_ui(flags(true, false, false), false));
+        assert!(suppresses_host_ui(flags(false, true, false), false));
+        assert!(!suppresses_host_ui(flags(false, false, true), false));
+        assert!(suppresses_host_ui(flags(false, false, true), true));
     }
 }

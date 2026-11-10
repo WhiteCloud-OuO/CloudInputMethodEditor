@@ -1926,6 +1926,11 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
 `Finalize` 的上屏文本挂到 `Shared.pending_ui_commit`，由 80ms 轮询那一拍写文档（不在元素回调里开编辑会话）；
 `SetSelection` 同步回一帧后补一次 `UpdateUIElement`。
 
+服务端（P1-D）：`SessionInfo.ui_element` 按 `focused` 会话压窗（`ui_less` / `host_draws` / 名单内 `host_reads`），
+抑制时 `reconcile_candidates` 只收窗并保留 `last_rect`（宿主交还绘制权时能按原位置弹回），
+`effective_preedit_mode` 强制 inline，状态切换提示不弹；`UiElementAction` 的 `Select` / `Finalize` / `Abort`
+落到 `composed::ui_element_select` / `ui_element_finalize`（整段提交返回空帧 + 文本，部分提交继续组句）。
+
 ## assets
 
 - `assets/sample/`：手写样例词库，不是产品数据。
