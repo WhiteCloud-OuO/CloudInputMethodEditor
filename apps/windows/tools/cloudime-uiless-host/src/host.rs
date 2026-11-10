@@ -5,6 +5,8 @@
 //!
 //! 不随安装包发布；只用于开发验证。
 
+use std::cell::{Cell, RefCell};
+use std::rc::Rc;
 use std::time::Duration;
 
 use windows::Win32::Foundation::{E_FAIL, HWND, LPARAM, LRESULT, WPARAM};
@@ -19,8 +21,9 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     VK_O, VK_SPACE,
 };
 use windows::Win32::UI::TextServices::{
-    CLSID_TF_ThreadMgr, ITextStoreACP, ITfContext, ITfDocumentMgr, ITfKeystrokeMgr, ITfSource,
-    ITfThreadMgr, ITfThreadMgrEx, ITfUIElementMgr, ITfUIElementSink, TF_TMAE_UIELEMENTENABLEDONLY,
+    CLSID_TF_ThreadMgr, ITextStoreACP, ITfCandidateListUIElementBehavior, ITfContext,
+    ITfDocumentMgr, ITfKeystrokeMgr, ITfSource, ITfThreadMgr, ITfThreadMgrEx, ITfUIElementMgr,
+    ITfUIElementSink, TF_TMAE_UIELEMENTENABLEDONLY,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     CW_USEDEFAULT, CreateWindowExW, DefWindowProcW, DispatchMessageW, GetMessageW, KillTimer, MSG,
@@ -35,7 +38,19 @@ use crate::uielement_sink::UiElementSink;
 
 const CLASS_NAME: PCWSTR = w!("CloudIMEUilessHost");
 const AUTO_TIMER: usize = 1;
-const AUTO_DONE_TIMER: usize = 2;
+const AUTO_PICK_TIMER: usize = 2;
+const AUTO_DONE_TIMER: usize = 3;
+
+/// `--auto-pick` 的目标：元素管理器 + 当前元素 id。
+type PickTarget = (ITfUIElementMgr, Rc<Cell<Option<u32>>>);
+
+thread_local! {
+    /// `--auto-pick` 用：元素管理器 + 当前元素 id，`WM_TIMER` 里拿它们调 SetSelection / Finalize。
+    static PICK_TARGET: RefCell<Option<PickTarget>> = const { RefCell::new(None) };
+
+    /// 自动跑时是不是 `--auto-pick`：决定要不要发空格、以及要不要在打字后调宿主动作。
+    static PICK_MODE: Cell<bool> = const { Cell::new(false) };
+}
 
 struct Host {
     _thread_mgr: ITfThreadMgr,
@@ -44,6 +59,8 @@ struct Host {
     store_object: ComObject<TextStore>,
     _store: ITextStoreACP,
     _ui_sink: ITfUIElementSink,
+    manager: ITfUIElementMgr,
+    element_id: Rc<Cell<Option<u32>>>,
     keystroke: ITfKeystrokeMgr,
 }
 
@@ -61,7 +78,9 @@ fn setup(hwnd: HWND) -> Result<Host> {
         );
 
         let manager: ITfUIElementMgr = thread_mgr.cast()?;
-        let ui_sink: ITfUIElementSink = UiElementSink::new(manager).into();
+        let element_id = Rc::new(Cell::new(None));
+        let ui_sink: ITfUIElementSink =
+            UiElementSink::new(manager.clone(), element_id.clone()).into();
         let source: ITfSource = thread_mgr.cast()?;
         source.AdviseSink(&ITfUIElementSink::IID, &ui_sink)?;
 
@@ -83,6 +102,8 @@ fn setup(hwnd: HWND) -> Result<Host> {
             store_object,
             _store: store,
             _ui_sink: ui_sink,
+            manager,
+            element_id,
             keystroke,
         })
     }
@@ -157,19 +178,64 @@ fn send_key(vk: VIRTUAL_KEY) {
     }
 }
 
-fn type_auto() {
-    for vk in [VK_N, VK_I, VK_H, VK_A, VK_O, VK_SPACE] {
+fn type_auto(pick: bool) {
+    for vk in [VK_N, VK_I, VK_H, VK_A, VK_O] {
         send_key(vk);
         std::thread::sleep(Duration::from_millis(100));
     }
+    if !pick {
+        send_key(VK_SPACE);
+    }
+}
+
+/// 宿主侧动作：`SetSelection(1)` 再 `Finalize()`，验证服务端的 UIElement 动作链路。
+fn pick_and_finalize() {
+    PICK_TARGET.with(|target| {
+        let target = target.borrow();
+        let Some((manager, id)) = target.as_ref() else {
+            return;
+        };
+        let Some(id) = id.get() else {
+            println!("[auto-pick] 没有活跃的 UIElement");
+            return;
+        };
+        let Ok(element) = (unsafe { manager.GetUIElement(id) }) else {
+            println!("[auto-pick] GetUIElement({id}) 失败");
+            return;
+        };
+        let Ok(behavior) = element.cast::<ITfCandidateListUIElementBehavior>() else {
+            println!("[auto-pick] 元素没有 Behavior 接口");
+            return;
+        };
+        println!("[auto-pick] SetSelection(1)");
+        if let Err(error) = unsafe { behavior.SetSelection(1) } {
+            println!("[auto-pick] SetSelection 失败: {error}");
+        }
+        println!("[auto-pick] Finalize()");
+        if let Err(error) = unsafe { behavior.Finalize() } {
+            println!("[auto-pick] Finalize 失败: {error}");
+        }
+    });
 }
 
 unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: LPARAM) -> LRESULT {
     match msg {
         WM_TIMER if wparam.0 == AUTO_TIMER => {
             let _ = unsafe { KillTimer(Some(hwnd), AUTO_TIMER) };
-            println!("[auto] 发送 nihao + 空格");
-            type_auto();
+            let pick = PICK_MODE.with(Cell::get);
+            println!("[auto] 发送 nihao{}", if pick { "" } else { " + 空格" });
+            type_auto(pick);
+            let (timer, delay) = if pick {
+                (AUTO_PICK_TIMER, 800)
+            } else {
+                (AUTO_DONE_TIMER, 1500)
+            };
+            unsafe { SetTimer(Some(hwnd), timer, delay, None) };
+            LRESULT(0)
+        }
+        WM_TIMER if wparam.0 == AUTO_PICK_TIMER => {
+            let _ = unsafe { KillTimer(Some(hwnd), AUTO_PICK_TIMER) };
+            pick_and_finalize();
             unsafe { SetTimer(Some(hwnd), AUTO_DONE_TIMER, 1500, None) };
             LRESULT(0)
         }
@@ -186,9 +252,11 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
     }
 }
 
-/// 跑测试宿主；`auto` 时窗口出现 1.2 秒后自动敲 `nihao` + 空格。
-pub fn run(auto: bool) {
+/// 跑测试宿主；`auto` 时窗口出现 1.2 秒后自动敲 `nihao`（默认再补空格）；
+/// `pick` 时不补空格，改为 0.8 秒后调 `SetSelection(1)` + `Finalize()`。
+pub fn run(auto: bool, pick: bool) {
     let _ = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    PICK_MODE.with(|mode| mode.set(pick));
 
     let hinstance = unsafe { GetModuleHandleW(None) }.expect("GetModuleHandleW");
     let class = WNDCLASSW {
@@ -223,6 +291,9 @@ pub fn run(auto: bool) {
             return;
         }
     };
+    PICK_TARGET.with(|target| {
+        *target.borrow_mut() = Some((host.manager.clone(), host.element_id.clone()));
+    });
     unsafe {
         let _ = ShowWindow(hwnd, SW_SHOW);
         let _ = SetForegroundWindow(hwnd);
@@ -242,6 +313,7 @@ pub fn run(auto: bool) {
         let _ = unsafe { TranslateMessage(&msg) };
         unsafe { DispatchMessageW(&msg) };
     }
+    PICK_TARGET.with(|target| *target.borrow_mut() = None);
     println!("文本存区: {:?}", host.store_object.get().text());
     drop(host);
     unsafe { CoUninitialize() };

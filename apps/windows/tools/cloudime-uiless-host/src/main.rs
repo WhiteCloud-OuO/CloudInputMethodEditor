@@ -9,7 +9,10 @@ mod uielement_sink;
 
 #[cfg(windows)]
 fn main() {
-    host::run(std::env::args().any(|arg| arg == "--auto"));
+    let args: Vec<String> = std::env::args().collect();
+    let pick = args.iter().any(|arg| arg == "--auto-pick");
+    let auto = pick || args.iter().any(|arg| arg == "--auto");
+    host::run(auto, pick);
 }
 
 #[cfg(not(windows))]

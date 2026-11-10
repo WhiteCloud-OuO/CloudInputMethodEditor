@@ -22,6 +22,18 @@ cargo run -p cloudime-uiless-host -- --auto
 cargo run -p cloudime-uiless-host
 ```
 
+`--auto-pick` 用来验宿主动作：敲 `nihao`（不补空格），0.8 秒后调用
+`ITfCandidateListUIElementBehavior::SetSelection(1)` 和 `Finalize()`，应看到：
+
+```text
+[auto-pick] SetSelection(1)
+[uielement] Update id=0
+  [uielement] count=9 selection=Some(1) ...
+[auto-pick] Finalize()
+[uielement] End id=0
+文本存区: "你会"    # 第二个候选，具体词随词库
+```
+
 预期输出（节选）：
 
 ```text

@@ -1,6 +1,9 @@
 //! 测试宿主的 `ITfUIElementSink`：`BeginUIElement` 一律回 `pbShow=FALSE`（自己画），
 //! 在 `UpdateUIElement` 里把候选页读出来打印，验证输入法交的数据。
 
+use std::cell::Cell;
+use std::rc::Rc;
+
 use windows::Win32::UI::TextServices::{
     ITfCandidateListUIElement, ITfUIElementMgr, ITfUIElementSink, ITfUIElementSink_Impl,
 };
@@ -9,11 +12,16 @@ use windows::core::{BOOL, Interface, Result, implement};
 #[implement(ITfUIElementSink)]
 pub(crate) struct UiElementSink {
     manager: ITfUIElementMgr,
+    /// 最近一次 `Begin` 的元素 id；`End` 清空。`--auto-pick` 用它去 QI Behavior。
+    element_id: Rc<Cell<Option<u32>>>,
 }
 
 impl UiElementSink {
-    pub(crate) fn new(manager: ITfUIElementMgr) -> Self {
-        Self { manager }
+    pub(crate) fn new(manager: ITfUIElementMgr, element_id: Rc<Cell<Option<u32>>>) -> Self {
+        Self {
+            manager,
+            element_id,
+        }
     }
 
     fn dump(&self, id: u32) {
@@ -43,6 +51,7 @@ impl UiElementSink {
 
 impl ITfUIElementSink_Impl for UiElementSink_Impl {
     fn BeginUIElement(&self, id: u32, pbshow: *mut BOOL) -> Result<()> {
+        self.element_id.set(Some(id));
         // 宿主自己画：输入法那边据此收掉自绘候选窗。
         unsafe {
             if !pbshow.is_null() {
@@ -60,6 +69,7 @@ impl ITfUIElementSink_Impl for UiElementSink_Impl {
     }
 
     fn EndUIElement(&self, id: u32) -> Result<()> {
+        self.element_id.set(None);
         println!("[uielement] End id={id}");
         Ok(())
     }
