@@ -2,9 +2,11 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
+use cloudime_platform::protocol::Frame;
 use windows::Win32::UI::TextServices::{ITfComposition, ITfContext};
 
 use crate::com::service::SharedClient;
+use crate::com::uielement::UiElementState;
 
 /// `TextService`、编辑会话、组句 sink、轮询定时器之间共享的组句状态（STA 单线程，`Rc` 传递）。
 pub(crate) struct Shared {
@@ -36,6 +38,9 @@ pub(crate) struct Shared {
     /// 因 Shift / Ctrl / Alt 还按着而延后的光标移动（负左、正右）；0 = 没有。
     /// 成对补全在 `Shift + 9` 这类键上会碰到：立刻注入方向键会被宿主看成 Shift+方向键。
     pending_caret_shift: Cell<i16>,
+
+    /// UIElement 状态与最新一帧（P1 UI-less）：候选元素的 getter 读它，状态变化时报 Server。
+    ui_element: RefCell<UiElementState>,
 }
 
 impl Shared {
@@ -50,6 +55,7 @@ impl Shared {
             client,
             injected_key: Cell::new(None),
             pending_caret_shift: Cell::new(0),
+            ui_element: RefCell::new(UiElementState::default()),
         })
     }
 
@@ -106,6 +112,37 @@ impl Shared {
     /// 取走延后的光标移动；没有则返回 0。
     pub(crate) fn take_pending_caret_shift(&self) -> i16 {
         self.pending_caret_shift.replace(0)
+    }
+
+    /// 记下 Server 刚下发的一帧（UIElement getter 读它）。
+    pub(crate) fn set_last_frame(&self, frame: Frame) {
+        self.ui_element.borrow_mut().set_frame(frame);
+    }
+
+    /// 宿主这次激活是不是 UI-less 线程；变化时立即上报。
+    pub(crate) fn set_ui_less(&self, ui_less: bool) {
+        self.ui_element.borrow_mut().ui_less = ui_less;
+        self.report_ui_element();
+    }
+
+    /// 把 UIElement 状态的变化报给 Server；连不上就等下一次变化 / 重连再报。
+    pub(crate) fn report_ui_element(&self) {
+        let Some(flags) = self.ui_element.borrow().changed() else {
+            return;
+        };
+        if let Ok(mut guard) = self.client.try_borrow_mut()
+            && let Some(client) = guard.as_mut()
+            && client
+                .ui_element_state(flags.host_draws, flags.ui_less, flags.host_reads)
+                .is_ok()
+        {
+            self.ui_element.borrow_mut().mark_sent();
+        }
+    }
+
+    /// 新连接（Server 可能重启过）：忘记上次上报，下一次 `report_ui_element` 重报。
+    pub(crate) fn reset_ui_element_report(&self) {
+        self.ui_element.borrow_mut().forget_sent();
     }
 
     pub(crate) fn last_context(&self) -> Option<ITfContext> {
@@ -176,6 +213,7 @@ impl Shared {
     pub(crate) fn reset(&self) {
         self.set_composition(None);
         self.set_last_context(None);
+        self.ui_element.borrow_mut().reset();
         self.end_composing();
     }
 

@@ -1,10 +1,14 @@
-//! `ITfTextInputProcessor`：激活时挂击键 sink、连 Server、起轮询定时器、挂 profile /
+//! `ITfTextInputProcessor` / `ITfTextInputProcessorEx`：激活时挂击键 sink、连 Server、起轮询定时器、挂 profile /
 //! 模式 compartment 回调、登记语言栏按钮；停用按相反顺序撤掉，敲了一半的拼音先原样落定。
+//!
+//! `ActivateEx` 带 `TF_TMAE_UIELEMENTENABLEDONLY` 时记下 UI-less 状态（P1）：宿主自己画候选，
+//! 服务端据此收掉自己的候选窗；普通 `Activate` 走同一条激活路径。
 
 use std::time::Instant;
 
 use windows::Win32::UI::TextServices::{
-    ITfKeyEventSink, ITfKeystrokeMgr, ITfTextInputProcessor_Impl, ITfThreadMgr,
+    ITfKeyEventSink, ITfKeystrokeMgr, ITfTextInputProcessor_Impl, ITfTextInputProcessorEx_Impl,
+    ITfThreadMgr, TF_TMAE_UIELEMENTENABLEDONLY,
 };
 use windows::core::{IUnknownImpl, Interface, Ref, Result};
 
@@ -19,6 +23,48 @@ use crate::com::profile;
 
 impl ITfTextInputProcessor_Impl for TextService_Impl {
     fn Activate(&self, ptim: Ref<ITfThreadMgr>, tid: u32) -> Result<()> {
+        self.activate(ptim, tid, false)
+    }
+
+    fn Deactivate(&self) -> Result<()> {
+        // 先撤回调，之后不再有回调碰本服务。
+        ACTIVE.with(|active| active.borrow_mut().take());
+        self.unadvise_mode_sinks();
+        if let Some((source, cookie)) = self.focus_sink.borrow_mut().take() {
+            focus::unadvise(&source, cookie);
+        }
+        self.remove_lang_bar_item();
+        self.poll_timer.borrow_mut().take();
+        // 切走输入法时敲了一半的拼音原样落定，再关会话。
+        self.commit_pending();
+        if let Some(thread_mgr) = self.thread_mgr.borrow_mut().take()
+            && let Ok(keystroke) = thread_mgr.cast::<ITfKeystrokeMgr>()
+        {
+            self.drop_switch_preserved_key(&keystroke);
+            let _ = unsafe { keystroke.UnadviseKeyEventSink(self.client_id.get()) };
+        }
+        if let Some(client) = self.engine.borrow_mut().take() {
+            let _ = client.close();
+        }
+        self.shared.reset();
+        self.shared.take_server_stale();
+        self.shared.set_foreground(false);
+        log("云朵输入法 TSF 已停用");
+        Ok(())
+    }
+}
+
+impl ITfTextInputProcessorEx_Impl for TextService_Impl {
+    fn ActivateEx(&self, ptim: Ref<ITfThreadMgr>, tid: u32, dwflags: u32) -> Result<()> {
+        let ui_less = dwflags & TF_TMAE_UIELEMENTENABLEDONLY != 0;
+        log(&format!("ActivateEx ui_less={ui_less}"));
+        self.activate(ptim, tid, ui_less)
+    }
+}
+
+impl TextService_Impl {
+    /// `Activate` / `ActivateEx` 的共用部分；`ui_less` 是宿主线程的 UI-less 标志。
+    fn activate(&self, ptim: Ref<ITfThreadMgr>, tid: u32, ui_less: bool) -> Result<()> {
         let thread_mgr = ptim.ok()?.clone();
         let keystroke: ITfKeystrokeMgr = thread_mgr.cast()?;
         let sink: ITfKeyEventSink = self.to_interface();
@@ -46,6 +92,8 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
         *self.thread_mgr.borrow_mut() = Some(thread_mgr);
         // 固定内置热键（Ctrl + Alt + . / ,）在激活时明确登记一次，不依赖设置是否已经下发。
         self.sync_preserved_hotkeys();
+        // UI-less 状态先记下：`connect` 拿到会话后报给 Server（连不上就等重连再报）。
+        self.shared.set_ui_less(ui_less);
         // 连 Server：它随 `OpenSession` 的回包把按键行为设置带下来，就地应用。那两个值在按键到达之前
         // 就要有，而且应用时要登记 Ctrl + Alt + Space 保留键，所以这一步必须排在 `thread_mgr` 就绪之后。
         self.connect();
@@ -78,33 +126,6 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
             "云朵输入法 TSF 已激活 tid={tid} 构建={}",
             crate::com::BUILD_STAMP
         ));
-        Ok(())
-    }
-
-    fn Deactivate(&self) -> Result<()> {
-        // 先撤回调，之后不再有回调碰本服务。
-        ACTIVE.with(|active| active.borrow_mut().take());
-        self.unadvise_mode_sinks();
-        if let Some((source, cookie)) = self.focus_sink.borrow_mut().take() {
-            focus::unadvise(&source, cookie);
-        }
-        self.remove_lang_bar_item();
-        self.poll_timer.borrow_mut().take();
-        // 切走输入法时敲了一半的拼音原样落定，再关会话。
-        self.commit_pending();
-        if let Some(thread_mgr) = self.thread_mgr.borrow_mut().take()
-            && let Ok(keystroke) = thread_mgr.cast::<ITfKeystrokeMgr>()
-        {
-            self.drop_switch_preserved_key(&keystroke);
-            let _ = unsafe { keystroke.UnadviseKeyEventSink(self.client_id.get()) };
-        }
-        if let Some(client) = self.engine.borrow_mut().take() {
-            let _ = client.close();
-        }
-        self.shared.reset();
-        self.shared.take_server_stale();
-        self.shared.set_foreground(false);
-        log("云朵输入法 TSF 已停用");
         Ok(())
     }
 }

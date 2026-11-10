@@ -23,6 +23,9 @@ impl TextService_Impl {
                 log("已连上 Server");
                 // 按键行为设置随 `OpenSession` 的回包一起下来（DLL 不读配置文件，AppContainer 里读不到）。
                 self.apply_input_settings(input);
+                // 新会话在 Server 那边没有 UIElement 状态：重报一次（含 `ui_less`）。
+                self.shared.reset_ui_element_report();
+                self.shared.report_ui_element();
             }
             Err(error) => {
                 self.last_connect_failure.set(Some(Instant::now()));

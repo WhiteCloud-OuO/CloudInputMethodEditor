@@ -64,6 +64,8 @@ impl TextService_Impl {
     /// 候选窗在 Server 手里、收不到按键，所以那一格要上屏的文本只能挂在 `Poll` 的回包里回来。
     /// 只选了一半（候选并进组句）时拼音行也变了，所以帧里那条新拼音行一并落进文档。
     pub(crate) fn apply_poll_commit(&self, frame: &Frame, commit: Option<String>) {
+        // 轮询回来的也是最新帧（鼠标点选 / 重排），UIElement getter 读这份。
+        self.shared.set_last_frame(frame.clone());
         let preedit = if frame.preedit_mode.inline() {
             preedit_string(frame)
         } else {

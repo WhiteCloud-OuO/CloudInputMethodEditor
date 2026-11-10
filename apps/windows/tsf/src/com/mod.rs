@@ -20,6 +20,7 @@ pub(crate) mod poll;
 pub(crate) mod profile;
 pub(crate) mod registry;
 pub(crate) mod service;
+pub(crate) mod uielement;
 pub(crate) mod window_class;
 
 use core::ffi::c_void;

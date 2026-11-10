@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::TextServices::{
     ITfDisplayAttributeProvider, ITfKeyEventSink, ITfLangBarItemButton, ITfSource,
-    ITfTextInputProcessor, ITfThreadMgr,
+    ITfTextInputProcessor, ITfTextInputProcessorEx, ITfThreadMgr,
 };
 use windows::core::{ComObject, GUID, implement};
 
@@ -40,7 +40,12 @@ pub(crate) type SharedClient = Rc<RefCell<Option<EngineClient<PipeStream>>>>;
 const RECONNECT_INTERVAL: Duration = Duration::from_secs(2);
 
 /// 一个 TSF 文本服务实例（每线程一个）。
-#[implement(ITfTextInputProcessor, ITfKeyEventSink, ITfDisplayAttributeProvider)]
+#[implement(
+    ITfTextInputProcessor,
+    ITfTextInputProcessorEx,
+    ITfKeyEventSink,
+    ITfDisplayAttributeProvider
+)]
 pub struct TextService {
     /// 激活时拿到的线程管理器，停用时用它反注册。
     thread_mgr: RefCell<Option<ITfThreadMgr>>,

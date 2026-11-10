@@ -156,6 +156,21 @@ impl<S: Read + Write> EngineClient<S> {
         })
     }
 
+    /// 报宿主的 UIElement 状态（UI-less / 自绘 / 读走过候选串）。不回话。
+    pub fn ui_element_state(
+        &mut self,
+        host_draws: bool,
+        ui_less: bool,
+        host_reads: bool,
+    ) -> Result<(), ClientError> {
+        self.send(&ClientMessage::UiElementState {
+            session: self.session,
+            host_draws,
+            ui_less,
+            host_reads,
+        })
+    }
+
     /// 问 Server 有没有待处理的目标模式，顺路取回最新的按键行为设置（每一拍都带）。
     /// `in_text_input` / `caps` 是本线程此刻的焦点状态（状态切换提示用，见 [`ClientMessage::SyncMode`]）。
     pub fn sync_mode(

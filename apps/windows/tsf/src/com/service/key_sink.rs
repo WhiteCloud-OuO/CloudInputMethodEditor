@@ -368,6 +368,8 @@ impl TextService_Impl {
             match response {
                 Ok(response) => {
                     want_caret = response.want_caret;
+                    // UIElement getter 读这份最新帧；与是否自绘候选窗无关，先缓存再处理。
+                    self.shared.set_last_frame(response.frame.clone());
                     // 「只在候选窗口」模式应用里不放行内拼音（那一行由 Server 画在候选窗口顶部）。
                     let preedit = if response.frame.preedit_mode.inline() {
                         preedit_string(&response.frame)
