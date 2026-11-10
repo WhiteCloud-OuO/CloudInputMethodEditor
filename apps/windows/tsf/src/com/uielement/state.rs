@@ -54,9 +54,15 @@ impl UiElementState {
     }
 
     /// 与上次上报的不同就返回新标志；没变化返回 `None`。
+    ///
+    /// 默认全 `false` 是 Server 的缺省状态，不必为一个普通会话发一条空消息；
+    /// 只有某个标志变 `true`（或从 `true` 变回来）才值得报。
     pub(crate) fn changed(&self) -> Option<UiElementFlags> {
         let flags = self.flags();
-        (self.sent != Some(flags)).then_some(flags)
+        if self.sent == Some(flags) || (self.sent.is_none() && flags == UiElementFlags::default()) {
+            return None;
+        }
+        Some(flags)
     }
 
     /// 上报成功后记下这一份，下一次只有再变才报。
@@ -84,15 +90,17 @@ mod tests {
     #[test]
     fn flags_only_report_when_they_change() {
         let mut state = UiElementState::default();
-        let first = state.changed().expect("第一次上报");
-        assert!(!first.ui_less && !first.host_draws && !first.host_reads);
+        assert!(state.changed().is_none(), "默认全 false 不必上报");
+
+        state.ui_less = true;
+        let first = state.changed().expect("ui_less 变了");
+        assert!(first.ui_less && !first.host_draws && !first.host_reads);
         state.mark_sent();
         assert!(state.changed().is_none(), "没变不再报");
 
-        state.ui_less = true;
-        let changed = state.changed().expect("ui_less 变了");
-        assert!(changed.ui_less);
-        assert!(!changed.host_draws && !changed.host_reads);
+        state.ui_less = false;
+        let back = state.changed().expect("从 true 变回来要报");
+        assert!(!back.ui_less && !back.host_draws && !back.host_reads);
         state.mark_sent();
         assert!(state.changed().is_none());
     }
@@ -110,9 +118,15 @@ mod tests {
         assert!(state.changed().is_none());
 
         state.reset();
-        let flags = state.changed().expect("reset 后重报");
-        assert!(!flags.ui_less && !flags.host_draws && !flags.host_reads);
+        assert!(
+            state.changed().is_none(),
+            "reset 后全 false 不必补一条空消息"
+        );
         assert!(state.frame.preedit.is_empty());
+
+        state.host_reads = true;
+        let flags = state.changed().expect("reset 后新的变化要重报");
+        assert!(flags.host_reads);
     }
 
     #[test]

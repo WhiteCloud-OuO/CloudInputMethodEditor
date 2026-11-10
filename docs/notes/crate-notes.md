@@ -1919,7 +1919,8 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
 
 **UI-less（P1，2026-11-10）**：`TextService` 同时实现 `ITfTextInputProcessorEx`；`ActivateEx` 带
 `TF_TMAE_UIELEMENTENABLEDONLY` 时记 `ui_less`。`com/uielement/` 的 `UiElementState` 缓存最新帧与三个标志
-（`ui_less` / `host_draws` / `host_reads`），只在变化时经 `ClientMessage::UiElementState` 上报；`lifecycle`
+（`ui_less` / `host_draws` / `host_reads`），只在变化时经 `ClientMessage::UiElementState` 上报（默认全 `false`
+不发初始消息，普通宿主零新增消息）；`lifecycle`
 只在 `ui_less` 或 `InputSettings.host_reads_opt_in` 时创建 `CandidateElement`（`ITfUIElement` +
 `ITfCandidateListUIElement` + Behavior），`BeginUIElement` 回 `FALSE` 后每帧 `UpdateUIElement`，
 组句结束 / 停用 `EndUIElement`。getter 只读 `Shared` 里的本地帧；`GetString` 第一次被调用记 `host_reads`。
