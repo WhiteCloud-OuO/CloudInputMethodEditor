@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use windows::Win32::UI::TextServices::{
     ITfKeyEventSink, ITfKeystrokeMgr, ITfTextInputProcessor_Impl, ITfTextInputProcessorEx_Impl,
-    ITfThreadMgr, TF_TMAE_UIELEMENTENABLEDONLY,
+    ITfThreadMgr, ITfUIElementMgr, TF_TMAE_UIELEMENTENABLEDONLY,
 };
 use windows::core::{IUnknownImpl, Interface, Ref, Result};
 
@@ -43,6 +43,9 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
             self.drop_switch_preserved_key(&keystroke);
             let _ = unsafe { keystroke.UnadviseKeyEventSink(self.client_id.get()) };
         }
+        // 先收 UIElement，再关会话（元素回调里可能还要用 client）。
+        self.end_ui_element();
+        self.ui_element_mgr.borrow_mut().take();
         if let Some(client) = self.engine.borrow_mut().take() {
             let _ = client.close();
         }
@@ -89,7 +92,10 @@ impl TextService_Impl {
         }
         // 激活时线程已有焦点的话，不会再来一次「得到焦点」。
         let focused = unsafe { thread_mgr.IsThreadFocus() }.is_ok_and(|focus| focus.as_bool());
+        let ui_element_mgr: Option<ITfUIElementMgr> = thread_mgr.cast().ok();
         *self.thread_mgr.borrow_mut() = Some(thread_mgr);
+        *self.ui_element.borrow_mut() = None;
+        *self.ui_element_mgr.borrow_mut() = ui_element_mgr;
         // 固定内置热键（Ctrl + Alt + . / ,）在激活时明确登记一次，不依赖设置是否已经下发。
         self.sync_preserved_hotkeys();
         // UI-less 状态先记下：`connect` 拿到会话后报给 Server（连不上就等重连再报）。

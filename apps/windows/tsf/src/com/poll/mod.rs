@@ -116,6 +116,14 @@ fn poll_once(context: &PollContext) {
     context.ticks.set(tick);
     if !context.shared.composing() {
         clear_pending_candidate();
+        // UIElement 的 Finalize 把上屏文本挂在这里：等这一拍再写文档，不在元素回调里开编辑会话。
+        if let Some((frame, commit)) = context.shared.take_ui_commit() {
+            super::service::with_active(|service| {
+                service.apply_poll_commit(&frame, Some(commit));
+            });
+        }
+        // 组句结束：UI-less 宿主那边的候选元素也收掉（Finalize / Abort 后最多晚一拍）。
+        super::service::with_active(|service| service.sync_ui_element());
         if tick.is_multiple_of(MODE_SYNC_EVERY) && in_foreground(context) {
             sync_mode(context);
             // 「不处于输入状态时自动禁用输入法」：跟着这一拍顺手看一眼焦点（改设置时也是这一拍生效）。

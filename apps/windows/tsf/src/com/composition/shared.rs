@@ -2,7 +2,7 @@ use std::cell::{Cell, RefCell};
 use std::rc::Rc;
 use std::time::{Duration, Instant};
 
-use cloudime_platform::protocol::Frame;
+use cloudime_platform::protocol::{CandidateAction, Frame};
 use windows::Win32::UI::TextServices::{ITfComposition, ITfContext};
 
 use crate::com::service::SharedClient;
@@ -41,6 +41,9 @@ pub(crate) struct Shared {
 
     /// UIElement 状态与最新一帧（P1 UI-less）：候选元素的 getter 读它，状态变化时报 Server。
     ui_element: RefCell<UiElementState>,
+
+    /// 宿主 `Finalize` 回来的上屏文本：等轮询那一拍应用，不在元素回调里直接改文档。
+    pending_ui_commit: RefCell<Option<(Frame, String)>>,
 }
 
 impl Shared {
@@ -56,6 +59,7 @@ impl Shared {
             injected_key: Cell::new(None),
             pending_caret_shift: Cell::new(0),
             ui_element: RefCell::new(UiElementState::default()),
+            pending_ui_commit: RefCell::new(None),
         })
     }
 
@@ -117,6 +121,61 @@ impl Shared {
     /// 记下 Server 刚下发的一帧（UIElement getter 读它）。
     pub(crate) fn set_last_frame(&self, frame: Frame) {
         self.ui_element.borrow_mut().set_frame(frame);
+    }
+
+    /// 只读最新帧（UIElement getter 用；不 clone 整帧）。
+    pub(crate) fn with_ui_frame<R>(&self, f: impl FnOnce(&Frame) -> R) -> R {
+        f(&self.ui_element.borrow().frame)
+    }
+
+    /// 宿主这次激活是不是 UI-less 线程。
+    pub(crate) fn ui_less(&self) -> bool {
+        self.ui_element.borrow().ui_less
+    }
+
+    /// 宿主接管 / 交还候选绘制权；变化时上报。
+    pub(crate) fn set_host_draws(&self, host_draws: bool) {
+        self.ui_element.borrow_mut().host_draws = host_draws;
+        self.report_ui_element();
+    }
+
+    /// 宿主读走了候选串；变化时上报。
+    pub(crate) fn note_host_reads(&self) {
+        self.ui_element.borrow_mut().host_reads = true;
+        self.report_ui_element();
+    }
+
+    /// 宿主的选词 / 定稿 / 放弃：同步等 Server 回一帧；连不上就断开，下一键重连。
+    pub(crate) fn ui_element_action(
+        &self,
+        action: CandidateAction,
+    ) -> Option<(Frame, Option<String>)> {
+        let mut guard = self.client.try_borrow_mut().ok()?;
+        let client = guard.as_mut()?;
+        match client.ui_element_action(action) {
+            Ok(reply) => {
+                self.set_last_frame(reply.frame.clone());
+                self.set_composing(!reply.frame.is_empty());
+                Some((reply.frame, reply.commit))
+            }
+            Err(error) => {
+                crate::com::log::log(&format!("UIElement 动作失败，断开，下一键重连: {error}"));
+                *guard = None;
+                drop(guard);
+                self.end_composing();
+                None
+            }
+        }
+    }
+
+    /// 宿主 `Finalize` 的上屏文本：等轮询那一拍再写文档（不在元素回调里直接开编辑会话）。
+    pub(crate) fn defer_ui_commit(&self, frame: Frame, commit: String) {
+        *self.pending_ui_commit.borrow_mut() = Some((frame, commit));
+    }
+
+    /// 取走待应用的上屏文本。
+    pub(crate) fn take_ui_commit(&self) -> Option<(Frame, String)> {
+        self.pending_ui_commit.borrow_mut().take()
     }
 
     /// 宿主这次激活是不是 UI-less 线程；变化时立即上报。
@@ -214,6 +273,7 @@ impl Shared {
         self.set_composition(None);
         self.set_last_context(None);
         self.ui_element.borrow_mut().reset();
+        *self.pending_ui_commit.borrow_mut() = None;
         self.end_composing();
     }
 

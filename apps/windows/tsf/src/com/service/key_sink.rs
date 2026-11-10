@@ -349,6 +349,7 @@ impl TextService_Impl {
         }
         // Server 交互在这段借用里做完，放掉借用再走编辑会话。
         let mut want_caret = false;
+        let mut frame_updated = false;
         let next = {
             let mut guard = self.engine.borrow_mut();
             let Some(client) = guard.as_mut() else {
@@ -370,6 +371,7 @@ impl TextService_Impl {
                     want_caret = response.want_caret;
                     // UIElement getter 读这份最新帧；与是否自绘候选窗无关，先缓存再处理。
                     self.shared.set_last_frame(response.frame.clone());
+                    frame_updated = true;
                     // 「只在候选窗口」模式应用里不放行内拼音（那一行由 Server 画在候选窗口顶部）。
                     let preedit = if response.frame.preedit_mode.inline() {
                         preedit_string(&response.frame)
@@ -408,6 +410,10 @@ impl TextService_Impl {
                 }
             }
         };
+        if frame_updated {
+            // 引擎借用已释放：UI-less / opt-in 宿主在这里创建 / 更新候选元素。
+            self.sync_ui_element();
+        }
         // 带 Ctrl / Alt / Win 的组合放行时仍交还应用，别把热键的字母插进文档。
         let insertable = !event.modifiers.has_command_key();
         let caret_context = pic.ok().ok().cloned();

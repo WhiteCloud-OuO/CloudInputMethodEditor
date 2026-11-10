@@ -19,7 +19,7 @@ use std::time::{Duration, Instant};
 use windows::Win32::Foundation::POINT;
 use windows::Win32::UI::TextServices::{
     ITfDisplayAttributeProvider, ITfKeyEventSink, ITfLangBarItemButton, ITfSource,
-    ITfTextInputProcessor, ITfTextInputProcessorEx, ITfThreadMgr,
+    ITfTextInputProcessor, ITfTextInputProcessorEx, ITfThreadMgr, ITfUIElementMgr,
 };
 use windows::core::{ComObject, GUID, implement};
 
@@ -30,6 +30,7 @@ use super::key::KeyTap;
 use super::mode::ModeState;
 use super::mode::sink::Advice;
 use super::poll::PollTimer;
+use super::uielement::ActiveElement;
 use crate::client::EngineClient;
 use crate::client::pipe::PipeStream;
 
@@ -57,10 +58,16 @@ pub struct TextService {
     engine: SharedClient,
 
     /// 跨按键存活的组句状态。
-    shared: Rc<Shared>,
+    pub(crate) shared: Rc<Shared>,
 
     /// 云联想轮询定时器；挂失败时为 `None`，退化为只在按键时收重排结果。
     poll_timer: RefCell<Option<PollTimer>>,
+
+    /// UIElement 管理器（激活时从线程管理器 QI）；拿不到就不支持 UI-less。
+    pub(crate) ui_element_mgr: RefCell<Option<ITfUIElementMgr>>,
+
+    /// 当前活着的候选元素（UI-less / opt-in 宿主）。
+    pub(crate) ui_element: RefCell<Option<ActiveElement>>,
 
     /// 上次连 Server 失败的时间，按 [`RECONNECT_INTERVAL`] 退避。
     last_connect_failure: Cell<Option<Instant>>,
@@ -102,7 +109,7 @@ pub struct TextService {
 
     /// 上一次应用过的按键行为设置；与 Server 下发的一致时就不重复应用
     /// （每一拍 `SyncMode` 都带着它，见 [`TextService_Impl::apply_input_settings`]）。
-    input_settings: Cell<Option<InputSettings>>,
+    pub(crate) input_settings: Cell<Option<InputSettings>>,
 
     /// 「不处于输入状态时自动禁用输入法」当前是不是我们关掉的：只放回自己关掉的，
     /// 用户手动 Ctrl + Space 禁用的不碰（见 [`TextService_Impl::sync_auto_disable`]）。
@@ -224,6 +231,8 @@ impl TextService {
             shared: Shared::new(engine.clone()),
             engine,
             poll_timer: RefCell::new(None),
+            ui_element_mgr: RefCell::new(None),
+            ui_element: RefCell::new(None),
             last_connect_failure: Cell::new(None),
             replaying: Cell::new(None),
             mode_state: ModeState::new(),

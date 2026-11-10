@@ -1917,6 +1917,15 @@ Server 每次轮询比对 `WordBank\` 的路径 / mtime / 长度快照，配置�
 DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上的 DLL——老的 `open` 是只写不读，
 多回一条会被它当成下一次 `Poll` 的应答而报错，那条连接就废了；老 DLL 从 `ModeSync` 那一拍也能拿到同一份（新字段直接忽略）。
 
+**UI-less（P1，2026-11-10）**：`TextService` 同时实现 `ITfTextInputProcessorEx`；`ActivateEx` 带
+`TF_TMAE_UIELEMENTENABLEDONLY` 时记 `ui_less`。`com/uielement/` 的 `UiElementState` 缓存最新帧与三个标志
+（`ui_less` / `host_draws` / `host_reads`），只在变化时经 `ClientMessage::UiElementState` 上报；`lifecycle`
+只在 `ui_less` 或 `InputSettings.host_reads_opt_in` 时创建 `CandidateElement`（`ITfUIElement` +
+`ITfCandidateListUIElement` + Behavior），`BeginUIElement` 回 `FALSE` 后每帧 `UpdateUIElement`，
+组句结束 / 停用 `EndUIElement`。getter 只读 `Shared` 里的本地帧；`GetString` 第一次被调用记 `host_reads`。
+`Finalize` 的上屏文本挂到 `Shared.pending_ui_commit`，由 80ms 轮询那一拍写文档（不在元素回调里开编辑会话）；
+`SetSelection` 同步回一帧后补一次 `UpdateUIElement`。
+
 ## assets
 
 - `assets/sample/`：手写样例词库，不是产品数据。

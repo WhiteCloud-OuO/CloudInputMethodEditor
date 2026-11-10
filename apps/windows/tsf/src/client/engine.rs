@@ -1,8 +1,8 @@
 use std::io::{Read, Write};
 
 use cloudime_platform::protocol::{
-    ClientMessage, DocumentText, IndicatorCommand, InputMode, InputSettings, KeyEvent,
-    PROTOCOL_VERSION, ScreenRect, ServerMessage, SessionId, read_message, write_message,
+    CandidateAction, ClientMessage, DocumentText, IndicatorCommand, InputMode, InputSettings,
+    KeyEvent, PROTOCOL_VERSION, ScreenRect, ServerMessage, SessionId, read_message, write_message,
 };
 
 use super::{KeyResponse, ModeSyncReply, PollReply};
@@ -169,6 +169,19 @@ impl<S: Read + Write> EngineClient<S> {
             ui_less,
             host_reads,
         })
+    }
+
+    /// 宿主的选词 / 定稿 / 放弃：同步等 Server 回一帧（`Update`）。
+    pub fn ui_element_action(&mut self, action: CandidateAction) -> Result<PollReply, ClientError> {
+        match self.call(&ClientMessage::UiElementAction {
+            session: self.session,
+            action,
+        })? {
+            ServerMessage::Update { frame, commit, .. } => Ok(PollReply { frame, commit }),
+            _ => Err(ClientError::Unexpected(
+                "expected update for ui element action",
+            )),
+        }
     }
 
     /// 问 Server 有没有待处理的目标模式，顺路取回最新的按键行为设置（每一拍都带）。
