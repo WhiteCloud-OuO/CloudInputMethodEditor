@@ -18,7 +18,7 @@ members = [
     "crates/cloud-ui",
     "crates/cloudime-update",
     "crates/cloudime-mcp-client",
-    "apps/cli", "apps/mcp", "apps/mcp-client", "apps/cloud-ui-demo", "apps/windows/server", "apps/windows/tsf", "apps/windows/settings", "tools/dict-convert", "tools/release-sign", "apps/windows/tools/cloudime-wordbank-transformer",
+    "apps/cli", "apps/mcp", "apps/mcp-client", "apps/cloud-ui-demo", "apps/windows/server", "apps/windows/tsf", "apps/windows/settings", "tools/dict-convert", "tools/release-sign", "apps/windows/tools/cloudime-wordbank-transformer", "apps/windows/tools/cloudime-uiless-host",
 ]
 
 [workspace.package]

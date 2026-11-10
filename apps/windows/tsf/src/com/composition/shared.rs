@@ -180,7 +180,15 @@ impl Shared {
 
     /// 宿主这次激活是不是 UI-less 线程；变化时立即上报。
     pub(crate) fn set_ui_less(&self, ui_less: bool) {
-        self.ui_element.borrow_mut().ui_less = ui_less;
+        let changed = {
+            let mut state = self.ui_element.borrow_mut();
+            let previous = state.ui_less;
+            state.ui_less = ui_less;
+            previous != ui_less
+        };
+        if changed {
+            crate::com::log::log(&format!("UIElement ui_less={ui_less}"));
+        }
         self.report_ui_element();
     }
 

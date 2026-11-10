@@ -741,6 +741,14 @@ dependencies = [
 ]
 
 [[package]]
+name = "cloudime-uiless-host"
+version = "0.0.3"
+dependencies = [
+ "windows",
+ "windows-core 0.62.2",
+]
+
+[[package]]
 name = "cloudime-update"
 version = "0.0.3"
 dependencies = [

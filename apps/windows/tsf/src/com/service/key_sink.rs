@@ -93,6 +93,8 @@ impl ITfKeyEventSink_Impl for TextService_Impl {
             self.send_indicator(IndicatorCommand::ToggleCharWidthType);
             return Ok(TRUE);
         }
+        // UI-less 标志在激活后才写进线程管理器：第一键发 Server 前先刷新，服务端才能从第一帧就收窗。
+        self.sync_ui_less();
         let event = self.key_event(vk);
         let handled = self.handle_key(pic, event);
         crate::com::log::timing(format_args!(

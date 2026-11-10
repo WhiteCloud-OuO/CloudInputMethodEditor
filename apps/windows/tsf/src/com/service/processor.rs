@@ -8,7 +8,7 @@ use std::time::Instant;
 
 use windows::Win32::UI::TextServices::{
     ITfKeyEventSink, ITfKeystrokeMgr, ITfTextInputProcessor_Impl, ITfTextInputProcessorEx_Impl,
-    ITfThreadMgr, ITfUIElementMgr, TF_TMAE_UIELEMENTENABLEDONLY,
+    ITfThreadMgr, ITfThreadMgrEx, ITfUIElementMgr, TF_TMAE_UIELEMENTENABLEDONLY,
 };
 use windows::core::{IUnknownImpl, Interface, Ref, Result};
 
@@ -60,7 +60,7 @@ impl ITfTextInputProcessor_Impl for TextService_Impl {
 impl ITfTextInputProcessorEx_Impl for TextService_Impl {
     fn ActivateEx(&self, ptim: Ref<ITfThreadMgr>, tid: u32, dwflags: u32) -> Result<()> {
         let ui_less = dwflags & TF_TMAE_UIELEMENTENABLEDONLY != 0;
-        log(&format!("ActivateEx ui_less={ui_less}"));
+        log(&format!("ActivateEx flags=0x{dwflags:X} ui_less={ui_less}"));
         self.activate(ptim, tid, ui_less)
     }
 }
@@ -69,6 +69,13 @@ impl TextService_Impl {
     /// `Activate` / `ActivateEx` 的共用部分；`ui_less` 是宿主线程的 UI-less 标志。
     fn activate(&self, ptim: Ref<ITfThreadMgr>, tid: u32, ui_less: bool) -> Result<()> {
         let thread_mgr = ptim.ok()?.clone();
+        // `ActivateEx` 的 `dwFlags` 不含 UI-less 位（只有 secure / comless / wow16 / console）；
+        // 线程管理器要等激活完成后才把 UI-less 位写进活动标志，第一键前用 `sync_ui_less` 再读。
+        let active_flags = thread_mgr
+            .cast::<ITfThreadMgrEx>()
+            .and_then(|ex| unsafe { ex.GetActiveFlags() })
+            .unwrap_or(u32::MAX);
+        log(&format!("激活 ui_less={ui_less} active=0x{active_flags:X}"));
         let keystroke: ITfKeystrokeMgr = thread_mgr.cast()?;
         let sink: ITfKeyEventSink = self.to_interface();
         unsafe { keystroke.AdviseKeyEventSink(tid, &sink, true)? };
@@ -134,4 +141,22 @@ impl TextService_Impl {
         ));
         Ok(())
     }
+
+    /// 读线程管理器的活动标志，刷新 `ui_less`：激活时那位还没写进去，第一键前再读一次。
+    pub(super) fn sync_ui_less(&self) {
+        let ui_less = self
+            .thread_mgr
+            .borrow()
+            .as_ref()
+            .is_some_and(thread_is_ui_less);
+        self.shared.set_ui_less(ui_less);
+    }
+}
+
+/// 真正的 UI-less 标志在 `ITfThreadMgrEx::GetActiveFlags()`（激活完成后才置位）。
+pub(super) fn thread_is_ui_less(thread_mgr: &ITfThreadMgr) -> bool {
+    thread_mgr
+        .cast::<ITfThreadMgrEx>()
+        .and_then(|ex| unsafe { ex.GetActiveFlags() })
+        .is_ok_and(|flags| flags & TF_TMAE_UIELEMENTENABLEDONLY != 0)
 }
