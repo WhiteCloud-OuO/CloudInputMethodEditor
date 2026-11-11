@@ -136,7 +136,10 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
   ① 覆盖的输入字母数降序（`kaif` 的 开发 先于只覆盖 `kai` 的 开）；② 非末尾的简拼音节数升序（`kai f a` 是 1、`kai fa` 是 0）；
   ③ 末音节完整匹配降序（`xian` 的 先 先于被当成没打完的 想）；④ 词库命中 `exact`（音节数正好等于查询位置数）降序；
   ⑤ 读法层级升序（原样 0 / 模糊音 1 / 一处编辑纠错 2）。不单列「音节数少优先」：覆盖满 + 末音节对上已经等价于「整段被完整读出来」。
-  **两处排序键必须同序**：词级 `ranking::rank` 与候选池 `rank_pool`（`PoolRank = (coverage, abbreviated, full_last, exact, tier, weight)`）。
+  **两处排序键必须同序**：词级 `ranking::rank` 与候选池 `rank_pool`（`PoolRank = (coverage, abbreviated, full_last, exact, tier, weight, sentence_order)`）。
+  最后一个 `sentence_order` 只在两条都是整句时参与比较（词候选恒为 0）：整句之间的先后是词图 viterbi 按语言模型排出来的，
+  不能再被「词频几何平均」的权重翻一遍——2026-11-11 `就是这样子`（路径分比次优高 20 nat、词频几何平均只有 27 万）
+  被 `就是这样字`（49 万）压在后面，用户看到的第一候选就是错的。整句与词之间仍按权重比。
   词级命中权重 = `词频 × 用户权重因子 × (1+同输入串选择次数) × 上下文系数 × 纠错折扣 × 联想折扣`；上下文系数 =
   `clamp(exp(transition_log_prob − fallback_log_prob), e^-4, e^4)`（`sentence::transition_log_prob`，模型不认识时 log_prob 等于兜底 → 1）；
   联想折扣 = `0.8^k`，`k = max(0, 词字数 − 产生它的读法音节数)`（`lookup_pattern` 带出的更长词）；模糊音命中 0.5。预选按结构键 + 便宜权重
@@ -1983,6 +1986,8 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
 - `english`：转 `assets/lexicon/05_english/00_all_words.tsv`；同编码优先保留含大写的专名写法（Windows ≠ windows），
   展示写法补充表 `07_display_forms.tsv` 后置读入。中英混杂词源在 `assets/lexicon/mixed_words.tsv`（`lexicon --extra-words`）。
 - `bigram`：统计语料；`--phrases` 给短语层、`--brand` 给品牌词（`assets/lexicon/brand.tsv`，云朵输入法 210）与中英混杂词（`mixed_words.tsv`，C盘 / B站：合成计数要成分词在语料里，C 不是 token，只能直接给一元，次数对着真词与整句候选定），领域词也走合成计数（语料里只有几十次的词当 token 统计会吸走成分词的二元证据）。
+  词尾后缀（`这样子` / `孩子们` / `木头`）另派生一份「词干 → 后缀」的二元，次数等于该词的出现次数（`split_trailing_suffix`，日志里看 `suffix_pairs`）：
+  分词器把这类词当一个 token，`这样 → 子` 这种接续在语料里只剩零星几次，整句里后缀字撑不起来（2026-11-11 `就是这样子` 输给 `就是这样字`）。
 - `mine`：从语料挖词库没收的高频词并过滤（`oov_filter.rs`：虚词规则 + 相邻字对 PMI≥3，`--candidates` 只重过滤）。
 - `phrases`：挖短语层（两遍扫语料：相邻两词、两段二元都够频的相邻三词，总次数与对话语料次数都 ≥ 2000 + 边界规则，读音由成分词拼出；我的 / 不知道 / 有没有 这类常用词表不收的组合，
   `assets/lexicon/phrases.tsv`；词库已并入过短语时重跑加 `--refresh`）。

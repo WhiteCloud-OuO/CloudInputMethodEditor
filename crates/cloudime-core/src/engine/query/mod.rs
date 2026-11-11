@@ -782,6 +782,7 @@ impl Engine {
                         item.hit.exact,
                         item.tier,
                         *weight,
+                        0,
                     ),
                 )
             })
@@ -1009,8 +1010,9 @@ impl Engine {
         };
         let keys = self.composition.scope();
         let full = keys.chars().filter(|c| *c != '\'').count();
-        // 整句按整段读法算，结构键给它最好的一档：覆盖满、无简拼、末音节完整、命中精确
-        let sentence_rank = |weight: f64| (full, 0, true, true, 0, weight);
+        // 整句按整段读法算，结构键给它最好的一档：覆盖满、无简拼、末音节完整、命中精确。
+        // 最后一位是整句名次：整句之间的顺序就是词图 viterbi 按语言模型排出来的顺序，不再让权重重排。
+        let sentence_rank = |order: usize, weight: f64| (full, 0, true, true, 0, weight, order + 1);
         let first_segmentation = |text: &str| {
             parser::segment_with(text, self.use_jian_pin)
                 .ok()?
@@ -1020,21 +1022,21 @@ impl Engine {
         match english_tail {
             Some(tail) if head_wins => {
                 if let Some((mixed, weight)) = self.mixed_sentence(best, tail) {
-                    push_sentence(pool, mixed, sentence_rank(weight));
+                    push_sentence(pool, mixed, sentence_rank(0, weight));
                 }
                 if tail.competes
                     && let Some(full_seg) = first_segmentation(keys)
                 {
                     let sentences = self.plain_sentence(pool, &full_seg);
-                    for (plain, weight) in sentences {
-                        push_sentence(pool, plain, sentence_rank(weight));
+                    for (order, (plain, weight)) in sentences.into_iter().enumerate() {
+                        push_sentence(pool, plain, sentence_rank(order, weight));
                     }
                 }
             }
             _ => {
                 let sentences = self.plain_sentence(pool, best);
-                for (plain, weight) in sentences {
-                    push_sentence(pool, plain, sentence_rank(weight));
+                for (order, (plain, weight)) in sentences.into_iter().enumerate() {
+                    push_sentence(pool, plain, sentence_rank(order, weight));
                 }
             }
         }
@@ -1347,7 +1349,7 @@ impl Engine {
                         auxiliary_typed: None,
                     },
                     // 结构键借用整段读法；`exact` 为真时整段就是这个词，补全比输入长视作不精确
-                    (full, abbreviated, full_last, exact, 0, weight),
+                    (full, abbreviated, full_last, exact, 0, weight, 0),
                 ));
             };
         if let Some((word, frequency)) = lists.iter().find_map(|words| {
@@ -1412,9 +1414,13 @@ impl Engine {
 }
 
 /// 候选池里一条的排序键：与 [`ranking::rank`] 同序——覆盖字母 → 非末尾简拼数 → 末音节完整 →
-/// 命中精确 → 读法层级 → 权重。候选池把词、整句、英文放在一起比，结构键必须带过来，
+/// 命中精确 → 读法层级 → **整句名次** → 权重。候选池把词、整句、英文放在一起比，结构键必须带过来，
 /// 否则最后一步的权重排序又会让高频单字霸屏。
-type PoolRank = (usize, usize, bool, bool, u8, f64);
+///
+/// 最后那个「整句名次」只在两条都是整句时参与比较（词候选恒为 0）：整句的顺序是词图 viterbi 按语言模型
+/// 算出来的，不能再被「词频几何平均」重排一遍 —— `我这样字`（权重 49 万）压过 `我这样子`（27 万）
+/// 就是这么来的，模型给前者的路径分比后者低 20 nat。
+type PoolRank = (usize, usize, bool, bool, u8, f64, usize);
 
 /// 候选池按结构键与权重排，同文本只留名次最高的那条；返回「候选 + 它的排名权重」
 /// （权重给平台层看 Core 的排序依据，见 [`Query::weights`]）。
@@ -1426,6 +1432,14 @@ fn rank_pool(mut pool: Vec<(Candidate, PoolRank)>) -> Vec<(Candidate, f64)> {
             .then_with(|| b.1.2.cmp(&a.1.2))
             .then_with(|| b.1.3.cmp(&a.1.3))
             .then_with(|| a.1.4.cmp(&b.1.4))
+            .then_with(|| {
+                // 两条都是整句时按词图的路径名次，别的组合（含和词候选比）交给权重
+                if a.1.6 > 0 && b.1.6 > 0 {
+                    a.1.6.cmp(&b.1.6)
+                } else {
+                    std::cmp::Ordering::Equal
+                }
+            })
             .then_with(|| {
                 b.1.5
                     .partial_cmp(&a.1.5)
@@ -1531,5 +1545,65 @@ fn chinese_candidate(item: &Scored<'_>) -> Candidate {
         reading: None,
         auxiliary: None,
         auxiliary_typed: None,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn candidate(text: &str, kind: CandidateKind) -> Candidate {
+        Candidate {
+            text: text.to_owned(),
+            display: None,
+            kind,
+            syllables: Vec::new(),
+            reading: None,
+            auxiliary: None,
+            auxiliary_typed: None,
+        }
+    }
+
+    /// 整句候选之间的先后由词图名次决定，不能被「词频几何平均」的权重翻掉：
+    /// `就是这样子`（路径分远高、词频几何平均低）曾经排在 `就是这样字` 后面。
+    #[test]
+    fn sentence_candidates_keep_their_path_order() {
+        let rank = 100usize;
+        let pool = vec![
+            (
+                candidate("就是这样字", CandidateKind::Sentence),
+                (rank, 0, true, true, 0, 490_000.0, 3),
+            ),
+            (
+                candidate("就是这样子", CandidateKind::Sentence),
+                (rank, 0, true, true, 0, 270_000.0, 1),
+            ),
+            (
+                candidate("就是这样自", CandidateKind::Sentence),
+                (rank, 0, true, true, 0, 486_000.0, 2),
+            ),
+        ];
+        let ranked = rank_pool(pool);
+        let texts: Vec<&str> = ranked.iter().map(|(c, _)| c.text.as_str()).collect();
+        assert_eq!(texts, ["就是这样子", "就是这样自", "就是这样字"]);
+    }
+
+    /// 整句与词候选之间仍按权重比（整句名次只影响整句和整句）。
+    #[test]
+    fn sentence_and_word_still_compare_by_weight() {
+        let rank = 100usize;
+        let pool = vec![
+            (
+                candidate("就是这样", CandidateKind::Chinese),
+                (rank, 0, true, true, 0, 300_000.0, 0),
+            ),
+            (
+                candidate("就是这样子", CandidateKind::Sentence),
+                (rank, 0, true, true, 0, 270_000.0, 1),
+            ),
+        ];
+        let ranked = rank_pool(pool);
+        let texts: Vec<&str> = ranked.iter().map(|(c, _)| c.text.as_str()).collect();
+        assert_eq!(texts, ["就是这样", "就是这样子"]);
     }
 }

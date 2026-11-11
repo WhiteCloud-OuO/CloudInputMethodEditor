@@ -46,6 +46,10 @@ pub(crate) struct Vocabulary {
     unknown: f64,
 }
 
+/// 词尾后缀单字：`这样子`、`孩子们`、`木头`。分词器把这类词当一个 token，语料里就没有
+/// `这样 → 子` 这种接续，整句里后缀字只能按独立词频跟同音字比（见 [`derive_suffix_bigrams`]）。
+const TRAILING_SUFFIX_CHARS: [char; 4] = ['子', '儿', '头', '们'];
+
 impl Vocabulary {
     /// 词表文件：`path` 加上同目录 `dicts/` 下的领域词库（拆分后基础词库不含领域词，分词仍要用全部词）。
     pub(crate) fn files(path: &Path) -> Vec<PathBuf> {
@@ -398,6 +402,7 @@ pub fn convert(
     let mut tokens = Vec::new();
     let mut lines = 0u64;
     let mut runs = 0u64;
+    let mut suffix_pairs = 0u64;
     for path in corpus {
         tracing::info!(path = %path.display(), "统计语料");
         for line in BufReader::new(File::open(path)?).lines() {
@@ -430,12 +435,26 @@ pub fn convert(
                         None => previous = None,
                     }
                 }
+                // 词尾后缀：`这样子` 被分词器当成一个词，二元表里就没有 `这样 → 子`，
+                // 按词的出现次数派生一份（见 `split_trailing_suffix`）。
+                for token in tokens.iter().flatten() {
+                    let Some((stem, suffix)) =
+                        split_trailing_suffix(&vocabulary.words[*token as usize], &vocabulary)
+                    else {
+                        continue;
+                    };
+                    *bigram
+                        .entry((u64::from(stem) << 32) | u64::from(suffix))
+                        .or_insert(0) += 1;
+                    suffix_pairs += 1;
+                }
             }
         }
     }
     tracing::info!(
         lines,
         sentences = runs,
+        suffix_pairs,
         distinct_bigrams = bigram.len(),
         "统计完成"
     );
@@ -604,9 +623,59 @@ fn synthesize_phrases(
     rows
 }
 
+/// 词尾后缀二元：`word` 以 子 / 儿 / 头 / 们 结尾、词干与后缀本身都在词表里时，返回词干与后缀的编号。
+///
+/// 分词器把 `这样子`、`孩子们` 粘成一个词，二元表里 `这样 → 子` 就只剩零星几次（`子` 偶尔单独成词时），
+/// 整句里后缀字撑不起来，会输给同音的 `字` / `自`。按词的出现次数派生一份「词干 → 后缀」补上这个证据。
+/// 词干不在词表时（`椅` 没收录）不派生：那时整句本来就只会用 `椅子` 这个词。
+fn split_trailing_suffix(word: &str, vocabulary: &Vocabulary) -> Option<(u32, u32)> {
+    let mut chars = word.char_indices();
+    let (_, last) = chars.next_back()?;
+    if !TRAILING_SUFFIX_CHARS.contains(&last) {
+        return None;
+    }
+    let stem_end = word.len() - last.len_utf8();
+    let stem = &word[..stem_end];
+    if stem.is_empty() {
+        return None;
+    }
+    let stem_id = *vocabulary.ids.get(stem)?;
+    let suffix_id = *vocabulary.ids.get(&last.to_string())?;
+    Some((stem_id, suffix_id))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 派生词尾后缀二元：`这样子` → (`这样`, `子`)；词干或后缀不在词表里就不派生。
+    #[test]
+    fn splits_trailing_suffix_words() {
+        let mut vocab = Vocabulary {
+            ids: HashMap::new(),
+            words: Vec::new(),
+            log_frequency: Vec::new(),
+            unknown: -20.0,
+        };
+        for (index, word) in ["这样", "子", "椅子", "我", "我们", "们", "有", "椅"]
+            .iter()
+            .enumerate()
+        {
+            let id = index as u32;
+            vocab.ids.insert((*word).to_owned(), id);
+            vocab.words.push((*word).to_owned());
+            vocab.log_frequency.push(0.0);
+        }
+        let (stem, suffix) = split_trailing_suffix("这样子", &vocab).expect("应能拆");
+        assert_eq!(vocab.words[stem as usize], "这样");
+        assert_eq!(vocab.words[suffix as usize], "子");
+        assert!(split_trailing_suffix("椅子", &vocab).is_some());
+        assert!(split_trailing_suffix("我们", &vocab).is_some());
+        // 不是后缀字 / 单字 / 词干不在词表
+        assert!(split_trailing_suffix("有", &vocab).is_none());
+        assert!(split_trailing_suffix("这样", &vocab).is_none());
+        assert!(split_trailing_suffix("桌子", &vocab).is_none());
+    }
 
     #[test]
     fn vocabulary_skips_hidden_temp_and_non_file_dicts() {
