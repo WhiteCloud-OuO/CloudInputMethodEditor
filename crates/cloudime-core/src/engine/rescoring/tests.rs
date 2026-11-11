@@ -61,6 +61,23 @@ fn sync_scorer_reorders_paths_in_place() {
     assert!(!engine.rescoring_pending());
 }
 
+/// 带纠正代价的路径不给模型加分：模型只能把它往下压，不能靠自己的偏好把「多敲一个键」凑出来的
+/// 路径抬到零代价路径前面（2026-11-11「应该是和羊」就是这么翻上去的）。
+#[test]
+fn rescoring_never_adds_to_a_corrected_path() {
+    let engine = engine().with_sentence_scorer(Box::new(Prefers("关系")), Some(0.5), None, None);
+    let mut corrected = path("关系", -3.0);
+    corrected.penalty = 4.5;
+    let mut paths = vec![corrected, path("开饭", -1.0)];
+    engine.rescore_paths(&mut paths);
+    let corrected = paths.iter().find(|p| p.text == "关系").unwrap();
+    // 模型给 关系 −1（比静态 −3 好），但带代价 → 加成钳成 0，分数原样
+    assert!((corrected.score - -3.0).abs() < 1e-9, "{}", corrected.score);
+    let clean = paths.iter().find(|p| p.text == "开饭").unwrap();
+    // 零代价照常按模型改分：−1 + 0.5·(−20 + 1) = −10.5
+    assert!((clean.score - -10.5).abs() < 1e-9, "{}", clean.score);
+}
+
 #[test]
 fn async_scorer_waits_for_the_shell_to_request_and_poll() {
     let mut engine =

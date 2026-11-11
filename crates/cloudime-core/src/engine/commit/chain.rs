@@ -40,6 +40,24 @@ impl CommitChain {
         }
     }
 
+    /// 学习用的上文：三元只在「再前一个词也是这段拼音里的」时才成立。
+    ///
+    /// 跨段拼音的相邻词只是文本上挨着（用户隔几秒、在不同应用里各上屏一个词），把它们记成三元
+    /// 会把偶然相邻写成「铁律」——2026-11-11 的「应该是」+「和」+「羊」就是三次独立输入凑出来的，
+    /// 记成三元之后 2/2 的个人概率把「应该是和羊」顶到了「应该是这样」前面。
+    /// 打分仍用 [`Self::context`]：文本衔接是事实，只有学习要更保守。
+    pub fn learn_context(&self) -> Context<'_> {
+        let earlier = if self.buffer_words.len() >= 2 {
+            self.earlier.as_deref()
+        } else {
+            None
+        };
+        Context {
+            previous: self.previous(),
+            earlier,
+        }
+    }
+
     /// 链上是否有这个词（作为前一个或再前一个）。
     pub fn mentions(&self, text: &str) -> bool {
         self.previous() == Some(text) || self.earlier.as_deref() == Some(text)
@@ -107,5 +125,36 @@ mod tests {
         assert!(chain.mentions("想") && chain.mentions("去") && !chain.mentions("我"));
         chain.reset();
         assert_eq!(chain.context(), Context::START);
+    }
+
+    /// 学习用的上文不跨组句：同一段拼音里连着选的两个词才算三元，
+    /// 隔了几秒的两次输入只记二元（`应该是` + `和` + `羊` 就是这么凑出来的假三元）。
+    #[test]
+    fn learn_context_keeps_trigrams_inside_one_composition() {
+        let mut chain = CommitChain::default();
+
+        // 第一次输入：一个词
+        chain.begin_buffer("yinggaishi".into());
+        chain.advance(
+            "应该是",
+            &["ying".into(), "gai".into(), "shi".into()],
+            false,
+        );
+        assert_eq!(chain.learn_context(), Context::after("应该是"));
+
+        // 第二次输入（新的一段拼音）：只给前一个词，不给三元上文
+        chain.begin_buffer("he".into());
+        assert_eq!(chain.learn_context(), Context::after("应该是"));
+        chain.advance("和", &["he".into()], false);
+        chain.begin_buffer("yang".into());
+        assert_eq!(chain.learn_context(), Context::after("和"));
+
+        // 同一段拼音里连着选两个词：三元成立
+        let mut chain = CommitChain::default();
+        chain.begin_buffer("wuxiangqu".into());
+        chain.advance("我", &["wo".into()], true);
+        chain.advance("想", &["xiang".into()], true);
+        assert_eq!(chain.learn_context(), Context::after_two("我", "想"));
+        assert_eq!(chain.context(), Context::after_two("我", "想"));
     }
 }

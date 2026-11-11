@@ -97,7 +97,13 @@ impl Engine {
         let lambda = self.neural_weight;
         for path in paths.iter_mut() {
             let neural = cache.get(&path.text).expect("filled above");
-            let delta = lambda * (neural - path.static_score);
+            let mut delta = lambda * (neural - path.static_score);
+            // 带纠正代价的路径不让模型再加分：纠正该不该赢由静态模型定（`meiganxi` → 没关系 就是这么赢的），
+            // 模型只负责在同等代价的路径之间挑。否则一条「多敲一个键」凑出来的路径一旦被个人数据抬近，
+            // 模型随手再加几分就翻到零代价的正确路径前面（2026-11-11「应该是和羊」压过「应该是这样」）。
+            if path.penalty > 0.0 {
+                delta = delta.min(0.0);
+            }
             path.score += delta;
             path.neural_factor = crate::ranking::clamp_factor(delta.exp());
         }

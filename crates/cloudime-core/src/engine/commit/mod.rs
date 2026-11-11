@@ -547,10 +547,10 @@ impl Engine {
         auto_word: bool,
         buffer_left: bool,
     ) {
-        self.learner
-            .record_transition(self.chain.context(), text, times);
-        self.recording
-            .push(Transition::new(self.chain.context(), text, times));
+        // 学习用的上文不跨组句（见 `CommitChain::learn_context`）。
+        let context = self.chain.learn_context();
+        self.learner.record_transition(context, text, times);
+        self.recording.push(Transition::new(context, text, times));
         if auto_word {
             let threshold = if self.chain.same_buffer() {
                 AUTO_WORD_THRESHOLD_SAME_BUFFER

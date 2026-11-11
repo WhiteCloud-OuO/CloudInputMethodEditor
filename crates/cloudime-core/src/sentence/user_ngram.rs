@@ -1,6 +1,9 @@
 use foldhash::{HashMap, HashMapExt};
 
-use super::{Context, Interpolation, MAX_USER_TRANSITIONS, SENTENCE_START};
+use super::{
+    Context, Interpolation, MAX_BLEND_BOOST, MAX_USER_TRANSITIONS, MIN_TRIGRAM_SUPPORT,
+    SENTENCE_START,
+};
 
 /// 个人 n-gram：用户上屏过的词序列计数（二元 + 三元），随上屏在线更新，进整句转换与词级排序的打分。
 ///
@@ -222,6 +225,9 @@ impl UserNgram {
     /// P₃ = max(c(u,v,w) − D, 0)/c(u,v) + D·N₁₊(u,v,·)/c(u,v)·P₂，没见过的接续只拿回退的份额。
     /// 插值权重 μ = c(v)/(c(v)+K)，封顶 `max_confidence`：见过这个前词越多越信个人数据，但永远压不死静态模型。
     /// λ、K、封顶、三元折扣 D 都来自 `interpolation`（缺省是本模块的常数）。前词从没见过时（句首用句首标记）原样返回。
+    ///
+    /// 两道闸门（见 [`MIN_TRIGRAM_SUPPORT`] / [`MAX_BLEND_BOOST`]）：三元证据不够就只走二元；
+    /// 单条边最多比静态模型高 `MAX_BLEND_BOOST`，个人偏好不能一个人把整句翻过来。
     pub fn blend(
         &self,
         context: Context<'_>,
@@ -244,7 +250,8 @@ impl UserNgram {
             .previous
             .and_then(|p| self.triple_row(context.earlier, p))
         {
-            Some((next, triple_total)) if triple_total > 0 => {
+            // 见过的次数太少就不用三元：2/2 这种「只见过这一种接续」的样本会把胡说八道写成铁律。
+            Some((next, triple_total)) if triple_total >= MIN_TRIGRAM_SUPPORT => {
                 let triple_total = f64::from(triple_total);
                 let seen = next.get(word).copied().unwrap_or(0);
                 let discount = interpolation.trigram_discount;
@@ -258,7 +265,11 @@ impl UserNgram {
             / (f64::from(context_total) + interpolation.confidence_k))
             .min(interpolation.max_confidence);
         let blended = (1.0 - confidence) * base_log_prob.exp() + confidence * personal;
-        blended.max(f64::MIN_POSITIVE).ln()
+        // 单条边最多比静态模型高 [`MAX_BLEND_BOOST`]：个人偏好够用就行，别把整句翻盘。
+        blended
+            .max(f64::MIN_POSITIVE)
+            .ln()
+            .min(base_log_prob + MAX_BLEND_BOOST)
     }
 
     /// 上文 (earlier, previous) 下的后词表与总次数；没见过这对上文返回 `None`。
@@ -523,7 +534,7 @@ mod tests {
             ),
             base_ba
         );
-        // 选过两次 吃饭 → 把：个人证据抬上来
+        // 选过两次 吃饭 → 把：个人证据抬上来，但单条边的加成封顶在 MAX_BLEND_BOOST
         model.record(Context::after("吃饭"), "把");
         model.record(Context::after("吃饭"), "把");
         let lifted = model.blend(
@@ -532,7 +543,11 @@ mod tests {
             base_ba,
             &Interpolation::DEFAULT,
         );
-        assert!(lifted > -2.5, "{lifted}");
+        assert!(lifted > base_ba, "{lifted}");
+        assert!(
+            lifted <= base_ba + super::super::MAX_BLEND_BOOST + 1e-9,
+            "{lifted} 超过单边加成的封顶"
+        );
         // 没跟在 吃饭 后面出现过的 吧 只是打折，不会被压死
         let base_ba_particle = -2.0;
         let discounted = model.blend(
@@ -552,7 +567,8 @@ mod tests {
     #[test]
     fn trigram_separates_continuations_the_bigram_mixes() {
         let mut model = UserNgram::default();
-        for _ in 0..3 {
+        // 每对上下文各记 6 次：够 `MIN_TRIGRAM_SUPPORT`，三元才生效。
+        for _ in 0..6 {
             model.record(Context::after_two("我", "想"), "去");
             model.record(Context::after_two("不", "想"), "要");
         }
@@ -591,6 +607,48 @@ mod tests {
         );
         assert!(unseen > base + (1.0 - Interpolation::DEFAULT.max_confidence).ln() - 1e-9);
         assert!(unseen < after_wo);
+    }
+
+    /// 三元要够样本量才启用：只见过两次、且只有一种接续时（2/2），不能让个人概率变成 0.63 的铁律。
+    #[test]
+    fn trigram_needs_min_support() {
+        let mut model = UserNgram::default();
+        // 「和」后面还常接别的字，二元的份额被稀释，三元的效果才看得出来（否则两边都顶到封顶）。
+        for _ in 0..20 {
+            model.record(Context::after("和"), "阳");
+        }
+        for _ in 0..2 {
+            model.record(Context::after_two("应该是", "和"), "羊");
+        }
+        // 静态概率 0.37：个人加成到不了封顶
+        let base = -1.0;
+        let with_trigram = model.blend(
+            Context::after_two("应该是", "和"),
+            "羊",
+            base,
+            &Interpolation::DEFAULT,
+        );
+        // 参照：换一个没见过的前二词上文，只走个人二元
+        let bigram_only = model.blend(
+            Context::after_two("别的", "和"),
+            "羊",
+            base,
+            &Interpolation::DEFAULT,
+        );
+        assert_eq!(with_trigram, bigram_only);
+
+        // 攒够次数才启用，并且仍然不超过单边封顶
+        for _ in 0..4 {
+            model.record(Context::after_two("应该是", "和"), "羊");
+        }
+        let boosted = model.blend(
+            Context::after_two("应该是", "和"),
+            "羊",
+            base,
+            &Interpolation::DEFAULT,
+        );
+        assert!(boosted > bigram_only, "{boosted} vs {bigram_only}");
+        assert!(boosted <= base + super::super::MAX_BLEND_BOOST + 1e-9);
     }
 
     #[test]

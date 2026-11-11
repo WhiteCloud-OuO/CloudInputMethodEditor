@@ -3,6 +3,9 @@
 //! 词图里每个完整音节除了敲的原样，还按这些变体查词，命中的词扣掉相应代价（见 `TypoCosts`），
 //! 让「每个音节都合法、整句却不通」的输入（`meiganxi`）也能出 没关系。整段一处编辑的纠错（`variants`）管切不干净的输入，两者互补。
 //!
+//! **多键 / 少键不碰首字母**（见 [`compute_variants`] 里的注释）：`zhe` 不会是 `he` 的变体，
+//! 声母的省略与混淆分别归简拼和模糊音管。
+//!
 //! 表按音节表一次算好：每个音节的变体几十个，全部音节几千条。
 
 mod kind;
@@ -114,12 +117,16 @@ fn compute_variants(syllable: &str) -> Vec<(String, TypoKind)> {
             push(String::from_utf8(v).expect("ascii"), TypoKind::Substitute);
         }
     }
-    for i in 0..n {
+    // 删、插都不许碰首字母：`zhe` 删掉 `z` 就是 `he`，`hao` 删掉 `h` 就是 `ao`——
+    // 音节表里 413 个音节有 211 个能这样「删一个首字母」变成另一个合法音节，而真实手误几乎不会
+    // 丢掉声母（那是模糊音 zh/z、f/h 或者简拼的地盘）。放开它等于给每个音节配一批常见同韵字：
+    // `zhe` 多出 和/河/喝/合，个人 n-gram 稍有偏好就把「应该是和羊」顶到「应该是这样」前面。
+    for i in 1..n {
         let mut v = bytes.to_vec();
         v.remove(i);
         push(String::from_utf8(v).expect("ascii"), TypoKind::Extra);
     }
-    for i in 0..=n {
+    for i in 1..=n {
         for letter in b'a'..=b'z' {
             let mut v = bytes.to_vec();
             v.insert(i, letter);
@@ -150,10 +157,15 @@ mod tests {
         let gan: Vec<&str> = variants("gan").iter().map(|(t, _)| t.as_str()).collect();
         assert!(gan.contains(&"guan"));
         assert!(gan.contains(&"gang"));
-        assert!(gan.contains(&"an"));
         assert!(gan.contains(&"han")); // g 与 h 相邻
         assert!(!gan.contains(&"dan")); // g 与 d 不相邻
         assert!(!gan.contains(&"gan"));
+        // 删掉首字母不算敲错：`gan` → `an`、`zhe` → `he` 这类是简拼 / 模糊音的领域，
+        // 放进来会给每个音节塞一批常见同韵字（2026-11-11「应该是和羊」就是这条路）。
+        assert!(!gan.contains(&"an"));
+        assert_eq!(kind("zhe", "he"), None);
+        assert_eq!(kind("he", "zhe"), None);
+        assert_eq!(kind("ban", "an"), None);
         assert!(gan.iter().all(|t| parser::is_syllable(t)));
         assert_eq!(kind("gan", "guan"), Some(TypoKind::Missing));
         assert_eq!(kind("gan", "gang"), Some(TypoKind::Missing));
@@ -167,6 +179,22 @@ mod tests {
         assert!(variants("zh").is_empty());
         assert!(variants("xia").len() >= 3); // xian / xiao / xi
         assert!(!is_variant("k", "ka"));
+    }
+
+    /// 多键 / 少键都不许动首字母：任何音节的这类变体都不能丢掉它的第一个字母，
+    /// 也不能往开头塞字母（反向的 `he` → `zhe`）。换位与相邻键替换本来就是换字母，不在此列。
+    #[test]
+    fn extra_and_missing_variants_keep_the_first_letter() {
+        for syllable in parser::SYLLABLES {
+            for (variant, kind) in variants(syllable) {
+                if matches!(kind, TypoKind::Extra | TypoKind::Missing) {
+                    assert!(
+                        variant.starts_with(&syllable[..1]),
+                        "{syllable} 的 {kind:?} 变体 {variant} 动了首字母"
+                    );
+                }
+            }
+        }
     }
 
     /// 同一变体能由多种编辑得到时留代价最低的：`shuo` → `shou` 既是换位也是两处换键，算换位。
