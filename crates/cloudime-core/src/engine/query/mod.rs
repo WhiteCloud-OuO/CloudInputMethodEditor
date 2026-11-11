@@ -1012,7 +1012,18 @@ impl Engine {
         let full = keys.chars().filter(|c| *c != '\'').count();
         // 整句按整段读法算，结构键给它最好的一档：覆盖满、无简拼、末音节完整、命中精确。
         // 最后一位是整句名次：整句之间的顺序就是词图 viterbi 按语言模型排出来的顺序，不再让权重重排。
-        let sentence_rank = |order: usize, weight: f64| (full, 0, true, true, 0, weight, order + 1);
+        // 权重按末字是后缀 / 语气词再上调（见 [`sentence_weight_boost`]），与词候选比时更靠前。
+        let sentence_rank = |order: usize, text: &str, weight: f64| {
+            (
+                full,
+                0,
+                true,
+                true,
+                0,
+                weight * sentence_weight_boost(text),
+                order + 1,
+            )
+        };
         let first_segmentation = |text: &str| {
             parser::segment_with(text, self.use_jian_pin)
                 .ok()?
@@ -1022,21 +1033,24 @@ impl Engine {
         match english_tail {
             Some(tail) if head_wins => {
                 if let Some((mixed, weight)) = self.mixed_sentence(best, tail) {
-                    push_sentence(pool, mixed, sentence_rank(0, weight));
+                    let rank = sentence_rank(0, &mixed.text, weight);
+                    push_sentence(pool, mixed, rank);
                 }
                 if tail.competes
                     && let Some(full_seg) = first_segmentation(keys)
                 {
                     let sentences = self.plain_sentence(pool, &full_seg);
                     for (order, (plain, weight)) in sentences.into_iter().enumerate() {
-                        push_sentence(pool, plain, sentence_rank(order, weight));
+                        let rank = sentence_rank(order, &plain.text, weight);
+                        push_sentence(pool, plain, rank);
                     }
                 }
             }
             _ => {
                 let sentences = self.plain_sentence(pool, best);
                 for (order, (plain, weight)) in sentences.into_iter().enumerate() {
-                    push_sentence(pool, plain, sentence_rank(order, weight));
+                    let rank = sentence_rank(order, &plain.text, weight);
+                    push_sentence(pool, plain, rank);
                 }
             }
         }
@@ -1413,6 +1427,31 @@ impl Engine {
     }
 }
 
+/// 整句末字是常见的词尾后缀 / 语气词时，候选权重上调 200%（×3）。
+///
+/// 这些字当单字出现时词频很低（`子` 基本只做构词成分），以它们收尾的整句在「词频几何平均」上吃亏，
+/// 容易被同音的实词（`字` / `自`）挤下去。整句的先后本来就由词图名次决定（`PoolRank::sentence_order`），
+/// 这一档只在跟词候选比权重时把整句抬高，不改变整句之间的顺序。
+pub(super) fn sentence_weight_boost(text: &str) -> f64 {
+    let trailing = text
+        .chars()
+        .last()
+        .is_some_and(|last| TRAILING_PARTICLES.contains(&last));
+    if trailing {
+        SENTENCE_TRAILING_BOOST
+    } else {
+        1.0
+    }
+}
+
+/// 词尾后缀 / 语气词：出现在整句末字时给权重加成。
+const TRAILING_PARTICLES: [char; 14] = [
+    '子', '儿', '们', '的', '了', '着', '过', '吧', '呢', '啊', '吗', '嘛', '呀', '啦',
+];
+
+/// 整句末字是后缀 / 语气词时的权重倍数（上调 200%）。
+const SENTENCE_TRAILING_BOOST: f64 = 3.0;
+
 /// 候选池里一条的排序键：与 [`ranking::rank`] 同序——覆盖字母 → 非末尾简拼数 → 末音节完整 →
 /// 命中精确 → 读法层级 → **整句名次** → 权重。候选池把词、整句、英文放在一起比，结构键必须带过来，
 /// 否则最后一步的权重排序又会让高频单字霸屏。
@@ -1562,6 +1601,44 @@ mod tests {
             auxiliary: None,
             auxiliary_typed: None,
         }
+    }
+
+    /// 整句末字是后缀 / 语气词时权重上调 200%（×3），其它不变。
+    #[test]
+    fn sentence_ending_in_a_particle_gets_weight_boost() {
+        assert_eq!(sentence_weight_boost("就是这样子"), 3.0);
+        assert_eq!(sentence_weight_boost("我们"), 3.0);
+        assert_eq!(sentence_weight_boost("好吧"), 3.0);
+        assert_eq!(sentence_weight_boost("就是这样字"), 1.0);
+        assert_eq!(sentence_weight_boost("这样"), 1.0);
+        assert_eq!(sentence_weight_boost(""), 1.0);
+    }
+
+    /// 上调后的权重参与「整句 vs 词」的比较：末字是后缀的整句能压过权重高一截的词。
+    #[test]
+    fn boosted_sentence_outranks_a_heavier_word() {
+        let rank = 100usize;
+        let pool = vec![
+            (
+                candidate("就是这样", CandidateKind::Chinese),
+                (rank, 0, true, true, 0, 400_000.0, 0),
+            ),
+            (
+                candidate("就是这样子", CandidateKind::Sentence),
+                (
+                    rank,
+                    0,
+                    true,
+                    true,
+                    0,
+                    200_000.0 * sentence_weight_boost("就是这样子"),
+                    1,
+                ),
+            ),
+        ];
+        let ranked = rank_pool(pool);
+        let texts: Vec<&str> = ranked.iter().map(|(c, _)| c.text.as_str()).collect();
+        assert_eq!(texts, ["就是这样子", "就是这样"]);
     }
 
     /// 整句候选之间的先后由词图名次决定，不能被「词频几何平均」的权重翻掉：
