@@ -193,25 +193,25 @@ fn fallback_only_covers_phrase_length_inputs() {
 }
 
 #[test]
-fn a_short_input_keeps_the_correct_word_in_the_first_three() {
+fn a_short_input_keeps_the_correct_word_in_the_sentence_slots() {
     use crate::candidate::CandidateKind;
 
     let engine = wrong_chars_engine("");
     let query = engine.query().unwrap();
-    let first_three: Vec<&str> = query
+    let slots: Vec<&str> = query
         .candidates
         .items
         .iter()
-        .take(3)
+        .take(crate::engine::SENTENCE_CANDIDATES)
         .map(|candidate| candidate.text.as_str())
         .collect();
-    assert_ne!(first_three[0], "不差毫厘", "这一例本来就该由整句候选排第一");
+    assert_ne!(slots[0], "不差毫厘", "这一例本来就该由整句候选排第一");
     assert!(
-        first_three.contains(&"不差毫厘"),
-        "重排后正确的词应保在前 3 条，实际 {first_three:?}"
+        slots.contains(&"不差毫厘"),
+        "重排后正确的词应保在整句这几格里，实际 {slots:?}"
     );
     assert_eq!(
-        query.candidates.items[2].kind,
+        query.candidates.items[crate::engine::SENTENCE_CANDIDATES - 1].kind,
         CandidateKind::Chinese,
         "保底的是词候选，不是整句"
     );
@@ -277,7 +277,10 @@ fn a_short_input_keeps_its_best_word_in_front() {
         candidate("不差", CandidateKind::Chinese),
     ];
     keep_word_candidate_near_top(&mut items, "不差毫厘");
-    assert_eq!(items[2].text, "不差毫厘");
+    assert_eq!(
+        items[crate::engine::SENTENCE_CANDIDATES - 1].text,
+        "不差毫厘"
+    );
     assert_eq!(items.len(), 5);
 }
 

@@ -172,7 +172,7 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
   `sentence_paths` 把 `k=16` 传给 Viterbi，后者按 `k > BEAM_WIDTH` 开 `NBEST_HISTORIES=4` 条来路、束宽 ×4；
   13 音节以上再沿最优路径每个词界拼最多 3 条「只改一处」的备选（`sentence/viterbi/splice.rs`），
   并按改动处排开（`diverse.rs`，同一处最多留 1 条在前）。重排后 `trim_sentence_alternates` 只保留前
-  `SENTENCE_CANDIDATES=3` 条整句，避免把第一页的词候选挤走。
+  `SENTENCE_CANDIDATES=2` 条整句，避免把第一页的词候选挤走（2026-11-12 从 3 条收到 2 条）。
 - 拼写纠错（`correction`）分两路，都按权重打折、原样读法的候选一直保留：
   ① 整段一处编辑（`engine/query/spelling.rs`）：拼音「不像话」（`unlikely_pinyin`）或末尾落单字母（`trailing_single_letter`）时，把**换位 / 键盘相邻键替换**
   能整段切分的纠正读法作为额外候选（`tier` 2，`correction::loose_segmentation` 允许换位末尾没敲完）；仅末尾落单字母触发时只试换位。折扣换位 0.75、替换 0.70。
@@ -315,7 +315,7 @@ Core 侧 `engine/choice/`：`ChoiceTier`（省电 5 条 / 32 字、均衡 9 / 64
 `rerank_choices` 在候选排序后只把前 N 条里盖住整段输入的候选按「模型 log softmax + 二元 LM + 原位置先验」挑最好的挪到组首；
 短语输入（4–8 音节）整句备选很容易占满模型窗口，正确的词根本没进比较：这里会把重排前最好的词候选补进
 `ChoiceRequest`，它的位置先验 / LM 按 `FALLBACK_TERMS_SCALE=0.1` 算（原排名被整句候选挤乱，不能照算），
-让模型分自己决定能否升到第一；重排后 `keep_word_candidate_near_top` 再把它保在前 `SENTENCE_CANDIDATES`（3）条。
+让模型分自己决定能否升到第一；重排后 `keep_word_candidate_near_top` 再把它保在前 `SENTENCE_CANDIDATES`（2）条。
 2–3 字词本来就在窗口里，不补（补进去反而会把正确的词挤掉）；>8 音节交给整句候选，不抢长句第一页。
 不再为短语单独加载基本模型：补窗后知意短语的 Top1 明显高于基本，Top3 基本持平；多加载一份只会多占内存。
 `char_table` 给 Viterbi 的词加 `char_emission`（字分布相对该槽最好的字，下限 −12，改读音固定 −4，×0.5）。

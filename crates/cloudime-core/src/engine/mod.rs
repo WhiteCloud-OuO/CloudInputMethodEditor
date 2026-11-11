@@ -335,12 +335,12 @@ const MAX_ASSOCIATION_COUNTS: usize = 4;
 const RESCORE_PATHS: usize = 6;
 
 /// 整句候选最多显示几条（重排后裁剪；词候选仍占第一页）。
-pub(crate) const SENTENCE_CANDIDATES: usize = 3;
+pub(crate) const SENTENCE_CANDIDATES: usize = 2;
 
 /// 接了选词模型时，交给它重排的整句备选条数。
 pub(crate) const CHOICE_SENTENCE_CANDIDATES: usize = 16;
 
-/// 输入至少这么多音节才给第 2、3 条整句备选；短输入那几格留给词候选。
+/// 输入至少这么多音节才给第 2 条整句备选；短输入那几格留给词候选。
 const ALTERNATE_MIN_SYLLABLES: usize = 4;
 
 /// 神经重打分的缺省权重 λ（见 `Engine::neural_weight`）：整句评测集上 0.5 到 1.0 一样好、0.75 最高（见 docs/notes/neural-rescoring.md），

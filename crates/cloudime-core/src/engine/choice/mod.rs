@@ -82,8 +82,8 @@ const ALTERED_EMISSION: f64 = -4.0;
 /// 语言模型不认识的字。
 const UNKNOWN_LOG_PROB: f64 = -18.5;
 
-/// 把 `text` 拉回前 `SENTENCE_CANDIDATES`（3）条：短输入时整句备选会把正确的词挤到第 4 位，
-/// 用户第一页看不到。只在它已经掉出去时挪，已经在前面就不动。
+/// 把 `text` 拉回前 [`SENTENCE_CANDIDATES`] 条：短输入时整句备选会把正确的词挤到后面，
+/// 用户第一页看不到。只在它已经掉出去时挪（顶掉最后一条整句备选），已经在前面就不动。
 fn keep_word_candidate_near_top(items: &mut Vec<Candidate>, text: &str) {
     let Some(index) = items.iter().position(|candidate| candidate.text == text) else {
         return;
