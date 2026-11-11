@@ -1227,7 +1227,12 @@ impl Engine {
                     continue;
                 }
                 let accepted = self.learner.typo_count(pattern.text, text);
-                expanded.push_alternative(index, text, self.typo_costs.typo_cost(*kind, accepted));
+                expanded.push_alternative(
+                    index,
+                    text,
+                    self.typo_costs
+                        .typo_cost(*kind, accepted, pattern.text.len()),
+                );
             }
         }
         expanded

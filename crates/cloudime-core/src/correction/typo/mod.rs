@@ -19,6 +19,10 @@ pub use kind::TypoKind;
 /// QWERTY 三排字母，算相邻键用。
 const ROWS: [&str; 3] = ["qwertyuiop", "asdfghjkl", "zxcvbnm"];
 
+/// 「少敲 / 多敲一个键」至少要在这么长的音节上才算敲错：两字母音节（`zi` / `ta` / `he`）
+/// 插一个字母就是另一个常见音节，等于换掉一半读音，不是手误。见 `compute_variants` 的注释。
+const MIN_MULTI_KEY_LETTERS: usize = 3;
+
 /// 全部音节的敲错变体：音节 → (变体, 类别)。同一变体只留代价最低的类别。
 static TABLE: LazyLock<HashMap<&'static str, Vec<(String, TypoKind)>>> = LazyLock::new(|| {
     SYLLABLES
@@ -121,16 +125,23 @@ fn compute_variants(syllable: &str) -> Vec<(String, TypoKind)> {
     // 音节表里 413 个音节有 211 个能这样「删一个首字母」变成另一个合法音节，而真实手误几乎不会
     // 丢掉声母（那是模糊音 zh/z、f/h 或者简拼的地盘）。放开它等于给每个音节配一批常见同韵字：
     // `zhe` 多出 和/河/喝/合，个人 n-gram 稍有偏好就把「应该是和羊」顶到「应该是这样」前面。
-    for i in 1..n {
-        let mut v = bytes.to_vec();
-        v.remove(i);
-        push(String::from_utf8(v).expect("ascii"), TypoKind::Extra);
-    }
-    for i in 1..=n {
-        for letter in b'a'..=b'z' {
+    //
+    // 两字母音节也不做删 / 插：`zi` 插一个字母就是 zai / zei / zhi / zui，等于换掉一半读音，
+    // 80 个两字母音节里 72 个都有这种落点，全是高频字（在/再/最/只）。这类「手误」只会在
+    // 个人 n-gram 稍有偏好时把正确读音挤掉（2026-11-11「就是这样子」被「就是这样再」压过）。
+    // 换位（`an` → `na`）与相邻键替换（`ni` → `mi`）照旧保留。
+    if n >= MIN_MULTI_KEY_LETTERS {
+        for i in 1..n {
             let mut v = bytes.to_vec();
-            v.insert(i, letter);
-            push(String::from_utf8(v).expect("ascii"), TypoKind::Missing);
+            v.remove(i);
+            push(String::from_utf8(v).expect("ascii"), TypoKind::Extra);
+        }
+        for i in 1..=n {
+            for letter in b'a'..=b'z' {
+                let mut v = bytes.to_vec();
+                v.insert(i, letter);
+                push(String::from_utf8(v).expect("ascii"), TypoKind::Missing);
+            }
         }
     }
     found
@@ -166,6 +177,13 @@ mod tests {
         assert_eq!(kind("zhe", "he"), None);
         assert_eq!(kind("he", "zhe"), None);
         assert_eq!(kind("ban", "an"), None);
+        // 两字母音节不做删 / 插：`zi` 插一个字母就是 zai / zei / zhi / zui（2026-11-11「就是这样再」）；
+        // 换位与相邻键替换照旧
+        assert_eq!(kind("zi", "zai"), None);
+        assert_eq!(kind("zi", "zui"), None);
+        assert_eq!(kind("ta", "tai"), None);
+        assert_eq!(kind("an", "na"), Some(TypoKind::Transpose));
+        assert_eq!(kind("zi", "xi"), Some(TypoKind::Substitute));
         assert!(gan.iter().all(|t| parser::is_syllable(t)));
         assert_eq!(kind("gan", "guan"), Some(TypoKind::Missing));
         assert_eq!(kind("gan", "gang"), Some(TypoKind::Missing));

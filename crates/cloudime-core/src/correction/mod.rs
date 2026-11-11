@@ -158,9 +158,22 @@ mod tests {
     #[test]
     fn personal_discount_is_capped() {
         let costs = TypoCosts::default();
-        assert_eq!(costs.typo_cost(TypoKind::Transpose, 0), 5.0);
-        assert!(costs.typo_cost(TypoKind::Transpose, 2) < 4.0);
-        assert!(costs.typo_cost(TypoKind::Missing, 1000) >= 2.5 - 1e-9);
+        assert_eq!(costs.typo_cost(TypoKind::Transpose, 0, 3), 5.0);
+        assert!(costs.typo_cost(TypoKind::Transpose, 2, 3) < 4.0);
+        assert!(costs.typo_cost(TypoKind::Missing, 1000, 3) >= 2.5 - 1e-9);
+    }
+
+    /// 少敲 / 多敲的代价按音节长度缩放：3 个字母是基准，短的更贵、长的更便宜；
+    /// 换位 / 替换不缩放。
+    #[test]
+    fn short_syllables_pay_more_for_missing_or_extra_keys() {
+        let costs = TypoCosts::default();
+        assert!((costs.typo_cost(TypoKind::Missing, 0, 3) - 5.5).abs() < 1e-9);
+        assert!((costs.typo_cost(TypoKind::Missing, 0, 2) - 8.25).abs() < 1e-9);
+        assert!((costs.typo_cost(TypoKind::Extra, 0, 4) - 4.125).abs() < 1e-9);
+        assert!((costs.typo_cost(TypoKind::Extra, 0, 6) - 2.75).abs() < 1e-9);
+        assert!((costs.typo_cost(TypoKind::Substitute, 0, 2) - 5.0).abs() < 1e-9);
+        assert!((costs.typo_cost(TypoKind::Transpose, 0, 2) - 5.0).abs() < 1e-9);
     }
 
     #[test]

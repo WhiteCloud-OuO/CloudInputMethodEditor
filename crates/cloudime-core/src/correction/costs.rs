@@ -54,9 +54,22 @@ impl TypoCosts {
         }
     }
 
-    /// 词图里一条敲错边的代价：类别的基础代价按个人敲错表打折（见 [`Self::discounted`]）。
-    pub fn typo_cost(&self, kind: TypoKind, accepted: u32) -> f64 {
-        self.discounted(self.cost(kind), accepted)
+    /// 词图里一条敲错边的代价：类别的基础代价按音节长度缩放（见 [`Self::length_scaled`]），
+    /// 再按个人敲错表打折（见 [`Self::discounted`]）。
+    pub fn typo_cost(&self, kind: TypoKind, accepted: u32, letters: usize) -> f64 {
+        self.discounted(self.length_scaled(kind, letters), accepted)
+    }
+
+    /// 少敲 / 多敲的代价按音节长度缩放：**3 个字母是基准**（`gan` → `guan`）。
+    /// 2 个字母插一个就等于换掉一半读音（`zi` → `zai` / `zei` / `zhi` / `zui`），代价要更贵；
+    /// 4~6 个字母里少一个更像手误（`zhuang` → `zhuan`），便宜一点。
+    /// 换位与替换本来就是一对一换键，不缩放。
+    fn length_scaled(&self, kind: TypoKind, letters: usize) -> f64 {
+        let base = self.cost(kind);
+        match kind {
+            TypoKind::Extra | TypoKind::Missing if letters > 0 => base * 3.0 / letters as f64,
+            _ => base,
+        }
     }
 
     /// 整段一处编辑的纠错代价：相邻换位先减 [`Self::correction_transpose_discount`]，再按个人敲错表打折。
