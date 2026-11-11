@@ -19,10 +19,17 @@
   历史在同日压成 `v0.0.1` 单提交（完整开发历史在本地分支 `archive/dev-history`，不推），所以公开仓库里从没出现过这些文件。
   还差：仓库推到 GitHub 后跑一次 `tools/release/data-bundle.sh`，把这三个 JSONL 与 `data/generated/*.qj` 传到 `data` 预发布 Release（现在只在本机与归档分支里有）；
   正式开源后若 clone 太慢，再考虑把 `assets/lexicon` 拆成数据仓库，现在不做
-- [ ] ★ 代码签名：安装包与 exe 目前不签名（`CLOUDIME_UIACCESS=0` 关掉 uiAccess，SmartScreen 拦截提示见 Release 说明）；
-  CI 已搭（2026-09-07，`docs/notes/release.md`）：推标签在 Windows runner 打安装包、建 Release、生成 `releases.json`，产品数据从 `data-vN` 预发布 Release 下载。
-  还差：Certum 开源代码签名证书（`build.ps1` 加 signtool、workflow 去掉 `CLOUDIME_UIACCESS=0`）、仓库推上 GitHub 后第一次真跑验证（本机没跑过 workflow）、
-  官网改成读 `releases.json`（含 sha256 / 提交 / 构建时间的展示）并配 `CLOUDIME_WEB_TOKEN` 让发版与文档改动自动触发官网构建、更新检查
+- [ ] ★ 代码签名（**只剩证书与真机验收，等外部条件**）：签名链路 2026-11-11 已就绪——
+  `build.ps1 -Sign` 支持正式证书指纹（`-CertThumbprint` / `CLOUDIME_CERT_THUMBPRINT`）与 RFC 3161 时间戳、
+  签完逐个校验 `Valid`、安装包 exe 也签；`release.yml` 配好 `CLOUDIME_CERT_PFX` / `CLOUDIME_CERT_PFX_PASSWORD`
+  两个 secret 就自动走签名 + `-SystemDeploy`（向导出现「推荐 / 完整安装」），没配就打内测包（不签名、只推荐安装）。
+  待外部条件：① **Certum 开源代码签名证书**到手，把 PFX 的 base64 与密码填进那两个 secret（顺带第一次真跑 workflow）；
+  ② 首个签名版发出前把安装包提交 **Microsoft Defender / 主流杀软白名单**（新发布者 + 新文件名容易被误报）。
+  另见「三、Windows」的游戏验收项与 `docs/notes/release.md`。
+- [ ] 发版链路首次真跑 + 官网收尾（外部准备）：仓库推上 GitHub 后第一次真跑 release workflow 验证；
+  官网侧确认下载页读的是 `releases.json`（sha256 / 提交 / 构建时间那几个字段）、并配好 `CLOUDIME_WEB_TOKEN`
+  （对官网仓库有 Contents: read and write），发版与文档改动才会自动触发官网构建。本仓库侧的
+  `publish-releases-json.sh` / `bump-website.sh` 已接在 `release.yml` 里。
 - [ ] ★ 特殊应用逐个验证（2026-09-07 用户已验：Zed、终端正常；JetBrains 系没装没验）：私密输入（已有检测，验证密码框不组句）、VS Code / Electron、
   浏览器地址栏、沙盒应用（UWP 应用、任务栏搜索）、全屏游戏；每个记录 preedit 模式建议（按应用的开关已有 `[apps]` 分节，
   英文候选按应用关已做，preedit 模式按应用定可以接在同一分节）
@@ -92,6 +99,12 @@
     **签名链路 2026-11-11 已就绪**：`build.ps1 -Sign` 支持正式证书指纹与时间戳、签完校验、安装包 exe 一起签；
     `release.yml` 配好 `CLOUDIME_CERT_PFX` / `CLOUDIME_CERT_PFX_PASSWORD` 两个 secret 就自动走签名 + 完整安装
     （`docs/notes/release.md`）。**剩下的只有证书本身**，以及拿到证书后的 CS2 / Valorant 真机验收。
+  - [ ] **游戏兼容验收（P2-B，等证书，暂不做）**：P0 全屏压制、P1 UI-less（声明 UI-less 的宿主自绘 / `host_drawn_candidates`
+    名单 / 抑制态强制行内）、P2-A 推荐·完整安装都已实现并本机验过（`docs/plan/game-compat-tsf-uielement.md`）。
+    还差真机：
+    ① **CS2**：签名版 + 完整安装（DLL 在 `System32\IME\CloudIME`、`InprocServer32` 指系统副本）下 Trusted Mode 不拒绝、游戏内聊天能出候选；
+    ② **Valorant**：Vanguard 内核反作弊可能直接禁第三方 IME，先验能不能加载，结论写进 CHANGELOG；
+    ③ 真实 UE 游戏（黑神话 / 逸剑风云决）没有文本输入，测不了，不做。
   - [ ] **本地整句模型上 Windows**：Server 已接（`dispatch/rescore/`，CPU 推理，设置「高级」页有开关，安装包带 `data\model`），待真机验：每次重排的耗时（前文 + 几条路径一次前向，CPU 上可能几十到一百多毫秒，超了就缩前文长度）、模型加载时间；
     应用光标前文已接（DLL 起组句时读、密码框跳过；2026-09-12 真机验过记事本 / Edge / 终端都读得到，Edge 密码框按 `IS_PRIVATE` 识别），真机看沉浸式应用读不读得到；
     模型单文件 `.qjm` 已做（2026-09-12，复用 `.qj` 容器 `Kind::Model`，`find_model` 先 `.qjm` 再三件套目录，`pack model` / `tools/release/pack-model.sh`，
