@@ -88,7 +88,10 @@
   - [~] **⑤ 任务栏点中/英反同步**（★☆☆ / 低 / 0.5 天）：**代码完成，待真机测**（2026-09-11）。
     激活时对转换模式 compartment 挂 `ITfCompartmentEventSink`（`com/conversion.rs`），`OnChange` 读回 `NATIVE` 位、与当前模式不同才翻转
     （防回环），顺带刷指示器 + 上报 Server 让悬浮状态条也同步。纯 DLL 改动、无新协议。
-  - [ ] 发版：换 **Certum 开源代码签名证书**重签（开发全程自签 + 本机受信任根，见 `installer/sign-local.ps1`）；CI 已搭（`docs/notes/release.md`）。
+  - [~] 发版：换 **Certum 开源代码签名证书**重签（开发全程自签 + 本机受信任根，见 `installer/sign-local.ps1`）。
+    **签名链路 2026-11-11 已就绪**：`build.ps1 -Sign` 支持正式证书指纹与时间戳、签完校验、安装包 exe 一起签；
+    `release.yml` 配好 `CLOUDIME_CERT_PFX` / `CLOUDIME_CERT_PFX_PASSWORD` 两个 secret 就自动走签名 + 完整安装
+    （`docs/notes/release.md`）。**剩下的只有证书本身**，以及拿到证书后的 CS2 / Valorant 真机验收。
   - [ ] **本地整句模型上 Windows**：Server 已接（`dispatch/rescore/`，CPU 推理，设置「高级」页有开关，安装包带 `data\model`），待真机验：每次重排的耗时（前文 + 几条路径一次前向，CPU 上可能几十到一百多毫秒，超了就缩前文长度）、模型加载时间；
     应用光标前文已接（DLL 起组句时读、密码框跳过；2026-09-12 真机验过记事本 / Edge / 终端都读得到，Edge 密码框按 `IS_PRIVATE` 识别），真机看沉浸式应用读不读得到；
     模型单文件 `.qjm` 已做（2026-09-12，复用 `.qj` 容器 `Kind::Model`，`find_model` 先 `.qjm` 再三件套目录，`pack model` / `tools/release/pack-model.sh`，
