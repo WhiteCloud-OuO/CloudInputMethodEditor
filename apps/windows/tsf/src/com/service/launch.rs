@@ -11,7 +11,9 @@
 //! 另一道门是宿主的完整性级别：输入法会被加载进登录界面（LogonUI）、UAC 的 consent.exe 这类
 //! 以 SYSTEM 跑在安全桌面上的进程，也会进 AppContainer 的商店应用（Low）。在这些宿主里
 //! `ShellExecute` 要么起出一个 SYSTEM 权限、挂在安全桌面上的 Server，要么干脆起不来——
-//! 只在普通桌面应用（Medium）里拉，其余照旧退避重连。
+//! 只在用户桌面应用（Medium 及以上、低于 SYSTEM）里拉，其余照旧退避重连。
+//! 不能只认 Medium：关掉 UAC（`EnableLUA=0`）的机器上所有进程都是 High，只认 Medium 会让那些
+//! 机器上 Server 一挂就再也拉不起来。
 //!
 //! 安装 / 卸载程序运行期间也不拉：它刚结束 Server 要替换 exe，这时拉起会占住文件（错误代码 5），
 //! 安装程序持有命名互斥体 [`INSTALLER_MUTEX`]（见 `cloudime.iss`），装完它自己起新 Server。
@@ -46,9 +48,13 @@ const LAUNCH_MUTEX: windows::core::PCWSTR = w!("Local\\CloudIMEServerLaunch");
 /// 安装 / 卸载程序运行期间持有的互斥体，名字与 `cloudime.iss` 的 `HoldInstallerMutex` 一致。
 const INSTALLER_MUTEX: windows::core::PCWSTR = w!("Global\\CloudIMEInstaller");
 
-/// 普通桌面应用的完整性级别 RID（UAC 未提升的用户进程）。低一档是 AppContainer / 浏览器沙箱，
-/// 高一档是管理员提升、SYSTEM 与安全桌面上的进程——那些里都不拉 Server。
-const MEDIUM_INTEGRITY_RID: u32 = 0x2000;
+/// 用户桌面应用的完整性级别下限：Medium（UAC 未提升的用户进程，RID 0x2000）。
+/// 低一档的 Low 是 AppContainer / 浏览器沙箱，那里 ShellExecute 起不出正常 Server，不拉。
+const MIN_DESKTOP_INTEGRITY_RID: u32 = 0x2000;
+
+/// SYSTEM（RID 0x4000）及更高的受保护级别：登录界面、UAC 的 consent.exe 都在安全桌面上以 SYSTEM 跑，
+/// 在这些宿主里起出来的 Server 会挂在安全桌面上，不拉。
+const SYSTEM_INTEGRITY_RID: u32 = 0x4000;
 
 /// 上次尝试拉起的时间；本进程内所有文本服务实例共用。
 static LAST_LAUNCH: Mutex<Option<Instant>> = Mutex::new(None);
@@ -58,8 +64,8 @@ pub(super) fn launch_server() -> bool {
     if !cooldown_passed() {
         return false;
     }
-    if !host_is_plain_desktop_app() {
-        log("宿主进程不是普通桌面应用（完整性级别非 Medium），不拉起 Server");
+    if !host_is_user_desktop_app() {
+        log("宿主进程不是用户桌面应用（完整性级别低于 Medium 或达到 SYSTEM），不拉起 Server");
         return false;
     }
     if installer_running() {
@@ -67,7 +73,7 @@ pub(super) fn launch_server() -> bool {
         return false;
     }
     let Some(exe) = server_exe() else {
-        log("找不到与 DLL 同目录的 cloudime-server.exe，不拉起");
+        log("找不到 Server（InstallDir 注册表项与 DLL 同目录都没有 cloudime-server.exe），不拉起");
         return false;
     };
     let Some(_mutex) = launch_mutex() else {
@@ -115,12 +121,12 @@ fn cooldown_passed() -> bool {
     true
 }
 
-/// 宿主进程是不是普通桌面应用（完整性级别为 Medium）。
+/// 宿主进程是不是用户桌面应用（完整性级别 Medium 及以上、低于 SYSTEM）。
 ///
 /// 读当前进程令牌的 `TokenIntegrityLevel`，SID 最后一个子授权值就是级别 RID。
 /// 读不到一律当成「不是」：宁可不拉（退回退避重连，下次登录时由启动文件夹的快捷方式起），
 /// 也不能在安全桌面上起出一个 SYSTEM 权限的 Server。
-fn host_is_plain_desktop_app() -> bool {
+fn host_is_user_desktop_app() -> bool {
     let mut token = HANDLE::default();
     if unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }.is_err() {
         return false;
@@ -162,7 +168,11 @@ fn host_is_plain_desktop_app() -> bool {
         return false;
     }
     let rid_ptr = unsafe { GetSidSubAuthority(sid, u32::from(count) - 1) };
-    !rid_ptr.is_null() && unsafe { *rid_ptr } == MEDIUM_INTEGRITY_RID
+    if rid_ptr.is_null() {
+        return false;
+    }
+    let rid = unsafe { *rid_ptr };
+    (MIN_DESKTOP_INTEGRITY_RID..SYSTEM_INTEGRITY_RID).contains(&rid)
 }
 
 /// 安装程序的互斥体在不在。它由提升的安装程序建，普通应用打开会被拒（`ERROR_ACCESS_DENIED`），拒也说明存在。
@@ -196,8 +206,26 @@ impl Drop for LaunchMutex {
 }
 
 fn server_exe() -> Option<PathBuf> {
+    // 系统目录里的 DLL 旁边没有 exe：安装器在 `HKLM\Software\CloudIME\InstallDir` 写了安装目录。
+    // 32 位 DLL 读的是 WOW6432Node，安装器两个视图都写。
+    if let Some(dir) = install_dir() {
+        let exe = dir.join("cloudime-server.exe");
+        if exe.is_file() {
+            return Some(exe);
+        }
+    }
     let module = module_path().ok()?;
     Some(server_exe_path(Path::new(&module.to_string())))
+}
+
+/// 安装目录；没装 / 读不到时为 `None`（开发时退回 DLL 同目录）。
+fn install_dir() -> Option<PathBuf> {
+    windows_registry::LOCAL_MACHINE
+        .open(r"Software\CloudIME")
+        .ok()
+        .and_then(|key| key.get_string("InstallDir").ok())
+        .filter(|dir| !dir.is_empty())
+        .map(PathBuf::from)
 }
 
 /// 与 DLL 同目录的 `cloudime-server.exe`（安装器把两者装在同一目录）。

@@ -1903,9 +1903,13 @@ TSF 原有数字 / OEM 标点 / 空格键码按当前布局用 `ToUnicodeEx` 解
 拼音显示位置（`[general] preedit`）在 Windows 上分两处落地：Server 把它读进 `RouterConfig.preedit` 并随 `Frame.preedit_mode`
 下发给 DLL，DLL（`com/service/key_sink.rs`）按 `inline()` 决定要不要放行内拼音，Server（`ui/candidates/render_data.rs::window_preedit`）
 按 `in_window()` 决定候选窗口顶部画不画拼音行；`window` 模式没有组句范围，光标矩形改从 `com/edit/anchor.rs::caret_rect`（当前选区）量。
-连不上 Server 时 DLL 自己拉起它（`tsf/src/com/service/launch.rs`）：`ShellExecuteW` 起与 DLL 同目录的 `cloudime-server.exe`
+连不上 Server 时 DLL 自己拉起它（`tsf/src/com/service/launch.rs`）：`ShellExecuteW` 起 `cloudime-server.exe`
 （`uiAccess=true` 的 exe 用 `CreateProcess` 报 740），进程内 5 秒冷却 + 跨进程命名互斥体防止砸出一串 Server；
 起完清掉重连退避，下一键就试。Server 只在登录时由「启动」文件夹拉起，中途挂了以前只能等下次登录。
+找 exe 先读 `HKLM\Software\CloudIME\InstallDir`（完整安装的 DLL 在系统目录、旁边没有 exe，见下文「安装方式」），
+没有才退回 DLL 同目录。宿主限定「用户桌面应用」：完整性级别 Medium 及以上、低于 SYSTEM——
+LogonUI / consent.exe 在安全桌面上以 SYSTEM 跑，AppContainer 商店应用是 Low，这两类里不拉；
+**不能只认 Medium**：关掉 UAC（`EnableLUA=0`）的机器上所有进程都是 High，只认 Medium 会让那样机器上 Server 一挂就再也起不来（2026-11-11 实测）。
 
 词库导入（设置「词库」页）走 `cloudime-dictionary::import`，只收现成的 `.db`、校验后原样复制进 `WordBank\`（空词库拒绝），多选批量、页面显示每个文件的结果；
 Server 每次轮询比对 `WordBank\` 的路径 / mtime / 长度快照，配置没变也重载新增、同名更新与移除（目录里有的都加载，没有 List.dat 启用开关）。
@@ -1931,6 +1935,21 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
 抑制时 `reconcile_candidates` 只收窗并保留 `last_rect`（宿主交还绘制权时能按原位置弹回），
 `effective_preedit_mode` 强制 inline，状态切换提示不弹；`UiElementAction` 的 `Select` / `Finalize` / `Abort`
 落到 `composed::ui_element_select` / `ui_element_finalize`（整段提交返回空帧 + 文本，部分提交继续组句）。
+
+**安装方式（P2，2026-11-11）**：`cloudime.iss` 的 `[Tasks]` 两项互斥（`recommended` 缺省勾选 / `full`），
+只有 `build.ps1 -SystemDeploy`（与 `-Sign` 绑死，单用直接报错）才定义 `SystemDeploy` 宏、整段 `[Tasks]` 与系统目录
+`[Files]` / `[Run]` / `[UninstallRun]` / `[UninstallDelete]` 都在 `#if SystemDeploy` 里。完整安装把同一份 DLL 再写进
+`{sys}\IME\CloudIME` 与 `{syswow64}\IME\CloudIME`，注册系统副本，`{app}` 那份留作兜底；`CurStepChanged(ssPostInstall)`
+校验 `InprocServer32` 是否真指向系统副本，没指过去就退回 `{app}` 副本并写 `SystemDeploy=0`。
+完整 → 推荐在 `PrepareToInstall` 里 `RemoveSystemDeploy`（反注册 + 删文件，删不掉的 `RestartReplace` 登记重启后删）。
+`HKLM\Software\CloudIME\InstallDir`（64 位与 `WOW6432Node` 各一份）由 `[Registry]` 写，`launch.rs` 与
+`scripts/reconfigure.ps1` 都先读它再决定 Server / 安装目录。
+`[Code]` 里访问真实 System32 必须走 `SysDir64`（`{sysnative}`）：Setup 是 32 位进程，`FileExists('C:\Windows\System32\...')`
+会被文件系统重定向到 SysWOW64，`RetireLoadedDllIn` 于是静默跳过，接着 `[Files]` 撞上被 explorer.exe 占用的系统 DLL、
+整个安装回滚（2026-11-11 实测踩到，回滚还把 Server exe 留成了 `.old-*.exe`）。另：Inno 发现
+`PendingFileRenameOperations` 命中自己的目标文件时会直接拒绝安装并提示「需要重启后才能继续」——
+卸载后紧接着重装完整版会遇到，清掉那条挂起项再加一次改名腾位即可。
+开发流程：`push-local.ps1 -Sign -SystemDir` 编签名版并走系统目录布局，`reconfigure.ps1 -SystemDir` 覆盖 + 注册系统副本。
 
 ## assets
 

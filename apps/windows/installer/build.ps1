@@ -16,9 +16,12 @@
     自签产物（sign-local.ps1）并开 uiAccess（候选窗才能盖过商店 / 任务栏搜索）。uiAccess=true 的 exe 要本机受信任的签名
     才准启动，自签证书只有编译机信任——所以 -Sign 只用于本机真机测，对外分发的包不加此开关：不签名、关 uiAccess，
     候选窗在那几个系统界面里会被盖住，但任何机器都能起。
+.PARAMETER SystemDeploy
+    打出带「推荐 / 完整安装」选择的包；完整安装会把 DLL 写进 System32\IME\CloudIME / SysWOW64\IME\CloudIME 并注册。
+    只允许与 -Sign 一起用（未签名构建只能推荐安装）；发版换 Certum 签名后由 CI 打开。
 #>
 [CmdletBinding()]
-param([switch]$SkipBuild, [switch]$Sign)
+param([switch]$SkipBuild, [switch]$Sign, [switch]$SystemDeploy)
 
 $ErrorActionPreference = 'Stop'
 
@@ -130,6 +133,10 @@ if ($missing.Count -gt 0) { throw "自包含 Windows App Runtime 缺 $($missing.
 Write-Host "自包含运行时 $($wanted.Count) 项 → target\installer\settings-runtime" -ForegroundColor Cyan
 
 # 1.5) 签名（必须在 iscc 打包前：Inno 把已签的文件原样拷进安装包）。
+# 完整安装（系统目录）只允许出现在签名构建里；未签名构建只能推荐安装。
+if ($SystemDeploy -and -not $Sign) {
+    throw '-SystemDeploy 只用于签名构建：请同时加 -Sign（发版用 Certum 签名）'
+}
 if ($Sign) {
     Write-Host '自签产物（uiAccess 要求 Server 代码签名）…' -ForegroundColor Cyan
     $binaries = $targets | ForEach-Object { Join-Path $Repo "target\$_" }
@@ -187,7 +194,10 @@ if ((Test-Path $tutorial) -and (Test-Path $changelog) -and
     Write-Host 'tutorial.md（使用手册）比 CHANGELOG.md 旧：确认这一版有没有用户可见的改动要写进手册。' -ForegroundColor Yellow
 }
 
-Invoke-Checked $iscc @("/DAppVersion=$Version", "/DAppVersionNumeric=$VersionNumeric", $Iss)
+$isccArgs = @("/DAppVersion=$Version", "/DAppVersionNumeric=$VersionNumeric")
+if ($SystemDeploy) { $isccArgs += '/DSystemDeploy=1' }
+$isccArgs += $Iss
+Invoke-Checked $iscc $isccArgs
 
 $out = Join-Path $Repo "target\installer\cloudime-$Version-windows-x86_64-setup.exe"
 Write-Host "完成：$out" -ForegroundColor Green

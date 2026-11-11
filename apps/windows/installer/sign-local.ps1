@@ -54,23 +54,32 @@ foreach ($store in @('Root', 'TrustedPublisher')) {
     }
 }
 
-# 3) 找 signtool（Windows SDK 里，取版本最新的一个）。
+# 3) 找 signtool（Windows SDK 里，取版本最新的一个）；没有就用 PowerShell 的 Authenticode 签名。
 $signtool = Get-ChildItem 'C:\Program Files (x86)\Windows Kits\10\bin\*\x64\signtool.exe' -ErrorAction SilentlyContinue |
     Sort-Object FullName -Descending | Select-Object -First 1
-if (-not $signtool) { throw '在 Windows SDK 里找不到 signtool.exe' }
 
 # 4) 签名（SHA256；开发自签不加时间戳，免网络依赖——证书 5 年内有效，够开发）。
 foreach ($f in $Path) {
     if (-not (Test-Path -LiteralPath $f)) { throw "要签的文件不存在：$f" }
 }
-# PowerShell 5.1 会把 signtool 写进 stderr 的内容包装成错误记录，配合上面的 Stop 会打断签名。
-$previous = $ErrorActionPreference
-$ErrorActionPreference = 'Continue'
-try {
-    & $signtool.FullName sign /sha1 $thumbprint /fd sha256 /v $Path 2>&1 | ForEach-Object { Write-Host $_ }
-    $exitCode = $LASTEXITCODE
-} finally {
-    $ErrorActionPreference = $previous
+if ($signtool) {
+    # PowerShell 5.1 会把 signtool 写进 stderr 的内容包装成错误记录，配合上面的 Stop 会打断签名。
+    $previous = $ErrorActionPreference
+    $ErrorActionPreference = 'Continue'
+    try {
+        & $signtool.FullName sign /sha1 $thumbprint /fd sha256 /v $Path 2>&1 | ForEach-Object { Write-Host $_ }
+        $exitCode = $LASTEXITCODE
+    } finally {
+        $ErrorActionPreference = $previous
+    }
+    if ($exitCode -ne 0) { throw "signtool 签名失败（退出码 $exitCode）" }
+} else {
+    Write-Host '没找到 signtool.exe，改用 PowerShell 的 Authenticode 签名（开发自签，无时间戳）…' -ForegroundColor Yellow
+    foreach ($f in $Path) {
+        $signature = Set-AuthenticodeSignature -FilePath $f -Certificate $cert -HashAlgorithm SHA256
+        if ($signature.Status -ne 'Valid') {
+            throw "Authenticode 签名失败：$f（$($signature.Status)）"
+        }
+    }
 }
-if ($exitCode -ne 0) { throw "signtool 签名失败（退出码 $exitCode）" }
 Write-Host "已签名 $($Path.Count) 个文件。" -ForegroundColor Green

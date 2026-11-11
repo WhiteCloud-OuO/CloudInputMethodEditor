@@ -41,6 +41,13 @@
 #define TsfDll "cloudime_tsf_x64.dll"
 #define TsfDll32 "cloudime_tsf_x86.dll"
 
+; 只有签名构建才传 /DSystemDeploy=1：安装向导才出现「推荐安装 / 完整安装」，
+; 完整安装才把 DLL 写进 System32\IME\CloudIME / SysWOW64\IME\CloudIME 并注册。
+; 未定义时只有推荐安装（只装 Program Files），不碰系统目录。
+#ifndef SystemDeploy
+  #define SystemDeploy 0
+#endif
+
 [Setup]
 AppId={{0E048967-806B-4724-80DD-989308F71342}
 AppName={#AppName}
@@ -82,14 +89,29 @@ Name: "chs"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 [Messages]
 ; 目录页的说明：改目录会让 uiAccess 失效（候选窗盖不住系统界面），在选目录这一步就讲清楚。
 SelectDirLabel3=云朵输入法 将被安装到下面指定的文件夹中。
+; 安装方式页（只有签名版才有「完整安装」）。
+WizardSelectTasks=选择安装方式
+SelectTasksDesc=推荐安装只写入 Program Files；完整安装还会把输入法模块写入系统目录并注册（用于 CS2 等游戏）。
+SelectTasksLabel2=请选择云朵输入法的安装方式，然后点击下一步。
 ; 完成页：DLL 会装进每个应用进程，装之前就开着的应用要用新版必须重启（见文件头「升级」）。
 ; 这是最容易被误解成「设置/新版没生效」的一点，所以放在完成页明说。
 FinishedLabel=云朵输入法 已安装在你的计算机上。建议重新启动计算机以便 云朵输入法 的服务程序正常运行。如果是覆盖升级，请关闭并重新打开正在使用输入法的应用（浏览器、编辑器、Office 等）；这些应用仍在使用旧版输入法模块，重启后才能完整生效。
+#if SystemDeploy
+[Tasks]
+; 两个互斥项：缺省推荐安装；完整安装才会写系统目录并注册（用于 CS2 等需要 Trusted Mode 的游戏）。
+Name: "recommended"; Description: "推荐安装（缺省）：只安装到 Program Files，不修改系统目录"; GroupDescription: "安装方式"; Flags: exclusive
+Name: "full"; Description: "完整安装：同时写入系统目录（System32 / SysWOW64 的 IME 目录）并注册，用于 CS2 等游戏"; GroupDescription: "安装方式"; Flags: exclusive unchecked
+#endif
 [Files]
 ; —— 二进制 ——
 ; DLL 按版本起名并排装；卸载时若仍被占用，登记成重启后删。
 Source: "{#Repo}\target\release\cloudime_tsf_x64.dll";      DestDir: "{app}"; DestName: "{#TsfDll}"; Flags: ignoreversion uninsrestartdelete
 Source: "{#Repo}\target\i686-pc-windows-msvc\release\cloudime_tsf_x86.dll"; DestDir: "{app}"; DestName: "{#TsfDll32}"; Flags: ignoreversion uninsrestartdelete
+#if SystemDeploy
+; 完整安装：系统目录副本（InprocServer32 指向这一份；{app} 里的同名文件留作兜底）。
+Source: "{#Repo}\target\release\cloudime_tsf_x64.dll"; DestDir: "{sys}\IME\CloudIME"; DestName: "{#TsfDll}"; Flags: ignoreversion uninsrestartdelete; Tasks: full
+Source: "{#Repo}\target\i686-pc-windows-msvc\release\cloudime_tsf_x86.dll"; DestDir: "{syswow64}\IME\CloudIME"; DestName: "{#TsfDll32}"; Flags: ignoreversion uninsrestartdelete; Tasks: full
+#endif
 Source: "{#Repo}\target\release\cloudime-settings.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; 设置程序自带一份 Windows App Runtime（自包含部署：Windows 10 上机器装的框架包用不了，见 docs\notes\windows-win10.md）；
 ; 文件由 build.ps1 按 settings-runtime.txt 从 target\release 挑进 target\installer\settings-runtime，必须与 exe 同级。
@@ -165,6 +187,11 @@ Name: "{app}\InputSchemes"
 ; 脚本目录由模板文件铺出来（Scripts\template.lua）；每个脚本自己带 shared / layouts / dlls / saved。
 ; [Run] ①.7 已经把整个 Scripts\ 递归授给普通用户可写。
 
+[Registry]
+; 安装目录：DLL 在系统目录时靠它找 Server。64 位与 32 位（WOW6432Node）各一份，32 位 DLL 才读得到。
+Root: HKLM; Subkey: "Software\CloudIME"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletevalue
+Root: HKLM32; Subkey: "Software\CloudIME"; ValueType: string; ValueName: "InstallDir"; ValueData: "{app}"; Flags: uninsdeletevalue
+
 [Icons]
 Name: "{group}\云朵输入法 设置"; Filename: "{app}\cloudime-settings.exe"; IconFilename: "{app}\cloudime.ico"
 Name: "{group}\云朵输入法 卸载"; Filename: "{uninstallexe}"
@@ -194,11 +221,28 @@ Filename: "{sys}\icacls.exe"; Parameters: """{app}\InputSchemes"" /grant *S-1-5-
   Flags: runhidden waituntilterminated; StatusMsg: "配置方案目录权限…"
 ; ② 注册文本服务（写 HKCR + 图标到 %ProgramData%\CloudIME\cloudime.ico）。注册的是本版本的 DLL，
 ;    InprocServer32 指向新文件；旧版本的 DLL **不能** regsvr32 /u（那会把整个 CLSID 注销掉）。
+;    完整安装注册系统副本；推荐安装注册 {app} 副本。
+#if SystemDeploy
+Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\{#TsfDll}"""; Tasks: not full; \
+  Flags: runhidden waituntilterminated; StatusMsg: "注册输入法…"
+#else
 Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{app}\{#TsfDll}"""; \
   Flags: runhidden waituntilterminated; StatusMsg: "注册输入法…"
+#endif
 ; 32 位那份用 SysWOW64 里的 32 位 regsvr32 注册，InprocServer32 才落到 WOW6432Node 下给 32 位进程用。
+#if SystemDeploy
+Filename: "{syswow64}\regsvr32.exe"; Parameters: "/s ""{app}\{#TsfDll32}"""; Tasks: not full; \
+  Flags: runhidden waituntilterminated; StatusMsg: "注册输入法（32 位）…"
+#else
 Filename: "{syswow64}\regsvr32.exe"; Parameters: "/s ""{app}\{#TsfDll32}"""; \
   Flags: runhidden waituntilterminated; StatusMsg: "注册输入法（32 位）…"
+#endif
+#if SystemDeploy
+Filename: "{sys}\regsvr32.exe"; Parameters: "/s ""{sys}\IME\CloudIME\{#TsfDll}"""; Tasks: full; \
+  Flags: runhidden waituntilterminated; StatusMsg: "注册输入法（系统目录）…"
+Filename: "{syswow64}\regsvr32.exe"; Parameters: "/s ""{syswow64}\IME\CloudIME\{#TsfDll32}"""; Tasks: full; \
+  Flags: runhidden waituntilterminated; StatusMsg: "注册输入法（系统目录，32 位）…"
+#endif
 ; ④ 装完立即起一次 Server 见 [Code] 的 StartServerOnce：装完（ssPostInstall）先无条件起一次，
 ;    完成页点 Finish 再试一次（已经起过就不重复）。uiAccess=true 的 exe 不能用
 ;    CreateProcess / runasoriginaluser 拉起（报 740），必须走 ShellExecute（等同双击），
@@ -218,10 +262,26 @@ Filename: "{sys}\taskkill.exe"; Parameters: "/im cloudime-server.exe /f"; \
   Flags: runhidden; RunOnceId: "KillServer"
 Filename: "{sys}\taskkill.exe"; Parameters: "/im cloudime-settings.exe /f"; \
   Flags: runhidden; RunOnceId: "KillSettings"
+#if SystemDeploy
+Filename: "{sys}\regsvr32.exe"; Parameters: "/u /s ""{app}\{#TsfDll}"""; Tasks: not full; \
+  Flags: runhidden; RunOnceId: "UnregDll"
+#else
 Filename: "{sys}\regsvr32.exe"; Parameters: "/u /s ""{app}\{#TsfDll}"""; \
   Flags: runhidden; RunOnceId: "UnregDll"
+#endif
+#if SystemDeploy
+Filename: "{syswow64}\regsvr32.exe"; Parameters: "/u /s ""{app}\{#TsfDll32}"""; Tasks: not full; \
+  Flags: runhidden; RunOnceId: "UnregDll32"
+#else
 Filename: "{syswow64}\regsvr32.exe"; Parameters: "/u /s ""{app}\{#TsfDll32}"""; \
   Flags: runhidden; RunOnceId: "UnregDll32"
+#endif
+#if SystemDeploy
+Filename: "{sys}\regsvr32.exe"; Parameters: "/u /s ""{sys}\IME\CloudIME\{#TsfDll}"""; Tasks: full; \
+  Flags: runhidden; RunOnceId: "UnregSystemDll"
+Filename: "{syswow64}\regsvr32.exe"; Parameters: "/u /s ""{syswow64}\IME\CloudIME\{#TsfDll32}"""; Tasks: full; \
+  Flags: runhidden; RunOnceId: "UnregSystemDll32"
+#endif
 
 [InstallDelete]
 ; 早期云朵版本（含改名前后用过的开始菜单目录名）与登录自启快捷方式都清掉，免得新旧两份并存（两条状态条、两个 Server）。卸载新版时会自动清掉新目录。
@@ -260,6 +320,9 @@ Type: files; Name: "{app}\cloudime-server.old-*.exe"
 ; 用户导入的词库、生成数据这类不在卸载记录里的文件：整目录清掉。
 ; 仍被应用加载着的 DLL 删不掉，由 [Code] 的 RetireLockedDlls 登记到重启后删。
 Type: filesandordirs; Name: "{app}"
+; 完整安装的系统目录副本：反注册由 [UninstallRun] 做，这里删文件与空目录。
+Type: filesandordirs; Name: "{sys}\IME\CloudIME"
+Type: filesandordirs; Name: "{syswow64}\IME\CloudIME"
 ; 用户数据：配置、短语（Phrase.db）、学习数据都在 %APPDATA%\CloudIME，日志在 %LOCALAPPDATA%\CloudIME。
 ; 卸载时一并删除，重装不会恢复；只想留着数据的话把这两条注释掉。
 ; 这里是机器级安装（PrivilegesRequired=admin），{userappdata} / {localappdata} 指**运行卸载程序的那个用户**
@@ -274,6 +337,9 @@ Type: filesandordirs; Name: "{commonappdata}\CloudIME"
 var
   { 卸载时是否有输入法 DLL 因为还被应用占用而登记成了「重启后删除」。 }
   RestartNeededForDlls: Boolean;
+  { 本次是否选了「完整安装」；以及安装前注册表里上一次的选择。 }
+  FullInstall: Boolean;
+  PreviousSystemDeploy: Boolean;
 
 function CreateMutex(Attributes: Longint; InitialOwner: BOOL; Name: String): THandle;
   external 'CreateMutexW@kernel32.dll stdcall';
@@ -309,21 +375,29 @@ begin
       Log('改名旧 Server 失败: ' + Path);
 end;
 
+{ [Code] 里的文件操作不经过 Inno 的 64 位感知：Setup 是 32 位进程，直接用 sys 常量会被文件系统
+  重定向到 SysWOW64，看不到真实的 System32。真实（64 位）System32 一律用 sysnative 常量。
+  注意注册表里的路径字符串由 regsvr32 写成 C:\Windows\System32\...，比对时仍用 sys。 }
+function SysDir64: String;
+begin
+  Result := ExpandConstant('{sysnative}');
+end;
+
 procedure KillProcess(const Image: String);
 var
   ResultCode: Integer;
 begin
-  Exec(ExpandConstant('{sys}\taskkill.exe'), '/im ' + Image + ' /f', '',
+  Exec(SysDir64 + '\taskkill.exe', '/im ' + Image + ' /f', '',
     SW_HIDE, ewWaitUntilTerminated, ResultCode);
 end;
 
 { 同版本重装（开发期反复装）：目标文件名与已加载的 DLL 撞名，覆盖不了但 Windows 允许改名，
   先把它改成 <原名>.old-<随机>.dll 腾出名字，装完由 DeleteStaleDlls 删掉 / 登记重启后删。 }
-procedure RetireLoadedDll(const Name: String);
+procedure RetireLoadedDllIn(const Dir, Name: String);
 var
   Path, Retired: String;
 begin
-  Path := ExpandConstant('{app}\') + Name;
+  Path := Dir + '\' + Name;
   if FileExists(Path) then
   begin
     Retired := Path + '.old-' + IntToStr(Random(1000000)) + '.dll';
@@ -332,16 +406,100 @@ begin
   end;
 end;
 
+procedure RetireLoadedDll(const Name: String);
+begin
+  RetireLoadedDllIn(ExpandConstant('{app}'), Name);
+end;
+
+procedure RegisterDll(const RegSvr, Dll: String);
+var
+  ResultCode: Integer;
+begin
+  Exec(RegSvr, '/s "' + Dll + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+procedure UnregisterDll(const RegSvr, Dll: String);
+var
+  ResultCode: Integer;
+begin
+  if FileExists(Dll) then
+    Exec(RegSvr, '/u /s "' + Dll + '"', '', SW_HIDE, ewWaitUntilTerminated, ResultCode);
+end;
+
+procedure RemoveDll(const Path: String);
+begin
+  if FileExists(Path) then
+    if not DeleteFile(Path) then
+      RestartReplace(Path, '');
+end;
+
+function ReadSystemDeploy: Boolean;
+var
+  Value: Cardinal;
+begin
+  Result := False;
+  if RegQueryDWordValue(HKEY_LOCAL_MACHINE, 'Software\CloudIME', 'SystemDeploy', Value) then
+    Result := Value <> 0;
+end;
+
+{ 完整 -> 推荐：反注册并删掉系统目录副本；被占用就登记重启后删。 }
+procedure RemoveSystemDeploy;
+var
+  Dir64, Dir32, Dll64, Dll32: String;
+begin
+  Dir64 := SysDir64 + '\IME\CloudIME';
+  Dir32 := ExpandConstant('{syswow64}\IME\CloudIME');
+  Dll64 := Dir64 + '\{#TsfDll}';
+  Dll32 := Dir32 + '\{#TsfDll32}';
+  UnregisterDll(SysDir64 + '\regsvr32.exe', Dll64);
+  UnregisterDll(ExpandConstant('{syswow64}\regsvr32.exe'), Dll32);
+  RemoveDll(Dll64);
+  RemoveDll(Dll32);
+  RemoveDir(Dir64);
+  RemoveDir(Dir32);
+end;
+
+function InprocServerIs(const Key, Expected: String): Boolean;
+var
+  Value: String;
+begin
+  Result := RegQueryStringValue(HKEY_CLASSES_ROOT, Key, '', Value) and
+    (CompareText(Value, Expected) = 0);
+end;
+
+{ 完整安装注册完系统副本后校验 InprocServer32；没指过去就退回安装目录里的副本。 }
+function SystemRegistrationPointsToSystem: Boolean;
+begin
+  Result :=
+    InprocServerIs('CLSID\{50020AC6-80FE-4709-BC25-A173B14A6E7F}\InprocServer32',
+      ExpandConstant('{sys}\IME\CloudIME\{#TsfDll}')) and
+    InprocServerIs('WOW6432Node\CLSID\{50020AC6-80FE-4709-BC25-A173B14A6E7F}\InprocServer32',
+      ExpandConstant('{syswow64}\IME\CloudIME\{#TsfDll32}'));
+end;
+
 { 覆盖前先结束 Server 与设置程序（只有这两个 exe 要覆盖；DLL 按版本并排装，不用关应用）。
   没在跑时 taskkill 返回非 0，忽略。 }
 function PrepareToInstall(var NeedsRestart: Boolean): String;
 begin
+  FullInstall := WizardIsTaskSelected('full');
+  PreviousSystemDeploy := ReadSystemDeploy;
   RetireServerExe;
   KillProcess('cloudime-server.exe');
   KillProcess('cloudime-mcp-client.exe');
   KillProcess('cloudime-settings.exe');
   RetireLoadedDll('{#TsfDll}');
   RetireLoadedDll('{#TsfDll32}');
+  if FullInstall then
+  begin
+    { 完整安装：旧系统副本也改名让路，[Files] 再落新的。 }
+    RetireLoadedDllIn(SysDir64 + '\IME\CloudIME', '{#TsfDll}');
+    RetireLoadedDllIn(ExpandConstant('{syswow64}\IME\CloudIME'), '{#TsfDll32}');
+  end
+  else if PreviousSystemDeploy then
+  begin
+    { 完整 -> 推荐：反注册并清掉系统副本。 }
+    RemoveSystemDeploy;
+  end;
   Result := '';
 end;
 
@@ -379,12 +537,11 @@ end;
 
 { 删掉旧版本的 DLL（含没带版本号的最早那份）。仍被某个应用加载着的删不掉，登记成重启后删：
   那些应用重启前继续用旧 DLL，Server 两个版本都服务。 }
-procedure DeleteStaleDlls;
+procedure DeleteStaleDllsIn(const Dir: String);
 var
-  Dir, Path: String;
+  Path: String;
   Found: TFindRec;
 begin
-  Dir := ExpandConstant('{app}');
   if FindFirst(Dir + '\cloudime_tsf*.dll', Found) then
   begin
     try
@@ -399,6 +556,18 @@ begin
     finally
       FindClose(Found);
     end;
+  end;
+end;
+
+{ 删掉旧版本的 DLL（含没带版本号的最早那份）。仍被某个应用加载着的删不掉，登记成重启后删：
+  那些应用重启前继续用旧 DLL，Server 两个版本都服务。完整安装时系统目录副本也一并清。 }
+procedure DeleteStaleDlls;
+begin
+  DeleteStaleDllsIn(ExpandConstant('{app}'));
+  if FullInstall then
+  begin
+    DeleteStaleDllsIn(SysDir64 + '\IME\CloudIME');
+    DeleteStaleDllsIn(ExpandConstant('{syswow64}\IME\CloudIME'));
   end;
 end;
 
@@ -428,6 +597,22 @@ begin
     DeleteLegacyLogonTask;
     DeleteStaleDlls;
     DeleteRetiredServers;
+    { 记账：完整安装校验 InprocServer32 是否真指向系统副本；没指过去就退回安装目录里的副本并写 0。 }
+    if FullInstall then
+    begin
+      if SystemRegistrationPointsToSystem then
+        RegWriteDWordValue(HKEY_LOCAL_MACHINE, 'Software\CloudIME', 'SystemDeploy', 1)
+      else
+      begin
+        Log('系统目录注册未生效，退回 {app} 副本（CS2 兼容未生效）');
+        RegisterDll(SysDir64 + '\regsvr32.exe', ExpandConstant('{app}\{#TsfDll}'));
+        RegisterDll(ExpandConstant('{syswow64}\regsvr32.exe'), ExpandConstant('{app}\{#TsfDll32}'));
+        RegWriteDWordValue(HKEY_LOCAL_MACHINE, 'Software\CloudIME', 'SystemDeploy', 0);
+        RemoveSystemDeploy;
+      end;
+    end
+    else
+      RegWriteDWordValue(HKEY_LOCAL_MACHINE, 'Software\CloudIME', 'SystemDeploy', 0);
     { 覆盖安装时安装前会先杀掉 Server（PrepareToInstall），完成页那步又可能被静默安装 / 提前关窗跳过，
       所以文件一落位就先无条件起一次，保证装完立刻能用。 }
     StartServerOnce;
@@ -437,13 +622,12 @@ end;
 { 卸载时输入法 DLL 还被加载在每个用过输入法的进程里（连 explorer.exe 都在内），文件锁着删不掉：
   删不掉的用 RestartReplace 登记到重启后由系统删除（就是 MoveFileEx 的 DELAY_UNTIL_REBOOT），
   返回是否需要提示用户重启。不先做这一步的话，[UninstallDelete] 只会删失败、文件一直留在安装目录。 }
-function RetireLockedDlls: Boolean;
+function RetireLockedDllsIn(const Dir: String): Boolean;
 var
-  Dir, Path: String;
+  Path: String;
   Found: TFindRec;
 begin
   Result := False;
-  Dir := ExpandConstant('{app}');
   if FindFirst(Dir + '\cloudime_tsf*.dll', Found) then
   begin
     try
@@ -459,6 +643,21 @@ begin
     finally
       FindClose(Found);
     end;
+  end;
+end;
+
+{ 卸载时输入法 DLL 还被加载在每个用过输入法的进程里（连 explorer.exe 都在内），文件锁着删不掉：
+  删不掉的用 RestartReplace 登记到重启后由系统删除（就是 MoveFileEx 的 DELAY_UNTIL_REBOOT），
+  返回是否需要提示用户重启。完整安装时系统目录副本也要处理。 }
+function RetireLockedDlls: Boolean;
+begin
+  Result := RetireLockedDllsIn(ExpandConstant('{app}'));
+  if ReadSystemDeploy then
+  begin
+    if RetireLockedDllsIn(SysDir64 + '\IME\CloudIME') then
+      Result := True;
+    if RetireLockedDllsIn(ExpandConstant('{syswow64}\IME\CloudIME')) then
+      Result := True;
   end;
 end;
 

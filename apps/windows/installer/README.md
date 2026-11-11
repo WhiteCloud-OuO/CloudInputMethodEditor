@@ -3,6 +3,10 @@
 用 [Inno Setup](https://jrsoftware.org/isinfo.php) 打的安装包，把 TSF DLL（64 位与 32 位各一份）、Server、设置程序与随包数据一起装进
 `C:\Program Files\CloudIME`，注册文本服务，并设登录自启。
 
+签名版（`build.ps1 -Sign -SystemDeploy` 打的包）在安装向导里多一步「安装方式」：缺省的**推荐安装**就是上面这套；
+**完整安装**另外把两份 DLL 写进 `C:\Windows\System32\IME\CloudIME` 与 `SysWOW64\IME\CloudIME` 并注册那两份
+（CS2 这类要求输入法模块待在系统目录的游戏才认）。未签名的包只有推荐安装，见下文「安装方式」。
+
 > 独立应用（例如 `apps/cloud-ui-demo`）有自己的示例安装包，见 `apps/cloud-ui-demo/installer/README.md`；
 > 它不混进本安装包，也不注册 TSF / 不写输入法数据。
 
@@ -48,6 +52,14 @@ C:\Program Files\CloudIME\
     assets\                   sample\（兜底样例词库）、auxiliary\（随包辅助码表，首次运行播种进 InputSchemes\）
 ```
 
+完整安装（仅签名版可选用，见下文「安装方式」）另外在这两处各放一份同样的 DLL，`InprocServer32` 指向它们；
+推荐安装不碰系统目录：
+
+```
+C:\Windows\System32\IME\CloudIME\cloudime_tsf_x64.dll
+C:\Windows\SysWOW64\IME\CloudIME\cloudime_tsf_x86.dll
+```
+
 Server 与设置程序按 **exe 相对**定位随包资源（`cloudime_platform::resources`）：装机时资源与 exe 同级，
 开发时是仓库 `ime\`（exe 在 `target\{debug,release}\` 下往上三层）。相对写法两套布局一致，只有根不同。
 词库目录 `WordBank\` 按这个根找（装机时就是程序目录），主词库固定 `Dict.db`。
@@ -81,6 +93,24 @@ Server 与设置程序按 **exe 相对**定位随包资源（`cloudime_platform:
 > 本仓库从青简 fork，但 `AppId`、TSF `CLSID`、语言 profile GUID、组句显示属性 GUID、保留键 GUID 都已换成云朵自己的值：
 > 云朵与青简**不是同一个产品**——装云朵不会顶掉青简，反之亦然，两个都装时各占一份输入法（状态条与 Server 各自独立）。
 
+## 安装方式：推荐安装 / 完整安装
+
+只有签名构建（`build.ps1 -Sign -SystemDeploy`，见「打包」）会出现安装方式页（`[Tasks]`），两项互斥：
+
+| | 推荐安装（缺省） | 完整安装 |
+| --- | --- | --- |
+| DLL 位置 | `{app}` | `{app}`（兜底）+ `{sys}\IME\CloudIME`、`{syswow64}\IME\CloudIME` |
+| InprocServer32 | `{app}` 那两份 | 系统目录那两份 |
+| `HKLM\Software\CloudIME` | `SystemDeploy=0` | `SystemDeploy=1` |
+| 用于 | 日常使用 | CS2 等要求输入法模块在系统目录的游戏 |
+
+- 系统目录那份是**唯一**被注册的，`{app}` 那份留着兜底：注册失效时安装程序会退回 `{app}` 并写 `SystemDeploy=0`（日志里 `系统目录注册未生效`）。
+- **切换模式**：完整 → 推荐会反注册并删掉系统副本（删不掉就登记重启后删），推荐 → 完整直接写系统副本并重注册。
+- **为什么要求签名**：系统目录里的 DLL 会被 Trusted Mode / 反作弊在内的各种宿主加载，未签名的模块会被拦；`build.ps1` 里
+  `-SystemDeploy` 与 `-Sign` 绑死，未签名构建直接不给这一项。
+- **`InstallDir` 注册表项**：`HKLM\Software\CloudIME\InstallDir`（64 位与 `WOW6432Node` 各一份）由安装器写。
+  系统目录里的 DLL 旁边没有 exe，`tsf/src/com/service/launch.rs` 靠它找 Server；`reconfigure.ps1` 也先读它再决定安装目录。
+
 ## 安装程序做的几件事
 
 1. **结束旧进程**：`PrepareToInstall` 里 `taskkill` Server 与设置程序（只有这两个 exe 要覆盖）。
@@ -89,6 +119,10 @@ Server 与设置程序按 **exe 相对**定位随包资源（`cloudime_platform:
    另外给 `WordBank\` / `Phrases\` / `Scripts\` / `InputSchemes\` 四棵目录授 `BUILTIN\Users`（SID `*S-1-5-32-545`）
    改（M）权限：它们都在 Program Files 下，而用户要在设置页里改词库、短语、脚本与双键拼音方案。
 3. **注册文本服务**：64 位 DLL 用 `regsvr32`、32 位 DLL 用 `SysWOW64\regsvr32`，各注册一次（各自写进自己视图的 HKCR，`CTF\TIP` 两边共用；要管理员——安装程序本就提权）。
+   完整安装注册系统目录那两份，推荐安装注册 `{app}` 那两份。
+   注意 `[Code]` 里的文件操作不走 Inno 的 64 位感知：Setup 是 32 位进程，`ExpandConstant('{sys}')` 会被文件系统重定向到
+   SysWOW64，看不到真实的 System32——`[Code]` 里一律用 `SysDir64`（`{sysnative}`）。漏了这一条，改名腾位的步骤会静默跳过，
+   接着 `[Files]` 撞上被 explorer.exe 占用的系统 DLL，整个安装回滚。
 4. **清旧 DLL**：装完删历次版本留下的 `cloudime_tsf*.dll`，仍被应用占用的登记成重启后删（`RestartReplace`）。
 5. **登录自启**：「启动」文件夹放 Server 快捷方式（Explorer 走 ShellExecute 拉起才拿到 uiAccess；计划任务拿不到）。
 6. **立即启动**：完成页以当前非提升用户 ShellExecute 起一次 Server，装完就能用，不必先注销。
@@ -140,6 +174,14 @@ powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1
 脚本 release 构建三个产物、从 `apps\windows\server\Cargo.toml` 读版本（版本号的源头是仓库根 `version.txt`，由 `cargo-build.ps1` 同步进三个壳）、找 `ISCC.exe`、编 `cloudime.iss`，
 成品在 `target\installer\cloudime-<版本>-windows-x86_64-setup.exe`。改了数据 / 脚本但二进制没变时加 `-SkipBuild`；`-Sign` 用自签证书签产物
 （uiAccess 要求 Server 签名 + 装 Program Files）。
+
+`-SystemDeploy` 打出带「推荐 / 完整安装」选择的包，**必须与 `-Sign` 同用**（未签名构建只能推荐安装）：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -Sign -SystemDeploy   # 本机测完整安装
+```
+
+发版换 Certum 签名后由 CI 打开 `-SystemDeploy`；自签证书只在编译机上受信任，别对外分发。
 
 也可手动：`iscc /DAppVersion=0.1.1 apps\windows\installer\cloudime.iss`。
 

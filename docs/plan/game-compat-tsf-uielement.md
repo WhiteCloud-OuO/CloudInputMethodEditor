@@ -3,7 +3,8 @@
 > 依据：[`docs/design/game-compat-tsf-uielement.md`](../design/game-compat-tsf-uielement.md)（已定稿）。
 > 本文只拆执行顺序与验证点；设计与取舍以那份文档为准。
 >
-> 执行状态：未开始。P1 可立即做；P2 的“完整安装 / 系统目录”部分等 Certum 代码签名证书。
+> 执行状态（2026-11-11）：**P1 全部完成**（E1–E3 验证通过）；**P2-A 完成并实测**（推荐 / 完整安装、模式双向切换、
+> `InstallDir` 拉起 Server 都跑通）；P2-B（Certum 签名接入 CI、CS2 / Valorant 真机验收）等证书。
 
 ## 0. 目标与验收
 
@@ -314,9 +315,19 @@ Requirement Ready Check：`ready`。依据是已定稿的
 
 验证：
 
-- `ISCC` 分别在不传 / 传 `/DSystemDeploy=1` 下编译通过；
-- 签名的测试包：默认推荐；选完整后系统目录有文件、`InprocServer32` 指向系统副本；
-- 推荐→完整→推荐的升级切换；卸载后两处无残留。
+- `ISCC` 分别在不传 / 传 `/DSystemDeploy=1` 下编译通过；✅ 2026-11-10
+- 签名的测试包：默认推荐；选完整后系统目录有文件、`InprocServer32` 指向系统副本；✅ 2026-11-11
+- 推荐→完整→推荐的升级切换；卸载后两处无残留。✅ 完整→推荐后 `SysWOW64` 目录已删、`InprocServer32` 回到 `{app}`；
+  `System32` 那份被 explorer 占用，`RestartReplace` 登记重启后删。
+
+实测踩到的坑（已修，写进 README 与 crate-notes）：
+
+- `[Code]` 里 `ExpandConstant('{sys}')` 在 32 位 Setup 进程里被重定向到 SysWOW64，`RetireLoadedDllIn` 静默跳过，
+  随后 `[Files]` 撞上被 explorer.exe 占用的系统 DLL，安装整体回滚（还把 Server 留成 `.old-*.exe`）。
+  改用 `SysDir64`（`{sysnative}`）后正常。
+- Inno 发现 `PendingFileRenameOperations` 命中目标文件时拒绝安装（卸载后紧接重装会遇到）。
+- 静默安装的 `/DIR` 必须带引号：`Start-Process -ArgumentList @('/DIR=D:\Program Files\CloudIME')` 会拆成两个参数、
+  装到 `D:\Program`；`/DIR=\"D:\Program Files\CloudIME\"` 才对。
 
 #### A2 开发脚本
 
@@ -336,7 +347,9 @@ Requirement Ready Check：`ready`。依据是已定稿的
 3. 未签名构建默认不带 `-SystemDir`，文档写清。
 
 验证：本机 `push-local`（不带 / 带 `-SystemDir`）各跑一次；Server 能启动、输入法可用；
-`InprocServer32` 指向正确。
+`InprocServer32` 指向正确。✅ 2026-11-11：`reconfigure.ps1 -SkipCopy -SystemDir` 把两份 DLL 写进系统目录并注册，
+`InstallDir` 从注册表反查回 `D:\Program Files\CloudIME`（没有误取 System32）；`push-local.ps1 -Sign -SystemDir`
+的签名步骤未单独跑（安装包路径已覆盖同一套自签流程）。
 
 #### A3 文档
 

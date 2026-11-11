@@ -8,16 +8,20 @@
   pwsh -File apps\windows\scripts\push-local.ps1 -SkipSettings    # 设置程序没改，不编也不拷
   pwsh -File apps\windows\scripts\push-local.ps1 -SkipExplorer    # 刷新时不重启 Explorer
   pwsh -File apps\windows\scripts\push-local.ps1 -InstallDir 'D:\Program Files\CloudIME'
+  pwsh -File apps\windows\scripts\push-local.ps1 -Sign -SystemDir   # 完整安装布局：自签 + 覆盖进系统目录并注册
 
 为什么编译要带 `CLOUDIME_UIACCESS=0`：没签名的 Server 带 uiAccess 起不来（os error 740），与 test-local.ps1 一致。
 本地覆盖上去的 Server 因此没有 uiAccess，候选窗在少数提升 / UWP 宿主里可能被盖住；要 uiAccess 的正式件请跑安装包。
+`-Sign` 改用 `CLOUDIME_UIACCESS=1` 编、再用 installer\sign-local.ps1 自签（本机受信任根，等同安装包的 -Sign）；
+`-SystemDir` 必须与 `-Sign` 同用——系统目录里的 DLL 是给受保护 / 提权宿主加载的，签了才稳。它把两份 DLL
+覆盖进 System32\IME\CloudIME / SysWOW64\IME\CloudIME 并注册那两份（完整安装的开发流程）。
 
 脚本存成带 BOM 的 UTF-8（Windows PowerShell 5.1 对无 BOM 的 .ps1 按系统 ANSI 解析，中文乱码还报语法错）。
 #>
 
 [CmdletBinding()]
 param(
-    # 已安装目录；缺省交给 reconfigure.ps1 按注册表 / 登录自启快捷方式反查。
+    # 已安装目录；缺省交给 reconfigure.ps1 按 InstallDir 注册表项 / InprocServer32 / 登录自启快捷方式反查。
     [string]$InstallDir = '',
 
     # 跳过编译（target\release 里已经有现成的产物）。
@@ -27,8 +31,18 @@ param(
     [switch]$SkipSettings,
 
     # 透传给 reconfigure.ps1：不重启 Explorer。
-    [switch]$SkipExplorer
+    [switch]$SkipExplorer,
+
+    # 自签产物并开 uiAccess（CLOUDIME_UIACCESS=1）；完整安装布局要签名，见 -SystemDir。
+    [switch]$Sign,
+
+    # 完整安装布局：DLL 覆盖进系统目录并注册那两份（透传给 reconfigure.ps1），必须与 -Sign 同用。
+    [switch]$SystemDir
 )
+
+if ($SystemDir -and -not $Sign) {
+    throw '-SystemDir 只用于签名构建：请同时加 -Sign（否则系统目录里的 Server 带 uiAccess 起不来）'
+}
 
 $ErrorActionPreference = 'Stop'
 
@@ -43,8 +57,8 @@ while ($RepoRoot) {
 }
 
 if (-not $SkipBuild) {
-    Write-Host '== 编译 release（CLOUDIME_UIACCESS=0）==' -ForegroundColor Cyan
-    $env:CLOUDIME_UIACCESS = '0'
+    Write-Host ("== 编译 release（CLOUDIME_UIACCESS={0}）==" -f $(if ($Sign) { 1 } else { 0 })) -ForegroundColor Cyan
+    $env:CLOUDIME_UIACCESS = if ($Sign) { '1' } else { '0' }
     Push-Location -LiteralPath $RepoRoot
     # cargo 把进度写 stderr，PS 5.1 在 $ErrorActionPreference='Stop' 下会把它当错误终止脚本：
     # 编译期间临时放宽，成败仍由 $LASTEXITCODE 判。
@@ -80,9 +94,24 @@ foreach ($pair in @(
     }
 }
 
+# 签名（必须在 reconfigure 覆盖之前：它拷的就是 target\release 里这份）。uiAccess 的 Server 只有签名后
+# 才起得来；完整安装布局把 DLL 放进系统目录，也要求签过。证书是 installer\sign-local.ps1 造的自签那张。
+if ($Sign) {
+    Write-Host '== 自签产物（Server + 两份 TSF DLL）==' -ForegroundColor Cyan
+    $signArgs = @{
+        Path = @(
+            (Join-Path $RepoRoot 'target\release\cloudime-server.exe'),
+            (Join-Path $RepoRoot 'target\release\cloudime_tsf_x64.dll'),
+            (Join-Path $RepoRoot 'target\i686-pc-windows-msvc\release\cloudime_tsf_x86.dll')
+        )
+    }
+    & (Join-Path $RepoRoot 'apps\windows\installer\sign-local.ps1') @signArgs
+}
+
 # 用 hashtable 传具名参数：PowerShell 5.1 的数组 splat（@('-Name', 值)）只按位置传，
 # 会把 '-Name' 当成值、后面的值当参数名（reconfigure.ps1 里也记了这一条）。
 $reconfigureArgs = @{ InstallDir = $InstallDir }
 if ($SkipSettings) { $reconfigureArgs.SkipSettings = $true }
 if ($SkipExplorer) { $reconfigureArgs.SkipExplorer = $true }
+if ($SystemDir) { $reconfigureArgs.SystemDir = $true }
 & (Join-Path $PSScriptRoot 'reconfigure.ps1') @reconfigureArgs

@@ -62,6 +62,10 @@ Rust 工具链由 `rust-toolchain.toml` 钉版本（现在 1.96.0），`ci.yml` 
   代价是候选窗在任务栏搜索 / 设置这类 UWP 宿主里可能被盖住，用户文档与 CHANGELOG 已列为已知问题。
   Certum 开源证书办下来后：在 `build.ps1` 加 signtool 一步（`sign-local.ps1` 是本机自签的参考），workflow 去掉那个环境变量；SmartScreen 对无签名安装包的拦截也一并消失。
   Inno Setup 钉 7.1.0（与开发机同版本、钉死 GitHub Release 上的安装程序与哈希；CI 镜像 PATH 上的 Chocolatey 6.x 不带简中翻译，不能让它抢先）。
+- **完整安装（系统目录部署）只随签名版发**：`build.ps1 -Sign -SystemDeploy` 才让安装向导出现「推荐 / 完整安装」，
+  `-SystemDeploy` 单独用会直接报错。Certum 证书接进 CI 后，release 的 `windows` job 打正式包时打开它；
+  内测包（未签名）保持只有推荐安装——系统目录里的未签名模块会被 Trusted Mode / 反作弊拦。
+  系统目录部署的验收门槛高：真实 CS2 / Valorant 各跑一遍（Valorant 有 Vanguard 内核反作弊，可能直接禁止第三方 IME，结论要写进 CHANGELOG）。
 - **官网**：安装包按文件名识别平台（`ASSET_KINDS`），下载页按访问者平台取「有该平台安装包的最新版本」（`latestFor`）。
 
 ## 提交前检查与 CI
