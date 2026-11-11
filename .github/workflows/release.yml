@@ -3,7 +3,11 @@
 # 流程：prepare 核对版本、建草稿 Release → windows job 打包，把安装包与摘要 / 构建信息片段传到草稿上
 # → publish 合并片段、转正、生成并签名 releases.json、触发官网构建。打包失败会停在草稿，不会发出缺内容的版本。
 # 流程见 docs/notes/release.md。
-# Windows 现在没有代码签名（CLOUDIME_UIACCESS=0 关掉 uiAccess，否则没签名的 Server 起不来），证书办下来再加 signtool。
+# Windows 代码签名（可选，配了就出正式签名包）：
+#   CLOUDIME_CERT_PFX           Certum 代码签名证书的 PFX（base64；含私钥）
+#   CLOUDIME_CERT_PFX_PASSWORD  PFX 密码
+#   两个都配：导入证书 → build.ps1 -Sign -SystemDeploy（uiAccess 打开、安装包重签名、加时间戳，
+#   安装向导出现「推荐 / 完整安装」）；没配：打内测包（不签名、关 uiAccess、只推荐安装，SmartScreen 会拦）。
 # 版本索引的签名（必须，没配门禁直接失败）：
 #   CLOUDIME_INDEX_SIGNING_KEY   releases.json 的 ed25519 私钥（base64 的 32 字节，tools/release-sign keygen 生成），
 #                                公钥在 crates/cloudime-update/src/index/signature.rs；软件内检查更新只认签过名的索引
@@ -78,10 +82,11 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           VERSION: ${{ steps.gate.outputs.version }}
           WINDOWS: ${{ steps.gate.outputs.windows }}
+          SIGNED: ${{ secrets.CLOUDIME_CERT_PFX != '' }}
         run: |
           NOTES="$RUNNER_TEMP/notes.md"
           python3 tools/release/releases_json.py --notes-for "$VERSION" > "$NOTES"
-          if [[ "$WINDOWS" == "true" ]]; then
+          if [[ "$WINDOWS" == "true" && "$SIGNED" != "true" ]]; then
             printf '\n> Windows：这一版没有代码签名：安装时 SmartScreen 拦截请点「更多信息 → 仍要运行」；任务栏搜索、「设置」等系统应用里候选窗口可能被遮挡。\n' >> "$NOTES"
           fi
           case "$GITHUB_REF_NAME" in
@@ -103,8 +108,8 @@ jobs:
         shell: bash
     env:
       VERSION: ${{ needs.prepare.outputs.version }}
-      # 没有代码签名证书：Server 不带 uiAccess（没签名的 exe 带 uiAccess=true 起不来）。证书办下来后去掉这一行并在 build.ps1 加 signtool。
-      CLOUDIME_UIACCESS: '0'
+      # uiAccess 与签名都由 build.ps1 的 -Sign 决定（它自己设 CLOUDIME_UIACCESS），这里不再固定。
+      # 配了 CLOUDIME_CERT_PFX 就打签名版 + 完整安装；没有就打内测包（不签名、只推荐安装）。
       PYTHON: python
       # Windows 上 Python 的标准输出缺省 cp1252，中文更新日志会编码失败。
       PYTHONUTF8: '1'
@@ -143,9 +148,29 @@ jobs:
           Start-Process -FilePath $exe -ArgumentList '/VERYSILENT', '/SUPPRESSMSGBOXES', '/NORESTART', '/SP-' -Wait
           & "${env:ProgramFiles}\Inno Setup 7\ISCC.exe" --version
 
+      - name: Import code signing certificate
+        if: ${{ secrets.CLOUDIME_CERT_PFX != '' }}
+        shell: pwsh
+        env:
+          PFX_BASE64: ${{ secrets.CLOUDIME_CERT_PFX }}
+          PFX_PASSWORD: ${{ secrets.CLOUDIME_CERT_PFX_PASSWORD }}
+        run: |
+          # Certum 的 PFX 以 base64 存在 secret 里；导入到当前用户存储，私钥随构建用完即弃（runner 是临时机器）。
+          $pfx = Join-Path $env:RUNNER_TEMP 'codesign.pfx'
+          [IO.File]::WriteAllBytes($pfx, [Convert]::FromBase64String($PFX_BASE64))
+          $password = ConvertTo-SecureString -String $PFX_PASSWORD -AsPlainText -Force
+          $cert = Import-PfxCertificate -FilePath $pfx -CertStoreLocation Cert:\CurrentUser\My -Password $password
+          Remove-Item $pfx -Force
+          "CLOUDIME_CERT_THUMBPRINT=$($cert.Thumbprint)" >> $env:GITHUB_ENV
+          Write-Host "已导入签名证书 $($cert.Subject)（指纹 $($cert.Thumbprint)）"
+
       - name: Build installer
         shell: pwsh
-        run: powershell -NoProfile -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1
+        run: |
+          # -Sign 用 CLOUDIME_CERT_THUMBPRINT 指定的证书（build.ps1 读完加时间戳）；-SystemDeploy 出「推荐 / 完整安装」。
+          $arguments = @('-NoProfile', '-ExecutionPolicy', 'Bypass', '-File', 'apps\windows\installer\build.ps1')
+          if ($env:CLOUDIME_CERT_THUMBPRINT) { $arguments += @('-Sign', '-SystemDeploy') }
+          & powershell @arguments
 
       - name: Upload to draft release
         env:

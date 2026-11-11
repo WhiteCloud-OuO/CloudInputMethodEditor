@@ -58,14 +58,17 @@ Rust 工具链由 `rust-toolchain.toml` 钉版本（现在 1.96.0），`ci.yml` 
 
 ## Windows 的特别之处
 
-- 没有代码签名证书时 workflow 设 `CLOUDIME_UIACCESS=0`：没签名的 exe 带 uiAccess=true 起不来（测试二进制同理）。CI 与 release 都设了。
-  代价是候选窗在任务栏搜索 / 设置这类 UWP 宿主里可能被盖住，用户文档与 CHANGELOG 已列为已知问题。
-  Certum 开源证书办下来后：在 `build.ps1` 加 signtool 一步（`sign-local.ps1` 是本机自签的参考），workflow 去掉那个环境变量；SmartScreen 对无签名安装包的拦截也一并消失。
+- 没有代码签名证书时 workflow 不传 `-Sign`：不签名的 exe 带 uiAccess=true 起不来（测试二进制同理），所以内测包 `CLOUDIME_UIACCESS=0`、
+  只推荐安装。代价是候选窗在任务栏搜索 / 设置这类 UWP 宿主里可能被盖住，用户文档与 CHANGELOG 已列为已知问题。
   Inno Setup 钉 7.1.0（与开发机同版本、钉死 GitHub Release 上的安装程序与哈希；CI 镜像 PATH 上的 Chocolatey 6.x 不带简中翻译，不能让它抢先）。
-- **完整安装（系统目录部署）只随签名版发**：`build.ps1 -Sign -SystemDeploy` 才让安装向导出现「推荐 / 完整安装」，
-  `-SystemDeploy` 单独用会直接报错。Certum 证书接进 CI 后，release 的 `windows` job 打正式包时打开它；
-  内测包（未签名）保持只有推荐安装——系统目录里的未签名模块会被 Trusted Mode / 反作弊拦。
-  系统目录部署的验收门槛高：真实 CS2 / Valorant 各跑一遍（Valorant 有 Vanguard 内核反作弊，可能直接禁止第三方 IME，结论要写进 CHANGELOG）。
+- **正式签名（2026-11-11 接好，等 Certum 证书）**：`release.yml` 的 `windows` job 读两个 secret——
+  `CLOUDIME_CERT_PFX`（PFX 的 base64）与 `CLOUDIME_CERT_PFX_PASSWORD`。配了就把证书导进当前用户存储，
+  把指纹写进 `CLOUDIME_CERT_THUMBPRINT`，然后跑 `build.ps1 -Sign -SystemDeploy`：
+  `sign-local.ps1` 按指纹签名（找不到私钥直接失败、不退回自签）、对每个签名加 DigiCert 的 RFC 3161 时间戳，
+  签完逐个 `Get-AuthenticodeSignature` 校验必须是 `Valid`；安装包 exe 本身在 ISCC 之后单独再签一次。
+  没配 secret 就打内测包，draft Release 说明里自动加「无签名」提示。
+  `-SystemDeploy` 只跟 `-Sign` 一起用（未签名构建只能推荐安装）；系统目录里的未签名模块会被 Trusted Mode / 反作弊拦。
+  验收门槛：真实 CS2 / Valorant 各跑一遍（Valorant 有 Vanguard 内核反作弊，可能直接禁止第三方 IME，结论要写进 CHANGELOG）。
 - **官网**：安装包按文件名识别平台（`ASSET_KINDS`），下载页按访问者平台取「有该平台安装包的最新版本」（`latestFor`）。
 
 ## 提交前检查与 CI
@@ -123,9 +126,17 @@ cargo 命令全 `--locked`（含 `build.ps1`）。普通 CI 只有 `contents: re
 
 ## 代码签名（Windows）
 
-安装包与 exe 目前不签名：`sign-local.ps1` 是本机自签的一份参考（自签要满足 uiAccess 对 Server 的代码签名要求），CI 上没有证书，
-所以 `CLOUDIME_UIACCESS=0` 关掉 uiAccess、Release 说明里自动加一句 SmartScreen 拦截怎么放行。
-拿到 Certum 开源证书后在 `build.ps1` 加 signtool 一步、workflow 去掉 `CLOUDIME_UIACCESS=0`，这条就只剩历史。
+2026-11-11 接好，等 Certum 开源证书：
+
+- **本机开发**：`build.ps1 -Sign`（不带指纹）= `sign-local.ps1` 造 / 复用自签证书、装进本机受信任根，签产物并开 uiAccess，
+  不加时间戳。只用于本机真机测。
+- **正式发版**：配 `CLOUDIME_CERT_PFX`（PFX 的 base64）与 `CLOUDIME_CERT_PFX_PASSWORD` 两个 Secret。`release.yml` 的 `windows` job
+  把证书导进当前用户存储、把指纹写进 `CLOUDIME_CERT_THUMBPRINT`，然后 `build.ps1 -Sign -SystemDeploy`：
+  按指纹签名（找不到私钥直接失败、**不会**退回自签）、加 DigiCert 的 RFC 3161 时间戳，签完逐个校验
+  `Get-AuthenticodeSignature` 必须是 `Valid`；安装包 exe 在 ISCC 之后单独再签一次。
+- 没配 Secret 就打内测包：不签名、关 uiAccess、只推荐安装，Release 说明里自动加一句 SmartScreen 拦截怎么放行。
+- 换证书只要换 Secret；`sign-local.ps1` 不认 Subject，只认指纹。
+- 首次发签名版前把安装包提交 Microsoft Defender / 主流杀软白名单（新发布者 + 新文件名容易被误报）。
 
 ## releases.json：官网下载页的数据源
 

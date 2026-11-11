@@ -4,7 +4,8 @@
 > 本文只拆执行顺序与验证点；设计与取舍以那份文档为准。
 >
 > 执行状态（2026-11-11）：**P1 全部完成**（E1–E3 验证通过）；**P2-A 完成并实测**（推荐 / 完整安装、模式双向切换、
-> `InstallDir` 拉起 Server 都跑通）；P2-B（Certum 签名接入 CI、CS2 / Valorant 真机验收）等证书。
+> `InstallDir` 拉起 Server 都跑通）；**P2-B1/B2 代码已接好**（证书指纹 / PFX secret → 签名 + 时间戳 + `-SystemDeploy`，
+> 自签路径实跑验证），只等 Certum 证书与 CS2 / Valorant 真机验收。
 
 ## 0. 目标与验收
 
@@ -372,11 +373,15 @@ Requirement Ready Check：`ready`。依据是已定稿的
 
 改动：
 
-1. `build.ps1` 增加签名步骤（Certum 证书指纹来自 CI secret / 本机参数）；
+1. `build.ps1` 增加签名步骤（Certum 证书指纹来自 `-CertThumbprint` / 环境变量 `CLOUDIME_CERT_THUMBPRINT`，
+   CI 从 secret 注入）；`sign-local.ps1` 增加 `-Thumbprint` / `-TimestampUrl`：给了指纹只认已装好的证书
+   （找不到私钥直接失败、不退回自签），并自动加 RFC 3161 时间戳；
 2. 只有签名成功才传 `-SystemDeploy=1` 给 `ISCC`；
-3. 签 x64/x86 DLL、Server、设置程序、安装包。
+3. 签 x64/x86 DLL、Server、设置程序、MCP 两个 exe，**以及 ISCC 编出来的安装包 exe**（ISCC 之后单独再签一次）。
 
-验证：`signtool verify /pa` 全部通过；未配置证书时构建自动退回未签名 / 推荐安装。
+验证：`signtool verify /pa` / `Get-AuthenticodeSignature` 全部 `Valid`；未配置证书时构建自动退回未签名 / 推荐安装。
+✅ 自签路径 2026-11-11 实测（五个产物 + 安装包 exe 全部 `Valid`，本机没装 SDK 走 PowerShell Authenticode 分支）；
+正式证书的时间戳分支待 Certum 证书到位后跑。
 
 #### B2 CI 发版
 
@@ -387,12 +392,15 @@ Requirement Ready Check：`ready`。依据是已定稿的
 
 改动：
 
-1. 证书就绪后去掉 `CLOUDIME_UIACCESS=0`，加签名步骤；
-2. release 构建传 `-SystemDeploy=1`；
-3. `build-info` / `SHA256SUMS` 覆盖系统 DLL；
-4. 发版前向 Microsoft Defender / 主流杀软提交样本。
+1. 证书就绪后去掉 `CLOUDIME_UIACCESS=0`，加签名步骤；✅ 2026-11-11 已接好：
+   `CLOUDIME_CERT_PFX` / `CLOUDIME_CERT_PFX_PASSWORD` 两个 secret → 导入证书 → 指纹写进
+   `CLOUDIME_CERT_THUMBPRINT` → `build.ps1 -Sign -SystemDeploy`；build.ps1 自己设 `CLOUDIME_UIACCESS`，
+   workflow 里那条固定行已删；
+2. release 构建传 `-SystemDeploy=1`（有证书时）；✅
+3. `build-info` / `SHA256SUMS` 覆盖系统 DLL：系统副本在安装包里、后者已被 `SHA256SUMS-windows` 覆盖，无额外改动；
+4. 发版前向 Microsoft Defender / 主流杀软提交样本。⏳ 需要签名产物
 
-验证：CI 产物签名正确；安装包两种模式都可装。
+验证：CI 产物签名正确；安装包两种模式都可装。⏳ 等 Certum 证书（secret 一配就生效，代码路径已用自签跑通）。
 
 #### B3 CS2
 

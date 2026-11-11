@@ -13,15 +13,26 @@
 .PARAMETER SkipBuild
     跳过 cargo build（数据或 .iss 改了、二进制没变时重编安装包用）。
 .PARAMETER Sign
-    自签产物（sign-local.ps1）并开 uiAccess（候选窗才能盖过商店 / 任务栏搜索）。uiAccess=true 的 exe 要本机受信任的签名
-    才准启动，自签证书只有编译机信任——所以 -Sign 只用于本机真机测，对外分发的包不加此开关：不签名、关 uiAccess，
-    候选窗在那几个系统界面里会被盖住，但任何机器都能起。
+    给产物签名并开 uiAccess（候选窗才能盖过商店 / 任务栏搜索）。uiAccess=true 的 exe 要有受信任的签名才起得来：
+    缺省用 sign-local.ps1 的本机自签证书（只有编译机信任）——本机真机测用；对外分发时证书指纹从
+    -CertThumbprint / CLOUDIME_CERT_THUMBPRINT 传（CI 导入 Certum 证书后自动带上），那时会同时给每个签名加时间戳。
+    不带 -Sign 的包不签名、关 uiAccess：任何机器都能起，但候选窗在那几个系统界面里会被盖住。
+.PARAMETER CertThumbprint
+    签名证书指纹（SHA1）。缺省读环境变量 CLOUDIME_CERT_THUMBPRINT；都没有就走本机自签。
+.PARAMETER TimestampUrl
+    时间戳服务地址（RFC 3161）。给了正式证书又没指定时缺省用 DigiCert 的；自签模式缺省不加时间戳。
 .PARAMETER SystemDeploy
     打出带「推荐 / 完整安装」选择的包；完整安装会把 DLL 写进 System32\IME\CloudIME / SysWOW64\IME\CloudIME 并注册。
-    只允许与 -Sign 一起用（未签名构建只能推荐安装）；发版换 Certum 签名后由 CI 打开。
+    只允许与 -Sign 一起用（未签名构建只能推荐安装）；发版用正式签名时由 CI 打开。
 #>
 [CmdletBinding()]
-param([switch]$SkipBuild, [switch]$Sign, [switch]$SystemDeploy)
+param(
+    [switch]$SkipBuild,
+    [switch]$Sign,
+    [switch]$SystemDeploy,
+    [string]$CertThumbprint = $env:CLOUDIME_CERT_THUMBPRINT,
+    [string]$TimestampUrl = ''
+)
 
 $ErrorActionPreference = 'Stop'
 
@@ -45,8 +56,25 @@ $Iss  = Join-Path $PSScriptRoot 'cloudime.iss'
 
 # uiAccess 跟着 -Sign 走（server\build.rs 读这个变量，改了会自动重编 Server）；理由见 -Sign 的说明。
 $env:CLOUDIME_UIACCESS = if ($Sign) { '1' } else { '0' }
+
+# 签名身份：给了指纹就是正式证书（Certum），没给就走本机自签。
+# 正式证书必须带时间戳：不带的话证书一过期，用户手里旧安装包的签名就跟着失效；自签不加（免网络依赖）。
+if ($Sign -and -not $TimestampUrl -and $CertThumbprint) {
+    $TimestampUrl = 'http://timestamp.digicert.com'
+}
+
+# 签名一组文件（.exe / .dll）。签名器是 sign-local.ps1，正式证书只认指纹、找不到就失败，不会悄悄退回自签。
+function Invoke-Sign {
+    param([string[]]$Files)
+    $signArgs = @{ Path = $Files }
+    if ($CertThumbprint) { $signArgs.Thumbprint = $CertThumbprint }
+    if ($TimestampUrl) { $signArgs.TimestampUrl = $TimestampUrl }
+    & (Join-Path $PSScriptRoot 'sign-local.ps1') @signArgs
+}
+
 if ($Sign) {
-    Write-Host 'uiAccess=1（-Sign：仅本机真机测，别用于对外分发）' -ForegroundColor Yellow
+    $who = if ($CertThumbprint) { "正式证书 $CertThumbprint" } else { '本机自签证书（只有编译机信任，别对外分发）' }
+    Write-Host "uiAccess=1，签名：$who" -ForegroundColor Yellow
 } else {
     Write-Host 'uiAccess=0（对外分发：Server 任何机器都能起；候选窗在商店 / 任务栏搜索里可能被盖）' -ForegroundColor Cyan
 }
@@ -138,9 +166,8 @@ if ($SystemDeploy -and -not $Sign) {
     throw '-SystemDeploy 只用于签名构建：请同时加 -Sign（发版用 Certum 签名）'
 }
 if ($Sign) {
-    Write-Host '自签产物（uiAccess 要求 Server 代码签名）…' -ForegroundColor Cyan
-    $binaries = $targets | ForEach-Object { Join-Path $Repo "target\$_" }
-    & (Join-Path $PSScriptRoot 'sign-local.ps1') -Path $binaries
+    Write-Host '签产物（uiAccess 要求 Server 代码签名；Inno 打包时把已签的文件原样拷进去）…' -ForegroundColor Cyan
+    Invoke-Sign -Files ($targets | ForEach-Object { Join-Path $Repo "target\$_" })
 }
 
 # 2) 从 server 的 Cargo.toml 读版本（apps\* 各自写死版本，不跟 workspace）。
@@ -200,4 +227,9 @@ $isccArgs += $Iss
 Invoke-Checked $iscc $isccArgs
 
 $out = Join-Path $Repo "target\installer\cloudime-$Version-windows-x86_64-setup.exe"
+# 安装包本身也要签：SmartScreen 看的是它。放在 ISCC 之后（签的是最终那个 exe，不是脚本里的内嵌文件）。
+if ($Sign) {
+    Write-Host '签安装包…' -ForegroundColor Cyan
+    Invoke-Sign -Files @($out)
+}
 Write-Host "完成：$out" -ForegroundColor Green

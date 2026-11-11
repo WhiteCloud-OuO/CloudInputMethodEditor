@@ -172,16 +172,19 @@ powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1
 ```
 
 脚本 release 构建三个产物、从 `apps\windows\server\Cargo.toml` 读版本（版本号的源头是仓库根 `version.txt`，由 `cargo-build.ps1` 同步进三个壳）、找 `ISCC.exe`、编 `cloudime.iss`，
-成品在 `target\installer\cloudime-<版本>-windows-x86_64-setup.exe`。改了数据 / 脚本但二进制没变时加 `-SkipBuild`；`-Sign` 用自签证书签产物
-（uiAccess 要求 Server 签名 + 装 Program Files）。
+成品在 `target\installer\cloudime-<版本>-windows-x86_64-setup.exe`。改了数据 / 脚本但二进制没变时加 `-SkipBuild`；
+`-Sign` 签产物并开 uiAccess（uiAccess 要求 Server 签名 + 装 Program Files）：不带 `-CertThumbprint` 就是用本机自签证书
+（只有编译机信任，仅供本机真机测）；带指纹（或环境变量 `CLOUDIME_CERT_THUMBPRINT`）就用已装好的正式证书并加时间戳，
+签完连安装包 exe 一起复核。
 
 `-SystemDeploy` 打出带「推荐 / 完整安装」选择的包，**必须与 `-Sign` 同用**（未签名构建只能推荐安装）：
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -Sign -SystemDeploy   # 本机测完整安装
+powershell -ExecutionPolicy Bypass -File apps\windows\installer\build.ps1 -Sign -SystemDeploy              # 本机自签测完整安装
+$env:CLOUDIME_CERT_THUMBPRINT = '证书指纹'; powershell -File apps\windows\installer\build.ps1 -Sign -SystemDeploy  # 正式证书
 ```
 
-发版换 Certum 签名后由 CI 打开 `-SystemDeploy`；自签证书只在编译机上受信任，别对外分发。
+发版由 `release.yml` 自动做：配了 `CLOUDIME_CERT_PFX` 就导入证书、带 `-Sign -SystemDeploy` 打包，否则打内测包。
 
 也可手动：`iscc /DAppVersion=0.1.1 apps\windows\installer\cloudime.iss`。
 
@@ -209,6 +212,10 @@ PATH 里有多份时用 `CLOUDIME_ISCC` 指定要用那份；只改了环境变�
 
 - **Inno 版本**：开发机与 CI 统一用 Inno Setup **7.1.0**（CI 从 jrsoftware/issrc 的 GitHub Release 钉死下载）。它自带简体中文翻译；
   6.x 的安装包不带 `Languages\ChineseSimplified.isl`，Chocolatey 也只有 6.x，别用。`ArchitecturesAllowed=x64compatible` 需 6.3+。
-- **签名**：发版证书就绪后在这里加 `SignTool`（对应 mac 的 Developer ID）；开发期用 `-Sign` 的自签证书。
-- **没证书的包**（CI 内测版）：先设 `$env:CLOUDIME_UIACCESS = '0'` 再打，Server 不嵌 uiAccess——没签名的 exe 带 uiAccess=true 会起不来。
-  代价是候选窗在 UWP 宿主里可能被盖住。`release.yml` 的 `windows` job 就是这么打的。
+- **签名**：正式签名走 `sign-local.ps1 -Thumbprint <指纹>`（`build.ps1 -Sign` 会透传，指纹来自
+  `-CertThumbprint` 或环境变量 `CLOUDIME_CERT_THUMBPRINT`）：只认已装好的证书，找不到私钥直接失败、不退回自签；
+  给了指纹就自动加 DigiCert 的 RFC 3161 时间戳（证书过期后旧安装包的签名仍有效）。签名后逐个校验
+  `Get-AuthenticodeSignature` 必须是 `Valid`。签的是五个产物 + 编出来的安装包 exe。
+  开发期不加指纹就是原来的本机自签（装进受信任根、不加时间戳），只用于本机真机测。
+- **没证书的包**（CI 内测版）：不传 `-Sign`，Server 不嵌 uiAccess、只推荐安装——没签名的 exe 带 uiAccess=true 会起不来。
+  代价是候选窗在 UWP 宿主里可能被盖住。`release.yml` 的 `windows` job 在没配证书 secret 时就是这么打的。
