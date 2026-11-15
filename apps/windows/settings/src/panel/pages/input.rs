@@ -7,7 +7,7 @@ use cloudime_platform::input_schemes::{
 };
 use cloudime_platform::{
     FullHalfPunctuation, InputScheme, MO_HU_YIN_BITS, PAIRWISE_COMPLETION_BITS,
-    PUNCTUATION_MAPPING_BITS, SimpTrad,
+    PUNCTUATION_MAPPING_BITS, SimpTrad, StatusTipMode,
 };
 use windows_reactor::*;
 
@@ -560,10 +560,15 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             "status-change-tip",
             field(
                 "状态切换提示",
-                "中 / 英、大写锁定、全 / 半角、简 / 繁、中文 / 西文标点变化时，在输入光标附近显示一个停留 1 秒的提示条。只在处于输入状态（焦点在可输入的文本框里）时显示。",
-                ToggleSwitch::new()
-                    .is_on(input.show_status_change_tip)
-                    .on_toggled(context.callback(Message::ShowStatusChangeTip)),
+                "中 / 英（含大写锁定）、全 / 半角字符、中文 / 西文标点、简 / 繁变化时，在输入光标附近显示一个停留 1 秒的提示条。「仅切换项」只显示被切换的那个图标（例如按 Shift 只显示中 / 英），「全部状态」四项都显示。只在处于输入状态（焦点在可输入的文本框里）时显示。",
+                radio_row(
+                    "status-change-tip-mode",
+                    StatusTipMode::ALL
+                        .iter()
+                        .map(|mode| (mode.label(), *mode == input.show_status_change_tip)),
+                    Message::StatusChangeTip,
+                    context,
+                ),
             ),
         ),
         KeyedView::new(

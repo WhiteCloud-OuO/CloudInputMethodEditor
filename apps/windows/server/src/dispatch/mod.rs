@@ -48,7 +48,7 @@ pub use self::rescore::{find_model, find_zhiyi};
 use self::script::BackgroundScript;
 pub use self::script::{NoopScriptWindowSink, ScriptWindowSink};
 use self::session::SessionInfo;
-pub use self::status::{NoopStatusSink, StatusEvent, StatusSink, StatusView};
+pub use self::status::{NoopStatusSink, StatusEvent, StatusItems, StatusSink, StatusView};
 use self::translate::Translate;
 use self::u_mode::UMode;
 

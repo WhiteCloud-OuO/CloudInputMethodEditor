@@ -9,7 +9,7 @@ pub use cloudime_platform::protocol::{
     ClientMessage, Frame, InputMode, KeyEvent, KeyModifiers, KeyOutcome, PROTOCOL_VERSION,
     ScreenRect, ServerMessage, SessionId,
 };
-pub use cloudime_windows_server::dispatch::{StatusEvent, StatusSink, StatusView};
+pub use cloudime_windows_server::dispatch::{StatusEvent, StatusItems, StatusSink, StatusView};
 pub use cloudime_windows_server::{AssemblySpec, Router, RouterConfig, assembly};
 
 pub const SESSION: SessionId = SessionId(1);
@@ -183,10 +183,18 @@ pub fn preedit(frame: &Frame) -> String {
 }
 
 /// 记录状态条调用：`Some(视图)` 是显示（按当时的模式与开关）、`None` 是收起；另记状态切换提示。
+#[derive(Clone)]
+pub struct StatusTipCall {
+    pub view: StatusView,
+    pub caps: bool,
+    pub anchor: ScreenRect,
+    pub items: StatusItems,
+}
+
 #[derive(Clone, Default)]
 pub struct RecordingStatus {
     calls: Arc<Mutex<Vec<Option<StatusView>>>>,
-    tips: Arc<Mutex<Vec<(StatusView, bool, ScreenRect)>>>,
+    tips: Arc<Mutex<Vec<StatusTipCall>>>,
 }
 
 impl RecordingStatus {
@@ -199,8 +207,8 @@ impl RecordingStatus {
         self.calls().last().copied().flatten()
     }
 
-    /// 收到过的状态切换提示：视图、Caps Lock 亮灭、光标矩形。
-    pub fn tips(&self) -> Vec<(StatusView, bool, ScreenRect)> {
+    /// 收到过的状态切换提示：视图、Caps Lock 亮灭、光标矩形、要显示哪几项。
+    pub fn tips(&self) -> Vec<StatusTipCall> {
         self.tips.lock().unwrap().clone()
     }
 }
@@ -214,8 +222,19 @@ impl StatusSink for RecordingStatus {
         self.calls.lock().unwrap().push(None);
     }
 
-    fn show_status_tip(&self, view: StatusView, caps: bool, anchor: ScreenRect) {
-        self.tips.lock().unwrap().push((view, caps, anchor));
+    fn show_status_tip(
+        &self,
+        view: StatusView,
+        caps: bool,
+        anchor: ScreenRect,
+        items: StatusItems,
+    ) {
+        self.tips.lock().unwrap().push(StatusTipCall {
+            view,
+            caps,
+            anchor,
+            items,
+        });
     }
 }
 

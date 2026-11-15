@@ -15,7 +15,7 @@ use windows::Win32::UI::WindowsAndMessaging::{
 use windows::core::{PCWSTR, Result, w};
 
 use super::status::StatusIcons;
-use crate::dispatch::StatusView;
+use crate::dispatch::{StatusItems, StatusView};
 use cloud_ui::independent_window_template::IndependentWindowTemplate;
 use cloud_ui::layered;
 use cloud_ui::monitor;
@@ -75,7 +75,15 @@ impl StatusTip {
     }
 
     /// 在光标矩形附近画一屏并显示，1 秒后自己收起。画不出来就保持收起。
-    pub(super) fn show(&self, view: &StatusView, caps: bool, anchor: RECT, status: Option<RECT>) {
+    /// `items` 是这次要显示哪几项（`仅切换项` 只亮变的那几项）。
+    pub(super) fn show(
+        &self,
+        view: &StatusView,
+        caps: bool,
+        anchor: RECT,
+        status: Option<RECT>,
+        items: StatusItems,
+    ) {
         // DPI 取光标所在显示器的（理由同候选窗，见 #146）。
         let point = POINT {
             x: anchor.left,
@@ -89,7 +97,7 @@ impl StatusTip {
             .unwrap_or(self.dpi.get())
             .max(1);
         self.dpi.set(dpi);
-        let cells = self.icons.borrow_mut().cells(view, caps);
+        let cells = self.icons.borrow_mut().cells(view, caps, items);
         let rendered = match (cells.is_empty(), self.painter.borrow_mut().as_mut()) {
             (false, Some(painter)) => {
                 painter.render_status(&cells, dpi, cloud_ui::painter::StatusKind::Tip)

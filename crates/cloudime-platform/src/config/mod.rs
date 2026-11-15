@@ -32,8 +32,8 @@ pub use debugging::DebuggingConfig;
 pub use general::{GeneralConfig, MAX_PAGE_SIZE};
 pub use input::{
     DEFAULT_PUNCTUATION_MAPPING, FullHalfPunctuation, InputConfig, InputScheme, MO_HU_YIN_BITS,
-    PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, SimpTrad, fuzzy_bits, pair_bit, pair_open,
-    pairwise_completion,
+    PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, SimpTrad, StatusTipMode, fuzzy_bits,
+    pair_bit, pair_open, pairwise_completion,
 };
 pub use layout_mode::LayoutMode;
 pub use log_level::LogLevel;
@@ -111,8 +111,9 @@ full_half_punctuation_marks_toggle = "follow"
 use_half_wide_punctuation_marks_after_digital = true
 # 特殊输入模式时造词：组句里只要有字是在特殊模式下选的，上屏前把整段收进用户词库
 special_input_word = false
-# 状态切换提示：中 / 英、大写锁定、全 / 半角、简 / 繁、中文 / 西文标点变化时，在输入光标附近弹一个停留 1 秒的提示条
-show_status_change_tip = true
+# 状态切换提示：off 关闭（缺省）/ switched 只显示被切换的那一项 / all 四项全部显示。
+# 中 / 英（Caps Lock）、全 / 半角字符、中文 / 西文标点、简 / 繁变化时，在输入光标附近弹一个停留 1 秒的提示条
+show_status_change_tip = "off"
 # 候选窗口显示时把 Caps Lock 临时当退格用：不切换大写锁定；缺省关
 caps_lock_as_backspace = false
 # 符号成对补全：敲左符号补上右符号、光标停在中间。勾选项数值相加 —— () 1、[] 2、{} 4、"" 8、

@@ -36,7 +36,7 @@ use self::placement::{Placement, StatusAction};
 use self::tooltip::Tooltip;
 use super::StatusEvents;
 use super::WM_STATUS_CAPS;
-use crate::dispatch::StatusView;
+use crate::dispatch::{StatusItems, StatusView};
 use cloud_ui::independent_window_template::IndependentWindowTemplate;
 use cloud_ui::layered;
 use cloud_ui::monitor;
@@ -176,16 +176,19 @@ impl StatusBar {
 
     /// 渲染器要的一排按钮：按 cfg 的 `pos` 从左到右，每个按钮按当前状态挑图标；`limit` 只取前几个
     /// （状态切换提示只要前四个），画满状态条时传 [`TIP_BUTTONS`] 之外的大数（`usize::MAX`）。
+    /// `items` 再按「哪几项」过滤：`全部状态` 传 [`StatusItems::all()`]，`仅切换项` 只放变的那几项。
     fn status_cells(
         view: &StatusView,
         arrangement: &Arrangement,
         caps: bool,
         limit: usize,
+        items: StatusItems,
     ) -> Vec<StatusCell> {
         let state = Self::button_state(view, caps);
         arrangement
             .buttons
             .iter()
+            .filter(|button| action_item(button.action).is_some_and(|item| items.contains(item)))
             .take(limit)
             .map(|button| StatusCell::icon(button.svg(&state)))
             .collect()
@@ -215,7 +218,13 @@ impl StatusBar {
         if arrangement.refresh() {
             tracing::info!(buttons = arrangement.buttons.len(), "状态条图标排布已重读");
         }
-        let cells = Self::status_cells(&view, &arrangement, self.placement.caps.get(), usize::MAX);
+        let cells = Self::status_cells(
+            &view,
+            &arrangement,
+            self.placement.caps.get(),
+            usize::MAX,
+            StatusItems::all(),
+        );
         let rendered = match (cells.is_empty(), self.painter.borrow_mut().as_mut()) {
             (false, Some(painter)) => {
                 painter.render_status(&cells, self.dpi.get(), cloud_ui::painter::StatusKind::Bar)
@@ -327,10 +336,26 @@ impl StatusIcons {
         }
     }
 
-    /// 按当前状态出一排图标；排布文件动过会重读（与状态条一样）。
-    pub(super) fn cells(&mut self, view: &StatusView, caps: bool) -> Vec<StatusCell> {
+    /// 按当前状态出一排图标；排布文件动过会重读（与状态条一样）。`items` 决定只要哪几项。
+    pub(super) fn cells(
+        &mut self,
+        view: &StatusView,
+        caps: bool,
+        items: StatusItems,
+    ) -> Vec<StatusCell> {
         self.arrangement.refresh();
-        StatusBar::status_cells(view, &self.arrangement, caps, TIP_BUTTONS)
+        StatusBar::status_cells(view, &self.arrangement, caps, TIP_BUTTONS, items)
+    }
+}
+
+/// 这颗按钮对应状态切换提示里的哪一项（设置 / 选项 / 符号这几颗不参与提示）。
+fn action_item(action: StatusAction) -> Option<StatusItems> {
+    match action {
+        StatusAction::ToggleLang => Some(StatusItems::LANG),
+        StatusAction::ToggleCharWidthType => Some(StatusItems::CHAR_WIDTH),
+        StatusAction::TogglePunctuation => Some(StatusItems::PUNCTUATION),
+        StatusAction::ToggleSimpTrad => Some(StatusItems::SIMP_TRAD),
+        StatusAction::OpenOptions | StatusAction::OpenWidgets | StatusAction::OpenSpecChars => None,
     }
 }
 

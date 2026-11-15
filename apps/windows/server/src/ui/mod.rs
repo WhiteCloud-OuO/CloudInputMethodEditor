@@ -81,8 +81,8 @@ use self::command::UiCommand;
 use self::status::StatusBar;
 use self::status_tip::StatusTip;
 use crate::dispatch::{
-    CandidateEvent, CandidateSink, RenderSettings, ScriptWindowSink, StatusEvent, StatusSink,
-    StatusView,
+    CandidateEvent, CandidateSink, RenderSettings, ScriptWindowSink, StatusEvent, StatusItems,
+    StatusSink, StatusView,
 };
 use cloud_ui::painter::{Painter, SharedPainter};
 use cloud_ui::script_window::{ScriptWindowEvents, ScriptWindows};
@@ -258,8 +258,14 @@ impl StatusSink for UiHandle {
         self.post(UiCommand::StatusHide);
     }
 
-    fn show_status_tip(&self, view: StatusView, caps: bool, anchor: ScreenRect) {
-        self.post(UiCommand::StatusTip(Box::new((view, caps, anchor))));
+    fn show_status_tip(
+        &self,
+        view: StatusView,
+        caps: bool,
+        anchor: ScreenRect,
+        items: StatusItems,
+    ) {
+        self.post(UiCommand::StatusTip(Box::new((view, caps, anchor, items))));
     }
 
     fn open_settings(&self) {
@@ -515,7 +521,7 @@ fn apply(
             }
         }
         UiCommand::StatusTip(payload) => {
-            let (view, caps, rect) = *payload;
+            let (view, caps, rect, items) = *payload;
             // 全屏（独占或铺满）下不弹状态切换提示，避免盖在游戏 / 视频上。
             if fullscreen::kind() != FullscreenKind::None {
                 if let Some(tip) = tip {
@@ -525,7 +531,7 @@ fn apply(
             }
             if let Some(tip) = tip {
                 let status_rect = status.and_then(StatusBar::window_rect);
-                tip.show(&view, caps, to_win_rect(rect), status_rect);
+                tip.show(&view, caps, to_win_rect(rect), status_rect, items);
             }
         }
         UiCommand::Configure(settings) => {

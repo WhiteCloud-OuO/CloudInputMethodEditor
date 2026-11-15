@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
 use cloudime_platform::{
-    Config, ItemNumberStyle, LayoutMode, MouseWordSelection, PreeditMode, SimpTrad,
+    Config, ItemNumberStyle, LayoutMode, MouseWordSelection, PreeditMode, SimpTrad, StatusTipMode,
     protocol::{MAX_SCRIPT_HOTKEYS, ScriptHotkey},
 };
 
@@ -123,8 +123,9 @@ pub struct RouterConfig {
     /// Server 只把它下发给 DLL，判断与动作都在 DLL（那边才拿得到 TSF 的焦点与上下文）。
     pub auto_disable_without_text_input: bool,
 
-    /// 状态切换提示（`[input] show_status_change_tip`）：状态一变在光标附近弹一个 1 秒的提示条。
-    pub show_status_change_tip: bool,
+    /// 状态切换提示（`[input] show_status_change_tip`）：状态一变在光标附近弹一个 1 秒的提示条；
+    /// 关闭 / 只显示被切换的那一项 / 四项全部显示。
+    pub show_status_change_tip: StatusTipMode,
 
     /// 候选窗显示时 Caps Lock 临时当退格（`[input] caps_lock_as_backspace`）。缺省关。
     pub caps_lock_as_backspace: bool,

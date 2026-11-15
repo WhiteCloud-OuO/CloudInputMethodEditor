@@ -9,11 +9,12 @@ mod view;
 
 use cloudime_platform::Config;
 use cloudime_platform::SimpTrad;
+use cloudime_platform::StatusTipMode;
 use cloudime_platform::protocol::{IndicatorCommand, InputMode};
 
 pub use self::event::StatusEvent;
 pub use self::sink::{NoopStatusSink, StatusSink};
-pub use self::view::StatusView;
+pub use self::view::{StatusItems, StatusView};
 use super::Router;
 
 impl Router {
@@ -167,6 +168,7 @@ impl Router {
 
     /// 状态切换提示（`[input] show_status_change_tip`）：中 / 英、Caps、全 / 半角、简 / 繁、中 / 西文标点
     /// 任一变了，就在光标附近弹一个 1 秒的提示条（[`crate::ui`] 的 `status_tip`）。
+    /// `Switched` 只显示变的那几项，`All` 四项都显示，`Off` 不弹。
     ///
     /// 只在云朵输入法在前台、没被禁用、且焦点确实在可输入文本区域里（DLL 每拍报上来的）时才弹；
     /// 还没拿到过光标矩形（这次运行还没组过句）也不弹 —— 没地方摆。
@@ -179,8 +181,8 @@ impl Router {
         if previous == state {
             return;
         }
-        let english = state.english;
-        if !self.config.show_status_change_tip
+        let mode = self.config.show_status_change_tip;
+        if mode == StatusTipMode::Off
             || !self.ime_active
             || self.mode.disabled()
             || !self.in_text_input
@@ -191,10 +193,17 @@ impl Router {
         let Some(rect) = self.last_caret else {
             return;
         };
-        tracing::debug!(?state, "状态切换提示");
+        let items = match mode {
+            StatusTipMode::All => StatusItems::all(),
+            _ => state.changed(previous),
+        };
+        if items.is_empty() {
+            return;
+        }
+        tracing::debug!(?state, ?items, "状态切换提示");
         self.status.show_status_tip(
             StatusView {
-                english,
+                english: state.english,
                 full_width_punctuation: state.full_width_punctuation,
                 full_width_chars: state.full_width_chars,
                 traditional: state.traditional,
@@ -203,6 +212,7 @@ impl Router {
             },
             self.caps,
             rect,
+            items,
         );
     }
 }
@@ -215,6 +225,26 @@ pub(super) struct TipState {
     full_width_chars: bool,
     traditional: bool,
     full_width_punctuation: bool,
+}
+
+impl TipState {
+    /// 相对上一拍变了哪几项（Caps Lock 与中 / 英是同一颗按钮）。
+    fn changed(self, previous: Self) -> StatusItems {
+        let mut items = StatusItems::none();
+        if self.english != previous.english || self.caps != previous.caps {
+            items = items.with(StatusItems::LANG);
+        }
+        if self.full_width_chars != previous.full_width_chars {
+            items = items.with(StatusItems::CHAR_WIDTH);
+        }
+        if self.full_width_punctuation != previous.full_width_punctuation {
+            items = items.with(StatusItems::PUNCTUATION);
+        }
+        if self.traditional != previous.traditional {
+            items = items.with(StatusItems::SIMP_TRAD);
+        }
+        items
+    }
 }
 
 /// 起一个新的 Server 实例接替本进程：带 `--wait-pid <本进程 pid>` 让它等本进程退出后再占命名管道

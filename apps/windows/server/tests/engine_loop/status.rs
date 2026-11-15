@@ -1,5 +1,6 @@
 //! 悬浮状态条随模式与开关变化。
 
+use cloudime_platform::StatusTipMode;
 use cloudime_platform::protocol::InputMode;
 
 use crate::support::*;
@@ -210,10 +211,18 @@ fn synced_input(
     }
 }
 
+/// 带「状态切换提示」模式的 Router（缺省是关闭）。
+fn router_with_tip(mode: StatusTipMode) -> Router {
+    router_with(RouterConfig {
+        show_status_change_tip: mode,
+        ..Default::default()
+    })
+}
+
 /// 状态切换提示：状态一变就弹一次，位置用最近一次的光标矩形；状态没变不弹。
 #[test]
 fn status_change_tip_follows_state_and_caret() {
-    let mut router = router();
+    let mut router = router_with_tip(StatusTipMode::All);
     let recorder = RecordingStatus::default();
     router.set_status_sink(Box::new(recorder.clone()));
     let rect = ScreenRect {
@@ -236,13 +245,18 @@ fn status_change_tip_follows_state_and_caret() {
         caps: false,
     });
 
-    // 切全角 / 半角：弹一次，位置就是那个光标矩形。
+    // 切全角 / 半角：弹一次，位置就是那个光标矩形；四项全部显示。
     router.handle_status_event(StatusEvent::ToggleCharWidthType);
     let tips = recorder.tips();
     assert_eq!(tips.len(), 1);
-    assert_eq!(tips[0].2, rect);
-    assert!(tips[0].0.full_width_chars);
-    assert!(!tips[0].1, "Caps 灭");
+    assert_eq!(tips[0].anchor, rect);
+    assert!(tips[0].view.full_width_chars);
+    assert!(!tips[0].caps, "Caps 灭");
+    assert!(
+        tips[0].items.contains(StatusItems::CHAR_WIDTH)
+            && tips[0].items.contains(StatusItems::LANG),
+        "全部状态四项都显示"
+    );
 
     // 拖动状态条、点同一格两次抵消后状态回到原样：只有真的变了才弹。
     router.handle_status_event(StatusEvent::Moved(10, 20));
@@ -251,10 +265,77 @@ fn status_change_tip_follows_state_and_caret() {
     assert_eq!(recorder.tips().len(), 2);
 }
 
+/// 缺省「关闭」：状态变了也不弹。
+#[test]
+fn status_change_tip_is_off_by_default() {
+    let mut router = router();
+    let recorder = RecordingStatus::default();
+    router.set_status_sink(Box::new(recorder.clone()));
+    press(&mut router, letter('n'));
+    router.handle(ClientMessage::PositionCandidates {
+        session: SESSION,
+        rect: ScreenRect {
+            left: 100,
+            top: 200,
+            right: 104,
+            bottom: 220,
+        },
+    });
+    router.handle(ClientMessage::SyncMode {
+        session: SESSION,
+        in_text_input: true,
+        caps: false,
+    });
+    router.handle_status_event(StatusEvent::ToggleCharWidthType);
+    assert!(recorder.tips().is_empty(), "缺省关闭");
+}
+
+/// 「仅切换项」：切全角字符只显示那一颗，中 / 英、标点、简繁都不出现。
+#[test]
+fn switched_only_mode_shows_just_the_changed_item() {
+    let mut router = router_with_tip(StatusTipMode::Switched);
+    let recorder = RecordingStatus::default();
+    router.set_status_sink(Box::new(recorder.clone()));
+    press(&mut router, letter('n'));
+    router.handle(ClientMessage::PositionCandidates {
+        session: SESSION,
+        rect: ScreenRect {
+            left: 100,
+            top: 200,
+            right: 104,
+            bottom: 220,
+        },
+    });
+    router.handle(ClientMessage::SyncMode {
+        session: SESSION,
+        in_text_input: true,
+        caps: false,
+    });
+
+    router.handle_status_event(StatusEvent::ToggleCharWidthType);
+    let tips = recorder.tips();
+    assert_eq!(tips.len(), 1);
+    let items = tips[0].items;
+    assert!(items.contains(StatusItems::CHAR_WIDTH));
+    assert!(
+        !items.contains(StatusItems::LANG)
+            && !items.contains(StatusItems::PUNCTUATION)
+            && !items.contains(StatusItems::SIMP_TRAD),
+        "只显示被切换的那一项"
+    );
+
+    // Caps Lock 亮灭归「中 / 英」那一颗（按 Shift / Caps 只显示它）。
+    router.handle_status_event(StatusEvent::ToggleSimpTrad);
+    let tips = recorder.tips();
+    assert_eq!(tips.len(), 2);
+    assert!(tips[1].items.contains(StatusItems::SIMP_TRAD));
+    assert!(!tips[1].items.contains(StatusItems::CHAR_WIDTH));
+}
+
 /// 焦点不在可输入文本区域里（DLL 报 `in_text_input = false`）时不弹提示。
 #[test]
 fn status_change_tip_skipped_outside_text_input() {
-    let mut router = router();
+    let mut router = router_with_tip(StatusTipMode::All);
     let recorder = RecordingStatus::default();
     router.set_status_sink(Box::new(recorder.clone()));
     press(&mut router, letter('n'));

@@ -4,6 +4,79 @@ use cloudime_core::FuzzyRules;
 use cloudime_core::punctuation::Mapping;
 use serde::{Deserialize, Serialize};
 
+/// 状态切换提示（`[input] show_status_change_tip`）：关闭 / 只显示被切换的那一项 / 四项全部显示。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum StatusTipMode {
+    /// 关闭（缺省）。
+    #[default]
+    Off,
+
+    /// 只显示被切换的那一项：按下 Shift 只弹中 / 英这颗，别的三项不出现。
+    Switched,
+
+    /// 四项状态全部显示（这一项以前是布尔开关，`true` 就是这个效果）。
+    All,
+}
+
+impl StatusTipMode {
+    /// 界面上从左到右的顺序。
+    pub const ALL: [Self; 3] = [Self::Off, Self::Switched, Self::All];
+
+    pub fn key(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Switched => "switched",
+            Self::All => "all",
+        }
+    }
+
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Off => "关闭",
+            Self::Switched => "仅切换项",
+            Self::All => "全部状态",
+        }
+    }
+}
+
+/// 老配置里这一项是 `true` / `false`（`true` = 全部状态），配置文件手写字符串也认。
+impl<'de> Deserialize<'de> for StatusTipMode {
+    fn deserialize<D>(deserializer: D) -> Result<Self, D::Error>
+    where
+        D: serde::Deserializer<'de>,
+    {
+        struct ModeVisitor;
+
+        impl serde::de::Visitor<'_> for ModeVisitor {
+            type Value = StatusTipMode;
+
+            fn expecting(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+                formatter.write_str("true / false 或 \"off\" / \"switched\" / \"all\"")
+            }
+
+            fn visit_bool<E: serde::de::Error>(self, on: bool) -> Result<Self::Value, E> {
+                Ok(if on {
+                    StatusTipMode::All
+                } else {
+                    StatusTipMode::Off
+                })
+            }
+
+            fn visit_str<E: serde::de::Error>(self, value: &str) -> Result<Self::Value, E> {
+                match value {
+                    "off" => Ok(StatusTipMode::Off),
+                    "switched" => Ok(StatusTipMode::Switched),
+                    "all" => Ok(StatusTipMode::All),
+                    other => Err(E::unknown_variant(other, &["off", "switched", "all"])),
+                }
+            }
+        }
+
+        deserializer.deserialize_any(ModeVisitor)
+    }
+}
+
 /// 模糊音各位（`mo_hu_yin_list` 是勾选项数值的和）：**一位一条规则**，按界面顺序 2^0…2^11。
 pub const MO_HU_YIN_ZH_Z: u32 = 1 << 0; // zh/z
 pub const MO_HU_YIN_CH_C: u32 = 1 << 1; // ch/c
@@ -252,9 +325,10 @@ pub struct InputConfig {
     /// 缺省关。
     pub special_input_word: bool,
 
-    /// 状态切换提示：中 / 英、大写锁定、全 / 半角、简 / 繁、中文 / 西文标点变化时，
-    /// 在输入光标附近弹一个停留 1 秒的提示条（只在处于输入状态时弹）。
-    pub show_status_change_tip: bool,
+    /// 状态切换提示（中 / 英、Caps Lock、全 / 半角字符、中文 / 西文标点、简 / 繁变化时，在输入光标附近
+    /// 弹一个停留 1 秒的提示条）：关闭 / 只显示被切换的那一项 / 四项全部显示。
+    /// 老配置里这一项是 `true` / `false`，[`StatusTipMode`] 的反序列化仍认（`true` = 全部状态）。
+    pub show_status_change_tip: StatusTipMode,
 
     /// 候选窗口显示时把 Caps Lock 临时当退格用（不切换大写锁定）。缺省关。
     pub caps_lock_as_backspace: bool,
@@ -278,7 +352,7 @@ impl Default for InputConfig {
             punctuation_marks_pairwise_completion: 0,
             use_half_wide_punctuation_marks_after_digital: true,
             special_input_word: false,
-            show_status_change_tip: true,
+            show_status_change_tip: StatusTipMode::Off,
             caps_lock_as_backspace: false,
             v_mode_time_seconds: false,
         }

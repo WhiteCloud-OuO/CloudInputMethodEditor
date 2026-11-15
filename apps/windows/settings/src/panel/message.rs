@@ -50,8 +50,8 @@ pub(crate) enum Message {
     HalfWideAfterDigit(bool),
     /// 特殊输入模式时造词（`[input] special_input_word`）。
     SpecialInputWord(bool),
-    /// 状态切换提示（`[input] show_status_change_tip`）。
-    ShowStatusChangeTip(bool),
+    /// 状态切换提示（`[input] show_status_change_tip`，`StatusTipMode::ALL` 的下标）。
+    StatusChangeTip(Option<usize>),
     /// 候选窗口显示时 Caps Lock 临时当退格（`[input] caps_lock_as_backspace`）。
     CapsLockAsBackspace(bool),
     VModeTimeSeconds(bool),

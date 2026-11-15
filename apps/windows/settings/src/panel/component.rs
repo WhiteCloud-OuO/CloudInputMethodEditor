@@ -8,7 +8,7 @@ use cloudime_platform::{
     LogLevel, MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MAX_NEED_TIMES, MAX_ZHIYI_THREADS,
     MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MIN_NEED_TIMES, MIN_ZHIYI_THREADS, MO_HU_YIN_BITS,
     MouseWordSelection, PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PreeditMode,
-    SENTENCE_DELAY_STEP_MS, SENTENCE_DELAY_STEPS, SimpTrad, ThemeColor, ThemeFile,
+    SENTENCE_DELAY_STEP_MS, SENTENCE_DELAY_STEPS, SimpTrad, StatusTipMode, ThemeColor, ThemeFile,
 };
 use windows_reactor::*;
 
@@ -206,7 +206,13 @@ impl Component for Settings {
                 self.save("input", "use_half_wide_punctuation_marks_after_digital", on)
             }
             Message::SpecialInputWord(on) => self.save("input", "special_input_word", on),
-            Message::ShowStatusChangeTip(on) => self.save("input", "show_status_change_tip", on),
+            Message::StatusChangeTip(Some(index)) if index < StatusTipMode::ALL.len() => {
+                self.save(
+                    "input",
+                    "show_status_change_tip",
+                    StatusTipMode::ALL[index].key(),
+                );
+            }
             Message::CapsLockAsBackspace(on) => self.save("input", "caps_lock_as_backspace", on),
             Message::VModeTimeSeconds(on) => self.save("input", "v_mode_time_seconds", on),
 

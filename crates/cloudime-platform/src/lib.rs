@@ -28,8 +28,8 @@ pub use config::{
     MAX_PAGE_SIZE, MAX_ZHIYI_THREADS, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MIN_NEED_TIMES,
     MIN_ZHIYI_THREADS, MO_HU_YIN_BITS, MouseWordSelection, PAIRWISE_COMPLETION_BITS,
     PUNCTUATION_MAPPING_BITS, PhraseConfig, PreeditMode, SENTENCE_DELAY_STEP_MS,
-    SENTENCE_DELAY_STEPS, SimpTrad, SwitchKey, SwitchKeys, ThemeConfig, TranslateConfig,
-    UpdateChannel, UpdateConfig, WordBankConfig, fuzzy_bits, pair_bit, pair_open,
+    SENTENCE_DELAY_STEPS, SimpTrad, StatusTipMode, SwitchKey, SwitchKeys, ThemeConfig,
+    TranslateConfig, UpdateChannel, UpdateConfig, WordBankConfig, fuzzy_bits, pair_bit, pair_open,
     pairwise_completion,
 };
 pub use error::ConfigError;
