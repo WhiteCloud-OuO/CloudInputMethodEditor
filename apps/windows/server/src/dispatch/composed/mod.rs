@@ -374,9 +374,10 @@ impl Router {
             return None;
         }
         let candidate = self.layout_candidate(index)?;
-        // 取名模式里选中还没带名字的姓氏：留在组句里（`v#wang` → `v#王`），下一屏再选名字。
-        if self.engine.name_selection_is_surname(&candidate.text) {
-            self.engine.select_name_surname(&candidate.text);
+        // 取名模式里选中还没带名字的姓氏（`v#wang` → `v#王`）、或者逐个取的名字字
+        // （`v#戴shi` → `v#戴石`）：留在组句里，下一屏再接着取。
+        if self.engine.name_selection_keeps_composing(&candidate.text) {
+            self.engine.select_name_part(&candidate.text);
             return None;
         }
         self.engine.commit(&candidate)

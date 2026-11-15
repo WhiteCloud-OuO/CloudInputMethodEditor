@@ -736,6 +736,31 @@ fn v_name_surname_keeps_composing_then_commits_the_full_name() {
     assert_eq!(commit.as_deref(), Some("王伟"));
 }
 
+/// V 模式取名：双字名逐个取 —— 先选第一个音节的字（留在组句里、剩下的拼音保留），再取第二个字上屏。
+#[test]
+fn v_name_given_char_keeps_composing_for_the_next_one() {
+    let normal = KeyModifiers::default();
+    let mut r = name_router();
+    compose(&mut r, "v#wang", normal);
+    let (_, commit, _) = key(&mut r, 0x31, Some('1'), normal);
+    assert!(commit.is_none(), "姓氏留在组句里");
+
+    // 名的两个音节一起打：前两条是完整组合（王伟建 / 王卫建），第 3 条起是逐字取的第一个字。
+    compose(&mut r, "weijian", normal);
+    let (outcome, commit, frame) = key(&mut r, 0x33, Some('3'), normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert!(commit.is_none(), "第一个名字字留在组句里");
+    let preedit: String = frame
+        .preedit
+        .iter()
+        .map(|segment| segment.text.as_str())
+        .collect();
+    assert_eq!(preedit, "v#王伟jian");
+
+    let (_, commit, _) = key(&mut r, 0x31, Some('1'), normal);
+    assert_eq!(commit.as_deref(), Some("王伟建"));
+}
+
 /// 组句里 Tab 展开「更多候选项」：一屏 = 5 × 候选项个数（竖排 5 列），序号不再画，
 /// 数字键改成跳页、方向键在格子里走；再按一次收起。
 #[test]

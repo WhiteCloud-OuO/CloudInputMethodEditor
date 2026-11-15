@@ -411,22 +411,6 @@ impl Engine {
         self.rare.as_ref()
     }
 
-    /// 挂上取名专用词库（`Dict.db` 里 `words_rare_word` 的两字词），只在 `v#` 取名候选里查。
-    pub fn with_name_words(mut self, name_words: Dictionary) -> Self {
-        self.name_words = Some(name_words);
-        self
-    }
-
-    /// 取名用的全部词库：普通那套（不含稀有组，除非开关打开）再加上取名专用词库。
-    /// 同一个词靠前命中后后面不再重复产出，与 [`Self::all_dictionaries`] 的约定一致。
-    pub(super) fn all_name_dictionaries(&self) -> Vec<&Dictionary> {
-        let mut all = self.all_dictionaries();
-        if let Some(name_words) = &self.name_words {
-            all.push(name_words);
-        }
-        all
-    }
-
     /// 丢掉已挂上的稀有词库，回到“按需再加载”的状态；关掉开关时用来释放内存。
     pub fn clear_rare(&mut self) {
         if self.rare.take().is_some() {

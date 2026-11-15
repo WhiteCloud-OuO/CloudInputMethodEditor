@@ -69,24 +69,6 @@ pub fn assemble(spec: &AssemblySpec) -> Result<Engine, ServerError> {
                     "姓氏 / 名字表已加载"
                 );
                 engine.set_name_tables(tables);
-                // 取名的两字名（`石麟` 这类）只认词库里现成的两字词：生僻词那一组太大，只挑两字的。
-                let started = Instant::now();
-                match DictDb::name_words_from_path(&spec.dict) {
-                    Ok(words) if !words.is_empty() => {
-                        tracing::info!(
-                            words = words.len(),
-                            load_ms = started.elapsed().as_millis(),
-                            "取名用的两字生僻词已加载"
-                        );
-                        engine = engine.with_name_words(words);
-                    }
-                    Ok(_) => tracing::debug!(path = %spec.dict.display(), "词库里没有两字生僻词"),
-                    Err(error) => tracing::warn!(
-                        %error,
-                        path = %spec.dict.display(),
-                        "取名用的两字生僻词读不出来，罕见名字只能靠普通词库"
-                    ),
-                }
             }
             Err(error) => tracing::warn!(
                 %error,

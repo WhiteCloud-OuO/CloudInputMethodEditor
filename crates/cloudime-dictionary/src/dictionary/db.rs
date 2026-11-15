@@ -254,20 +254,6 @@ pub(crate) fn open_rare(path: &Path) -> Result<Dictionary, DictionaryError> {
     }
 }
 
-/// 只读 `Dict.db` 里 `words_rare_word` 的**两字**词（`石麟` 这类罕见名字）：`v#` 取名补罕见
-/// 名字用。整份稀有组上百万条、读一次多几百毫秒，取名只要两字的那些。
-///
-/// 旧存档（格式 1 / 2）没有分类表，返回空 —— 这些存档本来就没有分流，调用方按「没有补词」处理。
-pub(crate) fn open_rare_name_words(path: &Path) -> Result<Dictionary, DictionaryError> {
-    let connection = Connection::open_with_flags(path, OpenFlags::SQLITE_OPEN_READ_ONLY)?;
-    read_metadata(&connection)?;
-    if !has_table(&connection, "words_rare_word")? {
-        return Ok(Dictionary::default());
-    }
-    let entries = read_entries_where(&connection, "words_rare_word", "length(text) = 2")?;
-    Dictionary::from_entries(entries)
-}
-
 /// 写成 `.db`：只写中文行（导入的单份词库用），稀有组为空。
 pub(crate) fn write(
     dictionary: &Dictionary,
@@ -415,21 +401,7 @@ fn read_entries(
     connection: &Connection,
     table: &str,
 ) -> Result<Vec<(String, String, u32)>, DictionaryError> {
-    read_entries_where(connection, table, "")
-}
-
-/// 读一张表，`filter` 是追加在 `WHERE` 后面的条件（空表示全读）。
-fn read_entries_where(
-    connection: &Connection,
-    table: &str,
-    filter: &str,
-) -> Result<Vec<(String, String, u32)>, DictionaryError> {
-    let mut sql = format!("SELECT text, pinyin, weight FROM {table}");
-    if !filter.is_empty() {
-        sql.push_str(" WHERE ");
-        sql.push_str(filter);
-    }
-    let mut statement = connection.prepare(&sql)?;
+    let mut statement = connection.prepare(&format!("SELECT text, pinyin, weight FROM {table}"))?;
     let rows = statement.query_map([], |row| {
         Ok((
             row.get::<_, String>(0)?,

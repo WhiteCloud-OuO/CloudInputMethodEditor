@@ -71,7 +71,7 @@ fn surname_only_then_continue_with_given_name() {
     assert!(engine.name_selection_is_surname("王"));
     assert!(!engine.name_selection_is_surname("王伟"));
 
-    assert!(engine.select_name_surname("王"));
+    assert!(engine.select_name_part("王"));
     assert_eq!(engine.composition().text(), "v#王");
     let all = texts(&engine);
     assert!(all.starts_with(&[
@@ -152,14 +152,52 @@ fn dictionary_name_words_rank_before_plain_same_sound_chars() {
     assert_eq!(texts(&engine), ["王伟", "王卫", "王玮", "王为"]);
 }
 
-/// 两个字的名用词库里现成的两字词（`石麟`）：名字表里没有这两个字也能候选到。
+/// 双字名逐个取：`v#daishilin` 先给第一个音节的字（`戴石`），选中后剩下的 `lin` 接着取。
 #[test]
-fn two_char_given_name_comes_from_dictionary_words() {
-    let mut engine = Engine::new(Dictionary::parse(SAMPLE).unwrap());
+fn given_name_is_taken_one_char_at_a_time() {
+    let mut engine = Engine::new(Dictionary::parse("石\tshi\t900\n麟\tlin\t600\n").unwrap());
     engine.set_name_tables(NameTables::from_tsv("戴\tdai\t64\n", NAMES).unwrap());
-    engine = engine.with_name_words(Dictionary::parse("石麟\tshi lin\t79\n").unwrap());
+
     engine.set_input("v#daishilin");
-    assert_eq!(texts(&engine), ["戴石麟"]);
+    let all = texts(&engine);
+    assert!(all.contains(&"戴石".to_owned()), "{all:?}");
+    assert_eq!(engine.name_next_part("戴石").as_deref(), Some("戴石lin"));
+    assert!(engine.select_name_part("戴石"));
+    assert_eq!(engine.composition().text(), "v#戴石lin");
+
+    let all = texts(&engine);
+    assert!(all.contains(&"戴石麟".to_owned()), "{all:?}");
+    assert!(
+        engine.name_next_part("戴石麟").is_none(),
+        "最后一个字直接上屏"
+    );
+    let candidate = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .find(|candidate| candidate.text == "戴石麟")
+        .unwrap();
+    assert_eq!(engine.commit(&candidate), Some("戴石麟".to_owned()));
+}
+
+/// 只有一个音节的 `v#daishi` 里 `戴石` 是完整的两字名：选中直接上屏，不留在组句里。
+#[test]
+fn a_full_single_syllable_name_still_commits_directly() {
+    let mut engine = Engine::new(Dictionary::parse("石\tshi\t900\n").unwrap());
+    engine.set_name_tables(NameTables::from_tsv("戴\tdai\t64\n", NAMES).unwrap());
+    engine.set_input("v#daishi");
+    assert!(engine.name_next_part("戴石").is_none());
+    let candidate = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .find(|candidate| candidate.text == "戴石")
+        .unwrap();
+    assert_eq!(engine.commit(&candidate), Some("戴石".to_owned()));
 }
 
 /// 表里已经有完整姓氏时不再拿词库的单字当姓：`为`、`未` 这类不是姓，别把候选挤乱。
