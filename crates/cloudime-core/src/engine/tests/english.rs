@@ -35,6 +35,36 @@ fn english_word_ranks_first_when_input_is_unlikely_pinyin() {
     assert_eq!(engine.query().unwrap().candidates.items[0].text, "china");
 }
 
+/// 中英混合组句：英文词夹在中间，与汉字在同一个词图里排（`ni'de'dian'nao'CPU'xing'hao'…`）。
+#[test]
+fn mixed_sentence_keeps_english_words_in_place() {
+    let words = WordList::parse("CPU\tcpu\t3720\n").unwrap();
+    let mut engine =
+        Engine::new(Dictionary::parse("你的\tni de\t9000\n电脑\tdian nao\t8000\n").unwrap())
+            .with_english(words);
+
+    engine.set_input("nidediannaocpu");
+    let query = engine.query().unwrap();
+    assert_eq!(query.candidates.items[0].text, "你的电脑CPU");
+    assert_eq!(query.candidates.items[0].kind, CandidateKind::Sentence);
+    let sentence = query.candidates.items[0].clone();
+    assert_eq!(engine.commit(&sentence).as_deref(), Some("你的电脑CPU"));
+    assert!(engine.composition().is_empty());
+
+    // 大写（Shift / CapsLock）也行：连续大写字母当一段英文文字，不是辅助码
+    engine.set_input("nidediannaoCPU");
+    assert_eq!(engine.composition().scope(), "nidediannaocpu");
+    assert_eq!(
+        engine.query().unwrap().candidates.items[0].text,
+        "你的电脑CPU"
+    );
+
+    // 单个大写字母仍是辅助码字面量（`su'A`），不进缓冲区
+    engine.set_input("su'A");
+    assert_eq!(engine.composition().scope(), "su");
+    assert!(engine.composition().has_literals());
+}
+
 #[test]
 fn usage_meter_counts_hanzi_words_and_english_words_per_commit() {
     let recorded = Arc::new(Mutex::new(Vec::new()));

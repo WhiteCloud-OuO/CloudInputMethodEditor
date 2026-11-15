@@ -192,6 +192,31 @@ impl Composition {
         }
     }
 
+    /// 光标处是不是「刚敲了一个大写字母」：那里站着字面量，或前一个字符就是 Shift 敲的。
+    /// 连续第二个大写字母据此判断要不要当一段英文文字（`CPU`）而不是辅助码（`su'A`）。
+    pub fn at_upper_tail(&self) -> bool {
+        self.literals
+            .iter()
+            .any(|literal| literal.at == self.cursor)
+            || (self.cursor == self.buffer.len() && self.shifted.last() == Some(&true))
+    }
+
+    /// 把光标处的大写字母字面量并回拼音缓冲区（小写 + `shifted`，原样上屏时还原大写）。
+    /// 连续大写字母从第二个起走这条路：`CPU` 整段进缓冲区，才能当英文词参与组句。
+    pub fn absorb_literal(&mut self) {
+        let Some(index) = self
+            .literals
+            .iter()
+            .position(|literal| literal.at == self.cursor)
+        else {
+            return;
+        };
+        let literal = self.literals.remove(index);
+        for c in literal.text.chars() {
+            self.push_shifted(c);
+        }
+    }
+
     /// 缓冲区里有没有 Shift 敲的大写字母。
     pub fn has_shifted(&self) -> bool {
         self.shifted.iter().any(|shifted| *shifted)

@@ -3,6 +3,7 @@
 use super::*;
 
 mod english_tail;
+mod mixed;
 mod name;
 mod result;
 mod snapshot;
@@ -547,7 +548,18 @@ impl Engine {
                 _ => segment_longest_prefix(keys, self.use_jian_pin),
             },
         };
+        // 中英混合（`ni'de'dian'nao'cpu'xing'hao'shi'shen'me`）：纯拼音切不动、留下尾巴、
+        // 或切出「中间没打完的音节」（`cpu` 被读成 `c…` + `pu`）时才试。
+        // 整段重新切成「拼音音节 + 英文词」，英文词进词图与汉字一起由整句模型排；
+        // 结果作为一条整句候选插进候选池，词级候选照常保留（见下面入池处）。
+        let plain_ok = match &parsed {
+            Ok((segments, tail)) => {
+                !segments.is_empty() && !correction::unlikely_pinyin(segments.first(), tail)
+            }
+            Err(_) => false,
+        };
         // 连第一个字母都切不动（`impor`）：拼音这边没戏，但英文词 / 补全、快捷候选还可以有
+        let mixed_anchor = mixed_anchor(&parsed);
         let (mut segmentations, tail) = match parsed {
             Ok(parsed) => parsed,
             Err(error) => {
@@ -566,6 +578,15 @@ impl Engine {
         // 仅末尾落单字母时只试换位，省每键的变体枚举开销
         let substitutes = correction::unlikely_pinyin(segmentations.first(), tail);
         let parse = start.elapsed();
+
+        // 中英混合的整句：拼音读法在某一格「出问题」（中间没打完的音节、或切不动留下的尾巴）时，
+        // 若那段字母正好是词表里的英文词，就把它当词图里的一个词重新整句。只有英文词盖住出问题那一格
+        // 才收：别处的英文词（`me` / `an` 这类也拼得出来的）不足以推翻正常的拼音读法。
+        let mixed = if allow_extras && !plain_ok {
+            self.mixed_candidate(keys, mixed_anchor)
+        } else {
+            None
+        };
 
         let start = Instant::now();
         let mut scored = Vec::new();
@@ -789,6 +810,20 @@ impl Engine {
             .collect();
         // 整句候选与词候选进同一个池子（同文本同读音不重复插；同文本不同读音的去掉词级那条）
         self.push_sentences(&mut pool, &segmentations, english_tail.as_ref(), head_wins);
+        // 中英混合的整句：拼音切分本身不完整（`cpu` 被读成 `c…`）时它比拼音读法更解释得通，
+        // 排在整句候选第一位（sorder 0）；词级候选照常保留。
+        if let Some((candidate, weight, _score)) = mixed {
+            let rank = (
+                keys.chars().filter(|c| *c != '\'').count(),
+                0,
+                true,
+                true,
+                0,
+                weight * sentence_weight_boost(&candidate.text),
+                1,
+            );
+            push_sentence(&mut pool, candidate, rank);
+        }
         // 英文候选按英文词频 ×(1+用户次数) 一起排。结构键借用整段读法（敲的字母是同一串），
         // 否则英文词凭「没有简拼 / 末音节必然完整」天然压过同覆盖的中文简拼读法（`mp` 的 MP 压 门票）。
         let reading_structure = segmentations.first().map_or((0, false), |segmentation| {
@@ -1012,6 +1047,7 @@ impl Engine {
         let full = keys.chars().filter(|c| *c != '\'').count();
         // 整句按整段读法算，结构键给它最好的一档：覆盖满、无简拼、末音节完整、命中精确。
         // 最后一位是整句名次：整句之间的顺序就是词图 viterbi 按语言模型排出来的顺序，不再让权重重排。
+        // 名次从 2 起：中英混合的整句占 1（它切分更贴切，排在拼音读法的整句前面）。
         // 权重按末字是后缀 / 语气词再上调（见 [`sentence_weight_boost`]），与词候选比时更靠前。
         let sentence_rank = |order: usize, text: &str, weight: f64| {
             (
@@ -1021,7 +1057,7 @@ impl Engine {
                 true,
                 0,
                 weight * sentence_weight_boost(text),
-                order + 1,
+                order + 2,
             )
         };
         let first_segmentation = |text: &str| {
@@ -1169,7 +1205,22 @@ impl Engine {
         whole: bool,
         want: usize,
     ) -> Vec<Conversion> {
-        let dictionaries = self.all_dictionaries();
+        self.sentence_paths_with(patterns, whole, want, None)
+    }
+
+    /// 同上，额外带一本本次查询专用的词库（中英混合组句的英文词表：`cpu` → CPU）。
+    /// 只给整句词图用，词级候选不查它。
+    pub(super) fn sentence_paths_with(
+        &self,
+        patterns: &[cloudime_dictionary::SyllablePattern<'_>],
+        whole: bool,
+        want: usize,
+        extra: Option<&Dictionary>,
+    ) -> Vec<Conversion> {
+        let mut dictionaries = self.all_dictionaries();
+        if let Some(extra) = extra {
+            dictionaries.insert(0, extra);
+        }
         let expanded = self.expand_positions(patterns);
         // 选词模型的按音节字分布：本次没有就先记下，后台算好后重查时再用。
         let table = self.char_table(patterns);
@@ -1212,6 +1263,7 @@ impl Engine {
 
     /// 一个位置的写法：敲的原样、模糊音扩展（配置的模糊音规则），再给每个完整音节补上
     /// **多敲 / 少敲** 一个键仍是合法音节的变体（`gan` → `guan`），按 [`TypoCosts`] 打折进词图。
+    /// 中英混合切分里的英文词（`cpu`）不是音节，原样留着，不扩展。
     /// 换位与相邻键替换不在这里补：它们走整段一处编辑的纠错读法（[`Self::correction_readings`]），
     /// 两边都放会重复。多敲 / 少敲是「音节级」的（`meiganxi` 的 `gan` 少一个键就是 `guan`），
     /// 整段编辑那一路反而是切不干净时才试，补不出 没关系。
@@ -1232,7 +1284,7 @@ impl Engine {
             return expanded;
         }
         for (index, pattern) in patterns.iter().enumerate() {
-            if !pattern.complete {
+            if !pattern.complete || !parser::is_syllable(pattern.text) {
                 continue;
             }
             for (text, kind) in correction::typo::variants(pattern.text) {
@@ -1451,6 +1503,34 @@ const TRAILING_PARTICLES: [char; 14] = [
 
 /// 整句末字是后缀 / 语气词时的权重倍数（上调 200%）。
 const SENTENCE_TRAILING_BOOST: f64 = 3.0;
+
+/// 拼音读法「出问题的那一格」：在去掉分隔符后的字节偏移，以及它是怎么坏的——
+/// `None` = 切不动留下的尾巴（这批字母压根不是拼音），`Some(len)` = 中间没打完的音节有多长。
+/// 中英混合只在英文词正好盖住这里时才收（见 `Engine::mixed_candidate`）。
+fn mixed_anchor(
+    parsed: &Result<(Vec<Segmentation>, &str), ParseError>,
+) -> Option<(usize, Option<usize>)> {
+    let (segments, tail) = parsed.as_ref().ok()?;
+    if !tail.is_empty() {
+        let consumed: usize = segments.first().map_or(0, |segmentation| {
+            segmentation
+                .syllables
+                .iter()
+                .map(|syllable| syllable.text.len())
+                .sum()
+        });
+        return Some((consumed, None));
+    }
+    let best = segments.first()?;
+    let mut offset = 0;
+    for syllable in &best.syllables[..best.syllables.len().saturating_sub(1)] {
+        if !syllable.complete {
+            return Some((offset, Some(syllable.text.len())));
+        }
+        offset += syllable.text.len();
+    }
+    None
+}
 
 /// 候选池里一条的排序键：与 [`ranking::rank`] 同序——覆盖字母 → 非末尾简拼数 → 末音节完整 →
 /// 命中精确 → 读法层级 → **整句名次** → 权重。候选池把词、整句、英文放在一起比，结构键必须带过来，

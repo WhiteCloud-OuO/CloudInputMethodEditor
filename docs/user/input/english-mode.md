@@ -67,4 +67,15 @@ description: 进入与退出英文模式、英文模式下按键全部直通、�
 中文模式下整段输入为英文词时同样直接给出英文候选（与中文候选按词频一起排，按对应序号选），
 拼音不成立时还会补全前缀（`compa` → company）。**不做拼错纠正**（`hallo` 不会出 hello）。
 双键拼音下这条路要开「中英文混合输入」（见 [首选项](../settings/preferences.md)）。
+
+英文词也能夹在句子里，和汉字一起整句转换：
+
+```
+nidediannaocpuxinghaoshishenme   → 你的电脑CPU型号是什么
+wozhejiuqugithubshangtiyigeissue → 我这就去GitHub上提一个issue
+```
+
+英文词要能在随包英文词表里查到（`CPU` / `GitHub` / `issue` 都在）；连续大写（按住 Shift 或开着 CapsLock
+打 `CPU`）整段当英文文字，单个大写字母仍是辅助码（`su'A` → 苏A）。查不到的拼写先不认，退回原来的
+整段英文候选与补全。
 无需切换到英文模式，见 [快捷输入](shortcuts.md)。

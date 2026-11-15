@@ -209,6 +209,11 @@ impl Engine {
         if c.is_ascii_uppercase() && !self.english_mode && !self.raw_mode() {
             if self.shuangpin.is_some() {
                 self.composition.push_shifted(c);
+            } else if self.composition.at_upper_tail() {
+                // 连续大写（`CPU`）当一段英文文字：上一枚字面量并回缓冲区，这一枚也进去，
+                // 才能当英文词参与组句。单个大写字母仍是字面量（`su'A` → 苏A）。
+                self.composition.absorb_literal();
+                self.composition.push_shifted(c);
             } else {
                 self.composition.push_literal(c);
             }
