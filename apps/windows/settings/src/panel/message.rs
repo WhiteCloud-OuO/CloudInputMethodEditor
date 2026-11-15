@@ -69,6 +69,8 @@ pub(crate) enum Message {
     CandidateCount(f64),
     /// 联想候选项目上限（滑轨）。
     AssociationCounts(f64),
+    /// 停键时再整句（滑轨：0 = 直接出整句，1–5 = 停键 100–500 ms 后出，`[candidate] sentence_delay_ms`）。
+    SentenceDelay(f64),
     /// 点了某个字体的「字体…」按钮：弹系统字体对话框。
     PickFont(super::pages::candidates::FontRole),
     /// 选 u 模式符号窗口的补充字体（只取字族名）。

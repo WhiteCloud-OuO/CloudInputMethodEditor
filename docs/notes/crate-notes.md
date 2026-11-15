@@ -169,6 +169,8 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
   **按 Shift 敲成大写的英文词不跟轮换**：`Composition::is_shifted_span` 按缓冲区里的 `shifted` 位判断这一段是不是
   整段大写，是就保留大写（`CPU` 一直是 `CPU`），小写敲的才按档位变。
   整句的**停键延时**（`[candidate] sentence_delay_ms`，缺省 500ms，`0` 立即；Core 缺省 0，CLI / 回放不受影响）：
+  设置页「停键时再整句」把它做成 6 档滑轨（`SENTENCE_DELAY_STEPS` / `SENTENCE_DELAY_STEP_MS`：0 档 `0ms`、
+  1–5 档 100–500ms，缺省 `DEFAULT_SENTENCE_DELAY_MS` = 最后一档），手改的非整百值按最近一档显示。
   `Engine::sentence_delay_pending` 按最后一键的时间判断，没到点 `push_sentences` 与混合读法都不出整句；
   Server 在 `recompose` 后 `schedule_sentence`，工人循环按 `next_tick` 的剩余时间醒来，`tick` 里 `advance_sentence`
   到点重查一次、把整句补进候选窗（复用 `requery_rescored` 那条刷新路）。反引号是例外：候选里还没有英文词、

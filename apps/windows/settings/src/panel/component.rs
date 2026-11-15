@@ -7,8 +7,8 @@ use cloudime_platform::{
     Config, FullHalfPunctuation, InputScheme, ItemNumberStyle, LayoutMode, LocalModelMode,
     LogLevel, MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MAX_NEED_TIMES, MAX_ZHIYI_THREADS,
     MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MIN_NEED_TIMES, MIN_ZHIYI_THREADS, MO_HU_YIN_BITS,
-    MouseWordSelection, PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PreeditMode, SimpTrad,
-    ThemeColor, ThemeFile,
+    MouseWordSelection, PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PreeditMode,
+    SENTENCE_DELAY_STEP_MS, SENTENCE_DELAY_STEPS, SimpTrad, ThemeColor, ThemeFile,
 };
 use windows_reactor::*;
 
@@ -243,6 +243,15 @@ impl Component for Settings {
                 let count = (value.round() as i64)
                     .clamp(MIN_ASSOCIATION_COUNTS as i64, MAX_ASSOCIATION_COUNTS as i64);
                 self.save("candidate", "candidate_association_counts", count);
+            }
+            Message::SentenceDelay(value) => {
+                // 滑轨 0–5：0 是直接出整句，1–5 是 100–500 ms。
+                let step = (value.round() as i64).clamp(0, SENTENCE_DELAY_STEPS as i64);
+                self.save(
+                    "candidate",
+                    "sentence_delay_ms",
+                    step * SENTENCE_DELAY_STEP_MS as i64,
+                );
             }
             Message::PickFont(role) => {
                 let current = role.current(&self.config.candidate).clone();

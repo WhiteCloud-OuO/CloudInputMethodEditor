@@ -258,9 +258,17 @@ pub struct CandidateConfig {
     pub sentence_delay_ms: u64,
 }
 
-/// 整句延时的缺省值：停键半秒后出。
+/// 停键延时的缺省值（毫秒），也就是「停键时再整句」滑轨的最后一档。
+pub const DEFAULT_SENTENCE_DELAY_MS: u64 = 500;
+
+/// 「停键时再整句」滑轨最高一档：0 是「直接出整句」，1–5 分别是 100–500 ms。
+pub const SENTENCE_DELAY_STEPS: u64 = 5;
+
+/// 滑轨每一档的毫秒数（0 档除外）。
+pub const SENTENCE_DELAY_STEP_MS: u64 = 100;
+
 fn default_sentence_delay_ms() -> u64 {
-    500
+    DEFAULT_SENTENCE_DELAY_MS
 }
 
 fn default_zhiyi_threads() -> usize {

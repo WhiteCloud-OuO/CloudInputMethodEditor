@@ -21,14 +21,16 @@ pub use theme::{
 
 pub use config::{
     CandidateConfig, Config, DEFAULT_CANDIDATE_BOX_MINIMUM_WIDTH, DEFAULT_CURR_THEME,
-    DEFAULT_FAMILY, DEFAULT_PUNCTUATION_MAPPING, DEFAULT_USER_WORD_BANK_FILE,
-    DEFAULT_ZHIYI_THREADS, DebuggingConfig, FontChoice, FullHalfPunctuation, GeneralConfig,
-    InputConfig, InputScheme, ItemNumberStyle, LayoutMode, LocalModelMode, LogLevel,
-    MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MAX_NEED_TIMES, MAX_PAGE_SIZE, MAX_ZHIYI_THREADS,
-    MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MIN_NEED_TIMES, MIN_ZHIYI_THREADS, MO_HU_YIN_BITS,
-    MouseWordSelection, PAIRWISE_COMPLETION_BITS, PUNCTUATION_MAPPING_BITS, PhraseConfig,
-    PreeditMode, SimpTrad, SwitchKey, SwitchKeys, ThemeConfig, TranslateConfig, UpdateChannel,
-    UpdateConfig, WordBankConfig, fuzzy_bits, pair_bit, pair_open, pairwise_completion,
+    DEFAULT_FAMILY, DEFAULT_PUNCTUATION_MAPPING, DEFAULT_SENTENCE_DELAY_MS,
+    DEFAULT_USER_WORD_BANK_FILE, DEFAULT_ZHIYI_THREADS, DebuggingConfig, FontChoice,
+    FullHalfPunctuation, GeneralConfig, InputConfig, InputScheme, ItemNumberStyle, LayoutMode,
+    LocalModelMode, LogLevel, MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MAX_NEED_TIMES,
+    MAX_PAGE_SIZE, MAX_ZHIYI_THREADS, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT, MIN_NEED_TIMES,
+    MIN_ZHIYI_THREADS, MO_HU_YIN_BITS, MouseWordSelection, PAIRWISE_COMPLETION_BITS,
+    PUNCTUATION_MAPPING_BITS, PhraseConfig, PreeditMode, SENTENCE_DELAY_STEP_MS,
+    SENTENCE_DELAY_STEPS, SimpTrad, SwitchKey, SwitchKeys, ThemeConfig, TranslateConfig,
+    UpdateChannel, UpdateConfig, WordBankConfig, fuzzy_bits, pair_bit, pair_open,
+    pairwise_completion,
 };
 pub use error::ConfigError;
 pub use migrate::Migration;

@@ -3,11 +3,13 @@
 use cloudime_platform::{
     CandidateConfig, FontChoice, InputScheme, ItemNumberStyle, LayoutMode, LocalModelMode,
     MAX_ASSOCIATION_COUNTS, MAX_CANDIDATE_COUNT, MIN_ASSOCIATION_COUNTS, MIN_CANDIDATE_COUNT,
-    MouseWordSelection, PreeditMode,
+    MouseWordSelection, PreeditMode, SENTENCE_DELAY_STEP_MS, SENTENCE_DELAY_STEPS,
 };
 use windows_reactor::*;
 
-use crate::panel::controls::{field, field_top, page, radio_row, scroll_list, slider_field};
+use crate::panel::controls::{
+    field, field_top, page, radio_row, scroll_list, slider_field, slider_field_showing,
+};
 use crate::panel::{Message, Settings};
 
 /// 基本模型的文件在不在这里：用户目录 `%APPDATA%\CloudIME\local_models\` 优先，其次随包 `Models\`。
@@ -205,6 +207,23 @@ fn mode_combo<T: PartialEq + Copy>(
         .on_selection_changed(callback)
 }
 
+/// `[candidate] sentence_delay_ms` → 滑轨档位（0–5）：0 = 直接出整句，1–5 = 停键 100–500 ms 后出。
+/// 手改过的非整百值按最近的一档算（250 → 3 档，即 300 ms）。
+fn sentence_delay_step(ms: u64) -> usize {
+    let half = SENTENCE_DELAY_STEP_MS / 2;
+    ((ms + half) / SENTENCE_DELAY_STEP_MS).min(SENTENCE_DELAY_STEPS) as usize
+}
+
+/// 滑轨右侧的字：0 档写「直接」，其余写毫秒数。
+fn sentence_delay_label(ms: u64) -> String {
+    let step = sentence_delay_step(ms) as u64;
+    if step == 0 {
+        "直接".to_owned()
+    } else {
+        format!("{}ms", step * SENTENCE_DELAY_STEP_MS)
+    }
+}
+
 /// 「不显示候选框」的程序名单：一个输入框 + 添加按钮；下面每行是一个 2 列 `Grid`（程序名 / 删除），
 /// 最多同时显示 5 行，多的靠列表内滚动。
 fn program_list(settings: &Settings, context: &mut ViewContext<Settings>) -> View {
@@ -313,6 +332,16 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             MIN_ASSOCIATION_COUNTS,
             MAX_ASSOCIATION_COUNTS,
             Message::AssociationCounts,
+            context,
+        ),
+        slider_field_showing(
+            "停键时再整句",
+            "停键之后才补整句候选：0 直接出；1–5 分别是停键 100–500 毫秒后出（缺省 500）。连着敲时只出词级候选，停键再算整句，快速输入时每键更轻、候选窗也不会边打边跳。",
+            sentence_delay_step(c.sentence_delay_ms),
+            0,
+            SENTENCE_DELAY_STEPS as usize,
+            sentence_delay_label(c.sentence_delay_ms),
+            Message::SentenceDelay,
             context,
         ),
         field(

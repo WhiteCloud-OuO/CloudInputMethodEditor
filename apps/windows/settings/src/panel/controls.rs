@@ -368,6 +368,31 @@ pub(super) fn slider_field(
     message: impl Fn(f64) -> Message + 'static,
     context: &mut ViewContext<Settings>,
 ) -> View {
+    slider_field_showing(
+        label,
+        hint,
+        value,
+        min,
+        max,
+        value.to_string(),
+        message,
+        context,
+    )
+}
+
+/// 同 [`slider_field`]，右侧显示的文字由调用方给（`0` 显示「直接」、`500` 显示「500ms」这类）。
+#[allow(clippy::too_many_arguments)]
+pub(super) fn slider_field_showing(
+    label: &str,
+    hint: &str,
+    value: usize,
+    min: usize,
+    max: usize,
+    text: impl Into<String>,
+    message: impl Fn(f64) -> Message + 'static,
+    context: &mut ViewContext<Settings>,
+) -> View {
+    let text = text.into();
     let slider = Slider::new()
         .width(260.0)
         .minimum(min as f64)
@@ -375,9 +400,11 @@ pub(super) fn slider_field(
         .step_frequency(1.0)
         .value(value as f64)
         .on_value_changed(context.callback(message));
+    // 「500ms」这类比数字宽：按字数放宽，免得被裁掉。
+    let width = 20.0_f64.max(text.chars().count() as f64 * 8.0);
     let number = TextBlock::new()
-        .text(value.to_string())
-        .width(20.0)
+        .text(text)
+        .width(width)
         .vertical_alignment(VerticalAlignment::Center);
     field(
         label,
