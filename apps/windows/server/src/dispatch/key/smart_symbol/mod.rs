@@ -96,11 +96,15 @@ impl Router {
             return;
         }
         // 交给应用的可见字符最终也会落在光标前；带 Ctrl / Alt / Win 的热键不算。
+        // 组句里敲的字母只是候选的输入、还没落进文档（提交时由上面的 commit 分支补），
+        // 不能算进本地前文 —— 否则整句匹配会变成 `san三` 这种。
         if let Some(c) = event.character.filter(|c| !c.is_control())
             && !event.modifiers.has_command_key()
         {
             self.smart_before = Some(c);
-            self.push_smart_text(&c.to_string());
+            if !self.composing() {
+                self.push_smart_text(&c.to_string());
+            }
             return;
         }
         if clears_caret(event.virtual_key) {
@@ -140,10 +144,10 @@ impl Router {
             }
             // 先看用户规则（按光标前那一整句的正则），没命中再走内置规则（最终兜底句号）。
             // 用的是第一击之前的前文：第一击的逗号是待替换的占位，不算进句子里。
-            if let Some(symbol) = self
-                .smart_symbols
-                .symbol_for(rules::current_sentence(&pending.sentence))
-            {
+            let sentence = rules::current_sentence(&pending.sentence);
+            let matched = self.smart_symbols.symbol_for(sentence);
+            tracing::debug!(sentence, symbol = ?matched, "智能符号：整句匹配");
+            if let Some(symbol) = matched {
                 let symbol = symbol.to_owned();
                 return Some(self.commit_smart_text(&symbol, Some(pending.inserted)));
             }

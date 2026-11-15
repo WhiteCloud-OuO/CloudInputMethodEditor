@@ -1654,6 +1654,68 @@ fn user_rules_only_see_the_current_sentence() {
     assert_eq!(commit.as_deref(), Some("。"), "上一句的「吧」不算数");
 }
 
+/// 单独一个中文数字（一～十）双击空格出顿号；`三四` / `五个` / `第六` 这种不算，仍出句号。
+#[test]
+fn user_rules_turn_a_lone_numeral_into_an_enumeration_comma() {
+    let normal = KeyModifiers::default();
+    let dir = smart_rules_dir(
+        "numeral",
+        r#"[{ "symbol": "、", "trigger": ["^[一二三四五六七八九十]$"] }]"#,
+    );
+    for (before, expected) in [
+        ("一", "、"),
+        ("二", "、"),
+        ("十", "、"),
+        ("三四", "。"),
+        ("五个", "。"),
+        ("第六", "。"),
+    ] {
+        let mut r = smart_router(5);
+        r.focused = Some(SessionId(1));
+        r.load_smart_symbol_rules(&dir);
+        surrounding(&mut r, before);
+        key_details(&mut r, 0x20, Some(' '), normal);
+        let (_, commit, _, delete_before) = key_details(&mut r, 0x20, Some(' '), normal);
+        assert_eq!(commit.as_deref(), Some(expected), "{before}");
+        assert_eq!(delete_before, 1, "{before}");
+    }
+}
+
+/// 组句里敲的拼音字母不算光标前文：`san` 选「三」后整句是「三」，而不是 `san三`。
+#[test]
+fn composing_letters_do_not_pollute_the_sentence() {
+    let normal = KeyModifiers::default();
+    let dir = smart_rules_dir(
+        "composing",
+        r#"[{ "symbol": "、", "trigger": ["^[一二三四五六七八九十]$"] }]"#,
+    );
+    let engine = Engine::new(Dictionary::parse("三\tsan\t100\n").unwrap());
+    let mut r = Router::new(
+        engine,
+        RouterConfig {
+            page_size: 9,
+            smart_symbols: true,
+            ..Default::default()
+        },
+    );
+    r.handle(ClientMessage::OpenSession {
+        session: SessionId(1),
+        app: None,
+        protocol: PROTOCOL_VERSION,
+    });
+    r.focused = Some(SessionId(1));
+    r.load_smart_symbol_rules(&dir);
+
+    compose(&mut r, "san", normal);
+    let (_, committed, _) = key(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(committed.as_deref(), Some("三"), "空格选第一个候选");
+    // 两次空格：整句就是「三」，命中数字规则出顿号（拼音字母没混进前文）。
+    key(&mut r, 0x20, Some(' '), normal);
+    let (_, commit, _, delete_before) = key_details(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(commit.as_deref(), Some("、"));
+    assert_eq!(delete_before, 1);
+}
+
 /// 一份临时的用户规则文件（目录里放的 `intelligent-symbol.json`）。
 fn smart_rules_dir(name: &str, json: &str) -> std::path::PathBuf {
     let dir = std::env::temp_dir().join(format!("cloudime-smart-symbol-{name}"));

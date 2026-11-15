@@ -147,4 +147,15 @@ mod tests {
             Rules::parse(r#"{ "rules": [{ "symbol": "！", "trigger": ["啊$"] }] }"#).unwrap();
         assert_eq!(rules.symbol_for("好累啊"), Some("！"));
     }
+
+    /// 随包模板与内置规则等价（单独数字 → 顿号这类是用户自己写进文件的那一条）。
+    #[test]
+    fn the_template_mirrors_the_builtin_rules() {
+        let rules = Rules::parse(cloudime_platform::smart_symbol::SMART_SYMBOL_TEMPLATE).unwrap();
+        assert_eq!(rules.symbol_for("好吗"), Some("？"));
+        assert_eq!(rules.symbol_for("好累啊"), Some("！"));
+        assert_eq!(rules.symbol_for("轰呜"), Some("——"));
+        // 整句就是一个数字不在模板里：那是「用户自己加一条 `^[一二三四五六七八九十]$`」的事。
+        assert_eq!(rules.symbol_for("一"), None);
+    }
 }

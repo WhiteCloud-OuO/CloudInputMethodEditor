@@ -475,9 +475,13 @@ DLL 据此在**组句里**把这一个键送来问一趟（`eats_key` 里那条�
 没命中再走 `smart_space_double`，最终兜底句号。**整句**的边界是句号 / 问号 / 叹号 / 省略号 / 换行
 （`rules::current_sentence`）；逗号 / 顿号 / 分号不断句，符合现代汉语的句子划分。文件路径与示例模板
 （`SMART_SYMBOL_FILE` / `SMART_SYMBOL_TEMPLATE`）在 `cloudime_platform::smart_symbol`，设置页那个开关右边
-的「修改配置」按钮负责「没有就写模板、再用默认程序打开」。规则文件按 mtime 随配置那一拍热加载
-（`reload::poll_config_reload`）。`Router.smart_text` 是本地那份光标前文（DLL 前文 + 本进程刚上屏的文本，
-最多 160 字），`smart_before` 仍只记最后一个字给内置规则用。
+的「修改配置」按钮负责「没有就写模板、再用默认程序打开」。**模板只放与内置规则等价的示例**：像
+「整句就是一个中文数字 → 顿号」这种内置表达不了的（`smart_space_double` 只看最后一个字），由用户自己往
+文件里加 `{ "symbol": "、", "trigger": ["^[一二三四五六七八九十]$"] }`（`^…$` 锚整句，所以 `三四` / `第六`
+不命中）。规则文件按 mtime 随配置那一拍热加载（`reload::poll_config_reload`）。`Router.smart_text` 是
+本地那份光标前文（DLL 前文 + 本进程刚上屏的文本，最多 160 字）：**组句里敲的拼音字母不算**（它们只是候选的
+输入，`note_key_result` 只在没在组句时把直通字符并进去，否则整句会变成 `san三`）；`smart_before` 仍只记
+最后一个字给内置规则用。
 `Router.smart_before` 由 DLL 前文与本进程刚上屏的文本共同维护；`stop_rescoring` 清 `surrounding` 时**不**清它，
 否则每次选完词都要等下一份前文。
 
