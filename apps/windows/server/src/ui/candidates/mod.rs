@@ -196,6 +196,9 @@ pub(crate) struct CandidateWindow {
     /// 上次 `show` 的定位 anchor；滑动期间按它原地重画，不跟着光标跳。
     anchor: Cell<Option<RECT>>,
 
+    /// 窗口现在是不是已经可见：可见时每帧不再调 `ShowWindow`（`SW_SHOWNA` 偶尔要几毫秒）。
+    visible: Cell<bool>,
+
     /// 上次用的 DPI（光标所在显示器）。
     dpi: Cell<u32>,
 
@@ -325,6 +328,7 @@ impl CandidateWindow {
             last_rects: RefCell::new(Vec::new()),
             last_regions: RefCell::new(Vec::new()),
             anchor: Cell::new(None),
+            visible: Cell::new(false),
             dpi: Cell::new(dpi),
             logged_dpi: Cell::new(None),
             painter,
@@ -563,6 +567,7 @@ impl CandidateWindow {
         }
         self.template.hide_assets();
         self.stop_animation();
+        self.visible.set(false);
         let _ = unsafe { ShowWindow(self.template.hwnd(), SW_HIDE) };
     }
 
@@ -600,6 +605,7 @@ impl CandidateWindow {
         // 窗口不在了：脚本问宽度就该得到「没有」。
         self.viewport.clear();
         self.stop_animation();
+        self.visible.set(false);
         let _ = unsafe { ShowWindow(self.template.hwnd(), SW_HIDE) };
     }
 
@@ -674,6 +680,7 @@ impl CandidateWindow {
                 .as_mut()
                 .and_then(|painter| painter.render_candidate(view, layout, dpi))
         };
+        let raster_started = Instant::now();
         let mut rendered = render(&view);
         // 竖排 + 自动反向：先按正常顺序量出高度，确认窗口会摆在光标上方后再重画一帧。
         // 正反两种排法高度相同，重画不会改变上下判断。
@@ -691,6 +698,7 @@ impl CandidateWindow {
                 rendered = render(&view).or(rendered);
             }
         }
+        let raster_us = raster_started.elapsed().as_micros();
         let Some(rendered) = rendered else {
             // 字体库加载失败或渲染出错（已记日志）：不贴图、不显示。
             self.hide();
@@ -758,11 +766,23 @@ impl CandidateWindow {
             ),
             alpha,
         );
+        let present_us = raster_started.elapsed().as_micros();
         if updated.is_ok() {
-            let _ = unsafe { ShowWindow(self.template.hwnd(), SW_SHOWNA) };
+            // 已经可见就不再 `ShowWindow`：这一下偶尔要几毫秒，而每帧都调没有意义。
+            if !self.visible.replace(true) {
+                let _ = unsafe { ShowWindow(self.template.hwnd(), SW_SHOWNA) };
+            }
         } else {
             self.hide();
         }
+        tracing::debug!(
+            target: "cloudime_timing",
+            raster_us = raster_us as u64,
+            present_us = (present_us - raster_us) as u64,
+            show_us = (raster_started.elapsed().as_micros() - present_us) as u64,
+            reversed = view.reverse_vertical,
+            "候选窗重画"
+        );
     }
 
     /// 当前该用的高亮动画：已缓动的进度；没有动画或已走完为 `None`。

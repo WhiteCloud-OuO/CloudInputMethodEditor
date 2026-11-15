@@ -1479,6 +1479,10 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 「上一键之后有没有报过」，报过的宿主等那一拍到齐再画（空帧 / 组句结束仍立即收窗）；从不补报的宿主与老 DLL
 保留原来的立即重画，第一键等一拍之后每键自己画（见 `docs/notes/performance.md` 第九轮）。
 
+贴图（`cloud_ui::layered`）：`present` 用的 DIB 按 64 像素一档留容量、放 `thread_local` 里复用（预编辑行每键
+多一个字母、窗口宽度几乎每键都变，`CreateDIBSection` 一次 2–5 ms），像素逐行换色写进容量行距（`swap_rb_rows`），
+`UpdateLayeredWindow` 只贴左上角这一帧的大小；窗口已经可见时不再每帧 `ShowWindow`（见第十轮）。
+
 候选窗显示期间 **Caps Lock 临时当退格**（`server/src/ui/caps_lock.rs`，`[input] caps_lock_as_backspace`，缺省关）：
 `WH_KEYBOARD_LL` 装在跑消息循环的 UI 线程上，`UiCommand::Show` / `Hide` 时装 / 卸钩子（只在候选窗开着且设置打开时存在，
 不组句时完全不拦系统按键）。

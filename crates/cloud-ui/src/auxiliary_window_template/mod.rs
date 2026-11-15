@@ -877,6 +877,7 @@ impl AuxiliaryWindowTemplate {
         }
         // 位图四周还有阴影留白，摆的是内容左上角，贴图位置要把留白减掉。
         let margin = rendered.content_x as i32;
+        let present_started = std::time::Instant::now();
         if let Err(error) =
             layered::present(self.hwnd, &rendered.pixmap, (x - margin, y - margin), 255)
         {
@@ -884,15 +885,23 @@ impl AuxiliaryWindowTemplate {
             self.hide();
             return;
         }
+        let present_us = present_started.elapsed().as_micros();
         *self.hits.borrow_mut() = hits;
         *self.regions.borrow_mut() = regions;
         self.scale.set(rendered.scale.max(0.01));
         self.margin.set(margin);
+        let show_started = std::time::Instant::now();
         let _ = unsafe { ShowWindow(self.hwnd, SW_SHOWNA) };
         if self.modal.get() {
             // 显示动作可能把它压到刚建 / 刚抬起的宿主窗下面：模态窗口必须回到最前
             self.raise_above_owner();
         }
+        tracing::debug!(
+            target: "cloudime_timing",
+            present_us = present_us as u64,
+            show_us = show_started.elapsed().as_micros() as u64,
+            "窗口模板贴出"
+        );
         self.painted.set(Some(signature));
         // 从「没显示」到「显示」记一条：排查「按了键没看见」时看它就知道摆到哪去了。
         if self.placed.get().is_none() {

@@ -14,8 +14,18 @@ use windows::core::{Error, Result};
 
 use self::canvas::Canvas;
 
+thread_local! {
+    /// 上一帧用的 DIB + 内存 DC：尺寸没变就复用。
+    /// 两次 `CreateDIBSection` 打点是 2–5 ms（GDI 对象分配），预编辑行每键长一个字母、窗口宽度几乎每键都变，
+    /// 所以按 64 像素一档留余量（`(cached_w, cached_h)` 是**容量**，贴图只用左上角 `w×h` 那块）。
+    static CANVAS: std::cell::RefCell<Option<(i32, i32, Canvas)>> = const { std::cell::RefCell::new(None) };
+}
+
 /// 阴影留白的逻辑像素宽度，状态条还没画过时按它折算占位。
 const SHADOW_MARGIN: i32 = 16;
+
+/// DIB 容量的对齐粒度：宽度每键涨一个字母（~8px），按 64px 一档能连着复用好几键。
+const CANVAS_STEP: i32 = 64;
 
 /// 阴影留白的物理像素宽度（`dpi` 96 为 100%）。
 pub fn shadow_margin(dpi: u32) -> i32 {
@@ -25,14 +35,52 @@ pub fn shadow_margin(dpi: u32) -> i32 {
 /// 把渲染器出的预乘 RGBA 位图（已含阴影边）贴到分层窗口上，`win_pos` 是位图左上角的屏幕坐标。
 /// `alpha` 是整张位图的额外不透明度（255 = 原样），候选窗展开 / 收起过渡淡入时用。
 pub fn present(hwnd: HWND, pixmap: &Pixmap, win_pos: (i32, i32), alpha: u8) -> Result<()> {
+    let started = std::time::Instant::now();
     let (w, h) = (pixmap.width() as i32, pixmap.height() as i32);
     if w <= 0 || h <= 0 {
         return Err(Error::from(E_INVALIDARG));
     }
-    let mut canvas = Canvas::new(w, h)?;
-    // tiny-skia 是 RGBA，DIB 是 BGRA；都是预乘，只换 R / B 两个字节。
-    swap_rb(pixmap.data(), canvas.pixels());
-    update(hwnd, canvas.dc(), win_pos, (w, h), alpha)
+    CANVAS.with(|cache| {
+        let mut slot = cache.borrow_mut();
+        let fits = matches!(&*slot, Some((cw, ch, _)) if *cw >= w && *ch >= h);
+        if !fits {
+            let cap = |value: i32| ((value + CANVAS_STEP - 1) / CANVAS_STEP) * CANVAS_STEP;
+            *slot = Some((cap(w), cap(h), Canvas::new(cap(w), cap(h))?));
+        }
+        let canvas_us = started.elapsed().as_micros();
+        let (cached_w, _, canvas) = slot.as_mut().expect("上面刚保证有");
+        // tiny-skia 是 RGBA，DIB 是 BGRA；都是预乘，只换 R / B 两个字节。
+        // DIB 可能比这一帧宽，逐行拷（行距按容量算）。
+        swap_rb_rows(
+            pixmap.data(),
+            canvas.pixels(),
+            w as usize,
+            h as usize,
+            *cached_w as usize,
+        );
+        let swap_us = started.elapsed().as_micros();
+        update(hwnd, canvas.dc(), win_pos, (w, h), alpha)?;
+        tracing::debug!(
+            target: "cloudime_timing",
+            canvas_us = canvas_us as u64,
+            swap_us = (swap_us - canvas_us) as u64,
+            update_us = (started.elapsed().as_micros() - swap_us) as u64,
+            width = w,
+            height = h,
+            "分层窗口贴图"
+        );
+        Ok(())
+    })
+}
+
+/// RGBA → BGRA 逐行换色：源是紧凑的 `w×h`，目标是行距 `stride` 的 DIB（可能比这一帧宽）。
+fn swap_rb_rows(source: &[u8], target: &mut [u8], w: usize, h: usize, stride: usize) {
+    let row = w * 4;
+    for y in 0..h {
+        let src = &source[y * row..(y + 1) * row];
+        let dst = &mut target[y * stride * 4..y * stride * 4 + row];
+        swap_rb(src, dst);
+    }
 }
 
 /// RGBA → BGRA：只在 4 字节组里换 R / B（预乘值本身不变）。

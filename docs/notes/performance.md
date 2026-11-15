@@ -364,6 +364,32 @@ UI 线程设为 `THREAD_PRIORITY_ABOVE_NORMAL`；CPU 被别的软件挤占时，
 其余 **5–9 ms 在 `window.show()` 里**——`layered::present` 的 `Canvas` 分配 + RGBA→BGRA 拷贝 + `UpdateLayeredWindow`
 + `ShowWindow`。这是下一轮的目标（窗口尺寸没变时复用 DIB / 只挪位置、或换 `UpdateLayeredWindowIndirect` 预热）。
 
+## 第十轮：分层窗口的 DIB 与 ShowWindow（2026-11-15）
+
+**起因**：第九轮之后每键只剩一次 `候选窗显示`，但 `render_us` 仍在 2–8 ms 抖动。分段打点（`分层窗口贴图` /
+`候选窗重画`：`canvas_us` / `swap_us` / `update_us`、`raster_us` / `present_us` / `show_us`）看到：
+`set_content` 0.02 ms、栅格化 1–1.7 ms（p50 1.5 / p90 3.8）、`ShowWindow` 0.1–0.9 ms（偶发 7 ms），
+其余在 `layered::present` —— **每帧一次 `CreateDIBSection`，2–5 ms（偶发 6 ms）**。预编辑行每键多一个字母、
+窗口宽度几乎每键都变，于是每键都重建一次 DIB。
+
+**改法**：
+
+1. DIB 按 64 像素一档留容量（`CANVAS_STEP`），这一帧没超出容量就复用（`thread_local` 里存一份）；
+   像素逐行换色写进容量位图的行距（`swap_rb_rows`），`UpdateLayeredWindow` 只贴左上角这一帧的 `w×h`。
+2. 窗口已经可见时不再每帧 `ShowWindow(SW_SHOWNA)`；`hide` / `suppress` 里复位。
+3. 打点补齐（都在 `cloudime_timing` 的 debug 级），下次再查不用重加。
+
+**结果**（本机，60 ms/键）：
+
+| | 改前（第九轮） | 改后 |
+|---|---|---|
+| `CreateDIBSection` | 每键一次，2–6 ms | 约 8 键一次（跨过 64px 档），其余 0 |
+| `ShowWindow` | 每帧 | 只在第一次显示 |
+| `候选窗显示` `render_us` 组成（p50） | 2–8 ms 抖动 | 栅格 1.5 + present 0.4 + show 0.08 |
+
+剩下的尖峰在 `UpdateLayeredWindow` 本身（p50 0.4 / p90 4.9 ms，随 DWM 调度与窗口逐键移动而抖），不是我们代码里的开销；
+再往下压得动渲染器（阴影 / 逐行位图缓存），或把「窗口逐键跟着光标挪」改成停在原处、停键后再对齐。
+
 ## 经验
 
 1. **先量再改，先打点再改。** 第三轮猜错两次的原因是凭「常识」判断热点（哈希查表、大数组二分都是教科书里的慢点），
