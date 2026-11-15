@@ -1481,6 +1481,9 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 三档（`StatusTipMode`，老配置的 `true` / `false` 仍认：`true` = `all`、`false` = `off`）：
 `off` 不弹；`switched`（「仅切换项」）只显示变了的那几项（`TipState::changed` → `StatusItems` 位掩码，
 `status_cells` 按 `action_item` 过滤，例如按 Shift 只弹中 / 英那一颗）；`all`（「全部状态」）四项都显示。
+`changed` 里有一条例外：中 / 英各记一份「标点全 / 半角」，切语言时标点那格几乎必然跟着翻（缺省「跟随」是
+中文全角、英文半角），**语言变了就不再单独报标点**（`english` 不同则跳过 `PUNCTUATION`），否则「仅切换项」
+会同时亮两颗；用户单独点标点那一格（`english` 没变）时照旧亮标点。
 **过滤只作用于提示窗**：悬浮状态条调 `status_cells(..., None)`，画满 cfg 里全部按钮（含设置 / 小组件 / 符号）。
 窗口由独立窗口模板建（`transparent = true`：`WS_EX_TRANSPARENT` 点不着、`WS_EX_NOACTIVATE` 不抢焦点），
 位置优先贴光标下方、放不下放上方（`place`）；只有和悬浮工具栏重叠时才挪到工具栏上方，其他时候跟着光标走。触发在 Router（`dispatch/status/mod.rs::check_status_tip`）：与 `reconcile_status` 分开，

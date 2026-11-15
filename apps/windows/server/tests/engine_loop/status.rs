@@ -332,6 +332,47 @@ fn switched_only_mode_shows_just_the_changed_item() {
     assert!(!tips[1].items.contains(StatusItems::CHAR_WIDTH));
 }
 
+/// 「仅切换项」：切中 / 英时标点那格会跟着翻（「跟随」下中文全角、英文半角），但那是切语言的
+/// 副作用，不该跟着亮 —— 只显示「中 / 英」这一颗。
+#[test]
+fn switched_only_mode_hides_the_punctuation_that_follows_the_language() {
+    let mut router = router_with_tip(StatusTipMode::Switched);
+    let recorder = RecordingStatus::default();
+    router.set_status_sink(Box::new(recorder.clone()));
+    press(&mut router, letter('n'));
+    router.handle(ClientMessage::PositionCandidates {
+        session: SESSION,
+        rect: ScreenRect {
+            left: 100,
+            top: 200,
+            right: 104,
+            bottom: 220,
+        },
+    });
+    router.handle(ClientMessage::SyncMode {
+        session: SESSION,
+        in_text_input: true,
+        caps: false,
+    });
+    assert!(recorder.tips().is_empty(), "第一拍只是把状态记下来");
+
+    router.handle(ClientMessage::ModeChanged {
+        session: SESSION,
+        mode: InputMode::English,
+    });
+    let tips = recorder.tips();
+    assert_eq!(tips.len(), 1);
+    assert_eq!(tips[0].items, StatusItems::LANG, "只亮中 / 英这一颗");
+    // 标点确实跟着翻了（缺省「跟随」：中文全角、英文半角），只是没单独报一项。
+    assert!(!tips[0].view.full_width_punctuation);
+
+    // 单独切标点（没切语言）仍然亮标点那一格。
+    router.handle_status_event(StatusEvent::TogglePunctuation);
+    let tips = recorder.tips();
+    assert_eq!(tips.len(), 2);
+    assert_eq!(tips[1].items, StatusItems::PUNCTUATION);
+}
+
 /// 焦点不在可输入文本区域里（DLL 报 `in_text_input = false`）时不弹提示。
 #[test]
 fn status_change_tip_skipped_outside_text_input() {

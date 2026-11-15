@@ -229,6 +229,10 @@ pub(super) struct TipState {
 
 impl TipState {
     /// 相对上一拍变了哪几项（Caps Lock 与中 / 英是同一颗按钮）。
+    ///
+    /// 中 / 英各记一份「标点全 / 半角」，所以切语言时标点那格几乎必然跟着翻（中文全角、英文半角）；
+    /// 那是切语言的副作用，不是用户单独动了标点，**不单独报一项** —— 否则「仅切换项」时会同时亮
+    /// 中 / 英与标点两格。
     fn changed(self, previous: Self) -> StatusItems {
         let mut items = StatusItems::none();
         if self.english != previous.english || self.caps != previous.caps {
@@ -237,7 +241,9 @@ impl TipState {
         if self.full_width_chars != previous.full_width_chars {
             items = items.with(StatusItems::CHAR_WIDTH);
         }
-        if self.full_width_punctuation != previous.full_width_punctuation {
+        if self.full_width_punctuation != previous.full_width_punctuation
+            && self.english == previous.english
+        {
             items = items.with(StatusItems::PUNCTUATION);
         }
         if self.traditional != previous.traditional {
