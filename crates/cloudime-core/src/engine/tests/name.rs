@@ -1,4 +1,4 @@
-//! V 模式 `#` 取名：姓氏优先、单双字名、选姓后继续、词库兜底。
+//! V 模式 `#` 取名：先出姓、再一段一段出名字字，选姓后不拼后面几段。
 
 use super::*;
 use crate::name::NameTables;
@@ -25,21 +25,35 @@ fn texts(engine: &Engine) -> Vec<String> {
 }
 
 #[test]
-fn full_name_pinyin_prefers_surname_rank_then_name_table_order() {
+fn before_a_surname_is_chosen_only_surnames_are_offered() {
     let mut engine = name_engine();
+    // 名拼音已经打完了，也先只出姓。
     engine.set_input("v#zhangwei");
-    assert_eq!(texts(&engine), ["张伟", "张卫"]);
+    assert_eq!(texts(&engine), ["张"]);
 
     engine.set_input("v#wangwei");
-    assert_eq!(texts(&engine), ["王伟", "王卫", "汪伟", "汪卫"]);
+    assert_eq!(texts(&engine), ["王", "汪"]);
+}
+
+#[test]
+fn surname_selection_keeps_the_rest_of_the_pinyin() {
+    let mut engine = name_engine();
+    engine.set_input("v#wangwei");
+    assert!(engine.select_name_part("王"));
+    assert_eq!(engine.composition().text(), "v#王wei");
+    assert_eq!(texts(&engine), ["王伟", "王卫"]);
+
+    let candidate = engine.query().unwrap().candidates.items[0].clone();
+    assert_eq!(engine.commit(&candidate), Some("王伟".to_owned()));
 }
 
 #[test]
 fn exact_syllable_beats_a_longer_one_with_the_same_start() {
     let mut engine = name_engine();
-    engine.set_input("v#zhangyi");
+    engine.set_input("v#wangyi");
+    assert!(engine.select_name_part("王"));
     // `yi` 是完整音节：怡 在前；英（ying）只是同前缀，排在后面。
-    assert_eq!(texts(&engine), ["张怡", "张英"]);
+    assert_eq!(texts(&engine), ["王怡", "王英"]);
 }
 
 #[test]
@@ -60,39 +74,14 @@ fn shorter_surname_is_not_read_as_surname_plus_one_given_letter() {
 fn compound_surname_wins_over_its_first_character() {
     let mut engine = name_engine();
     engine.set_input("v#ouyangna");
-    assert_eq!(texts(&engine), ["欧阳娜"]);
+    assert_eq!(texts(&engine), ["欧阳"]);
 }
 
 #[test]
-fn surname_only_then_continue_with_given_name() {
-    let mut engine = name_engine();
-    engine.set_input("v#wang");
-    assert_eq!(texts(&engine), ["王", "汪"]);
-    assert!(engine.name_selection_is_surname("王"));
-    assert!(!engine.name_selection_is_surname("王伟"));
-
-    assert!(engine.select_name_part("王"));
-    assert_eq!(engine.composition().text(), "v#王");
-    let all = texts(&engine);
-    assert!(all.starts_with(&[
-        "王伟".to_owned(),
-        "王卫".to_owned(),
-        "王建".to_owned(),
-        "王国".to_owned()
-    ]));
-    assert!(all.contains(&"王建国".to_owned()));
-
-    let candidate = engine.query().unwrap().candidates.items[0].clone();
-    assert_eq!(engine.commit(&candidate), Some("王伟".to_owned()));
-}
-
-#[test]
-fn literal_surname_lists_both_single_and_double_given_names() {
+fn literal_surname_only_offers_itself_until_pinyin_is_typed() {
     let mut engine = name_engine();
     engine.set_input("v#王");
-    let all = texts(&engine);
-    assert!(all.starts_with(&["王伟".to_owned(), "王卫".to_owned()]));
-    assert!(all.contains(&"王建国".to_owned()));
+    assert_eq!(texts(&engine), ["王"]);
 }
 
 #[test]
@@ -100,6 +89,8 @@ fn rare_single_surname_falls_back_to_dictionary() {
     let mut engine = Engine::new(Dictionary::parse("爨\tcuan\t100\n").unwrap());
     engine.set_name_tables(NameTables::from_tsv(SURNAMES, NAMES).unwrap());
     engine.set_input("v#cuanwei");
+    assert_eq!(texts(&engine), ["爨"]);
+    assert!(engine.select_name_part("爨"));
     assert_eq!(texts(&engine), ["爨伟", "爨卫"]);
 }
 
@@ -108,29 +99,27 @@ fn rare_compound_surname_falls_back_to_dictionary() {
     let mut engine = Engine::new(Dictionary::parse("澹台\tdan tai\t100\n").unwrap());
     engine.set_name_tables(NameTables::from_tsv(SURNAMES, NAMES).unwrap());
     engine.set_input("v#dantaijian");
+    assert_eq!(texts(&engine), ["澹台"]);
+    assert!(engine.select_name_part("澹台"));
     assert_eq!(texts(&engine), ["澹台建"]);
 }
 
-/// 名字表里的字排在词库同音字前面：表里有「建」，词库里的「健」跟在后面。
+#[test]
+fn rare_given_chars_follow_the_common_ones() {
+    let mut engine = Engine::new(Dictionary::parse("玮\twei\t900\n").unwrap());
+    engine.set_name_tables(NameTables::from_tsv(SURNAMES, NAMES).unwrap());
+    engine.set_input("v#wangwei");
+    assert!(engine.select_name_part("王"));
+    assert_eq!(texts(&engine), ["王伟", "王卫", "王玮"]);
+}
+
 #[test]
 fn dictionary_name_chars_come_after_the_table_ones() {
     let mut engine = Engine::new(Dictionary::parse("健\tjian\t900\n").unwrap());
     engine.set_name_tables(NameTables::from_tsv(SURNAMES, NAMES).unwrap());
     engine.set_input("v#zhangjian");
+    assert!(engine.select_name_part("张"));
     assert_eq!(texts(&engine), ["张建", "张健"]);
-}
-
-/// 不常见的名字用字（词库里有、名字表里没有）也能被候选到，只是排在常见名字字后面；
-/// 同音的每个姓都排上（按名字字交错），不会被排名最靠前的那个姓占满。
-#[test]
-fn rare_given_chars_follow_the_common_ones_for_every_surname() {
-    let mut engine = Engine::new(Dictionary::parse("玮\twei\t900\n").unwrap());
-    engine.set_name_tables(NameTables::from_tsv(SURNAMES, NAMES).unwrap());
-    engine.set_input("v#wangwei");
-    assert_eq!(
-        texts(&engine),
-        ["王伟", "王卫", "汪伟", "汪卫", "王玮", "汪玮"]
-    );
 }
 
 /// 罕见姓氏也在候选里，排在常见姓氏后面（表里按排名）。
@@ -140,64 +129,6 @@ fn rare_surnames_come_after_the_common_ones() {
     engine.set_name_tables(NameTables::from_tsv("卫\twei\t214\n隗\twei\t460\n", NAMES).unwrap());
     engine.set_input("v#wei");
     assert_eq!(texts(&engine), ["卫", "隗"]);
-}
-
-/// 词库里现成的姓名整词（`王玮`）优先于读音相同但不是名字的字（`为`）。
-#[test]
-fn dictionary_name_words_rank_before_plain_same_sound_chars() {
-    let mut engine =
-        Engine::new(Dictionary::parse("王玮\twang wei\t800\n为\twei\t9000\n").unwrap());
-    engine.set_name_tables(NameTables::from_tsv("王\twang\t1\n", NAMES).unwrap());
-    engine.set_input("v#wangwei");
-    assert_eq!(texts(&engine), ["王伟", "王卫", "王玮", "王为"]);
-}
-
-/// 双字名逐个取：`v#daishilin` 先给第一个音节的字（`戴石`），选中后剩下的 `lin` 接着取。
-#[test]
-fn given_name_is_taken_one_char_at_a_time() {
-    let mut engine = Engine::new(Dictionary::parse("石\tshi\t900\n麟\tlin\t600\n").unwrap());
-    engine.set_name_tables(NameTables::from_tsv("戴\tdai\t64\n", NAMES).unwrap());
-
-    engine.set_input("v#daishilin");
-    let all = texts(&engine);
-    assert!(all.contains(&"戴石".to_owned()), "{all:?}");
-    assert_eq!(engine.name_next_part("戴石").as_deref(), Some("戴石lin"));
-    assert!(engine.select_name_part("戴石"));
-    assert_eq!(engine.composition().text(), "v#戴石lin");
-
-    let all = texts(&engine);
-    assert!(all.contains(&"戴石麟".to_owned()), "{all:?}");
-    assert!(
-        engine.name_next_part("戴石麟").is_none(),
-        "最后一个字直接上屏"
-    );
-    let candidate = engine
-        .query()
-        .unwrap()
-        .candidates
-        .items
-        .into_iter()
-        .find(|candidate| candidate.text == "戴石麟")
-        .unwrap();
-    assert_eq!(engine.commit(&candidate), Some("戴石麟".to_owned()));
-}
-
-/// 只有一个音节的 `v#daishi` 里 `戴石` 是完整的两字名：选中直接上屏，不留在组句里。
-#[test]
-fn a_full_single_syllable_name_still_commits_directly() {
-    let mut engine = Engine::new(Dictionary::parse("石\tshi\t900\n").unwrap());
-    engine.set_name_tables(NameTables::from_tsv("戴\tdai\t64\n", NAMES).unwrap());
-    engine.set_input("v#daishi");
-    assert!(engine.name_next_part("戴石").is_none());
-    let candidate = engine
-        .query()
-        .unwrap()
-        .candidates
-        .items
-        .into_iter()
-        .find(|candidate| candidate.text == "戴石")
-        .unwrap();
-    assert_eq!(engine.commit(&candidate), Some("戴石".to_owned()));
 }
 
 /// 表里已经有完整姓氏时不再拿词库的单字当姓：`为`、`未` 这类不是姓，别把候选挤乱。
@@ -217,7 +148,62 @@ fn compound_surname_in_the_table_wins_over_its_first_character() {
         NameTables::from_tsv("宣\txuan\t318\n轩辕\txuan yuan\t415\n", NAMES).unwrap(),
     );
     engine.set_input("v#xuanyuanna");
-    assert_eq!(texts(&engine), ["轩辕娜"]);
+    assert_eq!(texts(&engine), ["轩辕"]);
+}
+
+/// 双字名一段一段取：选姓 → 只出第一段（`xiu`）的字 → 选完剩下的拼音接着取。
+#[test]
+fn given_name_is_taken_one_segment_at_a_time() {
+    let mut engine = Engine::new(Dictionary::parse("石\tshi\t900\n麟\tlin\t600\n").unwrap());
+    engine.set_name_tables(NameTables::from_tsv("戴\tdai\t64\n", NAMES).unwrap());
+
+    engine.set_input("v#daishilin");
+    assert_eq!(texts(&engine), ["戴"], "还没选姓：只出姓");
+    assert!(engine.select_name_part("戴"));
+    assert_eq!(engine.composition().text(), "v#戴shilin");
+
+    // 只出第一段（`shi`）的字：`石` 在，第二个音节的 `麟` 还不出。
+    let all = texts(&engine);
+    assert!(all.contains(&"戴石".to_owned()), "{all:?}");
+    assert!(!all.iter().any(|text| text.contains('麟')), "{all:?}");
+    assert_eq!(engine.name_part_after("戴石").as_deref(), Some("戴石lin"));
+
+    assert!(engine.select_name_part("戴石"));
+    assert_eq!(engine.composition().text(), "v#戴石lin");
+    let all = texts(&engine);
+    assert!(all.contains(&"戴石麟".to_owned()), "{all:?}");
+    let candidate = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .find(|candidate| candidate.text == "戴石麟")
+        .unwrap();
+    assert_eq!(engine.commit(&candidate), Some("戴石麟".to_owned()));
+}
+
+/// 名字只剩一段时，选中那个字就是完整名字，直接上屏。
+#[test]
+fn the_last_segment_commits_the_full_name() {
+    let mut engine = Engine::new(Dictionary::parse("石\tshi\t900\n").unwrap());
+    engine.set_name_tables(NameTables::from_tsv("戴\tdai\t64\n", NAMES).unwrap());
+    engine.set_input("v#daishi");
+    assert!(engine.select_name_part("戴"));
+    assert!(texts(&engine).contains(&"戴石".to_owned()));
+    assert!(
+        engine.name_part_after("戴石").is_none(),
+        "最后一段选中就上屏"
+    );
+    let candidate = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .find(|candidate| candidate.text == "戴石")
+        .unwrap();
+    assert_eq!(engine.commit(&candidate), Some("戴石".to_owned()));
 }
 
 #[test]
