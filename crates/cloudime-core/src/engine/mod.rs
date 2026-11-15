@@ -129,6 +129,13 @@ pub struct Engine {
     /// 英文候选的大小写档位（反引号轮换）：每次开一段新拼音回到原样。
     english_case: EnglishCase,
 
+    /// 停键多久之后才出整句候选（`[candidate] sentence_delay_ms`）：`0` 表示立刻出。
+    /// 连着敲的时候只出词级候选，停下再补整句，省掉每键一次 Viterbi。
+    sentence_delay: Duration,
+
+    /// 最后一次按键的时间，配合 [`Self::sentence_delay`] 判断「停够了没有」。
+    last_key: Instant,
+
     /// 联想候选项目上限（配置 `[candidate] candidate_association_counts`，0–4）：候选列表里
     /// 「比读法更长的词」（联想）最多留几条，避免单字输入时被大量联想候选淹没。
     association_counts: usize,
@@ -379,6 +386,8 @@ impl Engine {
             mixture_input: true,
             shuangpin_mixture_input: true,
             english_case: EnglishCase::Lower,
+            sentence_delay: Duration::ZERO,
+            last_key: Instant::now(),
             association_counts: MAX_ASSOCIATION_COUNTS,
             calculator: false,
             word_adjustments: HashMap::new(),

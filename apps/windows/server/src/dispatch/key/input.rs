@@ -703,10 +703,17 @@ impl Router {
     }
 
     /// 当前候选里有没有英文词（反引号轮换大小写只在有英文候选时生效）。
+    /// 中英混合的整句里也有英文词（`你的电脑CPU型号是什么`），一并算上。
     fn has_english_candidate(&self) -> bool {
         (0..self.candidate_count()).any(|index| {
             self.layout_candidate(index)
-                .is_some_and(|candidate| candidate.kind == CandidateKind::English)
+                .is_some_and(|candidate| match candidate.kind {
+                    CandidateKind::English => true,
+                    CandidateKind::Sentence => {
+                        candidate.text.chars().any(|c| c.is_ascii_alphabetic())
+                    }
+                    _ => false,
+                })
         })
     }
 

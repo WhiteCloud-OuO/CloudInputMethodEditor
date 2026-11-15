@@ -151,6 +151,12 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
   候选插进池子时 `sentence_order` 给 1（拼音读法的整句从 2 起），权重照常参与和词候选的比较。
   连续大写字母从第二个起并回拼音缓冲区（`CP` 起整段进缓冲区，`CPU` 才能当英文词），单个大写仍是辅助码
   （`su'A` → 苏A）。回放（36620 词 / 858 整句）与改前一致：词 89.6% / 整句 80.7%。
+  英文词的大小写跟 `english_case` 走（反引号轮换：小写 / 全大写 / 首字母大写）：混合整句在拼词库时按当前档位
+  改显示写法、读法仍是小写；句末英文词的 `mixed_sentence` 单独也套一次。缺省小写，与整段英文候选一致。
+  整句的**停键延时**（`[candidate] sentence_delay_ms`，缺省 500ms，`0` 立即；Core 缺省 0，CLI / 回放不受影响）：
+  `Engine::sentence_delay_pending` 按最后一键的时间判断，没到点 `push_sentences` 与混合读法都不出整句；
+  Server 在 `recompose` 后 `schedule_sentence`，工人循环按 `next_tick` 的剩余时间醒来，`tick` 里 `advance_sentence`
+  到点重查一次、把整句补进候选窗（复用 `requery_rescored` 那条刷新路）。
   词级命中权重 = `词频 × 用户权重因子 × (1+同输入串选择次数) × 上下文系数 × 纠错折扣 × 联想折扣`；上下文系数 =
   `clamp(exp(transition_log_prob − fallback_log_prob), e^-4, e^4)`（`sentence::transition_log_prob`，模型不认识时 log_prob 等于兜底 → 1）；
   联想折扣 = `0.8^k`，`k = max(0, 词字数 − 产生它的读法音节数)`（`lookup_pattern` 带出的更长词）；模糊音命中 0.5。预选按结构键 + 便宜权重

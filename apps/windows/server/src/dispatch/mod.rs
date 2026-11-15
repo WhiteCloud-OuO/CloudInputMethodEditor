@@ -191,6 +191,9 @@ pub struct Router {
     /// 重排的防抖 / 轮询进行态。
     rescore: RescoreState,
 
+    /// 整句候选在等停键（`sentence_delay_ms`）：记下最后一次缓冲变化的时间。
+    sentence_since: Option<Instant>,
+
     /// 本次按键要不要额外挪光标（成对补全把光标停到括号中间 / 跳过右半边），随 `KeyResult` 下发。
     caret_shift: i16,
 
@@ -367,6 +370,7 @@ impl Router {
             sentence_ready: false,
             choice_ready: false,
             rescore: RescoreState::default(),
+            sentence_since: None,
             caret_shift: 0,
             delete_before: 0,
             delete_after: 0,

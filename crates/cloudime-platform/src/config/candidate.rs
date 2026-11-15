@@ -251,6 +251,16 @@ pub struct CandidateConfig {
     /// 在下列程序中让出候选绘制权：宿主读走候选串（`GetString`）后收我们自己的候选窗。
     /// 只给 UI-less / IMM32 桥接这类真的会自己画候选的宿主用；普通宿主不要加（读候选串是常态）。
     pub host_drawn_candidates: Vec<String>,
+
+    /// 停键多久之后才出整句候选（毫秒，`0` 立即出）。连着敲时只出词级候选，停下再补整句：
+    /// 每键一次整句 Viterbi 在长输入上不划算，也免得候选窗边打边跳。
+    #[serde(default = "default_sentence_delay_ms")]
+    pub sentence_delay_ms: u64,
+}
+
+/// 整句延时的缺省值：停键半秒后出。
+fn default_sentence_delay_ms() -> u64 {
+    500
 }
 
 fn default_zhiyi_threads() -> usize {
@@ -283,6 +293,7 @@ impl Default for CandidateConfig {
             candidate_item_maximum_width: DEFAULT_CANDIDATE_ITEM_MAXIMUM_WIDTH,
             program_list_of_hiding_candidate: Vec::new(),
             host_drawn_candidates: Vec::new(),
+            sentence_delay_ms: default_sentence_delay_ms(),
         }
     }
 }

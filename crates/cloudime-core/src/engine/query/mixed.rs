@@ -155,6 +155,8 @@ impl Engine {
         for (is_latin, code, complete, entry) in steps {
             if is_latin {
                 let (word, frequency) = entry?;
+                // 反引号轮换的大小写只改显示 / 上屏的写法，读法（`code`）保持小写匹配
+                let word = self.english_case().apply(&word);
                 source.push_str(&format!("{word}\t{code}\t{frequency}\n"));
                 syllables.push(Syllable::complete(&code));
             } else if complete {

@@ -582,7 +582,7 @@ impl Engine {
         // 中英混合的整句：拼音读法在某一格「出问题」（中间没打完的音节、或切不动留下的尾巴）时，
         // 若那段字母正好是词表里的英文词，就把它当词图里的一个词重新整句。只有英文词盖住出问题那一格
         // 才收：别处的英文词（`me` / `an` 这类也拼得出来的）不足以推翻正常的拼音读法。
-        let mixed = if allow_extras && !plain_ok {
+        let mixed = if allow_extras && !plain_ok && !self.sentence_delay_pending() {
             self.mixed_candidate(keys, mixed_anchor)
         } else {
             None
@@ -1043,6 +1043,10 @@ impl Engine {
         let Some(best) = segmentations.first() else {
             return;
         };
+        // 停键延时没到：这次只出词级候选，壳到点再查一次补上整句
+        if self.sentence_delay_pending() {
+            return;
+        }
         let keys = self.composition.scope();
         let full = keys.chars().filter(|c| *c != '\'').count();
         // 整句按整段读法算，结构键给它最好的一档：覆盖满、无简拼、末音节完整、命中精确。

@@ -9,7 +9,7 @@ mod loader;
 mod state;
 
 use std::path::{Path, PathBuf};
-use std::time::Duration;
+use std::time::{Duration, Instant};
 
 use cloudime_core::CandidateLayout;
 use cloudime_platform::LocalModelMode;
@@ -400,23 +400,49 @@ impl Router {
         }
     }
 
+    /// 缓冲变化之后：整句延时没过就记下时间，工人循环到点补一次整句。
+    pub(super) fn schedule_sentence(&mut self) {
+        self.sentence_since = self.engine.sentence_delay_pending().then(Instant::now);
+    }
+
+    /// 停键够久了：重查一次，把整句候选补进候选窗（与重排回来时的刷新同一条路）。
+    fn advance_sentence(&mut self) {
+        let Some(since) = self.sentence_since else {
+            return;
+        };
+        if since.elapsed() < self.engine.sentence_delay() {
+            return;
+        }
+        self.sentence_since = None;
+        // 这期间又敲了键（延时重新计时）：等下一拍
+        if self.engine.sentence_delay_pending() {
+            return;
+        }
+        self.requery_rescored();
+    }
+
     /// 工人循环下次该多久后来一次 [`Self::tick`]：在等重排就按它的节拍，否则按配置热加载的一秒。
     pub fn next_tick(&self) -> Duration {
         // 脚本有挂着的 HTTP / MCP 请求时收快一点：结果早到就早回调，空转只多一次 mtime 检查。
         if self.scripts.has_pending_requests() {
             return Duration::from_millis(20);
         }
-        self.rescore
-            .next_deadline()
-            .map_or(super::reload::CONFIG_POLL_INTERVAL, |deadline| {
-                deadline.min(super::reload::CONFIG_POLL_INTERVAL)
-            })
+        let mut next = super::reload::CONFIG_POLL_INTERVAL;
+        if let Some(deadline) = self.rescore.next_deadline() {
+            next = next.min(deadline);
+        }
+        // 整句在等停键：到点就醒一次补上整句
+        if let Some(since) = self.sentence_since {
+            next = next.min(self.engine.sentence_delay().saturating_sub(since.elapsed()));
+        }
+        next
     }
 
     /// 到点了：接上加载好的模型、推进重排、看一眼配置文件。工人循环超时与 DLL 的 `Poll` 都会调。
     pub fn tick(&mut self) {
         self.ensure_lazy_sentence();
         self.attach_loaded_model();
+        self.advance_sentence();
         self.advance_rescoring();
         self.poll_config_reload();
         // 脚本的 HTTP 结果也借这一拍收：到了就调回调、按回调要的改候选显示再重画

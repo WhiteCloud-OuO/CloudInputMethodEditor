@@ -45,10 +45,10 @@ fn mixed_sentence_keeps_english_words_in_place() {
 
     engine.set_input("nidediannaocpu");
     let query = engine.query().unwrap();
-    assert_eq!(query.candidates.items[0].text, "你的电脑CPU");
+    assert_eq!(query.candidates.items[0].text, "你的电脑cpu");
     assert_eq!(query.candidates.items[0].kind, CandidateKind::Sentence);
     let sentence = query.candidates.items[0].clone();
-    assert_eq!(engine.commit(&sentence).as_deref(), Some("你的电脑CPU"));
+    assert_eq!(engine.commit(&sentence).as_deref(), Some("你的电脑cpu"));
     assert!(engine.composition().is_empty());
 
     // 大写（Shift / CapsLock）也行：连续大写字母当一段英文文字，不是辅助码
@@ -56,13 +56,65 @@ fn mixed_sentence_keeps_english_words_in_place() {
     assert_eq!(engine.composition().scope(), "nidediannaocpu");
     assert_eq!(
         engine.query().unwrap().candidates.items[0].text,
-        "你的电脑CPU"
+        "你的电脑cpu"
     );
 
     // 单个大写字母仍是辅助码字面量（`su'A`），不进缓冲区
     engine.set_input("su'A");
     assert_eq!(engine.composition().scope(), "su");
     assert!(engine.composition().has_literals());
+}
+
+/// 反引号轮换：中英混合整句里的英文词也跟着小写 → 全大写 → 首字母大写。
+#[test]
+fn mixed_sentence_follows_the_case_switch() {
+    let words = WordList::parse("CPU\tcpu\t3720\n").unwrap();
+    let mut engine =
+        Engine::new(Dictionary::parse("你的\tni de\t9000\n电脑\tdian nao\t8000\n").unwrap())
+            .with_english(words);
+    engine.set_input("nidediannaocpu");
+    let texts: Vec<String> = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect();
+    eprintln!("case={:?} candidates={texts:?}", engine.english_case());
+    assert_eq!(texts[0], "你的电脑cpu");
+    engine.cycle_english_case();
+    assert_eq!(
+        engine.query().unwrap().candidates.items[0].text,
+        "你的电脑CPU"
+    );
+    engine.cycle_english_case();
+    assert_eq!(
+        engine.query().unwrap().candidates.items[0].text,
+        "你的电脑Cpu"
+    );
+}
+
+/// 整句延时：停键不够久时只出词级候选，停够了才补整句。
+#[test]
+fn sentence_delay_holds_the_sentence_until_typing_stops() {
+    let mut engine = Engine::new(Dictionary::parse("你\tni\t9000\n好\thao\t8000\n").unwrap());
+    engine.set_sentence_delay(std::time::Duration::from_millis(30));
+    engine.set_input("nihao");
+    assert!(engine.sentence_delay_pending());
+    let has_sentence = |engine: &Engine| {
+        engine
+            .query()
+            .unwrap()
+            .candidates
+            .items
+            .iter()
+            .any(|candidate| candidate.kind == CandidateKind::Sentence)
+    };
+    assert!(!has_sentence(&engine));
+    std::thread::sleep(std::time::Duration::from_millis(60));
+    assert!(!engine.sentence_delay_pending());
+    assert!(has_sentence(&engine));
 }
 
 #[test]
@@ -405,7 +457,7 @@ fn english_word_at_the_end_of_pinyin_joins_the_sentence() {
             .candidates
             .items
             .iter()
-            .any(|c| c.text == "开发ID")
+            .any(|c| c.text == "开发id")
     );
     engine.set_input("kaifato");
     let all: Vec<String> = engine

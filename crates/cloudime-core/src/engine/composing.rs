@@ -194,6 +194,7 @@ impl Engine {
     }
 
     pub fn push(&mut self, c: char) {
+        self.last_key = Instant::now();
         if self.composition.is_empty() {
             // 新一段组句：从这一键起算耗时、翻页与重打；英文候选大小写回到原样
             self.forced_expression = false;
@@ -225,6 +226,7 @@ impl Engine {
     /// 退格。有已选文本、且未选拼音的光标停在末尾时，先撤回最后一次选择（把中文还原成它的拼音）；
     /// 否则删掉光标前的一个字符。光标在开头、也没有已选段时返回 `false`。
     pub fn backspace(&mut self) -> bool {
+        self.last_key = Instant::now();
         self.note_edit();
         if self.composition.has_selected()
             && self.composition.cursor() == self.composition.buffer_len()

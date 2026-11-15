@@ -114,6 +114,23 @@ impl Engine {
         self.english_case
     }
 
+    /// 停键多久之后才出整句候选（`[candidate] sentence_delay_ms`；`0` 立刻出）。
+    pub fn set_sentence_delay(&mut self, delay: Duration) {
+        self.sentence_delay = delay;
+    }
+
+    pub fn sentence_delay(&self) -> Duration {
+        self.sentence_delay
+    }
+
+    /// 整句还在等停键：组句里、设了延时、且最后一键到现在还不够久。
+    /// 这段时间内 [`Self::query`] 只出词级候选，壳到点再查一次补上整句。
+    pub fn sentence_delay_pending(&self) -> bool {
+        !self.composition.is_empty()
+            && !self.sentence_delay.is_zero()
+            && self.last_key.elapsed() < self.sentence_delay
+    }
+
     /// 联想候选项目上限（配置 `[candidate] candidate_association_counts`，0–4）：候选列表里
     /// 「比读法更长的词」（联想）最多留几条；`0` 表示不显示联想候选。
     pub fn set_association_counts(&mut self, count: usize) {

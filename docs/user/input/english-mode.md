@@ -77,5 +77,6 @@ wozhejiuqugithubshangtiyigeissue → 我这就去GitHub上提一个issue
 
 英文词要能在随包英文词表里查到（`CPU` / `GitHub` / `issue` 都在）；连续大写（按住 Shift 或开着 CapsLock
 打 `CPU`）整段当英文文字，单个大写字母仍是辅助码（`su'A` → 苏A）。查不到的拼写先不认，退回原来的
-整段英文候选与补全。
+整段英文候选与补全。英文词的大小写按 `反引号` 在**小写 → 全大写 → 首字母大写**之间切换
+（缺省小写：`cpu` → `CPU` → `Cpu`），整句里与句末的英文词都算。
 无需切换到英文模式，见 [快捷输入](shortcuts.md)。

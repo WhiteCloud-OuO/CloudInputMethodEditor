@@ -135,9 +135,11 @@ impl Engine {
         let typed = &self.composition.scope()[tail.head_len..];
         let mut syllables = conversion.syllables;
         syllables.push(typed.to_owned());
+        // 反引号轮换的英文大小写两个读法都要跟：句末英文词这里单独拼，`mixed_candidate` 那边另算
+        let word = self.english_case().apply(&tail.word);
         Some((
             Candidate {
-                text: format!("{}{}", conversion.text, tail.word),
+                text: format!("{}{}", conversion.text, word),
                 display: None,
                 kind: CandidateKind::Sentence,
                 syllables,

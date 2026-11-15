@@ -147,6 +147,7 @@ impl Router {
             self.highlight = self.highlight.min(count.saturating_sub(1));
         }
         self.schedule_rescoring();
+        self.schedule_sentence();
         // 引擎排完了：交给脚本看一眼能不能改候选顺序 / 显示（没人登记就什么都不做）
         if self.scripts.has_handlers("candidates") {
             self.let_scripts_reorder_candidates();

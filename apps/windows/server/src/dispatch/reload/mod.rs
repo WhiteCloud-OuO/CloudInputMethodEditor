@@ -152,6 +152,11 @@ impl Router {
             .set_half_wide_after_digit(config.input.use_half_wide_punctuation_marks_after_digital);
         self.engine
             .set_association_counts(config.candidate.association_counts());
+        // 停键多久之后才出整句候选（`[candidate] sentence_delay_ms`，缺省 500ms）
+        self.engine
+            .set_sentence_delay(std::time::Duration::from_millis(
+                config.candidate.sentence_delay_ms,
+            ));
         self.engine.set_traditional_mode(
             config.input.simp_trad_chinese_chars_toggle == cloudime_platform::SimpTrad::Traditional,
         );

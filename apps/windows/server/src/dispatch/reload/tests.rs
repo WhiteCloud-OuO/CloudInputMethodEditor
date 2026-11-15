@@ -143,6 +143,46 @@ fn dictionary_changes_do_not_retry_broken_config() {
     std::fs::remove_dir_all(&dir).unwrap();
 }
 
+/// `[candidate] sentence_delay_ms` 走配置热加载：装配时挂到引擎上（缺省 500ms）。
+#[test]
+fn sentence_delay_follows_config() {
+    let dir = std::env::temp_dir().join(format!("cloudime-reload-delay-{}", std::process::id()));
+    let _ = std::fs::remove_dir_all(&dir);
+    std::fs::create_dir_all(&dir).unwrap();
+    let config_path = dir.join("config.toml");
+    std::fs::write(&config_path, "").unwrap();
+    let default = Config::load(&config_path).unwrap();
+    assert_eq!(default.candidate.sentence_delay_ms, 500, "缺省停键半秒");
+
+    std::fs::write(&config_path, "[candidate]\nsentence_delay_ms = 200\n").unwrap();
+    modified_at(&config_path, 200);
+    let config = Config::load(&config_path).unwrap();
+    let mut router = Router::new(
+        Engine::new(Dictionary::default()),
+        RouterConfig::from(&config),
+    );
+    router.watch_config(
+        &config,
+        config_path.clone(),
+        DataDirs {
+            user_root: Some(dir.clone()),
+            ..DataDirs::default()
+        },
+    );
+    // mtime 变一次才会真正应用（watch_config 已经把当前 mtime 记下了）
+    modified_at(&config_path, 400);
+    poll(&mut router);
+    assert_eq!(router.engine.sentence_delay(), Duration::from_millis(200));
+
+    std::fs::write(&config_path, "[candidate]\nsentence_delay_ms = 0\n").unwrap();
+    modified_at(&config_path, 500);
+    poll(&mut router);
+    assert_eq!(router.engine.sentence_delay(), Duration::ZERO);
+
+    drop(router);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
 /// `[word_bank] rare_items` 改动走配置热加载：装配时挂着的稀有组跟着开关参与 / 退出查询。
 #[test]
 fn rare_items_toggle_follows_config() {
