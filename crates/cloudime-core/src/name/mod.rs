@@ -19,6 +19,9 @@ pub struct SurnameEntry {
     /// 去掉空格 / 撇号的小写拼音（`wang`、`ouyang`）。
     pub pinyin: String,
 
+    /// 音节拆开的小写拼音（`["ou", "yang"]`）：按整词查词库（`欧阳娜`）时要逐音节传。
+    pub syllables: Vec<String>,
+
     /// 排名，越小越靠前。
     pub rank: u32,
 }
@@ -148,9 +151,20 @@ fn parse_surnames(text: &str) -> Result<Vec<SurnameEntry>, NameTableError> {
             .get(2)
             .and_then(|rank| rank.parse().ok())
             .unwrap_or((index + 1) as u32);
+        let syllables = columns
+            .get(1)
+            .map(|pinyin| {
+                pinyin
+                    .split_whitespace()
+                    .map(normalize_pinyin)
+                    .filter(|syllable| !syllable.is_empty())
+                    .collect()
+            })
+            .unwrap_or_default();
         entries.push(SurnameEntry {
             text: text.to_owned(),
             pinyin,
+            syllables,
             rank,
         });
     }
@@ -226,6 +240,7 @@ mod tests {
         assert_eq!(tables.name_count(), 4);
         let ouyang = tables.surnames().iter().find(|s| s.text == "欧阳").unwrap();
         assert_eq!(ouyang.pinyin, "ouyang");
+        assert_eq!(ouyang.syllables, ["ou", "yang"]);
         assert_eq!(ouyang.rank, 401);
     }
 

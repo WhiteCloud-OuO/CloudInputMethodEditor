@@ -2,7 +2,7 @@
 //!
 //! 输入是「姓拼音 + 名拼音」连写（`v#zhangwei`）；中途也可以先选中姓氏，让汉字留在组句里
 //! （`v#王`），再输入名或直接从候选里挑。候选顺序：姓氏按表里的排名（复姓优先），同一姓氏下按
-//! 名字表的行序。
+//! 名字表的行序；**名字表里没有的同音字（罕见名字用字）与表里没有的姓也出，只是排在后面**。
 
 use std::collections::{HashMap, HashSet};
 
@@ -13,7 +13,9 @@ use crate::parser;
 use super::super::Engine;
 
 /// 取名候选一次最多给多少条（窗口再翻页也是这些）。
-const NAME_CANDIDATE_LIMIT: usize = 60;
+///
+/// 比别的模式宽：名字表只有几百个字，罕见名字用字全靠词库补在末尾，留够翻页的距离才够得着。
+const NAME_CANDIDATE_LIMIT: usize = 120;
 
 /// 姓选好、名还没敲时，先给多少个单字名 / 双字名。
 const DEFAULT_GIVEN_SINGLE: usize = 24;
@@ -31,6 +33,19 @@ struct SurnameHit {
 
     /// 排序用：复姓（拼音长）在前，同长按排名。
     rank: u32,
+
+    /// 来自姓氏表（否则是词库兜底的罕见姓）。
+    from_table: bool,
+
+    /// 音节拆开的拼音（`欧阳` → `["ou", "yang"]`），按整词查词库时用。
+    syllables: Vec<String>,
+}
+
+/// 名字字的来源：名字表（常见用字，含双字名）还是词库（同读音的其余字，罕见用字，只出单字）。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum GivenSource {
+    Table,
+    Dictionary,
 }
 
 impl Engine {
@@ -88,19 +103,37 @@ impl Engine {
 
         let mut items = Vec::new();
         let mut seen = HashSet::new();
+        // 词库补的罕见名字字先攒着：常见组合（名字表里的字）全部排完之后，按「同一个名字字 ×
+        // 每个姓」交错补在末尾 —— 复姓与同音的多个姓都有机会拿到它，不会全被排名最靠前的那个姓占满。
+        // 词库里现成的姓名整词（`张玮`）单独一轮排在前面，免得被「张为」「张未」这类字压到几页之后。
+        let mut boosted = Vec::new();
+        let mut rare = Vec::new();
         for surname in self.surname_hits(&body) {
             let remainder = &body[surname.pinyin_len.min(body.len())..];
             if remainder.is_empty() {
                 push_name_candidate(&mut items, &mut seen, surname.text.clone());
                 continue;
             }
-            for given in self.given_candidates(remainder) {
+            for given in self.given_candidates(remainder, GivenSource::Table) {
                 push_name_candidate(&mut items, &mut seen, format!("{}{given}", surname.text));
                 if items.len() >= NAME_CANDIDATE_LIMIT {
                     return items;
                 }
             }
+            let boost = self.name_word_given_chars(&surname.text, &surname.syllables, remainder);
+            let mut boost_seen: HashSet<String> = boost.iter().cloned().collect();
+            let rest: Vec<String> = self
+                .given_candidates(remainder, GivenSource::Dictionary)
+                .into_iter()
+                .filter(|given| boost_seen.insert(given.clone()))
+                .collect();
+            boosted.push((surname.text.clone(), boost));
+            rare.push((surname.text.clone(), rest));
         }
+        if push_given_interleaved(&mut items, &mut seen, &boosted) {
+            return items;
+        }
+        push_given_interleaved(&mut items, &mut seen, &rare);
         items
     }
 
@@ -114,7 +147,26 @@ impl Engine {
         let given = if rest.is_empty() {
             self.default_given_names(tables)
         } else {
-            self.given_candidates(&rest)
+            // 表里的字 → 词库里现成的姓名整词（`张玮`）→ 其余同音字。
+            let mut given = self.given_candidates(&rest, GivenSource::Table);
+            let mut seen: HashSet<String> = given.iter().cloned().collect();
+            let syllables: &[String] = tables
+                .surnames()
+                .iter()
+                .find(|entry| entry.text == surname)
+                .map(|entry| entry.syllables.as_slice())
+                .unwrap_or_default();
+            for text in self.name_word_given_chars(surname, syllables, &rest) {
+                if seen.insert(text.clone()) {
+                    given.push(text);
+                }
+            }
+            for text in self.given_candidates(&rest, GivenSource::Dictionary) {
+                if seen.insert(text.clone()) {
+                    given.push(text);
+                }
+            }
+            given
         };
         let mut items = Vec::new();
         let mut seen = HashSet::new();
@@ -134,8 +186,15 @@ impl Engine {
         } else {
             Vec::new()
         };
+        // 表里没有完整对上的姓才退回词库。表里已经有时不再补：`zhangwei` 里的「张伟」「长」「涨」
+        // 都不是姓，补进来只会把真正的姓名挤到后面。
         if !hits.iter().any(|hit| hit.complete) {
-            hits.extend(self.dictionary_surname_hits(body));
+            let mut seen: HashSet<String> = hits.iter().map(|hit| hit.text.clone()).collect();
+            hits.extend(
+                self.dictionary_surname_hits(body)
+                    .into_iter()
+                    .filter(|hit| seen.insert(hit.text.clone())),
+            );
         }
         // 同一段输入有更长的完整姓氏时，短姓氏只是把多出来的字母当成了名的开头：
         // `wang` 是 王 / 汪，不该再出「万 + g」。
@@ -151,6 +210,7 @@ impl Engine {
             right
                 .pinyin_len
                 .cmp(&left.pinyin_len)
+                .then_with(|| right.from_table.cmp(&left.from_table))
                 .then_with(|| left.rank.cmp(&right.rank))
         });
         hits
@@ -173,6 +233,8 @@ impl Engine {
                         pinyin_len: end,
                         complete: true,
                         rank: u32::MAX.saturating_sub(frequency),
+                        from_table: false,
+                        syllables: vec![syllable.to_owned()],
                     });
                 }
             }
@@ -201,6 +263,8 @@ impl Engine {
                                 pinyin_len: second_end,
                                 complete: true,
                                 rank: u32::MAX.saturating_sub(hit.frequency),
+                                from_table: false,
+                                syllables: vec![first.to_owned(), second.to_owned()],
                             });
                         }
                     }
@@ -210,15 +274,60 @@ impl Engine {
         hits
     }
 
-    /// 名字部分：单字名与双字名都出；表里的字优先，表里没有该读音才查词库。
-    fn given_candidates(&self, pinyin: &str) -> Vec<String> {
+    /// 词库里现成的「姓 + 单字名」整词（`张玮`、`张巍`）—— 这些名字字排在同音词库字前面，
+    /// 免得罕见名字字被「张为」「张未」这类常见的非名字字压到几页之后。
+    ///
+    /// 只在名正好是一个完整音节时查；返回单字（按整词词频降序）。
+    fn name_word_given_chars(
+        &self,
+        surname: &str,
+        syllables: &[String],
+        remainder: &str,
+    ) -> Vec<String> {
+        if syllables.is_empty() || !parser::is_syllable(remainder) {
+            return Vec::new();
+        }
+        let mut pattern: Vec<&str> = syllables.iter().map(String::as_str).collect();
+        pattern.push(remainder);
+        let surname_chars = surname.chars().count();
+        let mut hits: Vec<(String, u32)> = Vec::new();
+        let mut seen = HashSet::new();
+        for dictionary in self.all_dictionaries() {
+            for hit in dictionary.lookup(&pattern, false) {
+                if !hit.exact || hit.text.chars().count() != surname_chars + 1 {
+                    continue;
+                }
+                let Some(given) = hit.text.strip_prefix(surname) else {
+                    continue;
+                };
+                if given.is_empty() || !seen.insert(given.to_owned()) {
+                    continue;
+                }
+                hits.push((given.to_owned(), hit.frequency));
+            }
+        }
+        hits.sort_by_key(|(_, frequency)| std::cmp::Reverse(*frequency));
+        hits.into_iter().map(|(text, _)| text).collect()
+    }
+
+    /// 名字部分。`source` 决定只取名字表（常见用字，含双字名）还是只取词库（同读音的其余字，
+    /// 罕见名字用字，只出单字）—— 调用方先出表里的，再把词库那份排在后面。
+    fn given_candidates(&self, pinyin: &str, source: GivenSource) -> Vec<String> {
+        if pinyin.is_empty() {
+            return Vec::new();
+        }
+        match source {
+            GivenSource::Table => self.table_given_candidates(pinyin),
+            GivenSource::Dictionary => self.dictionary_given_candidates(pinyin),
+        }
+    }
+
+    /// 名字表里的名字字：单字名（整音节命中 → 更长音节的前缀命中）在前，双字名在后。
+    fn table_given_candidates(&self, pinyin: &str) -> Vec<String> {
         let mut items = Vec::new();
         let mut seen = HashSet::new();
-        if pinyin.is_empty() {
-            return items;
-        }
 
-        for text in self.name_chars_ordered(pinyin) {
+        for text in self.table_name_chars_ordered(pinyin) {
             if seen.insert(text.clone()) {
                 items.push(text);
             }
@@ -230,11 +339,11 @@ impl Engine {
         // 双字名：前一个字必须是完整音节，后一个字可以还没打完。
         for split in 1..pinyin.len() {
             let (left, right) = pinyin.split_at(split);
-            let left_chars = self.name_chars(left, false);
+            let left_chars = self.table_name_chars(left, false);
             if left_chars.is_empty() {
                 continue;
             }
-            let right_chars = self.name_chars_ordered(right);
+            let right_chars = self.table_name_chars_ordered(right);
             for first in &left_chars {
                 for second in &right_chars {
                     let text = format!("{first}{second}");
@@ -250,17 +359,35 @@ impl Engine {
         items
     }
 
-    /// 名字字：先整音节命中的（`yi` → 怡 / 艺），再排在后面补上更长音节的前缀命中
-    /// （`yi` → 英 / 颖）。
-    fn name_chars_ordered(&self, pinyin: &str) -> Vec<String> {
+    /// 词库里同读音、名字表里没有的字（罕见名字用字）：整音节命中在前，更长音节的前缀命中在后，
+    /// 各按词频降序。只出单字 —— 双字名交给名字表，不然组合数会炸。
+    fn dictionary_given_candidates(&self, pinyin: &str) -> Vec<String> {
         let mut items = Vec::new();
         let mut seen = HashSet::new();
-        for text in self.name_chars(pinyin, false) {
+        for partial in [false, true] {
+            for (text, _) in self.dictionary_chars(pinyin, partial) {
+                if seen.insert(text.clone()) {
+                    items.push(text);
+                }
+                if items.len() >= NAME_CANDIDATE_LIMIT {
+                    return items;
+                }
+            }
+        }
+        items
+    }
+
+    /// 名字表里的字：先整音节命中的（`yi` → 怡 / 艺），再排在后面补上更长音节的前缀命中
+    /// （`yi` → 英 / 颖）。
+    fn table_name_chars_ordered(&self, pinyin: &str) -> Vec<String> {
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+        for text in self.table_name_chars(pinyin, false) {
             if seen.insert(text.clone()) {
                 items.push(text);
             }
         }
-        for text in self.name_chars(pinyin, true) {
+        for text in self.table_name_chars(pinyin, true) {
             if seen.insert(text.clone()) {
                 items.push(text);
             }
@@ -293,22 +420,19 @@ impl Engine {
         items
     }
 
-    /// 名字字的候选：名字表里有这个读音就只用表里的，没有才退回词库。
-    fn name_chars(&self, pinyin: &str, partial: bool) -> Vec<String> {
-        if let Some(tables) = &self.names {
-            let hits: Vec<String> = tables
-                .name_chars(pinyin, partial)
-                .into_iter()
-                .map(|entry| entry.text.clone())
-                .collect();
-            if !hits.is_empty() {
-                return hits;
-            }
-        }
-        self.dictionary_chars(pinyin, partial)
-            .into_iter()
-            .map(|(text, _)| text)
-            .collect()
+    /// 名字表里这个读音的字；表里没有这个读音就是空的（词库那份由
+    /// [`Self::dictionary_given_candidates`] 补）。
+    fn table_name_chars(&self, pinyin: &str, partial: bool) -> Vec<String> {
+        self.names
+            .as_ref()
+            .map(|tables| {
+                tables
+                    .name_chars(pinyin, partial)
+                    .into_iter()
+                    .map(|entry| entry.text.clone())
+                    .collect()
+            })
+            .unwrap_or_default()
     }
 
     /// 词库里读音匹配的单字，按词频降序（跨主词库 / 稀有词库 / 附加词库去重）。
@@ -347,6 +471,8 @@ fn table_surname_hits(tables: &NameTables, body: &str) -> Vec<SurnameHit> {
                 pinyin_len: entry.pinyin.len(),
                 complete: true,
                 rank: entry.rank,
+                from_table: true,
+                syllables: entry.syllables.clone(),
             });
         }
     }
@@ -360,6 +486,8 @@ fn table_surname_hits(tables: &NameTables, body: &str) -> Vec<SurnameHit> {
             pinyin_len: body.len(),
             complete: false,
             rank: entry.rank,
+            from_table: true,
+            syllables: entry.syllables.clone(),
         });
     }
     hits
@@ -384,6 +512,32 @@ fn push_name_candidate(items: &mut Vec<Candidate>, seen: &mut HashSet<String>, t
         return;
     }
     items.push(name_candidate(text));
+}
+
+/// 按名字字交错：同一个名字字依次给每个姓各来一条，再轮到下一个名字字。
+/// 返回是否已经到上限（调用方直接收工）。
+fn push_given_interleaved(
+    items: &mut Vec<Candidate>,
+    seen: &mut HashSet<String>,
+    groups: &[(String, Vec<String>)],
+) -> bool {
+    let widest = groups
+        .iter()
+        .map(|(_, given)| given.len())
+        .max()
+        .unwrap_or(0);
+    for index in 0..widest {
+        for (surname, given) in groups {
+            let Some(given) = given.get(index) else {
+                continue;
+            };
+            push_name_candidate(items, seen, format!("{surname}{given}"));
+            if items.len() >= NAME_CANDIDATE_LIMIT {
+                return true;
+            }
+        }
+    }
+    false
 }
 
 fn name_candidate(text: String) -> Candidate {

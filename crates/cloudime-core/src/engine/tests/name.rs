@@ -111,12 +111,65 @@ fn rare_compound_surname_falls_back_to_dictionary() {
     assert_eq!(texts(&engine), ["澹台建"]);
 }
 
+/// 名字表里的字排在词库同音字前面：表里有「建」，词库里的「健」跟在后面。
 #[test]
-fn name_table_blocks_dictionary_fallback_for_the_same_reading() {
+fn dictionary_name_chars_come_after_the_table_ones() {
     let mut engine = Engine::new(Dictionary::parse("健\tjian\t900\n").unwrap());
     engine.set_name_tables(NameTables::from_tsv(SURNAMES, NAMES).unwrap());
     engine.set_input("v#zhangjian");
-    assert_eq!(texts(&engine), ["张建"]);
+    assert_eq!(texts(&engine), ["张建", "张健"]);
+}
+
+/// 不常见的名字用字（词库里有、名字表里没有）也能被候选到，只是排在常见名字字后面；
+/// 同音的每个姓都排上（按名字字交错），不会被排名最靠前的那个姓占满。
+#[test]
+fn rare_given_chars_follow_the_common_ones_for_every_surname() {
+    let mut engine = Engine::new(Dictionary::parse("玮\twei\t900\n").unwrap());
+    engine.set_name_tables(NameTables::from_tsv(SURNAMES, NAMES).unwrap());
+    engine.set_input("v#wangwei");
+    assert_eq!(
+        texts(&engine),
+        ["王伟", "王卫", "汪伟", "汪卫", "王玮", "汪玮"]
+    );
+}
+
+/// 罕见姓氏也在候选里，排在常见姓氏后面（表里按排名）。
+#[test]
+fn rare_surnames_come_after_the_common_ones() {
+    let mut engine = Engine::new(Dictionary::parse(SAMPLE).unwrap());
+    engine.set_name_tables(NameTables::from_tsv("卫\twei\t214\n隗\twei\t460\n", NAMES).unwrap());
+    engine.set_input("v#wei");
+    assert_eq!(texts(&engine), ["卫", "隗"]);
+}
+
+/// 词库里现成的姓名整词（`王玮`）优先于读音相同但不是名字的字（`为`）。
+#[test]
+fn dictionary_name_words_rank_before_plain_same_sound_chars() {
+    let mut engine =
+        Engine::new(Dictionary::parse("王玮\twang wei\t800\n为\twei\t9000\n").unwrap());
+    engine.set_name_tables(NameTables::from_tsv("王\twang\t1\n", NAMES).unwrap());
+    engine.set_input("v#wangwei");
+    assert_eq!(texts(&engine), ["王伟", "王卫", "王玮", "王为"]);
+}
+
+/// 表里已经有完整姓氏时不再拿词库的单字当姓：`为`、`未` 这类不是姓，别把候选挤乱。
+#[test]
+fn dictionary_chars_are_not_used_as_surnames_when_the_table_matches() {
+    let mut engine = Engine::new(Dictionary::parse("为\twei\t9000\n未\twei\t9000\n").unwrap());
+    engine.set_name_tables(NameTables::from_tsv("卫\twei\t214\n", NAMES).unwrap());
+    engine.set_input("v#wei");
+    assert_eq!(texts(&engine), ["卫"]);
+}
+
+/// 复姓在表里时，哪怕它的首字也是表里的完整姓氏（宣 / 轩辕），也优先出复姓。
+#[test]
+fn compound_surname_in_the_table_wins_over_its_first_character() {
+    let mut engine = Engine::new(Dictionary::parse(SAMPLE).unwrap());
+    engine.set_name_tables(
+        NameTables::from_tsv("宣\txuan\t318\n轩辕\txuan yuan\t415\n", NAMES).unwrap(),
+    );
+    engine.set_input("v#xuanyuanna");
+    assert_eq!(texts(&engine), ["轩辕娜"]);
 }
 
 #[test]
