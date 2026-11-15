@@ -56,6 +56,11 @@ impl Router {
         let updates = dirs.user_root.as_deref().map(|dir| {
             cloudime_update::Checker::new(dir.join(UPDATE_STATE_FILE), env!("CARGO_PKG_VERSION"))
         });
+        let smart_symbol_mtime = dirs
+            .user_root
+            .as_deref()
+            .map(|dir| mtime(&super::key::smart_symbol::rules_path(dir)))
+            .unwrap_or(None);
         self.reload = Some(ConfigReload {
             config_path,
             last_check: Instant::now(),
@@ -63,6 +68,7 @@ impl Router {
             last_mtime,
             dictionary_files,
             phrase_files,
+            smart_symbol_mtime,
             update: config.update.clone(),
             use_default_phrases: config.phrase.use_default_phrases,
             updates,
@@ -96,6 +102,18 @@ impl Router {
         if phrases_changed {
             reload.phrase_files = phrases;
         }
+        // 智能符号的用户规则改了（设置页点「修改配置」编辑过）：重读一份。
+        let smart_symbol_rules = {
+            let current = reload
+                .dirs
+                .user_root
+                .as_deref()
+                .map(|dir| mtime(&super::key::smart_symbol::rules_path(dir)))
+                .unwrap_or(None);
+            let changed = current != reload.smart_symbol_mtime;
+            reload.smart_symbol_mtime = current;
+            changed
+        };
         let config_changed = {
             let current = mtime(&reload.config_path);
             let changed = current != reload.last_mtime;
@@ -114,6 +132,16 @@ impl Router {
         }
         if phrases_changed {
             self.reload_phrases();
+        }
+        if smart_symbol_rules {
+            let dir = self
+                .reload
+                .as_ref()
+                .and_then(|reload| reload.dirs.user_root.clone());
+            if let Some(dir) = dir {
+                self.load_smart_symbol_rules(&dir);
+                tracing::info!("智能符号规则已热加载");
+            }
         }
     }
 

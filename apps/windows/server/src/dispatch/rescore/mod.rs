@@ -375,7 +375,7 @@ impl Router {
         // 脚本的 `cloudime.context`：`key` 触发脚本每个按键前现读的那份前文走这里
         self.surrounding = text.clone();
         // 智能符号：DLL 前文是光标前最可靠的来源；空串不覆盖本进程刚上屏的文字
-        self.note_text_before_caret(text.chars().next_back());
+        self.note_text_before_caret(&text);
         // 本地整句模型的前文只在组句里有意义：没组句就到这儿（引擎那边保持无前文）
         if self.engine.composition().is_empty() {
             self.engine.set_rescoring_context(None);

@@ -15,7 +15,9 @@ path = "src/main.rs"
 embed-manifest.workspace = true
 
 [dependencies]
+serde.workspace = true
 serde_json.workspace = true
+regex.workspace = true
 cloudime-core.workspace = true
 cloudime-dictionary.workspace = true
 cloudime-learning.workspace = true

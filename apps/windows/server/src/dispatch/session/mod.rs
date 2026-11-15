@@ -128,6 +128,7 @@ impl Router {
         self.pending_commit = None;
         // 光标位置 / 焦点变了：智能符号的本地前文与双击空格状态都不能再用
         self.smart_before = None;
+        self.smart_text.clear();
         self.smart_guard = None;
         self.smart_space = None;
         self.translate.end_choices();

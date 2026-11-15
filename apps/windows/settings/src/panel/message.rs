@@ -43,6 +43,8 @@ pub(crate) enum Message {
     FullHalfPunctuation(Option<usize>),
     /// 智能符号（`[input] smart_symbols`）。
     SmartSymbols(bool),
+    /// 打开智能符号的自定义规则文件（`%APPDATA%\CloudIME\intelligent-symbol.json`）。
+    OpenSmartSymbols,
     /// 成对补全的位下标（见 `PAIRWISE_COMPLETION_BITS`）+ 新值。
     PairwiseCompletion(usize, bool),
     /// 符号映射的位下标（见 `PUNCTUATION_MAPPING_BITS`）+ 新值。

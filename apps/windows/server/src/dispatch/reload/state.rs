@@ -64,6 +64,9 @@ pub(crate) struct ConfigReload {
     /// 最近加载的短语库快照。
     pub(super) phrase_files: Vec<(PathBuf, Option<SystemTime>, u64)>,
 
+    /// 上次看到的 `intelligent-symbol.json` 的 mtime（智能符号的用户规则）。
+    pub(super) smart_symbol_mtime: Option<SystemTime>,
+
     /// 当前的 `[update]`。
     pub(super) update: UpdateConfig,
 

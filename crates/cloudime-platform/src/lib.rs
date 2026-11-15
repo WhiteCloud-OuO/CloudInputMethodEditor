@@ -11,6 +11,7 @@ pub mod migrate;
 pub mod phrase;
 pub mod protocol;
 pub mod resources;
+pub mod smart_symbol;
 mod theme;
 pub mod word_bank;
 

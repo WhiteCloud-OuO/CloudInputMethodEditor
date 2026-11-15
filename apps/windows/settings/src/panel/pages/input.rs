@@ -514,10 +514,18 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             "smart-symbols",
             field(
                 "智能符号（空格）",
-                "中文模式下没在组句时，空格按光标前一个字换成标点：单个空格出逗号；1 秒内连按两个空格出对应的标点（「说」后出「：“」，吗 / 呢 / 嘛出「？」，呀 / 啊 / 哟 / 唷 / 哇 / 哦 / 喔 / 噢出「！」，呜 / 嘶 / 吱 / 嘎出「——」，其他汉字出「。」）。前一个字不是汉字时仍是普通空格。缺省关闭。",
-                ToggleSwitch::new()
-                    .is_on(input.smart_symbols)
-                    .on_toggled(context.callback(Message::SmartSymbols)),
+                "中文模式下没在组句时，空格按光标前的内容换成标点：单个空格出逗号；1 秒内连按两个空格出对应的标点——先按「修改配置」里的规则匹配光标前那一整句（正则，例如「吗$」出问号、「啊$」出叹号），没命中按光标前一个字用内置规则（说 →「：“」，吗 / 呢 / 嘛 →「？」，呀 / 啊 / 哟 / 唷 / 哇 / 哦 / 喔 / 噢 →「！」，呜 / 嘶 / 吱 / 嘎 →「——」），最后兜底句号「。」。逗号 / 顿号 / 分号不断句。前一个字不是汉字时仍是普通空格。缺省关闭。",
+                StackPanel::new()
+                    .orientation(Orientation::Horizontal)
+                    .spacing(12.0)
+                    .children((
+                        ToggleSwitch::new()
+                            .is_on(input.smart_symbols)
+                            .on_toggled(context.callback(Message::SmartSymbols)),
+                        Button::new()
+                            .on_click(context.message(Message::OpenSmartSymbols))
+                            .content("修改配置"),
+                    )),
             ),
         ),
         KeyedView::new(

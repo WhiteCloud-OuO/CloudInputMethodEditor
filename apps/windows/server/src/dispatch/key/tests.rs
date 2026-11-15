@@ -1601,6 +1601,71 @@ fn double_space_after_say_opens_a_quote_and_follows_pairwise_completion() {
     assert_eq!(delete_before, 1, "删掉第一击的逗号");
 }
 
+/// 用户规则（`intelligent-symbol.json`）：按光标前**一整句**匹配，逗号不断句。
+#[test]
+fn user_rules_match_the_whole_sentence_before_the_caret() {
+    let normal = KeyModifiers::default();
+    let dir = smart_rules_dir(
+        "whole-sentence",
+        r#"[{ "symbol": "！", "trigger": ["吧$"] }]"#,
+    );
+    let mut r = smart_router(5);
+    r.focused = Some(SessionId(1));
+    r.load_smart_symbol_rules(&dir);
+    // 中间有逗号，仍算一句：`吧$` 命中，出用户配置的「！」而不是内置的「。」。
+    surrounding(&mut r, "明天下雨天，干脆不出门了吧");
+    assert_eq!(
+        key_details(&mut r, 0x20, Some(' '), normal).1.as_deref(),
+        Some("，"),
+        "第一击仍是逗号"
+    );
+    let (_, commit, _, delete_before) = key_details(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(commit.as_deref(), Some("！"));
+    assert_eq!(delete_before, 1);
+}
+
+/// 用户规则没命中时走内置规则；内置规则最后兜底句号。
+#[test]
+fn user_rules_fall_back_to_the_builtin_symbols() {
+    let normal = KeyModifiers::default();
+    let dir = smart_rules_dir("fallback", r#"[{ "symbol": "……", "trigger": ["吧$"] }]"#);
+    for (before, expected) in [("好吗", "？"), ("好", "。")] {
+        let mut r = smart_router(5);
+        r.focused = Some(SessionId(1));
+        r.load_smart_symbol_rules(&dir);
+        surrounding(&mut r, before);
+        key_details(&mut r, 0x20, Some(' '), normal);
+        let (_, commit, _, _) = key_details(&mut r, 0x20, Some(' '), normal);
+        assert_eq!(commit.as_deref(), Some(expected), "{before}");
+    }
+}
+
+/// 光标前的句子从最后一个句末标点之后算起：上一句里的字不参与匹配。
+#[test]
+fn user_rules_only_see_the_current_sentence() {
+    let normal = KeyModifiers::default();
+    let dir = smart_rules_dir("sentence", r#"[{ "symbol": "！", "trigger": ["吧$"] }]"#);
+    let mut r = smart_router(5);
+    r.focused = Some(SessionId(1));
+    r.load_smart_symbol_rules(&dir);
+    surrounding(&mut r, "干脆不出门了吧。今天天气不错");
+    key_details(&mut r, 0x20, Some(' '), normal);
+    let (_, commit, _, _) = key_details(&mut r, 0x20, Some(' '), normal);
+    assert_eq!(commit.as_deref(), Some("。"), "上一句的「吧」不算数");
+}
+
+/// 一份临时的用户规则文件（目录里放的 `intelligent-symbol.json`）。
+fn smart_rules_dir(name: &str, json: &str) -> std::path::PathBuf {
+    let dir = std::env::temp_dir().join(format!("cloudime-smart-symbol-{name}"));
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(
+        dir.join(cloudime_platform::smart_symbol::SMART_SYMBOL_FILE),
+        json,
+    )
+    .unwrap();
+    dir
+}
+
 #[test]
 fn double_space_picks_the_symbol_after_the_right_character() {
     let normal = KeyModifiers::default();

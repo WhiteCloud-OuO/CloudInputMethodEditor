@@ -468,6 +468,16 @@ DLL 据此在**组句里**把这一个键送来问一趟（`eats_key` 里那条�
 **小于 1 秒**）用 `delete_before` 撤掉第一击再按那个字换成 `？` / `！` / `——` / `。`，`说` 换成 `：“`
 （成对补全开着时连 `”` 一起补、光标停在中间）。超时的那一下按普通空格处理，不另起后台定时器，
 只记第一击的 `Instant`，第二击进来时比较。
+
+2026-11-15 加了**用户自定义规则**（`dispatch/key/smart_symbol/rules.rs`）：第二击先拿光标前那一整句
+去匹配 `%APPDATA%\CloudIME\intelligent-symbol.json`（文件是一组 `{ "symbol": "？", "trigger": ["吗$"] }`，
+顶层数组或 `{ "rules": [...] }` 都认，正则按 `regex` crate 编译、坏的一条只跳过那一条），命中就用用户符号；
+没命中再走 `smart_space_double`，最终兜底句号。**整句**的边界是句号 / 问号 / 叹号 / 省略号 / 换行
+（`rules::current_sentence`）；逗号 / 顿号 / 分号不断句，符合现代汉语的句子划分。文件路径与示例模板
+（`SMART_SYMBOL_FILE` / `SMART_SYMBOL_TEMPLATE`）在 `cloudime_platform::smart_symbol`，设置页那个开关右边
+的「修改配置」按钮负责「没有就写模板、再用默认程序打开」。规则文件按 mtime 随配置那一拍热加载
+（`reload::poll_config_reload`）。`Router.smart_text` 是本地那份光标前文（DLL 前文 + 本进程刚上屏的文本，
+最多 160 字），`smart_before` 仍只记最后一个字给内置规则用。
 `Router.smart_before` 由 DLL 前文与本进程刚上屏的文本共同维护；`stop_rescoring` 清 `surrounding` 时**不**清它，
 否则每次选完词都要等下一份前文。
 

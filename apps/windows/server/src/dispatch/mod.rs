@@ -213,6 +213,13 @@ pub struct Router {
     /// 光标前一个字符（智能符号用）：DLL 送来的前文，或本进程刚上屏的文本。
     smart_before: Option<char>,
 
+    /// 光标前的本地前文（智能符号按**整句**匹配用户规则用）：DLL 送来的前文 + 本进程刚上屏的文本，
+    /// 只留最后 [`key::smart_symbol::SMART_TEXT_CHARS`] 个字。
+    smart_text: String,
+
+    /// 智能符号的用户规则（`intelligent-symbol.json`）：双击空格时先按它匹配整句。
+    smart_symbols: key::smart_symbol::Rules,
+
     /// 刚上屏文本对应的「光标前一个字符」：DLL 前文若对不上，说明它是上屏**之前**读的，先忽略一次。
     smart_guard: Option<char>,
 
@@ -381,6 +388,8 @@ impl Router {
             delete_after: 0,
             pending_close: None,
             smart_before: None,
+            smart_text: String::new(),
+            smart_symbols: key::smart_symbol::Rules::default(),
             smart_guard: None,
             smart_space: None,
             restart_pending: false,

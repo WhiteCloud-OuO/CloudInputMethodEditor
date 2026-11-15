@@ -299,6 +299,10 @@ fn main() {
             },
         );
     }
+    // 智能符号的用户规则（`%APPDATA%\CloudIME\intelligent-symbol.json`）：双击空格时按整句匹配。
+    if let Some(user) = user_dir() {
+        router.load_smart_symbol_rules(&user);
+    }
     tracing::info!(
         dict = %dict.display(),
         page_size = router_config.page_size,

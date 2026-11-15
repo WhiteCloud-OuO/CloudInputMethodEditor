@@ -169,6 +169,20 @@ impl Component for Settings {
             }
             Message::MixtureInput(on) => self.save("input", "mixture_input", on),
             Message::SmartSymbols(on) => self.save("input", "smart_symbols", on),
+            Message::OpenSmartSymbols => {
+                let path = self
+                    .data_dir()
+                    .join(cloudime_platform::smart_symbol::SMART_SYMBOL_FILE);
+                if !path.exists()
+                    && let Err(error) = std::fs::write(
+                        &path,
+                        cloudime_platform::smart_symbol::SMART_SYMBOL_TEMPLATE,
+                    )
+                {
+                    crate::log::warn(format!("写 {} 失败: {error}", path.display()));
+                }
+                open_document(&path);
+            }
             Message::FullHalfPunctuation(Some(i)) if i < FullHalfPunctuation::ALL.len() => {
                 self.save(
                     "input",
