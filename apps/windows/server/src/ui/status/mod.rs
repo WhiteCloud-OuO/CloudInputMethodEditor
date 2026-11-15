@@ -176,19 +176,24 @@ impl StatusBar {
 
     /// 渲染器要的一排按钮：按 cfg 的 `pos` 从左到右，每个按钮按当前状态挑图标；`limit` 只取前几个
     /// （状态切换提示只要前四个），画满状态条时传 [`TIP_BUTTONS`] 之外的大数（`usize::MAX`）。
-    /// `items` 再按「哪几项」过滤：`全部状态` 传 [`StatusItems::all()`]，`仅切换项` 只放变的那几项。
+    /// `items` 只有提示窗（[`Self::status_cells`] 的调用方 [`StatusIcons::cells`]）才传：
+    /// `全部状态` 是 [`StatusItems::all()`]、`仅切换项` 只放变的那几项；悬浮状态条传 `None`
+    /// —— 它要画满 cfg 里全部按钮（含设置 / 小组件 / 符号这几颗），不能跟着提示过滤。
     fn status_cells(
         view: &StatusView,
         arrangement: &Arrangement,
         caps: bool,
         limit: usize,
-        items: StatusItems,
+        items: Option<StatusItems>,
     ) -> Vec<StatusCell> {
         let state = Self::button_state(view, caps);
         arrangement
             .buttons
             .iter()
-            .filter(|button| action_item(button.action).is_some_and(|item| items.contains(item)))
+            .filter(|button| match items {
+                None => true,
+                Some(items) => action_item(button.action).is_some_and(|item| items.contains(item)),
+            })
             .take(limit)
             .map(|button| StatusCell::icon(button.svg(&state)))
             .collect()
@@ -223,7 +228,7 @@ impl StatusBar {
             &arrangement,
             self.placement.caps.get(),
             usize::MAX,
-            StatusItems::all(),
+            None,
         );
         let rendered = match (cells.is_empty(), self.painter.borrow_mut().as_mut()) {
             (false, Some(painter)) => {
@@ -344,7 +349,7 @@ impl StatusIcons {
         items: StatusItems,
     ) -> Vec<StatusCell> {
         self.arrangement.refresh();
-        StatusBar::status_cells(view, &self.arrangement, caps, TIP_BUTTONS, items)
+        StatusBar::status_cells(view, &self.arrangement, caps, TIP_BUTTONS, Some(items))
     }
 }
 

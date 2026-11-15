@@ -326,6 +326,47 @@ mod tests {
         assert_eq!(buttons[0].svg(&state()), "<svg id=\"ch\"/>");
     }
 
+    /// 悬浮状态条画满 cfg 里全部按钮（含设置 / 小组件 / 符号），只有提示窗才按「哪几项」过滤。
+    #[test]
+    fn the_status_bar_keeps_every_button_while_the_tip_filters() {
+        use super::super::{StatusBar, TIP_BUTTONS};
+        use crate::dispatch::{StatusItems, StatusView};
+
+        let file = fixture(
+            "filter",
+            "button=ch; icon=icons\\ch.svg; pos=0\n\
+             button=half; icon=icons\\half.svg; pos=1\n\
+             button=options; icon=icons\\options.svg; pos=2\n",
+        );
+        let buttons = parse(&file, &std::fs::read_to_string(&file).unwrap());
+        let arrangement = Arrangement {
+            file: Some(file),
+            stamp: None,
+            buttons,
+        };
+        let view = StatusView {
+            english: false,
+            full_width_punctuation: true,
+            full_width_chars: false,
+            traditional: false,
+            anchor: None,
+            auto_hide_fullscreen: false,
+        };
+
+        // 状态条：不过滤，中 / 英、半角、设置三颗都在。
+        let bar = StatusBar::status_cells(&view, &arrangement, false, usize::MAX, None);
+        assert_eq!(bar.len(), 3, "悬浮状态条不能被提示的过滤波及");
+        // 提示窗：只要「中 / 英」那一颗。
+        let tip = StatusBar::status_cells(
+            &view,
+            &arrangement,
+            false,
+            TIP_BUTTONS,
+            Some(StatusItems::LANG),
+        );
+        assert_eq!(tip.len(), 1);
+    }
+
     #[test]
     fn refresh_only_reads_after_the_file_changes() {
         let file = fixture("refresh", "button=ch; icon=icons\\ch.svg; pos=0\n");
