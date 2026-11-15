@@ -50,7 +50,16 @@ impl Engine {
             return None;
         }
         // `'` 只是分隔符：切分按去掉它的字母串算（上屏消耗仍按原串对齐）。
-        let text: String = keys.chars().filter(|c| *c != '\'').collect();
+        // 同时记下每个字母在**原缓冲区**里的位置：要回去看这一段是不是 Shift 敲的大写。
+        let mut text = String::with_capacity(keys.len());
+        let mut raw_of: Vec<usize> = Vec::with_capacity(keys.len());
+        for (index, c) in keys.char_indices() {
+            if c == '\'' {
+                continue;
+            }
+            text.push(c);
+            raw_of.push(index);
+        }
         if text.len() < MIN_MIXED_ENGLISH_LETTERS + 1
             || !text.bytes().all(|b| b.is_ascii_lowercase())
         {
@@ -139,6 +148,7 @@ impl Engine {
                 step.code.clone(),
                 step.complete,
                 step.entry.clone(),
+                step.from,
             ));
             if step.from >= cursor {
                 return None;
@@ -152,11 +162,16 @@ impl Engine {
         }
         let mut syllables = Vec::with_capacity(steps.len());
         let mut source = String::new();
-        for (is_latin, code, complete, entry) in steps {
+        for (is_latin, code, complete, entry, from) in steps {
             if is_latin {
                 let (word, frequency) = entry?;
-                // 反引号轮换的大小写只改显示 / 上屏的写法，读法（`code`）保持小写匹配
-                let word = self.english_case().apply(&word);
+                // 按敲的大写就保留大写（`CPU` 一直是 `CPU`），不跟反引号轮换；
+                // 小写敲的才按 `english_case` 走。读法（`code`）始终小写匹配。
+                let word = if self.typed_upper(&raw_of, from, &code) {
+                    code.to_ascii_uppercase()
+                } else {
+                    self.english_case().apply(&word)
+                };
                 source.push_str(&format!("{word}\t{code}\t{frequency}\n"));
                 syllables.push(Syllable::complete(&code));
             } else if complete {
@@ -167,6 +182,17 @@ impl Engine {
         }
         let dictionary = Dictionary::parse(&source).ok()?;
         Some((Segmentation { syllables }, dictionary))
+    }
+
+    /// 这一段英文词是不是整段按 Shift 敲的（大写）：是就不跟反引号轮换。
+    fn typed_upper(&self, raw_of: &[usize], from: usize, code: &str) -> bool {
+        let Some(&start) = raw_of.get(from) else {
+            return false;
+        };
+        let Some(&last) = raw_of.get(from + code.len().saturating_sub(1)) else {
+            return false;
+        };
+        self.composition.is_shifted_span(start, last + 1)
     }
 
     /// 中英混合的整句候选：整段一个 Viterbi，英文词与汉字一起排。

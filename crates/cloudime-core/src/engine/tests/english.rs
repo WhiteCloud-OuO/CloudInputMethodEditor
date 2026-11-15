@@ -54,9 +54,10 @@ fn mixed_sentence_keeps_english_words_in_place() {
     // 大写（Shift / CapsLock）也行：连续大写字母当一段英文文字，不是辅助码
     engine.set_input("nidediannaoCPU");
     assert_eq!(engine.composition().scope(), "nidediannaocpu");
+    // 大写敲的英文词不跟反引号轮换，缺省档位下也是大写
     assert_eq!(
         engine.query().unwrap().candidates.items[0].text,
-        "你的电脑cpu"
+        "你的电脑CPU"
     );
 
     // 单个大写字母仍是辅助码字面量（`su'A`），不进缓冲区
@@ -65,13 +66,16 @@ fn mixed_sentence_keeps_english_words_in_place() {
     assert!(engine.composition().has_literals());
 }
 
-/// 反引号轮换：中英混合整句里的英文词也跟着小写 → 全大写 → 首字母大写。
+/// 反引号轮换：中英混合整句里的英文词也跟着小写 → 全大写 → 首字母大写；
+/// 但整段按 Shift 敲的大写英文词不跟轮换，一直保持大写。
 #[test]
 fn mixed_sentence_follows_the_case_switch() {
     let words = WordList::parse("CPU\tcpu\t3720\n").unwrap();
     let mut engine =
         Engine::new(Dictionary::parse("你的\tni de\t9000\n电脑\tdian nao\t8000\n").unwrap())
             .with_english(words);
+
+    // 小写敲的：跟反引号轮换
     engine.set_input("nidediannaocpu");
     let texts: Vec<String> = engine
         .query()
@@ -81,7 +85,6 @@ fn mixed_sentence_follows_the_case_switch() {
         .into_iter()
         .map(|candidate| candidate.text)
         .collect();
-    eprintln!("case={:?} candidates={texts:?}", engine.english_case());
     assert_eq!(texts[0], "你的电脑cpu");
     engine.cycle_english_case();
     assert_eq!(
@@ -93,6 +96,21 @@ fn mixed_sentence_follows_the_case_switch() {
         engine.query().unwrap().candidates.items[0].text,
         "你的电脑Cpu"
     );
+
+    // 大写敲的（`CPU`）：三轮轮换都保持大写
+    engine.set_input("nidediannaoCPU");
+    assert_eq!(
+        engine.query().unwrap().candidates.items[0].text,
+        "你的电脑CPU"
+    );
+    for _ in 0..3 {
+        engine.cycle_english_case();
+        assert_eq!(
+            engine.query().unwrap().candidates.items[0].text,
+            "你的电脑CPU",
+            "大写敲的英文词不跟反引号轮换"
+        );
+    }
 }
 
 /// 整句延时：停键不够久时只出词级候选，停够了才补整句。
@@ -469,6 +487,29 @@ fn english_word_at_the_end_of_pinyin_joins_the_sentence() {
         .map(|c| c.text)
         .collect();
     assert!(!all.iter().any(|t| t.ends_with("to")), "{all:?}");
+
+    // 尾段整段按 Shift 敲的（`kaifaRUST`）：反引号轮换不改它，一直大写
+    engine.set_input("kaifaRUST");
+    assert!(
+        engine
+            .query()
+            .unwrap()
+            .candidates
+            .items
+            .iter()
+            .any(|c| c.text == "开发RUST"),
+        "大写敲的尾段保持大写"
+    );
+    engine.cycle_english_case();
+    assert!(
+        engine
+            .query()
+            .unwrap()
+            .candidates
+            .items
+            .iter()
+            .any(|c| c.text == "开发RUST")
+    );
 
     // 尾段本身是合法拼音又不到四个字母（`fan`）：就是拼音，开饭 照旧
     engine.set_input("kaifan");

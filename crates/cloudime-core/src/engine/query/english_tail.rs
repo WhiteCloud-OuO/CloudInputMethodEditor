@@ -134,9 +134,17 @@ impl Engine {
         let weight = conversion.weight();
         let typed = &self.composition.scope()[tail.head_len..];
         let mut syllables = conversion.syllables;
+        // 反引号轮换的英文大小写两个读法都要跟：句末英文词这里单独拼，`mixed_candidate` 那边另算。
+        // 尾段整段按 Shift 敲的（`kaifaRUST`）保留大写，不跟轮换。
+        let upper = self
+            .composition
+            .is_shifted_span(tail.head_len, tail.head_len + typed.len());
+        let word = if upper {
+            typed.to_ascii_uppercase()
+        } else {
+            self.english_case().apply(&tail.word)
+        };
         syllables.push(typed.to_owned());
-        // 反引号轮换的英文大小写两个读法都要跟：句末英文词这里单独拼，`mixed_candidate` 那边另算
-        let word = self.english_case().apply(&tail.word);
         Some((
             Candidate {
                 text: format!("{}{}", conversion.text, word),

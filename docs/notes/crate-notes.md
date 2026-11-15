@@ -153,6 +153,8 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
   （`su'A` → 苏A）。回放（36620 词 / 858 整句）与改前一致：词 89.6% / 整句 80.7%。
   英文词的大小写跟 `english_case` 走（反引号轮换：小写 / 全大写 / 首字母大写）：混合整句在拼词库时按当前档位
   改显示写法、读法仍是小写；句末英文词的 `mixed_sentence` 单独也套一次。缺省小写，与整段英文候选一致。
+  **按 Shift 敲成大写的英文词不跟轮换**：`Composition::is_shifted_span` 按缓冲区里的 `shifted` 位判断这一段是不是
+  整段大写，是就保留大写（`CPU` 一直是 `CPU`），小写敲的才按档位变。
   整句的**停键延时**（`[candidate] sentence_delay_ms`，缺省 500ms，`0` 立即；Core 缺省 0，CLI / 回放不受影响）：
   `Engine::sentence_delay_pending` 按最后一键的时间判断，没到点 `push_sentences` 与混合读法都不出整句；
   Server 在 `recompose` 后 `schedule_sentence`，工人循环按 `next_tick` 的剩余时间醒来，`tick` 里 `advance_sentence`

@@ -217,6 +217,20 @@ impl Composition {
         }
     }
 
+    /// 缓冲区 `start..end`（字节，落在字符边界上）这一段是不是都按 Shift 敲的（大写）。
+    /// 中英混合组句用它判断英文词「按敲的大写保留，不跟反引号轮换」。
+    pub fn is_shifted_span(&self, start: usize, end: usize) -> bool {
+        if start >= end {
+            return false;
+        }
+        let from = self.buffer[..start.min(self.buffer.len())].chars().count();
+        let to = self.buffer[..end.min(self.buffer.len())].chars().count();
+        let from = from.min(self.shifted.len());
+        let to = to.min(self.shifted.len());
+        let slice = &self.shifted[from..to];
+        !slice.is_empty() && slice.iter().all(|shifted| *shifted)
+    }
+
     /// 缓冲区里有没有 Shift 敲的大写字母。
     pub fn has_shifted(&self) -> bool {
         self.shifted.iter().any(|shifted| *shifted)
