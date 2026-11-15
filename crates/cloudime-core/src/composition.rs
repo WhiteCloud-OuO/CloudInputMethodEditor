@@ -217,6 +217,11 @@ impl Composition {
         }
     }
 
+    /// 缓冲区里有没有「连续两个及以上 Shift 敲的大写字母」：有就当英文文字，进组句时不按拼音读。
+    pub fn has_uppercase_run(&self) -> bool {
+        self.shifted.windows(2).any(|pair| pair[0] && pair[1])
+    }
+
     /// 缓冲区 `start..end`（字节，落在字符边界上）这一段是不是都按 Shift 敲的（大写）。
     /// 中英混合组句用它判断英文词「按敲的大写保留，不跟反引号轮换」。
     pub fn is_shifted_span(&self, start: usize, end: usize) -> bool {

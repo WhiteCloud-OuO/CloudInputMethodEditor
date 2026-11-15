@@ -582,7 +582,11 @@ impl Engine {
         // 中英混合的整句：拼音读法在某一格「出问题」（中间没打完的音节、或切不动留下的尾巴）时，
         // 若那段字母正好是词表里的英文词，就把它当词图里的一个词重新整句。只有英文词盖住出问题那一格
         // 才收：别处的英文词（`me` / `an` 这类也拼得出来的）不足以推翻正常的拼音读法。
-        let mixed = if allow_extras && !plain_ok && !self.sentence_delay_pending() {
+        // 有大写字母段（`CPU` / `API`）时也要试：大写段按英文文字读，不按拼音读。
+        let mixed = if allow_extras
+            && (!plain_ok || self.composition.has_uppercase_run())
+            && !self.sentence_delay_pending()
+        {
             self.mixed_candidate(keys, mixed_anchor)
         } else {
             None

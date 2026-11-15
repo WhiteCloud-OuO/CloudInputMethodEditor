@@ -113,6 +113,40 @@ fn mixed_sentence_follows_the_case_switch() {
     }
 }
 
+/// 大写敲的英文段不进拼音解析（与「组词」把大写当英文字面量一致）：
+/// `api` 小写时 `a` 能读成拼音、不当英文；大写 `API` 整段按英文读。
+#[test]
+fn uppercase_english_run_is_not_read_as_pinyin() {
+    let words = WordList::parse("API\tapi\t3680\n").unwrap();
+    let mut engine =
+        Engine::new(Dictionary::parse("你的\tni de\t9000\n电脑\tdian nao\t8000\n").unwrap())
+            .with_english(words);
+
+    engine.set_input("nidediannaoapi");
+    assert!(
+        engine
+            .query()
+            .unwrap()
+            .candidates
+            .items
+            .iter()
+            .all(|candidate| !candidate.text.contains("API")),
+        "小写 api 走拼音"
+    );
+
+    engine.set_input("nidediannaoAPI");
+    assert!(
+        engine
+            .query()
+            .unwrap()
+            .candidates
+            .items
+            .iter()
+            .any(|candidate| candidate.text == "你的电脑API"),
+        "大写 API 按英文读进整句"
+    );
+}
+
 /// 整句延时：停键不够久时只出词级候选，停够了才补整句。
 #[test]
 fn sentence_delay_holds_the_sentence_until_typing_stops() {

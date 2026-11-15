@@ -80,9 +80,11 @@ impl Engine {
             let Some(tokens) = best[start].as_ref().map(|step| step.tokens) else {
                 continue;
             };
+            let mut pinyin_edge = false;
             for len in 1..=parser::MAX_SYLLABLE_LEN.min(n - start) {
                 let piece = &text[start..start + len];
                 if parser::is_syllable(piece) {
+                    pinyin_edge = true;
                     improve(
                         &mut best,
                         start + len,
@@ -112,9 +114,18 @@ impl Engine {
             }
             for len in MIN_MIXED_ENGLISH_LETTERS..=MAX_MIXED_ENGLISH_LETTERS.min(n - start) {
                 let code = &text[start..start + len];
+                // 大写敲的英文段（`CPU`）不当拼音处理：只要整段是大写，就按英文词认，
+                // 与「组词」那一侧把大写当英文字面量一致。
+                let upper = self.typed_upper(&raw_of, start, code);
+                // 小写敲的：只在这一格压根读不出拼音时认（`cpu` 的 `c`、`github` 的 `g`）。
+                // 拼音能读的位置不认——否则 `xinghaode` 里的 `ode` 这类冷门英文词会把
+                // `hao de` 切成 `ha` + `ode`（2026-11-15 截图）。
+                if !upper && pinyin_edge {
+                    continue;
+                }
                 // 本身就是一个合法拼音音节的英文词（`men` / `an` / `bei`）不在这里认：
                 // 拼音读法更自然，认了会让正常拼音输入凭空多出一条混合整句（回放里掉 3 个点）。
-                if parser::is_syllable(code) {
+                if !upper && parser::is_syllable(code) {
                     continue;
                 }
                 let Some((word, frequency)) = lists.iter().find_map(|list| {
