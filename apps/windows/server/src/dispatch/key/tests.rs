@@ -1654,13 +1654,13 @@ fn user_rules_only_see_the_current_sentence() {
     assert_eq!(commit.as_deref(), Some("。"), "上一句的「吧」不算数");
 }
 
-/// 单独一个中文数字（一～十）双击空格出顿号；`三四` / `五个` / `第六` 这种不算，仍出句号。
+/// 缺省规则：单独一个中文数字（一～十）双击空格出顿号；`三四` / `五个` / `第六` 这种不算，仍出句号。
 #[test]
-fn user_rules_turn_a_lone_numeral_into_an_enumeration_comma() {
+fn the_default_rules_turn_a_lone_numeral_into_an_enumeration_comma() {
     let normal = KeyModifiers::default();
     let dir = smart_rules_dir(
         "numeral",
-        r#"[{ "symbol": "、", "trigger": ["^[一二三四五六七八九十]$"] }]"#,
+        cloudime_platform::smart_symbol::SMART_SYMBOL_TEMPLATE,
     );
     for (before, expected) in [
         ("一", "、"),
@@ -1687,7 +1687,7 @@ fn composing_letters_do_not_pollute_the_sentence() {
     let normal = KeyModifiers::default();
     let dir = smart_rules_dir(
         "composing",
-        r#"[{ "symbol": "、", "trigger": ["^[一二三四五六七八九十]$"] }]"#,
+        cloudime_platform::smart_symbol::SMART_SYMBOL_TEMPLATE,
     );
     let engine = Engine::new(Dictionary::parse("三\tsan\t100\n").unwrap());
     let mut r = Router::new(

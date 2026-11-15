@@ -7,16 +7,9 @@
 /// 文件名（放在用户目录 `%APPDATA%\CloudIME` 下）。
 pub const SMART_SYMBOL_FILE: &str = "intelligent-symbol.json";
 
-/// 用户还没建过这个文件时写进去的示例：与内置规则等价，照着改就行。
+/// 缺省规则：安装时由安装包放到用户目录（`onlyifdoesntexist`，不覆盖用户改过的），
+/// 设置页「修改配置」在文件缺失时也用它补一份。
 ///
-/// 只列「双击空格」的替换；单个空格（逗号）不受这份文件影响。
-pub const SMART_SYMBOL_TEMPLATE: &str = r#"[
-  { "symbol": "：", "trigger": ["说$", "說$"] },
-  { "symbol": "？", "trigger": ["吗$", "嗎$", "呢$", "嘛$"] },
-  {
-    "symbol": "！",
-    "trigger": ["啊$", "呀$", "哟$", "喲$", "唷$", "哇$", "哦$", "喔$", "噢$"]
-  },
-  { "symbol": "——", "trigger": ["呜$", "嗚$", "嘶$", "吱$", "嘎$"] }
-]
-"#;
+/// 单一来源是仓库里的 `assets/defaults/intelligent-symbol.json`，这里只为打进二进制。
+pub const SMART_SYMBOL_TEMPLATE: &str =
+    include_str!("../../../assets/defaults/intelligent-symbol.json");

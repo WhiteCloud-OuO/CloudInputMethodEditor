@@ -473,12 +473,15 @@ DLL 据此在**组句里**把这一个键送来问一趟（`eats_key` 里那条�
 去匹配 `%APPDATA%\CloudIME\intelligent-symbol.json`（文件是一组 `{ "symbol": "？", "trigger": ["吗$"] }`，
 顶层数组或 `{ "rules": [...] }` 都认，正则按 `regex` crate 编译、坏的一条只跳过那一条），命中就用用户符号；
 没命中再走 `smart_space_double`，最终兜底句号。**整句**的边界是句号 / 问号 / 叹号 / 省略号 / 换行
-（`rules::current_sentence`）；逗号 / 顿号 / 分号不断句，符合现代汉语的句子划分。文件路径与示例模板
-（`SMART_SYMBOL_FILE` / `SMART_SYMBOL_TEMPLATE`）在 `cloudime_platform::smart_symbol`，设置页那个开关右边
-的「修改配置」按钮负责「没有就写模板、再用默认程序打开」。**模板只放与内置规则等价的示例**：像
-「整句就是一个中文数字 → 顿号」这种内置表达不了的（`smart_space_double` 只看最后一个字），由用户自己往
-文件里加 `{ "symbol": "、", "trigger": ["^[一二三四五六七八九十]$"] }`（`^…$` 锚整句，所以 `三四` / `第六`
-不命中）。规则文件按 mtime 随配置那一拍热加载（`reload::poll_config_reload`）。`Router.smart_text` 是
+（`rules::current_sentence`）；逗号 / 顿号 / 分号不断句，符合现代汉语的句子划分。文件路径与缺省内容在
+`cloudime_platform::smart_symbol`：`SMART_SYMBOL_FILE` 是文件名，`SMART_SYMBOL_TEMPLATE` 是
+`include_str!("../../../assets/defaults/intelligent-symbol.json")`（**单一来源**，别在代码里另抄一份 JSON）。
+这份缺省文件由安装器放进 `%APPDATA%\CloudIME`（`cloudime.iss` 的 `[Files]`，`Flags: onlyifdoesntexist`，
+升级不覆盖用户改过的）；设置页那个开关右边的「修改配置」按钮负责「文件不在就按模板补一份、再用默认程序打开」。
+缺省里既有与内置规则等价的几条（`说` / `吗` / `啊` / `呜` 这些），也有内置表达不了的
+`{ "symbol": "、", "trigger": ["^[一二三四五六七八九十]$"] }` —— `smart_space_double` 只看最后一个字，
+「整句就是一个中文数字」只能靠自定义规则（`^…$` 锚整句，所以 `三四` / `第六` 不命中）。
+规则文件按 mtime 随配置那一拍热加载（`reload::poll_config_reload`）。`Router.smart_text` 是
 本地那份光标前文（DLL 前文 + 本进程刚上屏的文本，最多 160 字）：**组句里敲的拼音字母不算**（它们只是候选的
 输入，`note_key_result` 只在没在组句时把直通字符并进去，否则整句会变成 `san三`）；`smart_before` 仍只记
 最后一个字给内置规则用。
@@ -2033,6 +2036,9 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
 ## assets
 
 - `assets/sample/`：手写样例词库，不是产品数据。
+- `assets/defaults/`：安装时装给用户的缺省配置。目前只有 `intelligent-symbol.json`（智能符号规则）：
+  安装器直接把它拷到 `%APPDATA%\CloudIME`（`onlyifdoesntexist`），`cloudime_platform::smart_symbol`
+  的 `SMART_SYMBOL_TEMPLATE` 也是 `include_str!` 这一份 —— 改规则只改这里，别在代码里另抄一份。
 - 英文词表词频：`uv run tools/corpus/english_frequency.py data/generated/english.tsv -o data/generated/english-frequency.tsv`，再 `... english <词表> --frequency <那个文件>`。
 
 ## tools/dict-convert

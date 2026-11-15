@@ -168,6 +168,10 @@ Source: "{#Repo}\apps\windows\server\src\ui\status\icons\*.svg";           DestD
 Source: "{#Repo}\data\generated\plates.qj"; DestDir: "{app}\data"; Flags: ignoreversion skipifsourcedoesntexist
 ; 取名数据：姓氏 / 名字 TSV 装到 {app}\data\（Server 启动时读，V 模式 # 取名用）
 Source: "{#Repo}\assets\names\*.tsv"; DestDir: "{app}\data"; Flags: ignoreversion
+; —— 用户可写的缺省配置：智能符号规则 ——
+; 装到 %APPDATA%\CloudIME\intelligent-symbol.json（Server / 设置页都从这儿读）；onlyifdoesntexist：
+; 用户改过或删掉的升级时不碰，缺文件时设置页「修改配置」按钮还会按内置模板补一份。
+Source: "{#Repo}\assets\defaults\intelligent-symbol.json"; DestDir: "{userappdata}\CloudIME"; Flags: onlyifdoesntexist
 ; —— Server 放最后：它一落地，旧版 DLL 就能把它拉起来并占住数据文件（见文件头）——
 Source: "{#Repo}\target\release\cloudime-server.exe";   DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Repo}\target\installer\onnxruntime\onnxruntime.dll"; DestDir: "{app}"; Flags: ignoreversion skipifsourcedoesntexist
