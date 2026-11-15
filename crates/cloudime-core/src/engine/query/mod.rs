@@ -1249,6 +1249,18 @@ impl Engine {
         } else {
             1
         };
+        // 带本次查询专用词库（中英混合的英文词）时不走共享缓存：缓存键只有音节模式，
+        // 而同一个读法在不同英文大小写档位下文本不同（`cpu` / `CPU` / `Cpu`），
+        // 缓存会把上一次的写法带过来 —— 反引号轮换后候选还是小写（2026-11-15 真机）。
+        let mut local_cache = extra.is_some().then(sentence::SpanCache::default);
+        let mut shared_cache;
+        let cache = match &mut local_cache {
+            Some(cache) => cache,
+            None => {
+                shared_cache = self.span_cache.borrow_mut();
+                &mut shared_cache
+            }
+        };
         let mut paths = sentence::convert_paths_with_emission(
             &dictionaries,
             &expanded.positions(),
@@ -1263,7 +1275,7 @@ impl Engine {
                     super::choice::char_emission(table, patterns, start, text, syllables)
                 })
             },
-            &mut self.span_cache.borrow_mut(),
+            cache,
         );
         // 与最优路径差得太远的不参与：那种差距多半是个人 n-gram 拉开的
         if paths.len() > 1 {

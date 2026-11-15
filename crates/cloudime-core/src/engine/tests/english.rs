@@ -127,6 +127,26 @@ fn mixed_sentence_follows_the_case_switch() {
             "大写敲的英文词不跟反引号轮换"
         );
     }
+
+    // 长句子（`…cpu'xing'hao'shi'shen'me`）里也一样跟轮换
+    let mut long = Engine::new(
+        Dictionary::parse(
+            "你的\tni de\t9000\n电脑\tdian nao\t8000\n型号\txing hao\t7000\n是\tshi\t9000\n什么\tshen me\t8000\n",
+        )
+        .unwrap(),
+    )
+    .with_english(WordList::parse("CPU\tcpu\t3720\n").unwrap());
+    long.set_input("nidediannaocpuxinghaoshishenme");
+    assert_eq!(
+        long.query().unwrap().candidates.items[0].text,
+        "你的电脑cpu型号是什么"
+    );
+    long.cycle_english_case();
+    assert_eq!(
+        long.query().unwrap().candidates.items[0].text,
+        "你的电脑CPU型号是什么",
+        "长句子的混合整句也跟反引号轮换（不能吃词图缓存里的旧写法）"
+    );
 }
 
 /// 大写敲的英文段不进拼音解析（与「组词」把大写当英文字面量一致）：
