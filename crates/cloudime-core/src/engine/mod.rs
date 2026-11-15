@@ -71,6 +71,10 @@ pub struct Engine {
     /// 稀有组是否参与查词（缺省关，由 `[word_bank] rare_items` 决定）。
     rare_enabled: bool,
 
+    /// 取名专用词库：`Dict.db` 里 `words_rare_word` 的两字词（`石麟` 这类罕见名字），与
+    /// `rare_items` 无关 —— `v#` 取名就是来找生僻姓名的。只在 `v#` 候选里查。
+    name_words: Option<Dictionary>,
+
     /// 附加词库（领域词库、用户导入的第三方词库），**按添加顺序**与主词库一起查词、一起进整句词图；
     /// 靠前的优先，同一个词靠前命中后后面的不再重复产出。不参与语言模型（它们没有 bigram，
     /// 走词频兜底）。壳按用户目录 `dicts/` 与配置 `[dictionaries]` 装配。
@@ -370,6 +374,7 @@ impl Engine {
             dictionary,
             rare: None,
             rare_enabled: false,
+            name_words: None,
             extra_dictionaries: Vec::new(),
             learner: learning::MutedLearner::new(Box::new(NoLearner)),
             composition: Composition::default(),

@@ -74,6 +74,16 @@ impl DictDb {
         db::open_rare(path)
     }
 
+    /// 只读 `Dict.db` 里的两字生僻词（`石麟` 这类罕见名字）：`v#` 取名补名字用。
+    /// 非 SQLite 词库没有生僻组，返回空。
+    pub fn name_words_from_path(path: impl AsRef<Path>) -> Result<Dictionary, DictionaryError> {
+        let path = path.as_ref();
+        if !db::is_db(path) {
+            return Ok(Dictionary::default());
+        }
+        db::open_rare_name_words(path)
+    }
+
     /// 写成 `Dict.db`：7 张分类表一起落盘，`(text, pinyin, language)` 重复的权重大的胜出。
     pub fn write(&self, path: &Path, metadata: &Metadata) -> Result<(), DictionaryError> {
         db::write_word_bank(&self.chinese, &self.rare, &self.english, path, metadata)

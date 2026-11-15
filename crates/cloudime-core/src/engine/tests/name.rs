@@ -152,6 +152,16 @@ fn dictionary_name_words_rank_before_plain_same_sound_chars() {
     assert_eq!(texts(&engine), ["王伟", "王卫", "王玮", "王为"]);
 }
 
+/// 两个字的名用词库里现成的两字词（`石麟`）：名字表里没有这两个字也能候选到。
+#[test]
+fn two_char_given_name_comes_from_dictionary_words() {
+    let mut engine = Engine::new(Dictionary::parse(SAMPLE).unwrap());
+    engine.set_name_tables(NameTables::from_tsv("戴\tdai\t64\n", NAMES).unwrap());
+    engine = engine.with_name_words(Dictionary::parse("石麟\tshi lin\t79\n").unwrap());
+    engine.set_input("v#daishilin");
+    assert_eq!(texts(&engine), ["戴石麟"]);
+}
+
 /// 表里已经有完整姓氏时不再拿词库的单字当姓：`为`、`未` 这类不是姓，别把候选挤乱。
 #[test]
 fn dictionary_chars_are_not_used_as_surnames_when_the_table_matches() {

@@ -292,7 +292,7 @@ impl Engine {
         let surname_chars = surname.chars().count();
         let mut hits: Vec<(String, u32)> = Vec::new();
         let mut seen = HashSet::new();
-        for dictionary in self.all_dictionaries() {
+        for dictionary in self.all_name_dictionaries() {
             for hit in dictionary.lookup(&pattern, false) {
                 if !hit.exact || hit.text.chars().count() != surname_chars + 1 {
                     continue;
@@ -360,7 +360,7 @@ impl Engine {
     }
 
     /// 词库里同读音、名字表里没有的字（罕见名字用字）：整音节命中在前，更长音节的前缀命中在后，
-    /// 各按词频降序。只出单字 —— 双字名交给名字表，不然组合数会炸。
+    /// 各按词频降序。只出单字；两个字的名另走 [`Self::dictionary_two_char_givens`]。
     fn dictionary_given_candidates(&self, pinyin: &str) -> Vec<String> {
         let mut items = Vec::new();
         let mut seen = HashSet::new();
@@ -371,6 +371,38 @@ impl Engine {
                 }
                 if items.len() >= NAME_CANDIDATE_LIMIT {
                     return items;
+                }
+            }
+        }
+        if items.is_empty() {
+            items = self.dictionary_two_char_givens(pinyin);
+        }
+        items
+    }
+
+    /// 两个字的名：用词库里现成的两字词（`石林` / `石麟` / `诗林`），按词频。
+    /// 单个字凑组合会炸（两个音节各上百个字），所以只认词库里真有的两字词。
+    fn dictionary_two_char_givens(&self, pinyin: &str) -> Vec<String> {
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+        for split in 1..pinyin.len() {
+            let (left, right) = pinyin.split_at(split);
+            if !parser::is_syllable(left) {
+                continue;
+            }
+            // 后半截打完了就按整音节比（`lin` 不该命中 `ling`），没打完才按前缀。
+            let partial = !parser::is_syllable(right);
+            for dictionary in self.all_name_dictionaries() {
+                for hit in dictionary.lookup(&[left, right], partial) {
+                    if !hit.exact || hit.text.chars().count() != 2 {
+                        continue;
+                    }
+                    if seen.insert(hit.text.to_owned()) {
+                        items.push(hit.text.to_owned());
+                    }
+                    if items.len() >= NAME_CANDIDATE_LIMIT {
+                        return items;
+                    }
                 }
             }
         }
@@ -439,7 +471,7 @@ impl Engine {
     fn dictionary_chars(&self, pinyin: &str, partial: bool) -> Vec<(String, u32)> {
         let mut items: Vec<(String, u32)> = Vec::new();
         let mut positions: HashMap<String, usize> = HashMap::new();
-        for dictionary in self.all_dictionaries() {
+        for dictionary in self.all_name_dictionaries() {
             for hit in dictionary.lookup(&[pinyin], partial) {
                 if !partial && !hit.exact {
                     continue;
