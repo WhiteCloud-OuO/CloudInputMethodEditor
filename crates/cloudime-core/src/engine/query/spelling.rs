@@ -101,13 +101,21 @@ impl Engine {
             })
     }
 
-    /// 纠错读法里有没有能把整段转通的：给「句末英文词」判断用（`shiide` 是敲错，不是英文）。
-    pub(super) fn has_correction(&self, scope: &str) -> bool {
+    /// 纠错读法里有没有能把整段**全部**转成字的：给「句末英文词」判断用（`shiide` 是敲错，不是英文）。
+    /// 末尾落单的字母不算转通：`keep_partial=false` 时它本来就被丢掉
+    /// （`nidediannaocpu` 的 `…cu'p` 是「你的电脑粗 + 一个 p」，不是敲错读法）。
+    pub(in crate::engine) fn has_correction(&self, scope: &str) -> bool {
         self.correction_readings(scope, full_variants_wanted(scope))
             .iter()
-            .any(|correction| {
-                self.convert_sentence(&correction.segmentation.patterns())
-                    .is_some_and(|conversion| !conversion.has_placeholder())
+            .any(|correction| self.converts_whole(correction))
+    }
+
+    /// 这条纠错读法能不能整段转成字（不留尾巴）。
+    fn converts_whole(&self, correction: &Correction) -> bool {
+        self.convert_sentence(&correction.segmentation.patterns())
+            .is_some_and(|conversion| {
+                !conversion.has_placeholder()
+                    && conversion.syllables.len() == correction.segmentation.syllables.len()
             })
     }
 

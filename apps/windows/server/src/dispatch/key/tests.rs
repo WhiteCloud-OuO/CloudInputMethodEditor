@@ -2684,3 +2684,40 @@ fn ui_element_select_and_finalize_drive_the_composition() {
     assert_eq!(commit.as_deref(), Some(expected.as_str()));
     assert!(frame.is_empty(), "整段提交后帧应为空");
 }
+
+/// 反引号轮换：中英混合整句里的英文词也跟（Server 这侧的 `has_english_candidate`
+/// 要认「整句候选里含 ASCII 字母」，否则反引号会被当成标点）。
+/// 敲完最后一个字母**马上**按（整句还在停键延时里）也要能用：真机上就是这一步失灵。
+#[test]
+fn backtick_cycles_the_case_of_a_mixed_sentence() {
+    let mut engine =
+        Engine::new(Dictionary::parse("你的\tni de\t100\n电脑\tdian nao\t100\n").unwrap())
+            .with_english(WordList::parse("CPU\tcpu\t3720\n").unwrap());
+    engine.set_sentence_delay(Duration::from_secs(30));
+    let mut router = Router::new(
+        engine,
+        RouterConfig {
+            page_size: 9,
+            ..Default::default()
+        },
+    );
+    router.handle(ClientMessage::OpenSession {
+        session: SessionId(1),
+        app: None,
+        protocol: PROTOCOL_VERSION,
+    });
+    let normal = KeyModifiers::default();
+    compose(&mut router, "nidediannaocpu", normal);
+    // 不等 tick：整句还没补，反引号自己要把延时冲掉再查
+    let (_, _, frame) = key(&mut router, 0xC0, Some('`'), normal);
+    let texts: Vec<&str> = frame
+        .candidates
+        .items
+        .iter()
+        .map(|candidate| candidate.text.as_str())
+        .collect();
+    assert!(
+        texts.iter().any(|text| text.contains("CPU")),
+        "反引号应把整句里的 cpu 切成大写，实际 {texts:?}"
+    );
+}

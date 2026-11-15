@@ -225,11 +225,6 @@ impl Engine {
             if partial.is_some_and(|len| len != 1) {
                 return None;
             }
-            // 中间残缺又正好能纠成通顺拼音的（`ananjain` → 按按键）：按纠错读。
-            // `Jain` 这种冷门英文词会把敲错的拼音读法顶掉。
-            if partial.is_some() && self.has_correction(keys) {
-                return None;
-            }
             let covered = segmentation
                 .syllables
                 .iter()

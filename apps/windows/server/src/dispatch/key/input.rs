@@ -668,7 +668,14 @@ impl Router {
             let effect = self.apply_punctuation(c, event);
             return with_prefix(committed, effect, c);
         }
-        // 反引号：候选里有英文词时轮换英文候选的大小写（原样 → 全大写 → 首字母大写），不上屏标点
+        // 反引号：候选里有英文词时轮换英文候选的大小写（原样 → 全大写 → 首字母大写），不上屏标点。
+        // 敲完最后一个字母马上按会落在整句延时里，候选窗里还没有那条含英文词的整句，
+        // 这时先把延时按「等够了」补一次查询再看，否则用户会以为反引号失灵。
+        if c == '`' && !self.has_english_candidate() && self.engine.sentence_delay_pending() {
+            self.engine.flush_sentence_delay();
+            self.sentence_since = None;
+            self.requery_rescored();
+        }
         if c == '`' && self.has_english_candidate() {
             self.engine.cycle_english_case();
             return Effect::Changed(None);

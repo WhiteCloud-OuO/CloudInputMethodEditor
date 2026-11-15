@@ -123,6 +123,15 @@ impl Engine {
         self.sentence_delay
     }
 
+    /// 把停键延时按「已经等够」处理：下一次 [`Self::query`] 就带上整句候选。
+    /// 反引号这种「要看当前候选里有没有英文词才决定干什么」的键用它——用户常常敲完
+    /// 最后一个字母马上按，否则会落在延时里，看着像这一键失灵。
+    pub fn flush_sentence_delay(&mut self) {
+        if let Some(earlier) = Instant::now().checked_sub(self.sentence_delay) {
+            self.last_key = earlier;
+        }
+    }
+
     /// 整句还在等停键：组句里、设了延时、且最后一键到现在还不够久。
     /// 这段时间内 [`Self::query`] 只出词级候选，壳到点再查一次补上整句。
     pub fn sentence_delay_pending(&self) -> bool {

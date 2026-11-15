@@ -501,7 +501,7 @@ impl Router {
     }
 
     /// 分回来了：按重排后的顺序重建候选布局，重画当前页。
-    fn requery_rescored(&mut self) {
+    pub(super) fn requery_rescored(&mut self) {
         let Ok(query) = self.engine.query() else {
             return;
         };

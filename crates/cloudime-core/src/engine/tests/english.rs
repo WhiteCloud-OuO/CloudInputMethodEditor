@@ -66,6 +66,22 @@ fn mixed_sentence_keeps_english_words_in_place() {
     assert!(engine.composition().has_literals());
 }
 
+/// 混合读法不会被「能纠成通顺拼音」顶掉：`nidediannaocpu` 的拼音读法还能纠成「你的电脑普」，
+/// 但 `cpu` 是常用英文词，混合整句（你的电脑cpu）该排第一 —— 真机上也正是靠它，
+/// 反引号才能把 cpu 切成 CPU。
+#[test]
+fn mixed_sentence_survives_a_plausible_pinyin_correction() {
+    let mut engine = Engine::new(
+        Dictionary::parse("你的\tni de\t9000\n电脑\tdian nao\t8000\n普\tpu\t7000\n").unwrap(),
+    )
+    .with_english(WordList::parse("CPU\tcpu\t3720\n").unwrap());
+
+    engine.set_input("nidediannaocpu");
+    let query = engine.query().unwrap();
+    assert_eq!(query.candidates.items[0].text, "你的电脑cpu");
+    assert_eq!(query.candidates.items[0].kind, CandidateKind::Sentence);
+}
+
 /// 反引号轮换：中英混合整句里的英文词也跟着小写 → 全大写 → 首字母大写；
 /// 但整段按 Shift 敲的大写英文词不跟轮换，一直保持大写。
 #[test]
@@ -167,6 +183,26 @@ fn sentence_delay_holds_the_sentence_until_typing_stops() {
     std::thread::sleep(std::time::Duration::from_millis(60));
     assert!(!engine.sentence_delay_pending());
     assert!(has_sentence(&engine));
+}
+
+/// 敲完马上按反引号：延时可以被提前冲掉，不用等那一拍。
+#[test]
+fn flush_sentence_delay_shows_the_sentence_right_away() {
+    let mut engine = Engine::new(Dictionary::parse("你\tni\t9000\n好\thao\t8000\n").unwrap());
+    engine.set_sentence_delay(std::time::Duration::from_secs(30));
+    engine.set_input("nihao");
+    assert!(engine.sentence_delay_pending());
+    engine.flush_sentence_delay();
+    assert!(!engine.sentence_delay_pending());
+    assert!(
+        engine
+            .query()
+            .unwrap()
+            .candidates
+            .items
+            .iter()
+            .any(|candidate| candidate.kind == CandidateKind::Sentence)
+    );
 }
 
 #[test]

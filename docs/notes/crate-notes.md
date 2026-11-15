@@ -151,9 +151,17 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
   2026-11-15 收紧两条：小写英文段**只在这一格读不出拼音时**才认（`xinghaode` 里的 `ode` 曾把 `hao de` 切成
   `ha` + `ode`）；按 Shift 敲成大写的英文段（`CPU` / `API`）相反——**任何位置都按英文读**，
   与「组词」把大写当英文字面量一致（`has_uppercase_run` 有连续两个以上大写就试混合读法）。
-  候选插进池子时 `sentence_order` 给 1（拼音读法的整句从 2 起），权重照常参与和词候选的比较。
+  候选插进池子时 `sentence_order`：音节数 ≥ `ALTERNATE_MIN_SYLLABLES`（4）的输入给 1，排在拼音整句（从 2 起）前面
+  ——`ni'de'dian'nao'cpu'xing'hao…` 的 CPU 该压过「川普型号」；更短的输入（`dee` / `woxiangdoa`）给
+  `SENTENCE_CANDIDATES + 2`，先让拼音整句（的饿 / 我想的哦啊），自己只当附加候选。
+  `trim_sentence_alternates` 不再把含 ASCII 字母的整句算进「最多 2 条」：这条候选是「敲的这段字母正好是个英文词」，
+  与只差一两个字的拼音备选不是一类；反引号轮换也要它留在候选窗里。权重照常参与和词候选的比较。
+  原先「那一格能纠成通顺拼音就让给纠错」的门（`ananjain` → 按按键）2026-11-15 去掉：真机上它把
+  `ni'de'dian'nao'cpu` 的 CPU 整句整个吞掉（纠错读法 `…nao'cu'p` 的「你的电脑粗」/「你的电脑普」也能转通），
+  反引号于是没东西可轮换。代价是 `ananjain` 会多一条「阿南jain」整句（排在拼音整句之后）。
+  `has_correction` 现在只给句末英文词用，并要求纠错读法**整段**转成字（末尾落单字母不算）。
   连续大写字母从第二个起并回拼音缓冲区（`CP` 起整段进缓冲区，`CPU` 才能当英文词），单个大写仍是辅助码
-  （`su'A` → 苏A）。回放（36620 词 / 858 整句）与改前一致：词 89.6% / 整句 80.7%。
+  （`su'A` → 苏A）。回放（36744 词 / 861 整句）与改前一致：词 89.6% / 整句 80.5%（693 条命中，与改前同）。
   英文词的大小写跟 `english_case` 走（反引号轮换：小写 / 全大写 / 首字母大写）：混合整句在拼词库时按当前档位
   改显示写法、读法仍是小写；句末英文词的 `mixed_sentence` 单独也套一次。缺省小写，与整段英文候选一致。
   **按 Shift 敲成大写的英文词不跟轮换**：`Composition::is_shifted_span` 按缓冲区里的 `shifted` 位判断这一段是不是
@@ -161,7 +169,9 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
   整句的**停键延时**（`[candidate] sentence_delay_ms`，缺省 500ms，`0` 立即；Core 缺省 0，CLI / 回放不受影响）：
   `Engine::sentence_delay_pending` 按最后一键的时间判断，没到点 `push_sentences` 与混合读法都不出整句；
   Server 在 `recompose` 后 `schedule_sentence`，工人循环按 `next_tick` 的剩余时间醒来，`tick` 里 `advance_sentence`
-  到点重查一次、把整句补进候选窗（复用 `requery_rescored` 那条刷新路）。
+  到点重查一次、把整句补进候选窗（复用 `requery_rescored` 那条刷新路）。反引号是例外：候选里还没有英文词、
+  又在延时里时先 `Engine::flush_sentence_delay`（把最后一键的时间按「等够了」算）再 `requery_rescored`，
+  否则敲完最后一个字母马上按会当成普通字符进缓冲区（2026-11-15 真机）。
   词级命中权重 = `词频 × 用户权重因子 × (1+同输入串选择次数) × 上下文系数 × 纠错折扣 × 联想折扣`；上下文系数 =
   `clamp(exp(transition_log_prob − fallback_log_prob), e^-4, e^4)`（`sentence::transition_log_prob`，模型不认识时 log_prob 等于兜底 → 1）；
   联想折扣 = `0.8^k`，`k = max(0, 词字数 − 产生它的读法音节数)`（`lookup_pattern` 带出的更长词）；模糊音命中 0.5。预选按结构键 + 便宜权重

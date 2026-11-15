@@ -814,9 +814,16 @@ impl Engine {
             .collect();
         // 整句候选与词候选进同一个池子（同文本同读音不重复插；同文本不同读音的去掉词级那条）
         self.push_sentences(&mut pool, &segmentations, english_tail.as_ref(), head_wins);
-        // 中英混合的整句：拼音切分本身不完整（`cpu` 被读成 `c…`）时它比拼音读法更解释得通，
-        // 排在整句候选第一位（sorder 0）；词级候选照常保留。
+        // 中英混合的整句：拼音切分本身不完整（`cpu` 被读成 `c…`）时它比拼音读法更解释得通。
+        // 长输入里它是句子的一部分（`ni'de'dian'nao'cpu'xing'hao…` 的 CPU 该排整句第一），
+        // 短输入（`dee` / `woxiangdoa`）先让拼音整句（的饿 / 我想的哦啊），它排在后面当附加候选
+        // —— 也不占那两条整句名额（见 [`trim_sentence_alternates`]），反引号轮换靠它留在列表里。
         if let Some((candidate, weight, _score)) = mixed {
+            let order = if candidate.syllables.len() >= ALTERNATE_MIN_SYLLABLES {
+                1
+            } else {
+                SENTENCE_CANDIDATES + 2
+            };
             let rank = (
                 keys.chars().filter(|c| *c != '\'').count(),
                 0,
@@ -824,7 +831,7 @@ impl Engine {
                 true,
                 0,
                 weight * sentence_weight_boost(&candidate.text),
-                1,
+                order,
             );
             push_sentence(&mut pool, candidate, rank);
         }
@@ -1606,11 +1613,15 @@ fn keep_single_characters(items: &mut Vec<Candidate>, first: Option<(&str, bool)
 }
 
 /// 选词模型重排完只留前 [`SENTENCE_CANDIDATES`] 条整句：交给模型的备选多半只差一两个字，
-/// 全显示会把第一页的词挤走。
+/// 全显示会把第一页的词挤走。中英混合整句（文本里有 ASCII 字母）不占这个名额：它是
+/// 「敲的这段字母正好是个英文词」，与只差一两个字的拼音备选不是一类，反引号轮换也要它留在列表里。
 fn trim_sentence_alternates(items: &mut Vec<Candidate>) {
     let mut kept = 0;
     items.retain(|candidate| {
         if candidate.kind != CandidateKind::Sentence {
+            return true;
+        }
+        if candidate.text.chars().any(|c| c.is_ascii_alphabetic()) {
             return true;
         }
         kept += 1;

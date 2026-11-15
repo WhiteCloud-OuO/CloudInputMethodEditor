@@ -241,6 +241,10 @@ fn main() {
     engine.set_punctuation_mapping(config.input.punctuation_mapping());
     engine.set_half_wide_after_digit(config.input.use_half_wide_punctuation_marks_after_digital);
     engine.set_association_counts(config.candidate.association_counts());
+    // 停键多久之后才出整句候选（`[candidate] sentence_delay_ms`，缺省 500ms）
+    engine.set_sentence_delay(std::time::Duration::from_millis(
+        config.candidate.sentence_delay_ms,
+    ));
     engine.set_traditional_mode(
         config.input.simp_trad_chinese_chars_toggle == cloudime_platform::SimpTrad::Traditional,
     );
