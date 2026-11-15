@@ -241,6 +241,29 @@ fn slash_toggles_special_input_and_commits_one_character_at_a_time() {
     assert!(!r.engine.special_input());
 }
 
+/// 特殊输入模式里回车：当前字母原样输出，剩下的接着匹配——
+/// `yun` 里按三次回车依次输出 `y` / `u` / `n`，最后一个字母时整段上屏。
+#[test]
+fn special_input_enter_outputs_the_current_letter() {
+    let normal = KeyModifiers::default();
+    let mut r = special_router();
+    compose(&mut r, "yun", normal);
+    key(&mut r, 0xBF, Some('/'), normal);
+    assert!(r.engine.special_input());
+
+    for (selected, scope) in [("y", "un"), ("yu", "n")] {
+        let (outcome, commit, _) = key(&mut r, 0x0D, Some('\r'), normal);
+        assert_eq!(outcome, KeyOutcome::Consumed);
+        assert_eq!(commit, None, "还有字母没输出，先留在组句里");
+        assert_eq!(r.engine.composition().selected_text(), selected);
+        assert_eq!(r.engine.composition().scope(), scope);
+    }
+
+    let (_, commit, _) = key(&mut r, 0x0D, Some('\r'), normal);
+    assert_eq!(commit.as_deref(), Some("yun"), "整段选完一起上屏");
+    assert!(r.engine.composition().is_empty());
+}
+
 /// 旧协议 DLL 仍照常服务，但第一次出候选时提示重启这个应用，且每个会话只提示一次。
 #[test]
 fn old_dll_session_gets_a_restart_notice_once() {

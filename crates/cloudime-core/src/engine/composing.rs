@@ -378,6 +378,39 @@ impl Engine {
         }
     }
 
+    /// 特殊输入模式里按回车：把最前面那个**字母**原样并进组句，剩下的字母 / 拼音接着匹配
+    /// （`dian'nao'cpu` 选完 电脑 后剩 `cpu`，回车输出 `c`，接着出 `pu` 的候选；再按输出 `p`）。
+    /// 一次只吃一个字母：`pu` 按回车是 `p`，不是整个音节。
+    /// 返回同上：`None` 还在组句里（或没什么可交的），`Some(text)` 是整段交给应用。
+    pub fn commit_literal_letter(&mut self) -> Option<String> {
+        if !self.special_input {
+            return None;
+        }
+        let scope = self.composition.scope().to_owned();
+        let (start, first) = scope.char_indices().find(|(_, c)| *c != '\'')?;
+        let end = start + first.len_utf8();
+        // 按 Shift 敲的这个字母按原样还原（缓冲区里是小写，`shifted` 记着大小写）
+        let letters = if self.composition.is_shifted_span(start, end) {
+            first.to_ascii_uppercase().to_string()
+        } else {
+            first.to_string()
+        };
+        self.composition.select_prefix(&letters, end);
+        // 还有没选的拼音：先留在组句里，等后面选完或回车再整段上屏。
+        if !self.composition.text().is_empty() {
+            return None;
+        }
+        // 整段都选完了（最后一段是原样字母）：已选文本一次性交给应用，与普通上屏同样的记账。
+        let text = self.composition.selected_text();
+        self.log_commit(&letters, &text, InputSource::Raw);
+        self.meter_commit(&text, InputSource::Raw, false);
+        self.punctuation.note_committed(&text);
+        self.history.record(&text);
+        self.remember_commit(LastCommit::plain(&letters));
+        self.clear();
+        Some(text)
+    }
+
     /// Insert：只上屏组句里**已经选定**的部分，未选的拼音直接丢掉；一段都没选返回 `None`
     ///（那就只是把拼音丢掉，不往文档里写东西）。已选段在选中时已各自记过上屏记录，这里不再补记。
     pub fn take_selected(&mut self) -> Option<String> {

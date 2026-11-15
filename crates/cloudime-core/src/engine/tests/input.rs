@@ -69,6 +69,52 @@ fn special_input_walks_one_syllable_at_a_time() {
     assert_eq!(engine.commit(duo).as_deref(), Some("云多"));
 }
 
+/// 特殊输入模式里回车：把当前字母原样输出，剩下的接着匹配
+/// （`dian'nao'cpu` 选完 电、脑 后剩 `cpu`，回车输出 `c`，再按输出 `p`，再按输出 `u`）。
+#[test]
+fn special_input_enter_outputs_the_current_letter() {
+    let mut engine = Engine::new(
+        Dictionary::parse(
+            "电\tdian\t9000\n脑\tnao\t9000\n谱\tpu\t8000\n普\tpu\t7000\n电脑\tdian nao\t9000\n",
+        )
+        .unwrap(),
+    );
+    let single = |engine: &mut Engine, text: &str| {
+        engine
+            .query()
+            .unwrap()
+            .candidates
+            .items
+            .into_iter()
+            .find(|candidate| candidate.text == text)
+            .unwrap_or_else(|| panic!("{text} 的单字候选"))
+    };
+
+    engine.set_input("dian'nao'cpu");
+    engine.set_special_input(true);
+    let dian = single(&mut engine, "电");
+    assert_eq!(engine.commit(&dian), None);
+    let nao = single(&mut engine, "脑");
+    assert_eq!(engine.commit(&nao), None, "还有 cpu 没选");
+    assert_eq!(engine.composition().scope(), "cpu");
+
+    assert_eq!(engine.commit_literal_letter(), None);
+    assert_eq!(engine.composition().selected_text(), "电脑c");
+    assert_eq!(engine.composition().scope(), "pu");
+
+    // `pu` 是完整音节，但回车只输出一个字母：`p`，剩下的 `u` 接着匹配
+    assert_eq!(engine.commit_literal_letter(), None);
+    assert_eq!(engine.composition().selected_text(), "电脑cp");
+    assert_eq!(engine.composition().scope(), "u");
+
+    assert_eq!(
+        engine.commit_literal_letter().as_deref(),
+        Some("电脑cpu"),
+        "最后一个字母输出完整段上屏"
+    );
+    assert!(engine.composition().is_empty());
+}
+
 /// 大写字母停在拼音串里但按顺序保留：`su'A'ni` 选完得到「苏A你」。
 #[test]
 fn uppercase_is_an_ordered_english_literal() {

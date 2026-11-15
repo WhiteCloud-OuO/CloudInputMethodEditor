@@ -358,7 +358,19 @@ impl Router {
             codes::INSERT => Effect::Changed(self.engine.take_selected()),
             // 回车：表达式计算面板里算得出来就上屏「算式=结果」（`5*6` → `5*6=30`，算式里的 `v` 不算）；
             // 算不出来（或不在面板里）照旧把所敲内容原样上屏。
+            // 特殊输入模式下先走「原样输出当前字母」：`dian'nao'cpu` 选完 电脑 后剩 `cpu`，
+            // 回车输出 `c`、接着出 `pu` 的候选，再按输出 `p`；整段选完才交给应用。
+            // 什么都没吃（只剩分隔符之类）才落回下面按原样上屏整串。
             codes::RETURN => {
+                if self.engine.special_input() {
+                    let before = self.engine.composition().scope().to_owned();
+                    if let Some(text) = self.engine.commit_literal_letter() {
+                        return Effect::Changed(Some(text));
+                    }
+                    if self.engine.composition().scope() != before {
+                        return Effect::Changed(None);
+                    }
+                }
                 let expression = self.calculator_expression();
                 let raw = self.engine.take_raw();
                 Effect::Changed(Some(expression.unwrap_or(raw)))
