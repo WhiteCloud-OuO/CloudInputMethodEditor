@@ -1821,15 +1821,84 @@ fn a_later_candidate_rect_resends_an_identical_frame() {
     };
     position(&mut r, 140);
     assert_eq!(recorded.shows.lock().unwrap().len(), 1);
-    // 第一次方向键：高亮 0 → 1，起滑动。
+    // 第一次方向键：高亮 0 → 1。宿主每键都补报光标，窗口等那一拍再画（不再用上一键的矩形画一遍）。
     assert_eq!(key(&mut r, 0x28, None, normal).2.highlight, 1);
-    assert_eq!(recorded.shows.lock().unwrap().len(), 2);
+    assert_eq!(
+        recorded.shows.lock().unwrap().len(),
+        1,
+        "按键先不画，等光标"
+    );
     // 上一次按键补报的组句矩形：位置变了、帧一模一样。
     position(&mut r, 160);
+    // 再来一拍「只挪位置、帧没变」：壳侧照样要收到一模一样的那帧，动画才不会被清掉。
+    position(&mut r, 180);
     let shows = recorded.shows.lock().unwrap();
     assert_eq!(shows.len(), 3);
     assert_eq!(shows[1].0, shows[2].0);
     assert_ne!(shows[1].1, shows[2].1);
+}
+
+/// 按键不再先用上一键的光标矩形画一遍：等宿主补报位置，每键只画一次。
+#[test]
+fn typing_waits_for_the_caret_rect_instead_of_rendering_twice() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    let recorded = Arc::new(Recorded::default());
+    r.set_candidate_sink(Box::new(RecordingSink(recorded.clone())));
+    let position = |r: &mut Router, right| {
+        r.handle(ClientMessage::PositionCandidates {
+            session: SessionId(1),
+            rect: ScreenRect {
+                left: 100,
+                top: 100,
+                right,
+                bottom: 120,
+            },
+        });
+    };
+    compose(&mut r, "qq", normal);
+    assert_eq!(recorded.shows.lock().unwrap().len(), 0, "还没量到光标");
+    position(&mut r, 140);
+    assert_eq!(recorded.shows.lock().unwrap().len(), 1);
+
+    key(&mut r, 0x71, Some('q'), normal);
+    assert_eq!(
+        recorded.shows.lock().unwrap().len(),
+        1,
+        "等宿主补报光标再画，不再用旧矩形先画一遍"
+    );
+    position(&mut r, 160);
+    assert_eq!(recorded.shows.lock().unwrap().len(), 2, "光标到了画一次");
+}
+
+/// 从不补报光标的宿主（老壳 / 量不到插入点）：仍旧每键立即重画，不能指望那一拍。
+#[test]
+fn hosts_that_never_report_the_caret_still_redraw_each_key() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    let recorded = Arc::new(Recorded::default());
+    r.set_candidate_sink(Box::new(RecordingSink(recorded.clone())));
+    // 先组句、再报一次光标（真实 DLL 的编辑会话就是这样），窗口显示出来。
+    key(&mut r, 0x4E, Some('n'), normal);
+    r.handle(ClientMessage::PositionCandidates {
+        session: SessionId(1),
+        rect: ScreenRect {
+            left: 100,
+            top: 100,
+            right: 140,
+            bottom: 120,
+        },
+    });
+    assert_eq!(recorded.shows.lock().unwrap().len(), 1);
+    // 之后不再补报：第一键等了一拍（跳过），后面的键立即画。
+    key(&mut r, 0x49, Some('i'), normal);
+    let after_first = recorded.shows.lock().unwrap().len();
+    assert_eq!(after_first, 1, "这一键还在等光标");
+    key(&mut r, 0x4E, Some('n'), normal);
+    assert!(
+        recorded.shows.lock().unwrap().len() > after_first,
+        "没补报光标时按键要自己重画"
+    );
 }
 
 /// 双键拼音 + 辅助码的 Router：`l` = ai、`a` = a，开发 = K + F。
@@ -2215,20 +2284,26 @@ fn u_mode_space_switch_keeps_the_candidate_window_shown() {
     let mut r = router(9);
     let recorded = Arc::new(Recorded::default());
     r.set_candidate_sink(Box::new(RecordingSink(recorded.clone())));
+    // 宿主每键都补报同一位置（真实 DLL 的编辑会话就是这么做的），窗口才会跟着换内容。
+    let position = |r: &mut Router| {
+        r.handle(ClientMessage::PositionCandidates {
+            session: SessionId(1),
+            rect: ScreenRect {
+                left: 10,
+                top: 20,
+                right: 30,
+                bottom: 40,
+            },
+        })
+    };
     key(&mut r, 0x55, Some('u'), normal);
-    r.handle(ClientMessage::PositionCandidates {
-        session: SessionId(1),
-        rect: ScreenRect {
-            left: 10,
-            top: 20,
-            right: 30,
-            bottom: 40,
-        },
-    });
+    position(&mut r);
     key(&mut r, 0x20, Some(' '), normal); // 切到符号输入
+    position(&mut r);
     key(&mut r, 0x20, Some(' '), normal); // 切回字母输入
+    position(&mut r);
     let shows = recorded.shows.lock().unwrap();
-    assert!(shows.len() >= 2, "切模式也要显示候选窗");
+    assert!(shows.len() >= 3, "切模式也要显示候选窗");
     assert_eq!(shows.last().unwrap().0.preedit[0].text, "u");
     assert!(!r.u_mode.expect("还在 u 模式").symbol_ui);
 }

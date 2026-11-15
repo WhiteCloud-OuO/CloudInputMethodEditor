@@ -1474,6 +1474,11 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 约 150 ms 的 cubic ease-out 后收尾。
 窗口过程按 HWND 从 UI 线程的表里找回窗口（`attach`）。纯展示，不改窗口位置大小、不涉及协议。
 
+每键只画一次：DLL 在编辑会话里每键都会补报插入点（`ClientMessage::PositionCandidates` → `position_candidates`），
+所以 `handle_key_inner` **不再**先用上一键的矩形 `reconcile_candidates` 一遍 —— `Router::caret_reported` 记着
+「上一键之后有没有报过」，报过的宿主等那一拍到齐再画（空帧 / 组句结束仍立即收窗）；从不补报的宿主与老 DLL
+保留原来的立即重画，第一键等一拍之后每键自己画（见 `docs/notes/performance.md` 第九轮）。
+
 候选窗显示期间 **Caps Lock 临时当退格**（`server/src/ui/caps_lock.rs`，`[input] caps_lock_as_backspace`，缺省关）：
 `WH_KEYBOARD_LL` 装在跑消息循环的 UI 线程上，`UiCommand::Show` / `Hide` 时装 / 卸钩子（只在候选窗开着且设置打开时存在，
 不组句时完全不拦系统按键）。

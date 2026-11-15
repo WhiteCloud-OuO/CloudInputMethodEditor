@@ -340,6 +340,30 @@ AE 满载复测：`z` 的 Server `lookup` 从 20.4 ms 降到约 4–8 ms，按�
 UI 线程设为 `THREAD_PRIORITY_ABOVE_NORMAL`；CPU 被别的软件挤占时，避免候选窗排在后台任务后面。
 按键热路径仍在普通优先级的工人线程上，不抢宿主应用的 CPU。
 
+## 第九轮：候选窗每键只画一次（2026-11-15）
+
+**起因**：真机反馈「打字快时候选窗一顿一顿」。`CLOUDIME_TIMING=1` 打点（本机 i7 级 desktop、2560×1440）看到每键有
+**两条** `候选窗显示`：先按上一键的光标矩形画一遍（`render_us` 1.4–1.6 ms），等 DLL 编辑会话补报新位置后再画一遍
+（6–7 ms）。第一遍不但是白画，窗口还会先停在旧位置、几毫秒后跳到新位置（视觉上的抖）；`queue_us` 已经出现 6–9 ms 的
+积压，说明快打字时 UI 线程是饱和的。
+
+**改法**：`Router::caret_reported` 记住「上一键之后 DLL 有没有补报过插入点」。补报过的宿主，`handle_key_inner`
+不再立即 `reconcile_candidates`，等 `PositionCandidates` 那一拍再画；空帧（组句结束）仍立即收窗。从不补报的宿主 /
+老 DLL 保留原来的立即重画（第一键等一拍，之后每键自己画）。
+
+**结果**（本机，35 ms/键，`CLOUDIME_TIMING=1`）：
+
+| | 改前 | 改后 |
+|---|---|---|
+| 每键 `候选窗显示` | 2.0 次 | 1.15 次 |
+| UI `queue_us` p90 | 6.5 ms | 0.1 ms |
+| 每键 UI 总耗时 | ≈8 ms | ≈6.5 ms |
+| 窗口位置 | 先旧位再跳新位 | 直接到新位 |
+
+剩下的一次是必要的重画：`content_us`（`set_content`）0.01–0.18 ms、栅格化（`候选窗页面树位图已画`）1.0–1.7 ms，
+其余 **5–9 ms 在 `window.show()` 里**——`layered::present` 的 `Canvas` 分配 + RGBA→BGRA 拷贝 + `UpdateLayeredWindow`
++ `ShowWindow`。这是下一轮的目标（窗口尺寸没变时复用 DIB / 只挪位置、或换 `UpdateLayeredWindowIndirect` 预热）。
+
 ## 经验
 
 1. **先量再改，先打点再改。** 第三轮猜错两次的原因是凭「常识」判断热点（哈希查表、大数组二分都是教科书里的慢点），

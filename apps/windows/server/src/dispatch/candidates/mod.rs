@@ -195,6 +195,8 @@ impl Router {
         if self.focused != Some(session) {
             return;
         }
+        // 这个宿主每键都会报插入点：下一键可以等这一拍再画候选窗（见 `handle_key_inner`）。
+        self.caret_reported = true;
         if crate::timing::enabled() {
             tracing::info!(
                 target: "cloudime_timing",

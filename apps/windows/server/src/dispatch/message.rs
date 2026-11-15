@@ -366,7 +366,15 @@ impl Router {
         let shown = self.self_drawn_frame();
         let frame_us = frame_started.elapsed().as_micros();
         let reconcile_started = Instant::now();
-        self.reconcile_candidates(&shown);
+        // 宿主每键都会在编辑会话里补报插入点（`PositionCandidates`）：候选窗等那一拍再画。
+        // 先用上一键的矩形画一次，窗口会先错位再跳回来，还多一次整窗重绘（真机每键两次 `候选窗显示`）。
+        // 只跳过「有内容、且上一键确实报过光标」这一种：空帧（组句结束）要立刻收窗，
+        // 从不报光标的宿主 / 老 DLL 继续走原来的立即重画。
+        let wait_for_caret = self.caret_reported && !shown.is_empty();
+        self.caret_reported = false;
+        if !wait_for_caret {
+            self.reconcile_candidates(&shown);
+        }
         let reconcile_us = reconcile_started.elapsed().as_micros();
         let wire_started = Instant::now();
         let frame = self.current_frame();

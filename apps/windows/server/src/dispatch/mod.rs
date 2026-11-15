@@ -160,6 +160,10 @@ pub struct Router {
     /// 上次真正显示的帧与位置：没变就不重画（组字期间的空转 Poll 很多）。
     last_shown: Option<(Frame, Vec<Option<char>>, ScreenRect)>,
 
+    /// 上一键之后 DLL 有没有补报过插入点（`PositionCandidates`）。每键都报的宿主，
+    /// 候选窗等那一拍再画即可，不必先用上一键的矩形画一遍（多一次整窗重绘、窗口还会先错位再跳回来）。
+    caret_reported: bool,
+
     /// 基本本地模型（`.qjm` 或三件套目录）；没有模型文件为 `None`。
     model_path: Option<PathBuf>,
 
@@ -359,6 +363,7 @@ impl Router {
             last_caret: None,
             last_rect: None,
             last_shown: None,
+            caret_reported: false,
             model_path: None,
             zhiyi_model: None,
             zhiyi_threads: cloudime_platform::DEFAULT_ZHIYI_THREADS,

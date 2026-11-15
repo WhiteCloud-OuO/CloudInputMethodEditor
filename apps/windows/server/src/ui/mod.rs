@@ -439,6 +439,7 @@ fn apply(
             state.fullscreen = kind;
             let win_rect = to_win_rect(rect);
             window.set_content(&frame, &badges);
+            let content_us = started.elapsed().as_micros();
             if kind == FullscreenKind::D3dExclusive {
                 // 独占全屏下不显示：先把内容 / 锚点准备好，退出全屏由定时器恢复。
                 window.prepare(win_rect);
@@ -456,6 +457,7 @@ fn apply(
                 tracing::info!(
                     target: "cloudime_timing",
                     queue_us = queue_us as u64,
+                    content_us = content_us as u64,
                     render_us = started.elapsed().as_micros() as u64,
                     candidates = frame.candidates.items.len(),
                     left = rect.left,
