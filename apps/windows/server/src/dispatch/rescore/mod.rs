@@ -515,7 +515,11 @@ impl Router {
             return;
         };
         *layout = CandidateLayout::new(query.candidates.items.clone(), page_size);
-        (*preedit, *cursor) = marked_parts(&query, self.engine.special_input());
+        (*preedit, *cursor) = marked_parts(
+            &query,
+            self.engine.special_input(),
+            self.engine.composition().last_selected_is_letters(),
+        );
         let frame = self.self_drawn_frame();
         self.reconcile_candidates(&frame);
         // 前文在结果回来之前换过（Surrounding 晚到）：这次查询又记下了一批要打分的，再来一轮

@@ -111,7 +111,11 @@ impl Router {
             }
         }
         let built = query.map(|query| {
-            let (preedit, cursor) = marked_parts(&query, self.engine.special_input());
+            let (preedit, cursor) = marked_parts(
+                &query,
+                self.engine.special_input(),
+                self.engine.composition().last_selected_is_letters(),
+            );
             (
                 query.candidates.items.clone(),
                 wants_weights.then(|| query.weights.clone()),
@@ -204,7 +208,7 @@ impl Router {
             return false;
         }
         let query = self.engine.query_english_words();
-        let (preedit, cursor) = marked_parts(&query, false);
+        let (preedit, cursor) = marked_parts(&query, false, false);
         self.candidate_weights = query.weights;
         self.stop_rescoring();
         self.show_more = false;
@@ -550,7 +554,14 @@ fn preedit_mode_for(configured: PreeditMode, exclusive_fullscreen: bool) -> Pree
 
 /// 一次查询的拼音行分段与光标。
 /// 光标用 Core 的映射：自动补的 `'` 会让显示串比敲的长。
-pub(super) fn marked_parts(query: &Query, special: bool) -> (Vec<PreeditSegment>, usize) {
+///
+/// `rest_from_start`：上一次提交的是原样字母（特殊输入模式里回车输出的 `c`），
+/// 剩下的拼音整段画角标色 —— 那一段不再是「当前音节」，用户接着按回车输出的还是字母。
+pub(super) fn marked_parts(
+    query: &Query,
+    special: bool,
+    rest_from_start: bool,
+) -> (Vec<PreeditSegment>, usize) {
     let mut preedit: Vec<PreeditSegment> = query.marked_segments().iter().map(Into::into).collect();
     if special
         && query.typed_display.is_none()
@@ -560,17 +571,20 @@ pub(super) fn marked_parts(query: &Query, special: bool) -> (Vec<PreeditSegment>
             .first()
             .and_then(|segmentation| segmentation.syllables.first())
     {
-        split_special_rest(&mut preedit, first.text.chars().count());
+        let first_chars = if rest_from_start {
+            0
+        } else {
+            first.text.chars().count()
+        };
+        split_special_rest(&mut preedit, first_chars);
     }
     (preedit, query.segments_cursor())
 }
 
 /// 特殊输入模式：把拼音行最后一段（未选拼音）按第一个音节切开，
 /// 第一个音节保持普通拼音色，其余音节标成 `Rest`（角标色）。
+/// `first_chars == 0` 时整段都是 `Rest`（刚提交过原样字母）。
 fn split_special_rest(segments: &mut Vec<PreeditSegment>, first_chars: usize) {
-    if first_chars == 0 {
-        return;
-    }
     let Some(index) = segments
         .iter()
         .rposition(|segment| segment.kind == PreeditKind::Typed)
@@ -580,6 +594,10 @@ fn split_special_rest(segments: &mut Vec<PreeditSegment>, first_chars: usize) {
     let text = &segments[index].text;
     // 最后一段也可能是已选文本（中文）：只切纯拼音段。
     if !text.chars().all(|c| c.is_ascii_alphabetic() || c == '\'') {
+        return;
+    }
+    if first_chars == 0 {
+        segments[index].kind = PreeditKind::Rest;
         return;
     }
     let chars: Vec<char> = text.chars().collect();
@@ -626,6 +644,23 @@ mod tests {
         split_special_rest(&mut segments, 3);
         assert_eq!(segments.len(), 1);
         assert_eq!(segments[0].text, "duo");
+
+        // 刚提交过原样字母（`点脑c` + `pu`）：剩下整段都画角标色，不再高亮下一个音节。
+        let mut segments = vec![
+            PreeditSegment {
+                text: "点脑c".to_owned(),
+                kind: PreeditKind::Typed,
+            },
+            PreeditSegment {
+                text: "pu".to_owned(),
+                kind: PreeditKind::Typed,
+            },
+        ];
+        split_special_rest(&mut segments, 0);
+        assert_eq!(segments.len(), 2);
+        assert_eq!(segments[0].kind, PreeditKind::Typed);
+        assert_eq!(segments[1].text, "pu");
+        assert_eq!(segments[1].kind, PreeditKind::Rest);
     }
 
     #[test]

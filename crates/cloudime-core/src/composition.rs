@@ -78,6 +78,14 @@ impl Composition {
         self.selected.iter().map(|s| s.text.as_str()).collect()
     }
 
+    /// 最近一次并进组句的文本是不是英文（特殊输入模式里回车原样输出的那段字母）。
+    /// 拼音行据此把剩下的拼音整段画角标色：提交过字母之后，下一个音节不再当「当前音节」高亮。
+    pub fn last_selected_is_letters(&self) -> bool {
+        self.selected.last().is_some_and(|selected| {
+            !selected.text.is_empty() && selected.text.chars().all(|c| c.is_ascii_alphanumeric())
+        })
+    }
+
     /// 已选段消耗掉的拼音按顺序拼起来（不含英文字面量）。
     pub fn selected_pinyin(&self) -> String {
         self.selected.iter().map(|s| s.pinyin.as_str()).collect()
