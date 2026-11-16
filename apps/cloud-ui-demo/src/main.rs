@@ -14,7 +14,7 @@ const LIST_ROWS: usize = 5;
 const LIST_HEIGHT: f32 = 170.0;
 const LOG_ROWS: usize = 12;
 const LOG_HEIGHT: f32 = 110.0;
-const TEXT_LIST: [&str; 7] = [
+const TEXT_LIST: [&str; 8] = [
     "张伟",
     "张伟明",
     "李娜",
@@ -22,6 +22,7 @@ const TEXT_LIST: [&str; 7] = [
     "Alice",
     "alphabet",
     "欧阳娜娜",
+    "这是一个特别特别长的人名用字测试文本，用来看截断省略号或底部水平滚动条",
 ];
 
 #[derive(Default)]
@@ -33,6 +34,8 @@ struct Demo {
     log_scroll: f32,
     selected: Option<usize>,
     text_selected: Option<usize>,
+    /// 文本列表放不下时是出水平滚动条（true）还是截断（false，缺省）。
+    h_scroll_text: bool,
     light: bool,
     masked: bool,
     dialog_result: Option<u8>,
@@ -57,6 +60,9 @@ impl Application for Demo {
                 AppEvent::RegionClicked(name) if name == "click" => self.clicks += 1,
                 AppEvent::RegionClicked(name) if name == "theme" => self.light = !self.light,
                 AppEvent::RegionClicked(name) if name == "mask" => self.masked = !self.masked,
+                AppEvent::RegionClicked(name) if name == "text_wrap" => {
+                    self.h_scroll_text = !self.h_scroll_text
+                }
                 AppEvent::RegionClicked(name) if name == "dialog" => {
                     let mut dialog = MessageDialog::new(
                         "消息对话框",
@@ -241,15 +247,18 @@ impl Application for Demo {
                 theme.muted(),
             );
             let text_items: Vec<String> = TEXT_LIST.iter().map(|text| (*text).to_owned()).collect();
+            let mut text_style = theme.text_list();
+            text_style.allow_text_wrapping = !self.h_scroll_text;
             ui.text_list(
                 "recent",
                 &text_items,
                 &typed,
                 true,
-                theme.text_list(),
+                text_style,
                 TextListState {
                     selected: self.text_selected,
                     scroll_offset: 0.0,
+                    h_scroll_offset: 0.0,
                 },
             );
             ui.spacer(0.0, 8.0);
@@ -266,6 +275,15 @@ impl Application for Demo {
                     theme.button(),
                 );
                 row.button("dialog", "消息对话框", theme.button());
+                row.button(
+                    "text_wrap",
+                    if self.h_scroll_text {
+                        "文本列表：横向滚动"
+                    } else {
+                        "文本列表：截断"
+                    },
+                    theme.button(),
+                );
                 row.button("hide", "隐藏到托盘", theme.button());
             });
         });
@@ -331,7 +349,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     run_native(
         WindowOptions {
             title: "Cloud UI Demo".to_owned(),
-            size: (760.0, 900.0),
+            size: (760.0, 1020.0),
             min_size: Some((420.0, 360.0)),
             decorations: Decorations::None,
             top_most: false,

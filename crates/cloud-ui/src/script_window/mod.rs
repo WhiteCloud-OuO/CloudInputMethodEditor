@@ -598,10 +598,11 @@ struct ScrollDrag {
     offset: f32,
 }
 
-/// `list_box` 内部滚动条拖动：元素下标 + 按住时相对滑块顶部的偏移（点）。
+/// `list_box` 内部滚动条拖动：元素下标 + 轴 + 按住时相对滑块起点的偏移（点）。
 #[derive(Clone, Copy)]
 struct ListBoxDrag {
     index: usize,
+    axis: ScrollAxis,
     offset: f32,
 }
 
@@ -2123,6 +2124,49 @@ impl ScriptWindow {
         Some((inside_thumb, (x, y, width, height)))
     }
 
+    /// 点是否落在内部滚动条轨道上；返回 `(在滑块上, 滑块矩形)`。
+    fn list_box_h_bar_at(
+        &self,
+        index: usize,
+        x: f32,
+        y: f32,
+    ) -> Option<(bool, (f32, f32, f32, f32))> {
+        let list = self.list_box(index)?;
+        if !list.h_scrollbar_visible() {
+            return None;
+        }
+        let local = (x - list.x, y - list.y);
+        let (tx, ty, tw, th) = list.h_track_rect();
+        if local.0 < tx || local.0 > tx + tw || local.1 < ty || local.1 > ty + th {
+            return None;
+        }
+        let (x, y, width, height) = list.h_thumb_rect();
+        let inside_thumb =
+            local.0 >= x && local.0 <= x + width && local.1 >= y && local.1 <= y + height;
+        Some((inside_thumb, (x, y, width, height)))
+    }
+
+    /// 设置列表的水平滚动偏移；变了才重画。
+    fn set_list_box_h_scroll(&self, index: usize, offset: f32) -> bool {
+        let changed = {
+            let mut document = self.document.borrow_mut();
+            let Some(Element::ListBox(list)) = document.elements.get_mut(index) else {
+                return false;
+            };
+            let offset = offset.clamp(0.0, list.max_h_scroll_px());
+            if (list.h_scroll_offset - offset).abs() < 0.01 {
+                false
+            } else {
+                list.h_scroll_offset = offset;
+                true
+            }
+        };
+        if changed {
+            self.repaint();
+        }
+        changed
+    }
+
     fn begin_list_box_press(&self, client_x: i32, client_y: i32) -> bool {
         let (x, y, element, _) = self.hit_at(client_x, client_y);
         let Some(index) = self.list_box_index(element) else {
@@ -2138,6 +2182,7 @@ impl ScriptWindow {
                 self.list_box_anims.borrow_mut().remove(&index);
                 self.list_box_drag.set(Some(ListBoxDrag {
                     index,
+                    axis: ScrollAxis::Vertical,
                     offset: y - list.y - thumb_y,
                 }));
                 let _ = unsafe { SetCapture(self.hwnd()) };
@@ -2156,6 +2201,30 @@ impl ScriptWindow {
                 suppress_click: true,
             }));
             self.animate_list_box_scroll(index, target);
+            return true;
+        }
+        if let Some((inside_thumb, (thumb_x, _, thumb_width, _))) =
+            self.list_box_h_bar_at(index, x, y)
+        {
+            if inside_thumb {
+                self.list_box_drag.set(Some(ListBoxDrag {
+                    index,
+                    axis: ScrollAxis::Horizontal,
+                    offset: x - list.x - thumb_x,
+                }));
+                let _ = unsafe { SetCapture(self.hwnd()) };
+                return true;
+            }
+            let (track_x, _, track_width, _) = list.h_track_rect();
+            let travel = (track_width - thumb_width).max(1.0);
+            let ratio = ((x - list.x - track_x) / travel).clamp(0.0, 1.0);
+            self.list_box_press.set(Some(ListBoxPress {
+                index,
+                row: None,
+                child: None,
+                suppress_click: true,
+            }));
+            self.set_list_box_h_scroll(index, ratio * list.max_h_scroll_px());
             return true;
         }
         let local = (x - list.x, y - list.y);
@@ -2198,8 +2267,10 @@ impl ScriptWindow {
             return true;
         };
         let local = (x - list.x, y - list.y);
-        let (tx, ty, tw, th) = list.track_rect();
-        let (_, _, _, thumb) = list.thumb_rect();
+        let (tx, ty, tw, th) = match drag.axis {
+            ScrollAxis::Vertical => list.track_rect(),
+            ScrollAxis::Horizontal => list.h_track_rect(),
+        };
         if local.0 < tx || local.0 > tx + tw || local.1 < ty || local.1 > ty + th {
             self.list_box_drag.set(None);
             self.list_box_press.set(None);
@@ -2208,14 +2279,29 @@ impl ScriptWindow {
             let _ = unsafe { ReleaseCapture() };
             return true;
         }
-        let travel = (th - thumb).max(0.0);
-        let ratio = if travel <= 0.0 {
-            0.0
-        } else {
-            ((local.1 - drag.offset - ty) / travel).clamp(0.0, 1.0)
-        };
-        if self.set_list_box_scroll(drag.index, ratio * list.max_scroll_px()) {
-            self.repaint();
+        match drag.axis {
+            ScrollAxis::Vertical => {
+                let (_, _, _, thumb) = list.thumb_rect();
+                let travel = (th - thumb).max(0.0);
+                let ratio = if travel <= 0.0 {
+                    0.0
+                } else {
+                    ((local.1 - drag.offset - ty) / travel).clamp(0.0, 1.0)
+                };
+                if self.set_list_box_scroll(drag.index, ratio * list.max_scroll_px()) {
+                    self.repaint();
+                }
+            }
+            ScrollAxis::Horizontal => {
+                let (_, _, thumb, _) = list.h_thumb_rect();
+                let travel = (tw - thumb).max(0.0);
+                let ratio = if travel <= 0.0 {
+                    0.0
+                } else {
+                    ((local.0 - drag.offset - tx) / travel).clamp(0.0, 1.0)
+                };
+                self.set_list_box_h_scroll(drag.index, ratio * list.max_h_scroll_px());
+            }
         }
         true
     }
@@ -2240,6 +2326,19 @@ impl ScriptWindow {
         let local = (x - list.x, y - list.y);
         if local.0 < 0.0 || local.0 > list.width || local.1 < 0.0 || local.1 > list.height {
             return false;
+        }
+        let (_, _, shift) = modifiers();
+        // Shift + 滚轮（以及没有竖向滚动时）走水平滚动。
+        if (shift && list.h_scrollbar_visible()) || !list.scrollbar_visible() {
+            if list.h_scrollbar_visible() {
+                let target = if delta > 0 {
+                    list.clamp_h_scroll() - 24.0
+                } else {
+                    list.clamp_h_scroll() + 24.0
+                };
+                self.set_list_box_h_scroll(index, target);
+            }
+            return true;
         }
         let step = list
             .row_at(y - list.y)
@@ -4710,6 +4809,8 @@ mod tests {
             .map(|text| (*text).to_owned())
             .collect();
         let shown = visible_items(&items, "", false);
+        let mut measure =
+            |text: &str, _slot, size: f32| (text.chars().count() as f32 * size * 0.6, size * 1.25);
         let first = build_text_list(
             &style,
             &items,
@@ -4717,8 +4818,10 @@ mod tests {
             Some(0),
             None,
             40.0,
+            0.0,
             (0.0, 0.0, 100.0, 40.0),
             "list",
+            &mut measure,
         );
         let mut document = Document::empty(100.0, 40.0);
         document.elements.push(Element::ListBox(first));
@@ -4735,8 +4838,10 @@ mod tests {
             Some(2),
             None,
             0.0,
+            0.0,
             (0.0, 0.0, 100.0, 40.0),
             "list",
+            &mut measure,
         );
         assert!(crate::text_list::replace(&mut document, "list", next));
         let Some(Element::ListBox(list)) = document.elements.first() else {

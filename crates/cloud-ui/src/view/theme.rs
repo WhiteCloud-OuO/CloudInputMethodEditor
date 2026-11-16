@@ -196,6 +196,7 @@ impl Theme {
             selection: self.accent,
             selection_text: self.accent_text,
             hover: self.surface_alt,
+            allow_text_wrapping: true,
         }
     }
 

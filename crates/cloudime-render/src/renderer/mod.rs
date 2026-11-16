@@ -1344,7 +1344,7 @@ fn draw_list_box(
     };
     let edge = list.edge_width.max(0.0);
     let gap = list.content_gap.max(0.0);
-    let scrollbar = list.scrollbar_visible();
+    let (vertical, horizontal) = list.scrollbars();
     if let Some(fill) = list.fill {
         layer.round_rect(
             edge + gap,
@@ -1358,12 +1358,16 @@ fn draw_list_box(
     let content_x = edge + gap;
     let content_y = edge + gap;
     let content_width =
-        (list.width * scale - (edge + gap) * 2.0 - if scrollbar { 12.0 * scale } else { 0.0 })
+        (list.width * scale - (edge + gap) * 2.0 - if vertical { 12.0 * scale } else { 0.0 })
             .ceil()
             .max(1.0) as u32;
-    let content_height = (list.height * scale - (edge + gap) * 2.0).ceil().max(1.0) as u32;
+    let content_height =
+        (list.height * scale - (edge + gap) * 2.0 - if horizontal { 12.0 * scale } else { 0.0 })
+            .ceil()
+            .max(1.0) as u32;
     if let Ok(mut content) = Render::new(content_width, content_height, render.text_handle()) {
-        let available = list.content_width(scrollbar);
+        let available = list.content_width(vertical);
+        let h_offset = list.clamp_h_scroll();
         for row in &list.rows {
             let Some(row_y) = list.row_view_top(row) else {
                 continue;
@@ -1377,7 +1381,7 @@ fn draw_list_box(
                 crate::control::ListBoxAlign::Left => 0.0,
                 crate::control::ListBoxAlign::Center => (available - row_width).max(0.0) * 0.5,
                 crate::control::ListBoxAlign::Right => (available - row_width).max(0.0),
-            };
+            } - h_offset;
             let elements = row.active_elements(
                 list.selected_index == row.index as i32,
                 list.hovered_index == Some(row.index as i32),
@@ -1392,7 +1396,7 @@ fn draw_list_box(
             &content.into_pixmap(),
         );
     }
-    if scrollbar {
+    if vertical {
         let (tx, ty, tw, th) = list.track_rect();
         layer.round_rect(
             tx * scale,
@@ -1410,6 +1414,28 @@ fn draw_list_box(
                 tw * scale,
                 th * scale,
                 tw * scale * 0.5,
+                Color::rgb(0x88, 0x88, 0x88),
+            );
+        }
+    }
+    if horizontal {
+        let (tx, ty, tw, th) = list.h_track_rect();
+        layer.round_rect(
+            tx * scale,
+            ty * scale,
+            tw * scale,
+            th * scale,
+            th * scale * 0.5,
+            Color::rgb(0xC8, 0xC8, 0xC8),
+        );
+        let (tx, ty, tw, th) = list.h_thumb_rect();
+        if tw > 0.0 {
+            layer.round_rect(
+                tx * scale,
+                ty * scale,
+                tw * scale,
+                th * scale,
+                th * scale * 0.5,
                 Color::rgb(0x88, 0x88, 0x88),
             );
         }
@@ -2843,6 +2869,8 @@ mod tests {
             ],
             row_count: 2,
             scroll_offset: 0.0,
+            content_width: 0.0,
+            h_scroll_offset: 0.0,
             content_height: 80.0,
             allow_select: false,
             selected_index: -2,

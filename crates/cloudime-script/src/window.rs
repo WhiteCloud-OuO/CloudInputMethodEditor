@@ -49,6 +49,10 @@ struct CachedTextList {
     auto_height: bool,
     /// 选中项的原下标（0 起）。
     selected: Option<usize>,
+    /// 水平滚动偏移（点）。
+    h_scroll: f32,
+    /// 量字宽用（截断 / 水平滚动条判断）；没有量尺时退回估算。
+    measure: Option<crate::runtime::LayoutMeasureHook>,
 }
 
 type ListScrollHandler = Rc<dyn Fn(&mlua::Lua, &str, usize) -> mlua::Result<()>>;
@@ -3944,6 +3948,8 @@ fn parse_list_box(
         rows: window.rows,
         row_count: window.row_count,
         scroll_offset: window.scroll_offset,
+        content_width: 0.0,
+        h_scroll_offset: 0.0,
         content_height: window.content_height,
         allow_select,
         selected_index: selected_index(table, window.row_count)?,
@@ -4155,8 +4161,20 @@ fn mutate_text_list(
         let entry = lists.get_mut(&(id, name.to_owned()))?;
         mutate(entry);
         let visible = visible_items(&entry.items, &entry.query, entry.sort);
+        let mut measure = text_list_measure(entry.measure.clone());
         let height = if entry.auto_height {
-            entry.style.auto_height(visible.len())
+            let measured = cloudime_render::text_list_measured_width(
+                &entry.style,
+                &entry.items,
+                &visible,
+                &mut measure,
+            );
+            cloudime_render::text_list_auto_height(
+                &entry.style,
+                visible.len(),
+                entry.width,
+                measured,
+            )
         } else {
             entry.height
         };
@@ -4167,8 +4185,10 @@ fn mutate_text_list(
             entry.selected,
             None,
             0.0,
+            entry.h_scroll,
             (entry.x, entry.y, entry.width, height),
             name,
+            &mut measure,
         ))
     });
     let Some(list) = list else {
@@ -4439,6 +4459,9 @@ fn parse_text_list(table: &mlua::Table) -> mlua::Result<Element> {
         selection_text: color(table, "selection_text", false)?
             .unwrap_or(Color::rgb(0xFF, 0xFF, 0xFF)),
         hover: color(table, "hover", false)?.unwrap_or(Color::rgb(0x2D, 0x2D, 0x38)),
+        allow_text_wrapping: table
+            .get::<Option<bool>>("allow_text_wrapping")?
+            .unwrap_or(true),
     };
     let items = text_list_items(table)?;
     let query = table.get::<Option<String>>("query")?.unwrap_or_default();
@@ -4453,11 +4476,21 @@ fn parse_text_list(table: &mlua::Table) -> mlua::Result<Element> {
     let auto_height = table
         .get::<Option<bool>>("auto_height")?
         .unwrap_or(explicit_height.is_none());
-    let height = explicit_height.unwrap_or_else(|| style.auto_height(shown.len()));
+    let height = explicit_height.unwrap_or(0.0);
     let name = table.get::<Option<String>>("name")?.unwrap_or_default();
     let x = number(table, "x", 0.0)?;
     let y = number(table, "y", 0.0)?;
     let width = positive(table, "w", "width")?;
+    let h_scroll = number(table, "h_scroll_offset", 0.0)?.max(0.0);
+    let measure = PARSE_MEASURE.with(|slot| slot.borrow().clone());
+    let mut measure_text = text_list_measure(measure.clone());
+    let height = if auto_height {
+        let measured =
+            cloudime_render::text_list_measured_width(&style, &items, &shown, &mut measure_text);
+        cloudime_render::text_list_auto_height(&style, shown.len(), width, measured)
+    } else {
+        height
+    };
     PARSED_TEXT_LISTS.with(|lists| {
         lists.borrow_mut().push((
             name.clone(),
@@ -4472,6 +4505,8 @@ fn parse_text_list(table: &mlua::Table) -> mlua::Result<Element> {
                 height,
                 auto_height,
                 selected,
+                h_scroll,
+                measure,
             },
         ));
     });
@@ -4482,8 +4517,10 @@ fn parse_text_list(table: &mlua::Table) -> mlua::Result<Element> {
         selected,
         None,
         number(table, "scroll_offset", 0.0)?.max(0.0),
+        h_scroll,
         (x, y, width, height),
         &name,
+        &mut measure_text,
     );
     if !allow_select {
         list.allow_select = false;
@@ -4491,6 +4528,24 @@ fn parse_text_list(table: &mlua::Table) -> mlua::Result<Element> {
         list.hovered_index = None;
     }
     Ok(Element::ListBox(list))
+}
+
+/// `text_list` 行宽用的量尺：优先用脚本侧量尺，没有就按字号估算。
+fn text_list_measure(
+    measure: Option<crate::runtime::LayoutMeasureHook>,
+) -> impl FnMut(&str, FontSlot, f32) -> (f32, f32) {
+    move |text, slot, size| {
+        let font = match slot {
+            FontSlot::Pinyin => crate::runtime::MeasureFont::Pinyin,
+            FontSlot::ItemNumber => crate::runtime::MeasureFont::ItemNumber,
+            FontSlot::Translate => crate::runtime::MeasureFont::Translate,
+            FontSlot::Candidate => crate::runtime::MeasureFont::Candidate,
+        };
+        measure
+            .as_ref()
+            .and_then(|measure| measure(text, size, 0.0, font))
+            .unwrap_or_else(|| (text.chars().count() as f32 * size * 0.6, size * 1.25))
+    }
 }
 
 /// `text_list.items`：字符串数组；数字 / 布尔也转成文本，其它类型跳过。
@@ -5639,6 +5694,41 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn text_list_wrapping_flag_truncates_or_adds_a_horizontal_bar() {
+        let lua = mlua::Lua::new();
+        let long = "很长很长很长很长很长很长很长很长很长很长很长很长很长";
+        let table: mlua::Table = lua
+            .load(format!(
+                r#"{{ type = "text_list", name = "recent", w = 100, h = 40,
+                      allow_text_wrapping = false, items = {{ "{long}" }} }}"#
+            ))
+            .eval()
+            .unwrap();
+        let mut images = ImageCache::default();
+        let Element::ListBox(list) = parse_element(&table, &mut images, 0).unwrap() else {
+            panic!("text_list 应生成列表元素");
+        };
+        assert!(list.h_scrollbar_visible(), "不换行 + 长文本要出水平滚动条");
+        assert!(list.max_h_scroll_px() > 0.0);
+
+        let table: mlua::Table = lua
+            .load(format!(
+                r#"{{ type = "text_list", name = "recent", w = 100, h = 40,
+                      items = {{ "{long}" }} }}"#
+            ))
+            .eval()
+            .unwrap();
+        let Element::ListBox(list) = parse_element(&table, &mut images, 0).unwrap() else {
+            panic!("text_list 应生成列表元素");
+        };
+        assert!(!list.h_scrollbar_visible(), "默认截断，不出水平条");
+        let Some(Element::Text { text, .. }) = list.rows[0].elements.last() else {
+            panic!("行里应有文字");
+        };
+        assert!(text.ends_with('…'), "{text}");
     }
 
     #[test]

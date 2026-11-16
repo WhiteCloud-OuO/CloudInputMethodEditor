@@ -5,7 +5,7 @@
 
 use cloud_ui_core::{Constraints, Rect, Size};
 use cloudime_render::{
-    Element, HitRect, HitShape, Region, TextListStyle, build_text_list, visible_items,
+    Element, FontSlot, HitRect, HitShape, Region, TextListStyle, build_text_list, visible_items,
 };
 
 use super::View;
@@ -18,21 +18,29 @@ pub struct TextListState {
 
     /// 滚动偏移（点）；会被内容高度夹住。
     pub scroll_offset: f32,
+
+    /// 水平滚动偏移（点）；只有 `allow_text_wrapping = false` 且内容超宽时有用。
+    pub h_scroll_offset: f32,
 }
 
 /// 量宽：横向铺满父容器；高度有固定值用固定值，否则按可见行数自动算。
-pub(super) fn measure(
+pub(super) fn measure<F>(
     items: &[String],
     query: &str,
     sort: bool,
     style: &TextListStyle,
     constraints: Constraints,
-) -> Size {
+    measure: &mut F,
+) -> Size
+where
+    F: FnMut(&str, FontSlot, f32) -> (f32, f32),
+{
+    let shown = visible_items(items, query, sort);
     let height = match style.height {
         Some(height) => height,
         None => {
-            let shown = visible_items(items, query, sort);
-            style.auto_height(shown.len())
+            let width = cloudime_render::text_list_measured_width(style, items, &shown, measure);
+            cloudime_render::text_list_auto_height(style, shown.len(), constraints.max_width, width)
         }
     };
     Size::new(constraints.max_width, height.min(constraints.max_height))
@@ -40,7 +48,7 @@ pub(super) fn measure(
 
 /// 把文本列表写进 document，并给可见行写命中区域。
 #[allow(clippy::too_many_arguments)]
-pub(super) fn build(
+pub(super) fn build<F>(
     elements: &mut Vec<Element>,
     regions: &mut Vec<Region>,
     name: &str,
@@ -53,26 +61,21 @@ pub(super) fn build(
     drawn: (f32, f32),
     clip: Option<Rect>,
     pointer: Option<(f32, f32)>,
-) {
+    measure: &mut F,
+) where
+    F: FnMut(&str, FontSlot, f32) -> (f32, f32),
+{
     let shown = visible_items(items, query, sort);
     let edge = style.edge_width.max(0.0);
     let gap = style.content_gap.max(0.0);
-    let viewport = (rect.height - (edge + gap) * 2.0).max(0.0);
-    let content_height = style.content_height(shown.len());
-    let scroll_offset = state
-        .scroll_offset
-        .clamp(0.0, (content_height - viewport).max(0.0));
     let stride = style.stride();
-    let scrollbar = content_height > viewport + 0.01;
-    let row_width =
-        (rect.width - (edge + gap) * 2.0 - if scrollbar { 8.0 + 4.0 } else { 0.0 }).max(1.0);
 
     // 指针已经是相对整个 view 的坐标；换算到列表盒左上角后取行。
+    let pointer = pointer.map(|(x, y)| (x - (drawn.0 + rect.x), y - (drawn.1 + rect.y)));
     let hovered = pointer
-        .map(|(x, y)| (x - (drawn.0 + rect.x), y - (drawn.1 + rect.y)))
         .filter(|(x, y)| *x >= 0.0 && *x <= rect.width && *y >= 0.0 && *y <= rect.height)
         .and_then(|(_, y)| {
-            let local = y - edge - gap + scroll_offset;
+            let local = y - edge - gap + state.scroll_offset;
             (local >= 0.0).then(|| (local / stride) as usize)
         })
         .filter(|position| *position < shown.len())
@@ -84,14 +87,19 @@ pub(super) fn build(
         &shown,
         state.selected,
         hovered,
-        scroll_offset,
+        state.scroll_offset,
+        state.h_scroll_offset,
         (rect.x, rect.y, rect.width, rect.height),
         name,
+        measure,
     );
 
+    let viewport = list.viewport_width();
+    let viewport_height = list.viewport_height();
     for (position, &index) in shown.iter().enumerate() {
-        let top = (position as f32 * stride - scroll_offset).max(0.0);
-        let bottom = (position as f32 * stride - scroll_offset + style.row_height).min(viewport);
+        let top = (position as f32 * stride - list.clamp_scroll()).max(0.0);
+        let bottom = (position as f32 * stride - list.clamp_scroll() + style.row_height)
+            .min(viewport_height);
         if bottom <= top {
             continue;
         }
@@ -101,7 +109,7 @@ pub(super) fn build(
             HitShape::Rect(HitRect::new(
                 rect.x + edge + gap,
                 rect.y + edge + gap + top,
-                row_width,
+                viewport,
                 bottom - top,
             )),
             drawn,

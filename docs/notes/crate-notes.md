@@ -689,7 +689,10 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 都复用渲染器那一套。`visible_items` 做模糊过滤（子序列，大小写不敏感；整串相等 > 前缀 > 子串 >
 子序列，按分数、文本、原下标定序）与可选文本排序，`cloud-ui::view` 与 `cloudime-script` 的元素表
 共用这一份顺序。`build_text_list` 把 `items` 的**原下标**映射成可见行（`selected` / `hovered` 传原下标），
-行的 `key` 就是行文本（脚本事件里的 `event.item_key`）。
+行的 `key` 就是行文本（脚本事件里的 `event.item_key`）。长文本按 `allow_text_wrapping`（缺省 true）
+二选一：true 用 `measure` 截到可视宽度并补「…」，false 把内容宽度交给 `ListBox.content_width`、
+底部出水平滚动条（`h_scroll_offset` / `h_track_rect` / `h_thumb_rect`，脚本窗口里 Shift+滚轮或拖滑块，
+`cloud-ui` 由应用自己更新）。两条滚动条互相让位（`ListBox::scrollbars` 迭代两次求稳定）。
 
 ## crates/cloud-ui-core
 

@@ -605,6 +605,7 @@ impl View {
                 drawn,
                 clip,
                 self.pointer,
+                measure,
             ),
             Some(Widget::TextEdit { name, text, style }) => {
                 text_edit::build(target.elements, local, name, text, style)
@@ -685,7 +686,7 @@ where
                 sort,
                 style,
                 ..
-            } => text_list::measure(items, query, *sort, style, constraints),
+            } => text_list::measure(items, query, *sort, style, constraints, self.measure),
             Widget::TextEdit { style, .. } | Widget::TextBox { style, .. } => {
                 text_edit::measure(style, constraints)
             }
@@ -973,6 +974,7 @@ mod tests {
             TextListState {
                 selected: Some(2),
                 scroll_offset: 0.0,
+                h_scroll_offset: 0.0,
             },
         );
         let document = view.build(measure);
@@ -1014,6 +1016,7 @@ mod tests {
             TextListState {
                 selected: None,
                 scroll_offset: 30.0,
+                h_scroll_offset: 0.0,
             },
         );
         let document = view.build(measure);
@@ -1027,6 +1030,34 @@ mod tests {
         assert!((list.height - 60.0).abs() < 0.01, "固定视口");
         assert!(list.scrollbar_visible());
         assert!((list.scroll_offset - 30.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn text_list_auto_height_leaves_room_for_the_horizontal_bar() {
+        let mut view = View::new(300.0, 200.0);
+        let items = vec![
+            "很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长很长".to_owned(),
+        ];
+        let style = cloudime_render::TextListStyle {
+            allow_text_wrapping: false,
+            ..Theme::dark().text_list()
+        };
+        view.text_list("long", &items, "", false, style, TextListState::default());
+        let document = view.build(measure);
+        let Some(Element::ListBox(list)) = document
+            .elements
+            .iter()
+            .find(|element| matches!(element, Element::ListBox(_)))
+        else {
+            panic!("应生成列表元素");
+        };
+        assert!(list.h_scrollbar_visible(), "长文本 + 不截断要出水平条");
+        assert!(!list.scrollbar_visible(), "自动高度已经给水平条留了位置");
+        assert!(
+            (list.height - (style.auto_height(1) + 12.0)).abs() < 0.01,
+            "{}",
+            list.height
+        );
     }
 
     #[test]

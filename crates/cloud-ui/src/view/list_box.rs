@@ -261,6 +261,8 @@ pub(super) fn build<F>(
         rows,
         row_count: input.items.len(),
         scroll_offset,
+        content_width: 0.0,
+        h_scroll_offset: 0.0,
         content_height,
         allow_select: true,
         selected_index: selected.map_or(-1, |index| index as i32),

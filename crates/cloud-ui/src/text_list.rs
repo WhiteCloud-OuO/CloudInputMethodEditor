@@ -16,6 +16,7 @@ pub(crate) fn replace(document: &mut Document, name: &str, mut list: ListBox) ->
     };
     if let Some(Element::ListBox(old)) = document.elements.get(index) {
         list.scroll_offset = old.scroll_offset.min(list.max_scroll_px());
+        list.h_scroll_offset = old.h_scroll_offset.min(list.max_h_scroll_px());
     }
     document.elements[index] = Element::ListBox(list);
     true

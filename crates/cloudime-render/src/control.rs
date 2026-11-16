@@ -720,6 +720,12 @@ pub struct ListBox {
     pub row_count: usize,
     /// 滚动偏移（点）。
     pub scroll_offset: f32,
+
+    /// 每行内容的最大宽度（含行内左右留白）；`0` = 没量过，不显示水平滚动条。
+    pub content_width: f32,
+
+    /// 水平滚动偏移（点）。
+    pub h_scroll_offset: f32,
     /// 逻辑内容总高度（点）。
     pub content_height: f32,
     pub allow_select: bool,
@@ -745,32 +751,89 @@ impl std::fmt::Debug for ListBox {
 }
 
 impl ListBox {
-    pub fn viewport_height(&self) -> f32 {
-        (self.height - self.edge_width * 2.0 - self.content_gap * 2.0).max(0.0)
-    }
+    /// 滚动条厚度（点）：竖向与横向一样。
+    pub const SCROLLBAR_THICKNESS: f32 = 8.0;
 
-    pub fn content_width(&self, scrollbar: bool) -> f32 {
+    /// 滚动条与内容之间的空隙（点）。
+    pub const SCROLLBAR_GAP: f32 = 4.0;
+
+    /// 扣掉边框 / 内间隙 / 竖向滚动条后的内容宽度。
+    fn inner_width(&self, vertical: bool) -> f32 {
         (self.width
             - self.edge_width * 2.0
             - self.content_gap * 2.0
-            - if scrollbar { 8.0 + 4.0 } else { 0.0 })
+            - if vertical {
+                Self::SCROLLBAR_THICKNESS + Self::SCROLLBAR_GAP
+            } else {
+                0.0
+            })
         .max(0.0)
     }
 
-    pub fn scrollbar_visible(&self) -> bool {
-        self.content_height > self.viewport_height() + 0.01
+    /// 扣掉边框 / 内间隙 / 横向滚动条后的内容高度。
+    fn inner_height(&self, horizontal: bool) -> f32 {
+        (self.height
+            - self.edge_width * 2.0
+            - self.content_gap * 2.0
+            - if horizontal {
+                Self::SCROLLBAR_THICKNESS + Self::SCROLLBAR_GAP
+            } else {
+                0.0
+            })
+        .max(0.0)
     }
 
-    /// 滚动条轨道（相对控件左上角）：右侧内缩 2、宽 8、上下贴边框内沿。
+    /// 两条滚动条要不要出现：互相让出对方占的宽度，迭代两次就稳定。
+    pub fn scrollbars(&self) -> (bool, bool) {
+        let mut horizontal = self.content_width > self.inner_width(false) + 0.01;
+        let mut vertical = self.content_height > self.inner_height(horizontal) + 0.01;
+        horizontal = self.content_width > self.inner_width(vertical) + 0.01;
+        vertical = self.content_height > self.inner_height(horizontal) + 0.01;
+        (vertical, horizontal)
+    }
+
+    pub fn viewport_height(&self) -> f32 {
+        self.inner_height(self.h_scrollbar_visible())
+    }
+
+    /// 内容区可视宽度（扣掉竖向滚动条）。
+    pub fn viewport_width(&self) -> f32 {
+        self.inner_width(self.scrollbar_visible())
+    }
+
+    pub fn content_width(&self, scrollbar: bool) -> f32 {
+        self.inner_width(scrollbar)
+    }
+
+    pub fn scrollbar_visible(&self) -> bool {
+        self.scrollbars().0
+    }
+
+    pub fn h_scrollbar_visible(&self) -> bool {
+        self.scrollbars().1
+    }
+
+    /// 竖向滚动条轨道（相对控件左上角）：右侧内缩 2、宽 8、上下贴边框内沿。
     pub fn track_rect(&self) -> (f32, f32, f32, f32) {
         // 轨道和内容区使用同一对上下内缩；否则滑块会顶到圆角边框，
         // 和列表内容之间看起来多出一截。
         let top = self.edge_width + self.content_gap;
         (
-            self.width - self.edge_width - 2.0 - 8.0,
+            self.width - self.edge_width - 2.0 - Self::SCROLLBAR_THICKNESS,
             top,
-            8.0,
+            Self::SCROLLBAR_THICKNESS,
             self.viewport_height().max(1.0),
+        )
+    }
+
+    /// 横向滚动条轨道：贴内容区下沿，右侧给竖向滚动条让位。
+    pub fn h_track_rect(&self) -> (f32, f32, f32, f32) {
+        let left = self.edge_width + self.content_gap;
+        (
+            left,
+            self.height - self.edge_width - 2.0 - Self::SCROLLBAR_THICKNESS,
+            self.viewport_width().max(1.0),
+            Self::SCROLLBAR_THICKNESS,
         )
     }
 
@@ -793,6 +856,25 @@ impl ListBox {
         (tx, ty + travel * ratio, tw, length)
     }
 
+    pub fn h_thumb_rect(&self) -> (f32, f32, f32, f32) {
+        let (tx, ty, tw, th) = self.h_track_rect();
+        let content = self.content_width;
+        let view = self.viewport_width();
+        if content <= view || content <= 0.0 {
+            return (tx, ty, 0.0, th);
+        }
+        let length = (tw * view / content).max(1.0).min(tw);
+        let travel = (tw - length).max(0.0);
+        let max_scroll = (content - view).max(0.0);
+        let offset = self.h_scroll_offset.clamp(0.0, max_scroll);
+        let ratio = if max_scroll <= 0.0 {
+            0.0
+        } else {
+            offset / max_scroll
+        };
+        (tx + travel * ratio, ty, length, th)
+    }
+
     pub fn hit_shape(&self, origin: (f32, f32)) -> HitShape {
         HitShape::RoundRect {
             x: origin.0 + self.x,
@@ -809,6 +891,14 @@ impl ListBox {
 
     pub fn clamp_scroll(&self) -> f32 {
         self.scroll_offset.clamp(0.0, self.max_scroll_px())
+    }
+
+    pub fn max_h_scroll_px(&self) -> f32 {
+        (self.content_width - self.viewport_width()).max(0.0)
+    }
+
+    pub fn clamp_h_scroll(&self) -> f32 {
+        self.h_scroll_offset.clamp(0.0, self.max_h_scroll_px())
     }
 
     /// 绘制和命中使用的滚动偏移：中间位置吸附到行首，尽量让上下边缘都落在整行上。
@@ -1529,6 +1619,8 @@ mod tests {
             rows: vec![test_row(0, 0.0, 40.0), test_row(1, 40.0, 40.0)],
             row_count: 2,
             scroll_offset,
+            content_width: 0.0,
+            h_scroll_offset: 0.0,
             content_height: 80.0,
             allow_select: false,
             selected_index: -1,

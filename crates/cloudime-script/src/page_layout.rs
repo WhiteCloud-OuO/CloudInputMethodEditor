@@ -2764,12 +2764,50 @@ impl Measure for PayloadMeasure<'_> {
                     .map(|width| width as f32)
                     .unwrap_or(1.0)
                     .max(0.0),
+                padding_x: object
+                    .get("padding_x")
+                    .and_then(Value::as_f64)
+                    .map(|padding| padding as f32)
+                    .unwrap_or(10.0)
+                    .max(0.0),
+                allow_text_wrapping: object
+                    .get("allow_text_wrapping")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
                 ..TextListStyle::default()
             };
             let shown = visible_items(&items, query, sort);
+            let size = object
+                .get("size")
+                .or_else(|| object.get("font_size"))
+                .and_then(Value::as_f64)
+                .map(|size| size as f32)
+                .unwrap_or(14.0);
+            let font = object
+                .get("font")
+                .and_then(Value::as_str)
+                .and_then(MeasureFont::from_name)
+                .unwrap_or(MeasureFont::Candidate);
+            let measured = shown
+                .iter()
+                .map(|&index| {
+                    let text = items.get(index).map(String::as_str).unwrap_or("");
+                    self.measure
+                        .and_then(|measure| measure(text, size, 0.0, font))
+                        .map(|(width, _)| width)
+                        .unwrap_or(text.chars().count() as f32 * size * 0.6)
+                })
+                .fold(0.0f32, f32::max)
+                + style.padding_x * 2.0;
             return Size::new(
                 constraints.max_width,
-                style.auto_height(shown.len()).min(constraints.max_height),
+                cloudime_render::text_list_auto_height(
+                    &style,
+                    shown.len(),
+                    constraints.max_width,
+                    measured,
+                )
+                .min(constraints.max_height),
             );
         }
         let text = object

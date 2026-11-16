@@ -2,7 +2,8 @@
 //!
 //! 数据模型只有文本，没有子页面 / 行内控件；过滤与排序在 [`visible_items`] 里做，
 //! `cloud-ui::view` 与 `cloudime-script` 的元素表共用同一套顺序。
-//! 行本身的绘制、裁剪、滚动条与选中 / 悬停仍由 [`ListBox`] 负责。
+//! 行本身的绘制、裁剪、滚动条与选中 / 悬停仍由 [`ListBox`] 负责；放不下的长文本按
+//! [`TextListStyle::allow_text_wrapping`] 决定是截断加「…」还是出水平滚动条。
 
 use crate::color::Color;
 use crate::control::{ListBox, ListBoxAlign, ListBoxRow};
@@ -40,6 +41,9 @@ pub struct TextListStyle {
     pub selection: Color,
     pub selection_text: Color,
     pub hover: Color,
+
+    /// `true`：一行放不下时把文字截断并在末尾补「…」；`false`：放不下就出水平滚动条。
+    pub allow_text_wrapping: bool,
 }
 
 impl Default for TextListStyle {
@@ -61,6 +65,7 @@ impl Default for TextListStyle {
             selection: Color::rgb(48, 108, 220),
             selection_text: Color::rgb(255, 255, 255),
             hover: Color::rgb(45, 45, 56),
+            allow_text_wrapping: true,
         }
     }
 }
@@ -168,10 +173,38 @@ pub fn visible_items(items: &[String], query: &str, sort: bool) -> Vec<usize> {
     shown.into_iter().map(|(index, _)| index).collect()
 }
 
+/// 量一组可见项目里最宽的一条（含左右留白）。
+pub fn measured_width(
+    style: &TextListStyle,
+    items: &[String],
+    visible: &[usize],
+    measure: &mut dyn FnMut(&str, FontSlot, f32) -> (f32, f32),
+) -> f32 {
+    visible
+        .iter()
+        .map(|&index| {
+            let text = items.get(index).map(String::as_str).unwrap_or("");
+            measure(text, style.font, style.size).0
+        })
+        .fold(0.0f32, f32::max)
+        + style.padding_x.max(0.0) * 2.0
+}
+
+/// 自动高度：`allow_text_wrapping = false` 且内容超宽时，把底部水平滚动条的高度也算进去。
+pub fn auto_height(style: &TextListStyle, rows: usize, width: f32, content_width: f32) -> f32 {
+    let mut height = style.auto_height(rows);
+    let inner = (width - (style.edge_width.max(0.0) + style.content_gap.max(0.0)) * 2.0).max(0.0);
+    if !style.allow_text_wrapping && content_width > inner + 0.01 {
+        height += ListBox::SCROLLBAR_THICKNESS + ListBox::SCROLLBAR_GAP;
+    }
+    height
+}
+
 /// 构造一帧文本列表。
 ///
 /// `selected` / `hovered` 是**原 `items` 的下标**（过滤 / 排序后仍然指向同一项），
-/// 函数内部换算成显示行；`scroll_offset` 会被内容高度夹住。
+/// 函数内部换算成显示行；`scroll_offset` / `h_scroll_offset` 会被内容范围夹住。
+/// `measure` 量一段文字的尺寸，用来判断长文本是截断还是出水平滚动条。
 #[allow(clippy::too_many_arguments)]
 pub fn build(
     style: &TextListStyle,
@@ -180,47 +213,23 @@ pub fn build(
     selected: Option<usize>,
     hovered: Option<usize>,
     scroll_offset: f32,
+    h_scroll_offset: f32,
     rect: (f32, f32, f32, f32),
     region_name: &str,
+    measure: &mut dyn FnMut(&str, FontSlot, f32) -> (f32, f32),
 ) -> ListBox {
     let (x, y, width, height) = rect;
-    let edge = style.edge_width.max(0.0);
-    let gap = style.content_gap.max(0.0);
-    let viewport = (height - (edge + gap) * 2.0).max(0.0);
+    let padding = style.padding_x.max(0.0);
     let content_height = style.content_height(visible.len());
-    let scrollbar = content_height > viewport + 0.01;
-    let row_width = (width - (edge + gap) * 2.0 - if scrollbar { 8.0 + 4.0 } else { 0.0 }).max(1.0);
-    let scroll_offset = scroll_offset.clamp(0.0, (content_height - viewport).max(0.0));
-
-    let mut rows = Vec::with_capacity(visible.len());
-    for (position, &index) in visible.iter().enumerate() {
-        let text = items.get(index).cloned().unwrap_or_default();
-        rows.push(ListBoxRow {
-            index: position,
-            top: position as f32 * style.stride(),
-            height: style.row_height,
-            width: row_width,
-            key: Some(text.clone()),
-            elements: row_elements(style, &text, row_width, None, style.text),
-            selected_elements: row_elements(
-                style,
-                &text,
-                row_width,
-                Some(style.selection),
-                style.selection_text,
-            ),
-            hovered_elements: row_elements(style, &text, row_width, Some(style.hover), style.text),
-            hits: Vec::new(),
-        });
-    }
-
-    let position_of = |index: Option<usize>| {
-        index
-            .and_then(|index| visible.iter().position(|&shown| shown == index))
-            .map_or(-1, |position| position as i32)
+    let measured_width = measured_width(style, items, visible, measure);
+    // 截断模式下永远不出水平滚动条：内容宽度按 0 算，行按可视宽度铺满。
+    let content_width = if style.allow_text_wrapping {
+        0.0
+    } else {
+        measured_width
     };
 
-    ListBox {
+    let mut list = ListBox {
         x,
         y,
         width,
@@ -233,19 +242,94 @@ pub fn build(
         gap: style.gap,
         auto_item_gap_averaging: false,
         align: ListBoxAlign::Left,
-        rows,
+        rows: Vec::with_capacity(visible.len()),
         row_count: visible.len(),
         scroll_offset,
+        content_width,
+        h_scroll_offset,
         content_height,
         allow_select: true,
-        selected_index: position_of(selected),
+        selected_index: -1,
         auto_center_selected: false,
-        hovered_index: {
-            let hovered = position_of(hovered);
-            (hovered >= 0).then_some(hovered)
-        },
+        hovered_index: None,
         region_name: region_name.to_owned(),
+    };
+
+    let (vertical, horizontal) = list.scrollbars();
+    let available = list.content_width(vertical);
+    // 出水平滚动条时行按内容宽度铺开；截断模式下按可视宽度铺满。
+    let row_width = if horizontal {
+        measured_width.max(available)
+    } else {
+        available
+    };
+    let text_limit = (row_width - padding * 2.0).max(0.0);
+    for (position, &index) in visible.iter().enumerate() {
+        let text = items.get(index).cloned().unwrap_or_default();
+        let shown = if style.allow_text_wrapping {
+            truncate_to_width(&text, text_limit, style, measure)
+        } else {
+            text.clone()
+        };
+        list.rows.push(ListBoxRow {
+            index: position,
+            top: position as f32 * style.stride(),
+            height: style.row_height,
+            width: row_width,
+            key: Some(text),
+            elements: row_elements(style, &shown, row_width, None, style.text),
+            selected_elements: row_elements(
+                style,
+                &shown,
+                row_width,
+                Some(style.selection),
+                style.selection_text,
+            ),
+            hovered_elements: row_elements(style, &shown, row_width, Some(style.hover), style.text),
+            hits: Vec::new(),
+        });
     }
+
+    let position_of = |index: Option<usize>| {
+        index
+            .and_then(|index| visible.iter().position(|&shown| shown == index))
+            .map_or(-1, |position| position as i32)
+    };
+    list.selected_index = position_of(selected);
+    let hovered = position_of(hovered);
+    list.hovered_index = (hovered >= 0).then_some(hovered);
+    list.h_scroll_offset = list.clamp_h_scroll();
+    list
+}
+
+/// 把 `text` 截到 `max` 宽以内，末尾补「…」；已经放得下就原样返回。
+fn truncate_to_width(
+    text: &str,
+    max: f32,
+    style: &TextListStyle,
+    measure: &mut dyn FnMut(&str, FontSlot, f32) -> (f32, f32),
+) -> String {
+    if max <= 0.0 {
+        return String::new();
+    }
+    if measure(text, style.font, style.size).0 <= max {
+        return text.to_owned();
+    }
+    let characters: Vec<char> = text.chars().collect();
+    let (mut low, mut high) = (0usize, characters.len());
+    while low < high {
+        let middle = (low + high).div_ceil(2);
+        let mut candidate: String = characters[..middle].iter().collect();
+        candidate.push('…');
+        if measure(&candidate, style.font, style.size).0 <= max {
+            low = middle;
+        } else {
+            high = middle - 1;
+        }
+    }
+    let mut truncated: String = characters[..low].iter().collect();
+    truncated.push('…');
+    truncated
 }
 
 fn row_elements(
@@ -291,6 +375,11 @@ mod tests {
         text.iter().map(|text| (*text).to_owned()).collect()
     }
 
+    /// 等宽假量尺：一个字符 10 点宽。
+    fn measure(text: &str, _slot: FontSlot, _size: f32) -> (f32, f32) {
+        (text.chars().count() as f32 * 10.0, 14.0)
+    }
+
     #[test]
     fn fuzzy_scores_rank_exact_then_prefix_then_substring_then_subsequence() {
         let exact = fuzzy_score("张伟", "张伟").unwrap();
@@ -332,6 +421,7 @@ mod tests {
         let all = items(&["甲", "乙丙", "丙"]);
         let shown = visible_items(&all, "丙", false);
         assert_eq!(shown, [2, 1], "整串相等排在子串前面");
+        let mut measure = measure;
         let list = build(
             &style,
             &all,
@@ -339,13 +429,79 @@ mod tests {
             Some(1),
             Some(2),
             0.0,
+            0.0,
             (0.0, 0.0, 100.0, style.auto_height(shown.len())),
             "list",
+            &mut measure,
         );
         assert_eq!(list.row_count, 2);
         assert_eq!(list.selected_index, 1, "乙丙 是可见行里的第 2 行");
         assert_eq!(list.hovered_index, Some(0));
         assert_eq!(list.rows[1].key.as_deref(), Some("乙丙"));
         assert!(!list.scrollbar_visible(), "自动高度下没有滚动条");
+        assert!(!list.h_scrollbar_visible(), "文字放得下，不出水平条");
+    }
+
+    #[test]
+    fn long_text_truncates_with_ellipsis_when_wrapping_is_allowed() {
+        let style = TextListStyle {
+            allow_text_wrapping: true,
+            padding_x: 10.0,
+            ..TextListStyle::default()
+        };
+        let all = items(&["12345678901234567890"]);
+        let shown = visible_items(&all, "", false);
+        let mut measure = measure;
+        // 宽 100：内容区约 100 - 2*(1+4) = 90，文字可用 90 - 20 = 70 → 7 个字符 + …
+        let list = build(
+            &style,
+            &all,
+            &shown,
+            None,
+            None,
+            0.0,
+            0.0,
+            (0.0, 0.0, 100.0, 40.0),
+            "list",
+            &mut measure,
+        );
+        let Some(Element::Text { text, .. }) = list.rows[0].elements.last() else {
+            panic!("行里应有文字");
+        };
+        assert!(text.ends_with('…'), "{text}");
+        assert!(text.chars().count() <= 8, "{text}");
+        assert!(!list.h_scrollbar_visible());
+    }
+
+    #[test]
+    fn long_text_shows_a_horizontal_scrollbar_when_wrapping_is_off() {
+        let style = TextListStyle {
+            allow_text_wrapping: false,
+            ..TextListStyle::default()
+        };
+        let all = items(&["12345678901234567890"]);
+        let shown = visible_items(&all, "", false);
+        let mut measure = measure;
+        let list = build(
+            &style,
+            &all,
+            &shown,
+            None,
+            None,
+            0.0,
+            0.0,
+            (0.0, 0.0, 100.0, 40.0),
+            "list",
+            &mut measure,
+        );
+        assert!(list.h_scrollbar_visible(), "长文本要出水平滚动条");
+        let Some(Element::Text { text, .. }) = list.rows[0].elements.last() else {
+            panic!("行里应有文字");
+        };
+        assert_eq!(text, "12345678901234567890", "不截断");
+        assert!(list.max_h_scroll_px() > 0.0);
+        assert!(list.h_thumb_rect().2 > 0.0);
+        let (_, track_y, _, track_height) = list.h_track_rect();
+        assert!(track_y + track_height <= list.height);
     }
 }
