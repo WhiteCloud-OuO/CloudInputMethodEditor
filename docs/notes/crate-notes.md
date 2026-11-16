@@ -692,7 +692,13 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 行的 `key` 就是行文本（脚本事件里的 `event.item_key`）。长文本按 `allow_text_wrapping`（缺省 true）
 二选一：true 用 `measure` 截到可视宽度并补「…」，false 把内容宽度交给 `ListBox.content_width`、
 底部出水平滚动条（`h_scroll_offset` / `h_track_rect` / `h_thumb_rect`，脚本窗口里 Shift+滚轮或拖滑块，
-`cloud-ui` 由应用自己更新）。两条滚动条互相让位（`ListBox::scrollbars` 迭代两次求稳定）。
+`cloud-ui` 的独立窗口由壳内建处理）。两条滚动条互相让位（`ListBox::scrollbars` 迭代两次求稳定）。
+
+**滚动句柄**（2026-11-16，`document.rs`）：`ScrollHandle` 用 `Arc<AtomicU32>` 存 f32 位模式
+（`Document` 要从脚本工人线程交给 UI 线程，不能用 `Rc<Cell>`）。`Document.scroll_targets` 里每项
+记一条滚动条的 `area` / `track` / `thumb`（绝对文档坐标）、`max`、滚轮 `step` 与共享句柄；
+`ScrollTarget::offset_for(x, y, grab)` 把指针换算成偏移，`scroll_by(delta)` 给滚轮用。
+这些几何由 `cloud-ui::view` 的 `View::build` 登记，脚本路径不填（脚本窗口自己管拖拽）。
 
 ## crates/cloud-ui-core
 
@@ -900,6 +906,13 @@ Windows 壳的公共层（2026-10-20 从 `apps/windows/server/src/ui/` 抽出）
   `row_at` 也吃局部 y；不要再减 `rect.x` / `rect.y`，否则鼠标在列表外时反而会误高亮。
   `ListBoxStyle::auto_item_gap_averaging` 缺省 true，渲染器把剩余高度平均进行间隙、只画完整行；
   行列表要用 `list_box`，`scrollable_page`（可滚动页面，控件容器）只负责任意内容的裁剪。
+- **内建滚动**（2026-11-16）：`ListBoxState.scroll` / `TextListState.scroll` / `h_scroll` 是
+  `ScrollHandle`，应用建一次、每帧 `clone()` 传入。`View::build` 把列表盒的两条滚动条登记到
+  `Document.scroll_targets`（几何用 `drawn + local` 的绝对坐标）；`cloud_ui::app` 保存上一帧的
+  `scroll_targets`，`WM_LBUTTONDOWN` 命中轨道就 `SetCapture` 开始拖、`WM_MOUSEMOVE` 直接写句柄并
+  重绘、`WM_LBUTTONUP` / `WM_CAPTURECHANGED` 结束；拖拽期间不向应用派 `MouseButton` / `RegionClicked`。
+  `WM_MOUSEWHEEL` 先换算屏幕坐标，指针在列表上就按 `step` 滚并消费掉（Shift 优先横向，
+  没有横向条退回纵向），应用收不到 `MouseWheel`。夹紧后的偏移由 `build` 回写句柄。
   `scrollable_page`（可滚动页面）是通用控件容器，生成 `Element::SelfDrawingPanel`（`clip = true`）：
   子控件按 `(panel 原点 + offset)` 换算坐标，
   超出视口由渲染器的面板图层裁掉；滚动条轨道 / 滑块作为面板 children 追加在内容之后。

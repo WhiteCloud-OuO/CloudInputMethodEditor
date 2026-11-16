@@ -123,7 +123,8 @@ Server 继续通过 `features = ["script"]` 打开全部 IME 能力。
 生成 `Element::ListBox`，行由子页面式的行模板展开：
 
 - 行由 `ListItem` 描述：`title`、可选右侧 `detail`、可选点击名 `action`；
-- `ListBoxState` 保存 `selected` 与 `scroll_offset`。滚轮 / 选中状态由应用自己维护，下一帧传回来；
+- `ListBoxState` 保存 `selected` 与滚动句柄 `scroll`（`ScrollHandle`）。应用建一次、每帧 `clone()`
+  传入：`selected` 归应用，滚动偏移由窗口壳直接写；
 - 可点击行按 `action` 写 `Document.regions`，应用收到 `RegionClicked(action)`；
 - 悬停取自 `View::pointer(x, y)`，渲染时按指针位置算行号；
 - 行高 / 间隙 / 圆角 / 选中色 / 悬停色都在 `ListBoxStyle` 里，`Theme::list_box(h)` 给一套缺省值；
@@ -132,9 +133,10 @@ Server 继续通过 `features = ["script"]` 打开全部 IME 能力。
   行内容由渲染器的 `paint_scroll` 吸附到行首，滚到底时则按从下往上的整行窗口显示。
 - `scrollable_page` 是给任意内容的控件容器；**行列表**请用 `list_box`（子页面容器），
   才会得到上面这套整行 / 均匀间隙规则。
-- 滚动条拖拽（列表盒 / 文本列表都一样）：`Document::list_box_scrollbar_at(x, y)` 给出命中的
-  轨道 / 滑块、轴与 `offset_for(x, y)`；应用在按下时记住它，`MouseMoved` 时把新偏移写回自己的
-  `ListBoxState` / `TextListState`（demo 就是这么接的，独立窗口里没有内建拖拽）。
+- 滚动条拖拽 / 滚轮是**窗口壳内建**的（列表盒与文本列表一样）：`View::build` 把每条滚动条的
+  几何与共享句柄登记到 `Document.scroll_targets`，`cloud_ui::app` 在按下 / 拖动 / 滚轮时直接改句柄
+  并重绘。指针压在列表上时滚轮被壳吃掉，应用收不到 `MouseWheel`；Shift+滚轮优先横向。
+  应用只管数据与选中，不用自己写鼠标几何。
 
 ## 文本列表（叶子控件）
 
@@ -144,11 +146,11 @@ Server 继续通过 `features = ["script"]` 打开全部 IME 能力。
 `text_list` 共用同一套顺序。
 
 - 高度：`TextListStyle.height` 为 `None` 时按可见行数自动算（行少时没有滚动条）；
-  给 `Some(h)` 时是固定视口，滚轮由应用自己更新 `TextListState.scroll_offset`。
+  给 `Some(h)` 时是固定视口，滚动由窗口壳内建处理。
   宽度：`TextListStyle.width` 为 `None` 时铺满父容器，给 `Some(w)` 时固定宽度（截断效果要靠它）。
 - 长文本：`TextListStyle.allow_text_wrapping = true`（缺省）时一行放不下就截断并在末尾补「…」；
-  `false` 时不截断，底部出现水平滚动条，应用要自己更新 `TextListState.h_scroll_offset`
-  （脚本窗口里是 Shift+滚轮或拖那条滚动条）。
+  `false` 时不截断，底部出现水平滚动条（拖拽 / Shift+滚轮由窗口壳处理，
+  脚本窗口里则是 Shift+滚轮或拖那条滚动条）。
 - `query` 做模糊匹配（子序列，大小写不敏感；整串相等 > 前缀 > 子串 > 子序列），
   `sort` 控制没有查询时是否按文本排序；有查询时按分数、同分再按 `sort` / 原顺序。
 - `TextListState.selected` 用 **`items` 原下标**（过滤后仍指向同一项）；`View` 内部换算成可见行。

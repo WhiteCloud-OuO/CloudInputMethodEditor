@@ -215,6 +215,7 @@ fn build_document(painter: &mut cloud_ui::painter::Painter, mode: HelpMode) -> D
         regions: Vec::new(),
         control_names: Vec::new(),
         instances: Default::default(),
+        scroll_targets: Vec::new(),
     }
 }
 

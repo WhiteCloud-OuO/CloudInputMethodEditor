@@ -7,6 +7,7 @@
 
 use cloudime_render::{
     Color, Element, FontSlot, HitRect, HitShape, ListBox, ListBoxAlign, ListBoxRow, Region,
+    ScrollHandle,
 };
 
 use super::View;
@@ -143,13 +144,16 @@ impl ListBoxStyle {
 }
 
 /// 列表盒的每帧状态。
-#[derive(Debug, Clone, Copy, Default)]
+///
+/// 滚动偏移是 [`ScrollHandle`]：建一次、跨帧持有，每帧把 `clone()` 传给
+/// [`View::list_box`]。窗口壳拖动滚动条 / 滚轮时直接写句柄，应用不用自己接鼠标。
+#[derive(Debug, Clone, Default)]
 pub struct ListBoxState {
     /// 选中行（0 起）；`None` = 没有选中。
     pub selected: Option<usize>,
 
-    /// 滚动偏移（点）；会被内容高度夹住。
-    pub scroll_offset: f32,
+    /// 滚动偏移句柄（点）；超出内容范围时由 `build` 夹紧。
+    pub scroll: ScrollHandle,
 }
 
 pub(super) struct ListBoxInput<'a> {
@@ -195,9 +199,7 @@ pub(super) fn build<F>(
     let row_width = available;
 
     let selected = state.selected.filter(|index| *index < input.items.len());
-    let scroll_offset = state
-        .scroll_offset
-        .clamp(0.0, (content_height - viewport).max(0.0));
+    let scroll_offset = state.scroll.get();
 
     let mut rows = Vec::with_capacity(input.items.len());
     for (index, item) in input.items.iter().enumerate() {
@@ -270,6 +272,10 @@ pub(super) fn build<F>(
         hovered_index: None,
         region_name: input.name.to_owned(),
     };
+
+    // 夹紧后回写句柄，让应用与窗口壳看到同一个受限偏移。
+    list.scroll_offset = list.clamp_scroll();
+    state.scroll.set(list.scroll_offset);
 
     // `pointer` 已经是相对列表盒左上角的坐标，直接和 0..尺寸 比。
     if let Some((x, y)) = pointer
@@ -369,7 +375,8 @@ where
 impl View {
     /// 加一个单列列表盒（子页面容器）；行点击走 `ListItem::action` 的 `RegionClicked`。
     ///
-    /// 滚轮 / 选中状态由应用自己保存，这里只按 `state` 画一帧。
+    /// `state` 每帧传 `clone()`：选中的行由应用更新，滚动偏移是共享句柄，
+    /// 拖动滚动条 / 滚轮由窗口壳直接写，应用不用自己接鼠标。
     /// 指针位置（[`View::pointer`]）用来算行悬停。
     pub fn list_box(
         &mut self,

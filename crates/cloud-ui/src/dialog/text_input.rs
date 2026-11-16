@@ -253,6 +253,7 @@ fn build_layout(
             regions,
             control_names: Vec::new(),
             instances: Default::default(),
+            scroll_targets: Vec::new(),
             elements,
         },
         input,

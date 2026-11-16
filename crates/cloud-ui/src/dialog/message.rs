@@ -254,6 +254,7 @@ fn build_document(
         regions,
         control_names: Vec::new(),
         instances: Default::default(),
+        scroll_targets: Vec::new(),
         elements,
     }
 }

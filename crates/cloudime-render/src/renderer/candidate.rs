@@ -152,6 +152,7 @@ impl Renderer {
             regions: Vec::new(),
             control_names: Vec::new(),
             instances: Default::default(),
+            scroll_targets: Vec::new(),
         };
         let mut rendered = self
             .render_document(&document, theme, scale, shadow, false)?
@@ -861,6 +862,7 @@ impl Renderer {
             regions: Vec::new(),
             control_names: Vec::new(),
             instances: Default::default(),
+            scroll_targets: Vec::new(),
         };
         let mut rendered = self
             .render_document(&document, theme, scale, shadow, false)?
@@ -1165,6 +1167,7 @@ impl Renderer {
             regions: Vec::new(),
             control_names: Vec::new(),
             instances: Default::default(),
+            scroll_targets: Vec::new(),
         };
         let mut rendered = self
             .render_document(&document, theme, scale, shadow, false)?

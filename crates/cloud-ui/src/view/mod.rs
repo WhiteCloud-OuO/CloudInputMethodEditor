@@ -19,7 +19,10 @@ use cloud_ui_core::{
     Align, Axis, Constraints, Edges, Justify, LayoutResult, LayoutSpec, Measure, Node, NodeId,
     NodeKind, PageTree, Rect, Size, SizeSpec, layout,
 };
-use cloudime_render::{Color, Document, Element, FontSlot, HitShape, Region, WindowGlyph};
+use cloudime_render::{
+    Color, Document, Element, FontSlot, HitShape, ListBox, Region, ScrollAxis, ScrollHandle,
+    ScrollTarget, WindowGlyph,
+};
 
 mod list_box;
 mod scrollable_page;
@@ -448,6 +451,7 @@ impl View {
                 &result,
                 &mut target,
                 &mut document.regions,
+                &mut document.scroll_targets,
                 &mut measure,
                 &mut pages,
             );
@@ -484,12 +488,14 @@ impl View {
     }
 
     /// 递归生成元素；可滚动页面会另起一层坐标并把子元素塞进裁剪面板。
+    #[allow(clippy::too_many_arguments)]
     fn emit<F>(
         &self,
         id: NodeId,
         result: &LayoutResult,
         target: &mut Target<'_>,
         regions: &mut Vec<Region>,
+        scroll_targets: &mut Vec<ScrollTarget>,
         measure: &mut F,
         pages: &mut HashMap<String, ScrollablePageMetrics>,
     ) where
@@ -538,7 +544,15 @@ impl View {
                         clip: panel_clip,
                     };
                     for child in &self.tree.nodes[id].children {
-                        self.emit(*child, result, &mut child_target, regions, measure, pages);
+                        self.emit(
+                            *child,
+                            result,
+                            &mut child_target,
+                            regions,
+                            scroll_targets,
+                            measure,
+                            pages,
+                        );
                     }
                 }
                 scrollable_page::push_scrollbar(&mut panel, style, metrics, offset);
@@ -581,9 +595,19 @@ impl View {
                         style: *style,
                     },
                     pointer,
-                    *state,
+                    state.clone(),
                     measure,
                 );
+                if let Some(Element::ListBox(list)) = target.elements.last() {
+                    push_scroll_targets(
+                        scroll_targets,
+                        name,
+                        (box_drawn.0, box_drawn.1, local.width, local.height),
+                        list,
+                        Some((state.scroll.clone(), style.row_stride())),
+                        None,
+                    );
+                }
             }
             Some(Widget::TextList {
                 name,
@@ -592,21 +616,39 @@ impl View {
                 sort,
                 style,
                 state,
-            }) => text_list::build(
-                target.elements,
-                regions,
-                name,
-                items,
-                query,
-                *sort,
-                *style,
-                *state,
-                local,
-                drawn,
-                clip,
-                self.pointer,
-                measure,
-            ),
+            }) => {
+                text_list::build(
+                    target.elements,
+                    regions,
+                    name,
+                    items,
+                    query,
+                    *sort,
+                    *style,
+                    state.clone(),
+                    local,
+                    drawn,
+                    clip,
+                    self.pointer,
+                    measure,
+                );
+                if let Some(Element::ListBox(list)) = target.elements.last() {
+                    let area = (
+                        drawn.0 + local.x,
+                        drawn.1 + local.y,
+                        local.width,
+                        local.height,
+                    );
+                    push_scroll_targets(
+                        scroll_targets,
+                        name,
+                        area,
+                        list,
+                        Some((state.scroll.clone(), style.stride())),
+                        Some((state.h_scroll.clone(), 30.0)),
+                    );
+                }
+            }
             Some(Widget::TextEdit { name, text, style }) => {
                 text_edit::build(target.elements, local, name, text, style)
             }
@@ -637,7 +679,15 @@ impl View {
         }
 
         for child in &self.tree.nodes[id].children {
-            self.emit(*child, result, target, regions, measure, pages);
+            self.emit(
+                *child,
+                result,
+                target,
+                regions,
+                scroll_targets,
+                measure,
+                pages,
+            );
         }
     }
 
@@ -648,6 +698,51 @@ impl View {
             bottom = bottom.max(self.subtree_bottom(*child, result));
         }
         bottom
+    }
+}
+
+/// 把列表盒上的滚动条登记到文档：几何换算成**绝对文档坐标**，偏移句柄原样带过去。
+///
+/// 只有滚动条真的显示时才登记，所以窗口壳按指针命中就能判断「这里可以滚」。
+fn push_scroll_targets(
+    targets: &mut Vec<ScrollTarget>,
+    name: &str,
+    area: (f32, f32, f32, f32),
+    list: &ListBox,
+    vertical: Option<(ScrollHandle, f32)>,
+    horizontal: Option<(ScrollHandle, f32)>,
+) {
+    if let Some((handle, step)) = vertical
+        && list.scrollbar_visible()
+    {
+        let (tx, ty, tw, th) = list.track_rect();
+        let (hx, hy, hw, hh) = list.thumb_rect();
+        targets.push(ScrollTarget {
+            name: name.to_owned(),
+            axis: ScrollAxis::Vertical,
+            area,
+            track: (area.0 + tx, area.1 + ty, tw, th),
+            thumb: (area.0 + hx, area.1 + hy, hw, hh),
+            max: list.max_scroll_px(),
+            step,
+            handle,
+        });
+    }
+    if let Some((handle, step)) = horizontal
+        && list.h_scrollbar_visible()
+    {
+        let (tx, ty, tw, th) = list.h_track_rect();
+        let (hx, hy, hw, hh) = list.h_thumb_rect();
+        targets.push(ScrollTarget {
+            name: name.to_owned(),
+            axis: ScrollAxis::Horizontal,
+            area,
+            track: (area.0 + tx, area.1 + ty, tw, th),
+            thumb: (area.0 + hx, area.1 + hy, hw, hh),
+            max: list.max_h_scroll_px(),
+            step,
+            handle,
+        });
     }
 }
 
@@ -935,7 +1030,7 @@ mod tests {
             ListBoxStyle::with_height(120.0),
             ListBoxState {
                 selected: Some(1),
-                scroll_offset: 0.0,
+                scroll: ScrollHandle::default(),
             },
         );
         let document = view.build(measure);
@@ -973,8 +1068,8 @@ mod tests {
             style,
             TextListState {
                 selected: Some(2),
-                scroll_offset: 0.0,
-                h_scroll_offset: 0.0,
+                scroll: ScrollHandle::default(),
+                h_scroll: ScrollHandle::default(),
             },
         );
         let document = view.build(measure);
@@ -1015,8 +1110,8 @@ mod tests {
             style,
             TextListState {
                 selected: None,
-                scroll_offset: 30.0,
-                h_scroll_offset: 0.0,
+                scroll: ScrollHandle::new(30.0),
+                h_scroll: ScrollHandle::default(),
             },
         );
         let document = view.build(measure);
@@ -1030,6 +1125,56 @@ mod tests {
         assert!((list.height - 60.0).abs() < 0.01, "固定视口");
         assert!(list.scrollbar_visible());
         assert!((list.scroll_offset - 30.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn list_scrollbars_register_shared_scroll_targets() {
+        let items: Vec<String> = (0..10)
+            .map(|index| {
+                if index == 0 {
+                    "一个特别特别长的人名用字测试文本，用来看横向滚动".to_owned()
+                } else {
+                    format!("第 {index} 项")
+                }
+            })
+            .collect();
+        let mut style = Theme::dark().text_list();
+        style.height = Some(60.0);
+        style.row_height = 20.0;
+        style.width = Some(90.0);
+        style.allow_text_wrapping = false;
+        let state = TextListState::default();
+        let build = |state: TextListState| {
+            let mut view = View::new(300.0, 200.0);
+            view.text_list("recent", &items, "", false, style, state);
+            view.build(measure)
+        };
+        let document = build(state.clone());
+        let vertical = document
+            .scroll_targets
+            .iter()
+            .find(|target| target.axis == ScrollAxis::Vertical)
+            .expect("竖向滚动目标");
+        assert!(
+            document
+                .scroll_targets
+                .iter()
+                .any(|target| target.axis == ScrollAxis::Horizontal)
+        );
+        assert!(vertical.contains(vertical.track.0, vertical.track.1));
+        assert_eq!(vertical.name, "recent");
+
+        // 句柄是共享的：写进去的偏移下一帧能被视图层读到。
+        vertical.handle.set(25.0);
+        let document = build(state);
+        let Some(Element::ListBox(list)) = document
+            .elements
+            .iter()
+            .find(|element| matches!(element, Element::ListBox(_)))
+        else {
+            panic!("应生成列表元素");
+        };
+        assert!((list.scroll_offset - 25.0).abs() < 0.01);
     }
 
     #[test]
@@ -1071,7 +1216,7 @@ mod tests {
             ListBoxStyle::with_height(120.0),
             ListBoxState {
                 selected: None,
-                scroll_offset: 0.0,
+                scroll: ScrollHandle::default(),
             },
         );
         view.pointer(10.0, 60.0);
@@ -1097,7 +1242,7 @@ mod tests {
             ListBoxStyle::with_height(120.0),
             ListBoxState {
                 selected: None,
-                scroll_offset: 0.0,
+                scroll: ScrollHandle::default(),
             },
         );
         view.pointer(10.0, 200.0);
@@ -1233,7 +1378,7 @@ mod tests {
             ListBoxStyle::with_height(110.0),
             ListBoxState {
                 selected: None,
-                scroll_offset: 40.0,
+                scroll: ScrollHandle::new(40.0),
             },
         );
         let document = view.build(measure);

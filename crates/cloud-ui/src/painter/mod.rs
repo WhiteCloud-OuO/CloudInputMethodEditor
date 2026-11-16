@@ -415,6 +415,7 @@ impl Painter {
             regions: Vec::new(),
             control_names: Vec::new(),
             instances: Default::default(),
+            scroll_targets: Vec::new(),
         };
         let mut theme = self.theme.clone();
         theme.colors.background = background;

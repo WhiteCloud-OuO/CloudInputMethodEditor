@@ -2965,6 +2965,7 @@ fn parse_document(
         regions,
         control_names: Vec::new(),
         instances: HashMap::new(),
+        scroll_targets: Vec::new(),
     })
 }
 

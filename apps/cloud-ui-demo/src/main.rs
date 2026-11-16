@@ -5,11 +5,10 @@
 
 use cloud_ui::{
     AppEvent, Application, CLOSE_ACTION, Context, Decorations, ListBoxState, ListItem,
-    MAXIMIZE_ACTION, MINIMIZE_ACTION, MessageDialog, MouseButton, StackStyle, TextInputDialog,
-    TextListState, Theme, TrayEvent, TrayMenuItem, TrayOptions, View, WindowMask, WindowOptions,
-    run_native,
+    MAXIMIZE_ACTION, MINIMIZE_ACTION, MessageDialog, StackStyle, TextInputDialog, TextListState,
+    Theme, TrayEvent, TrayMenuItem, TrayOptions, View, WindowMask, WindowOptions, run_native,
 };
-use cloudime_render::{Document, ScrollAxis, ScrollbarHit};
+use cloudime_render::Document;
 
 const LIST_ROWS: usize = 5;
 const LIST_HEIGHT: f32 = 170.0;
@@ -32,16 +31,10 @@ struct Demo {
     pointer: Option<(f32, f32)>,
     typed: String,
     notes: String,
-    log_scroll: f32,
-    selected: Option<usize>,
-    text_selected: Option<usize>,
-    /// 文本列表的竖向 / 横向滚动偏移。
-    text_scroll: f32,
-    text_h_scroll: f32,
-    /// 正在拖的滚动条；`None` = 没在拖。
-    scroll_drag: Option<ScrollbarHit>,
-    /// 上一帧画出去的文档，按下时用来找滚动条。
-    last_document: Option<Document>,
+    /// 列表状态建一次、每帧 `clone()`：滚动偏移在共享句柄里，由窗口壳直接写。
+    log: ListBoxState,
+    list: ListBoxState,
+    recent: TextListState,
     /// 文本列表放不下时是出水平滚动条（true）还是截断（false，缺省）。
     h_scroll_text: bool,
     light: bool,
@@ -57,54 +50,14 @@ impl Demo {
             Theme::dark()
         }
     }
-
-    /// 把滚动条拖到的新偏移落到对应控件的状态里。
-    fn apply_scroll(&mut self, hit: &ScrollbarHit, offset: f32) {
-        match hit.name.as_str() {
-            "log" => self.log_scroll = offset,
-            "recent" => match hit.axis {
-                ScrollAxis::Vertical => self.text_scroll = offset,
-                ScrollAxis::Horizontal => self.text_h_scroll = offset,
-            },
-            _ => {}
-        }
-    }
 }
 
 impl Application for Demo {
     fn update(&mut self, ctx: &mut Context) {
         for event in ctx.events() {
             match event {
-                AppEvent::MouseMoved { x, y } => {
-                    self.pointer = Some((*x, *y));
-                    if let Some(hit) = self.scroll_drag.clone() {
-                        let offset = hit.offset_for(*x, *y);
-                        self.apply_scroll(&hit, offset);
-                    }
-                }
+                AppEvent::MouseMoved { x, y } => self.pointer = Some((*x, *y)),
                 AppEvent::MouseLeft => self.pointer = None,
-                AppEvent::MouseButton {
-                    button: MouseButton::Left,
-                    pressed,
-                    x,
-                    y,
-                } => {
-                    if *pressed {
-                        if let Some(hit) = self
-                            .last_document
-                            .as_ref()
-                            .and_then(|document| document.list_box_scrollbar_at(*x, *y))
-                        {
-                            if !hit.inside_thumb {
-                                let offset = hit.offset_for(*x, *y);
-                                self.apply_scroll(&hit, offset);
-                            }
-                            self.scroll_drag = Some(hit);
-                        }
-                    } else {
-                        self.scroll_drag = None;
-                    }
-                }
                 AppEvent::RegionClicked(name) if name == "click" => self.clicks += 1,
                 AppEvent::RegionClicked(name) if name == "theme" => self.light = !self.light,
                 AppEvent::RegionClicked(name) if name == "mask" => self.masked = !self.masked,
@@ -174,18 +127,12 @@ impl Application for Demo {
                     if let Some(index) = name.strip_prefix("row-")
                         && let Ok(index) = index.parse::<usize>()
                     {
-                        self.selected = Some(index);
+                        self.list.selected = Some(index);
                     } else if let Some(index) = name.strip_prefix("recent#")
                         && let Ok(index) = index.parse::<usize>()
                     {
-                        self.text_selected = Some(index);
+                        self.recent.selected = Some(index);
                     }
-                }
-                AppEvent::MouseWheel { delta } => {
-                    let style = self.theme().list_box(LOG_HEIGHT);
-                    let max = style.max_scroll(LOG_ROWS);
-                    let stride = style.row_stride();
-                    self.log_scroll = (self.log_scroll - delta * stride).clamp(0.0, max);
                 }
                 AppEvent::TextChanged { name, text } if name == "input" => {
                     self.typed = text.clone();
@@ -219,8 +166,10 @@ impl Application for Demo {
         let log_items: Vec<ListItem> = (0..LOG_ROWS)
             .map(|index| ListItem::new(format!("日志行 {} · 用于验证滚轮", index + 1)))
             .collect();
-        let selected = self.selected;
-        let log_scroll = self.log_scroll;
+        let selected = self.list.selected;
+        let log_state = self.log.clone();
+        let list_state = self.list.clone();
+        let recent_state = self.recent.clone();
         let pointer = self.pointer;
         let typed = self.typed.clone();
         let notes = self.notes.clone();
@@ -273,16 +222,8 @@ impl Application for Demo {
             });
             ui.spacer(0.0, 6.0);
             ui.text_box("notes", notes.clone(), theme.text_box(80.0));
-            ui.label("日志列表（滚轮滚动，行始终完整显示）：", theme.muted());
-            ui.list_box(
-                "log",
-                &log_items,
-                theme.list_box(LOG_HEIGHT),
-                ListBoxState {
-                    selected: None,
-                    scroll_offset: log_scroll,
-                },
-            );
+            ui.label("日志列表（滚轮 / 拖动滚动条）：", theme.muted());
+            ui.list_box("log", &log_items, theme.list_box(LOG_HEIGHT), log_state);
             ui.spacer(0.0, 10.0);
             ui.label(
                 format!(
@@ -292,15 +233,7 @@ impl Application for Demo {
                 ),
                 theme.label(),
             );
-            ui.list_box(
-                "list",
-                &items,
-                list_style,
-                ListBoxState {
-                    selected,
-                    scroll_offset: 0.0,
-                },
-            );
+            ui.list_box("list", &items, list_style, list_state);
             ui.spacer(0.0, 8.0);
             ui.label(
                 "文本列表（用上面的输入框做模糊过滤，点行选中）：",
@@ -317,11 +250,7 @@ impl Application for Demo {
                 &typed,
                 true,
                 text_style,
-                TextListState {
-                    selected: self.text_selected,
-                    scroll_offset: self.text_scroll,
-                    h_scroll_offset: self.text_h_scroll,
-                },
+                recent_state,
             );
             ui.spacer(0.0, 8.0);
             ui.row(StackStyle::gap(16.0), |row| {
@@ -340,10 +269,7 @@ impl Application for Demo {
                 row.button("hide", "隐藏到托盘", theme.button());
             });
         });
-        let document = view.build(|text, slot, size| ctx.measure_text(text, slot, size));
-        // 下一帧按下时用这一份找滚动条。
-        self.last_document = Some(document.clone());
-        document
+        view.build(|text, slot, size| ctx.measure_text(text, slot, size))
     }
 }
 

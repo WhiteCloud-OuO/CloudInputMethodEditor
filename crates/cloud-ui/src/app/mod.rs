@@ -27,7 +27,10 @@ use std::collections::HashMap;
 use std::rc::Rc;
 use std::sync::OnceLock;
 
-use cloudime_render::{Color, Document, Element, FontSlot, Pixmap, Region, Shadow, TextBoxScroll};
+use cloudime_render::{
+    Color, Document, Element, FontSlot, Pixmap, Region, ScrollAxis, ScrollTarget, Shadow,
+    TextBoxScroll,
+};
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
     BI_RGB, BITMAPINFO, BITMAPINFOHEADER, BeginPaint, ClientToScreen, DIB_RGB_COLORS, EndPaint,
@@ -39,19 +42,21 @@ use windows::Win32::UI::HiDpi::{
     DPI_AWARENESS_CONTEXT_PER_MONITOR_AWARE_V2, GetDpiForSystem, GetDpiForWindow,
     SetProcessDpiAwarenessContext,
 };
-use windows::Win32::UI::Input::KeyboardAndMouse::{TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent};
+use windows::Win32::UI::Input::KeyboardAndMouse::{
+    GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_SHIFT,
+};
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
     GetClientRect, GetMessageW, GetWindowRect, HTCAPTION, HTCLIENT, HTTRANSPARENT, IDC_ARROW,
     IsIconic, IsWindowVisible, IsZoomed, LoadCursorW, MINMAXINFO, MSG, PostMessageW,
     PostQuitMessage, RegisterWindowMessageW, SIZE_MINIMIZED, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE,
     SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos,
-    ShowWindow, TranslateMessage, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_DPICHANGED, WM_ERASEBKGND,
-    WM_GETMINMAXINFO, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN, WM_LBUTTONUP,
-    WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_PAINT,
-    WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WNDCLASSEXW,
-    WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX,
-    WS_OVERLAPPEDWINDOW, WS_POPUP,
+    ShowWindow, TranslateMessage, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_DPICHANGED,
+    WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
+    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCHITTEST,
+    WM_NCLBUTTONDBLCLK, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_SHOWWINDOW,
+    WM_SIZE, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
+    WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
@@ -553,6 +558,8 @@ fn create_window(
         mask_window: None,
         corner_radius: options.corner_radius,
         last_pointer: None,
+        scroll_targets: Vec::new(),
+        scroll_drag: None,
     }));
     window.borrow_mut().sync_mask(hwnd);
     Ok((hwnd, window))
@@ -582,6 +589,16 @@ struct AppWindow {
     corner_radius: f32,
     /// 上一次鼠标位置（内容坐标）；连续重复的 `WM_MOUSEMOVE` 不再触发重画。
     last_pointer: Option<(f32, f32)>,
+    /// 当前帧的滚动条（绝对文档坐标）；窗口壳按它命中拖拽 / 滚轮。
+    scroll_targets: Vec<ScrollTarget>,
+    /// 正在拖的滚动条：命中项（几何按下时快照）与抓住位置。
+    scroll_drag: Option<ScrollDrag>,
+}
+
+/// 一次滚动条拖拽：几何用按下时的快照，指针移动只换偏移。
+struct ScrollDrag {
+    target: ScrollTarget,
+    grab: f32,
 }
 
 /// 一个 `View::text_edit` 对应的 RichEdit 宿主。
@@ -715,9 +732,43 @@ fn scroll_state(info: ScrollInfo) -> TextBoxScroll {
 impl AppWindow {
     fn push(&mut self, hwnd: HWND, event: AppEvent) {
         self.events.push(event);
+        self.redraw(hwnd);
+    }
+
+    /// 重画一帧；滚动条拖拽只改共享句柄，不往应用派鼠标事件。
+    fn redraw(&self, hwnd: HWND) {
         unsafe {
             let _ = InvalidateRect(Some(hwnd), None, false);
         }
+    }
+
+    /// 指针落在哪条滚动条的轨道上（从后往前找，和命中测试顺序一致）。
+    fn scroll_target_at(&self, x: f32, y: f32) -> Option<ScrollTarget> {
+        self.scroll_targets
+            .iter()
+            .rev()
+            .find(|target| target.contains(x, y) && target.hits_track(x, y))
+            .cloned()
+    }
+
+    /// 滚轮该滚哪条：`horizontal`（Shift）优先横向，没有横向条就退回纵向。
+    fn scroll_target_for_wheel(&self, x: f32, y: f32, horizontal: bool) -> Option<ScrollTarget> {
+        let axis = if horizontal {
+            ScrollAxis::Horizontal
+        } else {
+            ScrollAxis::Vertical
+        };
+        self.scroll_targets
+            .iter()
+            .rev()
+            .find(|target| target.axis == axis && target.contains(x, y))
+            .or_else(|| {
+                self.scroll_targets
+                    .iter()
+                    .rev()
+                    .find(|target| target.contains(x, y))
+            })
+            .cloned()
     }
 
     fn paint(&mut self, hwnd: HWND, hdc: HDC) {
@@ -761,6 +812,8 @@ impl AppWindow {
         );
         self.app.update(&mut ctx);
         let mut document = self.app.view(&ctx);
+        // 这一帧的滚动条几何交给窗口壳，鼠标拖拽 / 滚轮直接用。
+        self.scroll_targets = document.scroll_targets.clone();
         crate::current::set_background(document_background(&document));
         drop(current);
         if ctx.close.get() {
@@ -1329,6 +1382,12 @@ unsafe extern "system" fn wndproc(
                     return;
                 }
                 window.last_pointer = Some((x, y));
+                if let Some(drag) = &window.scroll_drag {
+                    let offset = drag.target.offset_for(x, y, drag.grab);
+                    drag.target.handle.set(offset);
+                    window.redraw(hwnd);
+                    return;
+                }
                 window.push(hwnd, AppEvent::MouseMoved { x, y });
             });
             LRESULT(0)
@@ -1350,7 +1409,32 @@ unsafe extern "system" fn wndproc(
                 _ => MouseButton::Right,
             };
             let pressed = matches!(message, WM_LBUTTONDOWN | WM_RBUTTONDOWN);
+            let mut release_capture = false;
             with_window(hwnd, |window| {
+                // 左键按在滚动条上：窗口壳自己拖，应用既收不到按下也收不到点击。
+                if message == WM_LBUTTONDOWN
+                    && let Some(target) = window.scroll_target_at(x, y)
+                {
+                    let grab = target.grab(x, y);
+                    target.handle.set(target.offset_for(x, y, grab));
+                    window.pressed_region = None;
+                    window.scroll_drag = Some(ScrollDrag { target, grab });
+                    let _ = unsafe { SetCapture(hwnd) };
+                    window.redraw(hwnd);
+                    return;
+                }
+                if message == WM_LBUTTONUP
+                    && let Some(drag) = window.scroll_drag.take()
+                {
+                    // 松开时再按一次，保证停在最终指针位置而不是上一条移动消息。
+                    drag.target
+                        .handle
+                        .set(drag.target.offset_for(x, y, drag.grab));
+                    release_capture = true;
+                    window.redraw(hwnd);
+                    return;
+                }
+
                 let hit = window
                     .regions
                     .iter()
@@ -1375,13 +1459,37 @@ unsafe extern "system" fn wndproc(
                     },
                 )
             });
+            if release_capture {
+                let _ = unsafe { ReleaseCapture() };
+            }
+            LRESULT(0)
+        }
+        WM_CAPTURECHANGED => {
+            // 捕获被系统或别的窗口拿走时，拖拽不会再收到松开消息，直接结束。
+            with_window(hwnd, |window| {
+                if window.scroll_drag.take().is_some() {
+                    window.redraw(hwnd);
+                }
+            });
             LRESULT(0)
         }
         WM_MOUSEWHEEL => {
             let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16 as f32 / 120.0;
+            let (x, y) = wheel_point(hwnd, lparam.0);
+            let horizontal = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
+            let mut consumed = false;
             with_window(hwnd, |window| {
-                window.push(hwnd, AppEvent::MouseWheel { delta })
+                if let Some(target) = window.scroll_target_for_wheel(x, y, horizontal) {
+                    target.handle.set(target.scroll_by(delta));
+                    window.redraw(hwnd);
+                    consumed = true;
+                }
             });
+            if !consumed {
+                with_window(hwnd, |window| {
+                    window.push(hwnd, AppEvent::MouseWheel { delta })
+                });
+            }
             LRESULT(0)
         }
         WM_KEYDOWN | WM_KEYUP => {
@@ -1616,6 +1724,24 @@ fn mouse_point(hwnd: HWND, lparam: isize) -> (f32, f32) {
     (
         (loword(lparam) - margin) as f32 / scale,
         (hiword(lparam) - margin) as f32 / scale,
+    )
+}
+
+/// 滚轮的 `lparam` 是**屏幕坐标**：先转客户区，再按 DPI / 阴影边换算成内容坐标。
+fn wheel_point(hwnd: HWND, lparam: isize) -> (f32, f32) {
+    let mut point = POINT {
+        x: loword(lparam),
+        y: hiword(lparam),
+    };
+    unsafe {
+        let _ = ScreenToClient(hwnd, &mut point);
+    }
+    let dpi = unsafe { GetDpiForWindow(hwnd) };
+    let scale = dpi as f32 / 96.0;
+    let margin = with_window_value(hwnd, |window| window.margin(hwnd)).unwrap_or(0);
+    (
+        (point.x - margin) as f32 / scale,
+        (point.y - margin) as f32 / scale,
     )
 }
 

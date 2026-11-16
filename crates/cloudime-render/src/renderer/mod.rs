@@ -361,6 +361,7 @@ impl Renderer {
             regions: Vec::new(),
             control_names: Vec::new(),
             instances: Default::default(),
+            scroll_targets: Vec::new(),
         };
         let highlight_index = highlight_element_index(&document, theme);
         set_highlight(
@@ -2528,6 +2529,7 @@ mod tests {
             regions: Vec::new(),
             control_names: Vec::new(),
             instances: Default::default(),
+            scroll_targets: Vec::new(),
             elements: vec![
                 Element::Rect {
                     x: 0.0,
@@ -2603,6 +2605,7 @@ mod tests {
             regions: Vec::new(),
             control_names: Vec::new(),
             instances: Default::default(),
+            scroll_targets: Vec::new(),
             elements: vec![
                 Element::Panel(Panel {
                     x: 0.0,
@@ -2708,6 +2711,7 @@ mod tests {
             regions: Vec::new(),
             control_names: Vec::new(),
             instances: Default::default(),
+            scroll_targets: Vec::new(),
         };
         let rendered = renderer
             .render_document(&document, &Theme::new(), 1.0, None, false)
@@ -2767,6 +2771,7 @@ mod tests {
                 regions: Vec::new(),
                 control_names: Vec::new(),
                 instances: Default::default(),
+                scroll_targets: Vec::new(),
                 elements: vec![Element::FlatSvgButton(button(state))],
             };
             renderer
@@ -2884,6 +2889,7 @@ mod tests {
             regions: Vec::new(),
             control_names: Vec::new(),
             instances: Default::default(),
+            scroll_targets: Vec::new(),
             elements: vec![Element::ListBox(list)],
         };
         let rendered = renderer
@@ -2947,6 +2953,7 @@ mod tests {
             regions: Vec::new(),
             control_names: Vec::new(),
             instances: Default::default(),
+            scroll_targets: Vec::new(),
             elements: vec![Element::FlatSvgButton(button)],
         };
         let rendered = renderer
@@ -2998,6 +3005,7 @@ mod tests {
             regions: Vec::new(),
             control_names: Vec::new(),
             instances: Default::default(),
+            scroll_targets: Vec::new(),
             elements: vec![Element::Rect {
                 x: -10.0,
                 y: -10.0,

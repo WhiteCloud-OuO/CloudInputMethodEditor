@@ -5,22 +5,26 @@
 
 use cloud_ui_core::{Constraints, Rect, Size};
 use cloudime_render::{
-    Element, FontSlot, HitRect, HitShape, Region, TextListStyle, build_text_list, visible_items,
+    Element, FontSlot, HitRect, HitShape, Region, ScrollHandle, TextListStyle, build_text_list,
+    visible_items,
 };
 
 use super::View;
 
 /// 文本列表的每帧状态。
-#[derive(Debug, Clone, Copy, Default)]
+///
+/// 两个滚动偏移都是 [`ScrollHandle`]：建一次、跨帧持有，每帧把 `clone()` 传给
+/// [`View::text_list`]。窗口壳拖动滚动条 / 滚轮时直接写句柄，应用不用自己接鼠标。
+#[derive(Debug, Clone, Default)]
 pub struct TextListState {
     /// 选中的项（`items` 里的**原下标**，不是过滤 / 排序后的行号）。
     pub selected: Option<usize>,
 
-    /// 滚动偏移（点）；会被内容高度夹住。
-    pub scroll_offset: f32,
+    /// 竖向滚动偏移句柄（点）。
+    pub scroll: ScrollHandle,
 
-    /// 水平滚动偏移（点）；只有 `allow_text_wrapping = false` 且内容超宽时有用。
-    pub h_scroll_offset: f32,
+    /// 水平滚动偏移句柄（点）；只有 `allow_text_wrapping = false` 且内容超宽时有用。
+    pub h_scroll: ScrollHandle,
 }
 
 /// 量宽：横向铺满父容器；高度有固定值用固定值，否则按可见行数自动算。
@@ -75,30 +79,37 @@ pub(super) fn build<F>(
     let edge = style.edge_width.max(0.0);
     let gap = style.content_gap.max(0.0);
     let stride = style.stride();
+    let scroll = state.scroll.get();
 
     // 指针已经是相对整个 view 的坐标；换算到列表盒左上角后取行。
     let pointer = pointer.map(|(x, y)| (x - (drawn.0 + rect.x), y - (drawn.1 + rect.y)));
     let hovered = pointer
         .filter(|(x, y)| *x >= 0.0 && *x <= rect.width && *y >= 0.0 && *y <= rect.height)
         .and_then(|(_, y)| {
-            let local = y - edge - gap + state.scroll_offset;
+            let local = y - edge - gap + scroll;
             (local >= 0.0).then(|| (local / stride) as usize)
         })
         .filter(|position| *position < shown.len())
         .map(|position| shown[position]);
 
-    let list = build_text_list(
+    let mut list = build_text_list(
         &style,
         items,
         &shown,
         state.selected,
         hovered,
-        state.scroll_offset,
-        state.h_scroll_offset,
+        scroll,
+        state.h_scroll.get(),
         (rect.x, rect.y, rect.width, rect.height),
         name,
         measure,
     );
+
+    // 夹紧后回写句柄，让应用与窗口壳看到同一个受限偏移。
+    list.scroll_offset = list.clamp_scroll();
+    list.h_scroll_offset = list.clamp_h_scroll();
+    state.scroll.set(list.scroll_offset);
+    state.h_scroll.set(list.h_scroll_offset);
 
     let viewport = list.viewport_width();
     let viewport_height = list.viewport_height();
@@ -131,8 +142,9 @@ impl View {
     ///
     /// `items` 是原数据，`query` 做模糊过滤、`sort` 控制无查询时是否按文本排序；
     /// `state.selected` 用**原下标**。`style.height` 为 `None` 时按行数自动高，
-    /// 给固定值则有视口、按 `state.scroll_offset` 滚动。行点击走
-    /// `AppEvent::RegionClicked("名字#原下标")`，滚轮 / 选中由应用自己保存进 `TextListState`。
+    /// 给固定值则有视口、按 `state.scroll` 滚动。行点击走
+    /// `AppEvent::RegionClicked("名字#原下标")`；滚动偏移是共享句柄，拖动滚动条 /
+    /// 滚轮由窗口壳直接写，应用不用自己接鼠标。
     pub fn text_list(
         &mut self,
         name: impl Into<String>,

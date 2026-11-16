@@ -9,6 +9,7 @@
 
 use std::collections::HashMap;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicU32, Ordering};
 
 use i_overlay::core::fill_rule::FillRule;
 use i_overlay::core::overlay_rule::OverlayRule;
@@ -17,8 +18,8 @@ use tiny_skia::{PathBuilder, Pixmap};
 
 use crate::color::Color;
 use crate::control::{
-    FlatSvgButton, Label, LabelRun, Panel, ScrollBar, StaticImage, StaticShape, TextBlock, TextBox,
-    TextEdit,
+    FlatSvgButton, Label, LabelRun, Panel, ScrollAxis, ScrollBar, StaticImage, StaticShape,
+    TextBlock, TextBox, TextEdit,
 };
 
 /// 一个静态文本控件的新内容：`label` 要带每段颜色的 runs，`text_block` 是整段文字。
@@ -48,6 +49,12 @@ pub struct Document {
 
     /// 子页面实例元数据：控件名 → 它属于哪个实例；普通控件没有条目。
     pub instances: HashMap<String, InstanceInfo>,
+
+    /// 可拖拽的滚动条：几何 + 写回偏移的共享句柄。
+    ///
+    /// 窗口壳（`cloud_ui::app`）按下 / 拖动 / 滚轮时直接写句柄并重绘，
+    /// 应用下一帧从 `ListBoxState` / `TextListState` 里读到的就是新偏移。
+    pub scroll_targets: Vec<ScrollTarget>,
 }
 
 /// 一个子页面实例的上下文。
@@ -412,6 +419,7 @@ impl Document {
             regions: Vec::new(),
             control_names: Vec::new(),
             instances: HashMap::new(),
+            scroll_targets: Vec::new(),
         }
     }
 
@@ -786,16 +794,49 @@ pub enum WindowGlyph {
     Restore,
 }
 
-/// 文档里点在某条列表滚动条上的命中。
+/// 滚动偏移的共享句柄：视图层写进 `ListBoxState` / `TextListState`，
+/// 文档带着同一份句柄交给窗口壳，壳拖动滚动条 / 滚轮时直接改它。
 ///
-/// 独立窗口的应用自己保存滚动状态；按下 / 拖动滚动条时用它把指针位置换算成新的偏移，
-/// 下一帧再传回 `ListBoxState` / `TextListState`。
+/// `Document` 会从脚本工人线程交给 UI 线程，所以句柄用 `Arc<AtomicU32>`（存 f32 位模式）
+/// 而不是 `Rc<Cell>`；读写都是宽松顺序，只需要共享数值，不需要同步先后。
+#[derive(Clone, Debug, Default)]
+pub struct ScrollHandle {
+    value: Arc<AtomicU32>,
+}
+
+impl ScrollHandle {
+    /// 从初始偏移建一个句柄。
+    pub fn new(value: f32) -> Self {
+        Self {
+            value: Arc::new(AtomicU32::new(value.to_bits())),
+        }
+    }
+
+    /// 当前偏移（点）。
+    pub fn get(&self) -> f32 {
+        f32::from_bits(self.value.load(Ordering::Relaxed))
+    }
+
+    /// 写入偏移；夹取范围由调用方按内容高度决定。
+    pub fn set(&self, value: f32) {
+        self.value.store(value.to_bits(), Ordering::Relaxed);
+    }
+}
+
+/// 文档里一条可以拖动 / 滚动的滚动条。
+///
+/// 坐标都是**文档坐标**（点），由视图层在 `View::build` 时按列表盒的实际位置算好；
+/// 窗口壳只做命中与换算，不知道控件是怎么搭出来的。
 #[derive(Clone, Debug)]
-pub struct ScrollbarHit {
-    /// 列表盒的 `region_name`。
+pub struct ScrollTarget {
+    /// 列表盒的 `region_name`（同一份内容里唯一）。
     pub name: String,
 
-    pub axis: crate::control::ScrollAxis,
+    /// 这条滚动条的方向。
+    pub axis: ScrollAxis,
+
+    /// 整个列表盒的矩形（文档坐标）。
+    pub area: (f32, f32, f32, f32),
 
     /// 轨道矩形（文档坐标）。
     pub track: (f32, f32, f32, f32),
@@ -803,89 +844,87 @@ pub struct ScrollbarHit {
     /// 滑块矩形（文档坐标）。
     pub thumb: (f32, f32, f32, f32),
 
-    /// 按下点是否落在滑块上（否则是轨道空白）。
-    pub inside_thumb: bool,
-
-    /// 按下点相对滑块起点的偏移（点）。
-    pub grab: f32,
-
     /// 最大滚动量（点）。
     pub max: f32,
+
+    /// 滚轮一格滚多远（点）。
+    pub step: f32,
+
+    /// 写回偏移的共享句柄。
+    pub handle: ScrollHandle,
 }
 
-impl ScrollbarHit {
-    /// 指针在 `(x, y)` 时对应的滚动偏移；夹在 `0..=max`。
-    pub fn offset_for(&self, x: f32, y: f32) -> f32 {
-        let (track_start, thumb_length, pointer, track_length) = match self.axis {
-            crate::control::ScrollAxis::Vertical => (self.track.1, self.thumb.3, y, self.track.3),
-            crate::control::ScrollAxis::Horizontal => (self.track.0, self.thumb.2, x, self.track.2),
-        };
-        let travel = (track_length - thumb_length).max(0.0);
+impl ScrollTarget {
+    /// 指针是否落在这个列表盒里。
+    pub fn contains(&self, x: f32, y: f32) -> bool {
+        inside_rect(self.area, x, y)
+    }
+
+    /// 指针是否落在轨道上（滑块或空白都算）。
+    pub fn hits_track(&self, x: f32, y: f32) -> bool {
+        inside_rect(self.track, x, y)
+    }
+
+    /// 按下时抓住的位置：点在滑块上按实际位置，点在轨道空白上按滑块中心，
+    /// 这样滑块会跳到指针下而不是整条跳到底。
+    pub fn grab(&self, x: f32, y: f32) -> f32 {
+        let (thumb_start, _thumb_anchor, pointer) =
+            axis_parts(self.axis, self.thumb, self.track, x, y);
+        if inside_rect(self.thumb, x, y) {
+            pointer - thumb_start
+        } else {
+            thumb_length(self.axis, self.thumb) * 0.5
+        }
+    }
+
+    /// 指针在 `(x, y)`、抓住位置为 `grab` 时对应的滚动偏移；夹在 `0..=max`。
+    pub fn offset_for(&self, x: f32, y: f32, grab: f32) -> f32 {
+        let (track_start, _thumb_start, pointer) =
+            axis_parts(self.axis, self.thumb, self.track, x, y);
+        let travel =
+            (track_length(self.axis, self.track) - thumb_length(self.axis, self.thumb)).max(0.0);
         if travel <= 0.0 {
             return 0.0;
         }
-        // 点在滑块上按抓住的位置算；点在轨道空白上让滑块中心对到点击处。
-        let grab = if self.inside_thumb {
-            self.grab
-        } else {
-            thumb_length * 0.5
-        };
         let ratio = ((pointer - grab - track_start) / travel).clamp(0.0, 1.0);
         ratio * self.max
     }
+
+    /// 滚轮一格后的偏移：`delta` 正数是向上滚（偏移减小）。
+    pub fn scroll_by(&self, delta: f32) -> f32 {
+        (self.handle.get() - delta * self.step).clamp(0.0, self.max)
+    }
 }
 
-impl Document {
-    /// 文档坐标 `(x, y)` 落在哪个列表盒的滚动条上（先竖向、再横向）；不在滚动条上给 `None`。
-    ///
-    /// 元素按绘制顺序叠放，从后往前找，和命中测试的规则一致。
-    pub fn list_box_scrollbar_at(&self, x: f32, y: f32) -> Option<ScrollbarHit> {
-        for element in self.elements.iter().rev() {
-            let Element::ListBox(list) = element else {
-                continue;
-            };
-            if x < list.x || x > list.x + list.width || y < list.y || y > list.y + list.height {
-                continue;
-            }
-            let inside = |rect: (f32, f32, f32, f32)| {
-                x >= rect.0 && x <= rect.0 + rect.2 && y >= rect.1 && y <= rect.1 + rect.3
-            };
-            if list.scrollbar_visible() {
-                let (tx, ty, tw, th) = list.track_rect();
-                let track = (list.x + tx, list.y + ty, tw, th);
-                if inside(track) {
-                    let (hx, hy, hw, hh) = list.thumb_rect();
-                    let thumb = (list.x + hx, list.y + hy, hw, hh);
-                    return Some(ScrollbarHit {
-                        name: list.region_name.clone(),
-                        axis: crate::control::ScrollAxis::Vertical,
-                        track,
-                        thumb,
-                        inside_thumb: inside(thumb),
-                        grab: y - thumb.1,
-                        max: list.max_scroll_px(),
-                    });
-                }
-            }
-            if list.h_scrollbar_visible() {
-                let (tx, ty, tw, th) = list.h_track_rect();
-                let track = (list.x + tx, list.y + ty, tw, th);
-                if inside(track) {
-                    let (hx, hy, hw, hh) = list.h_thumb_rect();
-                    let thumb = (list.x + hx, list.y + hy, hw, hh);
-                    return Some(ScrollbarHit {
-                        name: list.region_name.clone(),
-                        axis: crate::control::ScrollAxis::Horizontal,
-                        track,
-                        thumb,
-                        inside_thumb: inside(thumb),
-                        grab: x - thumb.0,
-                        max: list.max_h_scroll_px(),
-                    });
-                }
-            }
-        }
-        None
+fn inside_rect(rect: (f32, f32, f32, f32), x: f32, y: f32) -> bool {
+    x >= rect.0 && x <= rect.0 + rect.2 && y >= rect.1 && y <= rect.1 + rect.3
+}
+
+fn track_length(axis: ScrollAxis, track: (f32, f32, f32, f32)) -> f32 {
+    match axis {
+        ScrollAxis::Vertical => track.3,
+        ScrollAxis::Horizontal => track.2,
+    }
+}
+
+fn thumb_length(axis: ScrollAxis, thumb: (f32, f32, f32, f32)) -> f32 {
+    match axis {
+        ScrollAxis::Vertical => thumb.3,
+        ScrollAxis::Horizontal => thumb.2,
+    }
+}
+
+/// 取 `(轨道起点, 滑块起点, 指针位置)`；方向不同只看一个轴。
+fn axis_parts(
+    axis: ScrollAxis,
+    thumb: (f32, f32, f32, f32),
+    track: (f32, f32, f32, f32),
+    x: f32,
+    y: f32,
+) -> (f32, f32, f32) {
+    match axis {
+        ScrollAxis::Vertical => (track.1, thumb.1, y),
+        ScrollAxis::Horizontal => (track.0, thumb.0, x),
     }
 }
 
@@ -1576,6 +1615,7 @@ impl std::fmt::Debug for Document {
             .field("regions", &self.regions.len())
             .field("control_names", &self.control_names.len())
             .field("instances", &self.instances.len())
+            .field("scroll_targets", &self.scroll_targets.len())
             .finish()
     }
 }
@@ -1584,61 +1624,47 @@ impl std::fmt::Debug for Document {
 mod tests {
     use super::*;
 
-    /// 列表盒两条滚动条都能被点中，指针位置能换算成滚动偏移。
+    /// 滚动目标能把指针位置换算成偏移，抓住滑块与点轨道空白的语义不同。
     #[test]
-    fn list_box_scrollbars_can_be_hit_and_mapped_to_offsets() {
-        let list = crate::control::ListBox {
-            x: 10.0,
-            y: 20.0,
-            width: 100.0,
-            height: 60.0,
-            radius: 0.0,
-            fill: None,
-            edge_color: Color::rgb(0, 0, 0),
-            edge_width: 1.0,
-            content_gap: 2.0,
-            gap: 0.0,
-            auto_item_gap_averaging: false,
-            align: crate::control::ListBoxAlign::Left,
-            rows: Vec::new(),
-            row_count: 20,
-            scroll_offset: 0.0,
-            content_width: 300.0,
-            h_scroll_offset: 0.0,
-            content_height: 400.0,
-            allow_select: false,
-            selected_index: -1,
-            auto_center_selected: false,
-            hovered_index: None,
-            region_name: "log".to_owned(),
+    fn scroll_target_maps_pointer_to_offset() {
+        let handle = ScrollHandle::new(0.0);
+        let target = ScrollTarget {
+            name: "log".to_owned(),
+            axis: ScrollAxis::Vertical,
+            area: (10.0, 20.0, 100.0, 60.0),
+            track: (84.0, 24.0, 8.0, 52.0),
+            thumb: (84.0, 24.0, 8.0, 13.0),
+            max: 340.0,
+            step: 26.0,
+            handle: handle.clone(),
         };
-        let mut document = Document::empty(200.0, 200.0);
-        document.elements.push(Element::ListBox(list.clone()));
 
-        let (tx, ty, tw, th) = list.track_rect();
-        let hit = document
-            .list_box_scrollbar_at(list.x + tx + tw * 0.5, list.y + ty + th - 2.0)
-            .expect("竖向滚动条");
-        assert_eq!(hit.name, "log");
-        assert_eq!(hit.axis, crate::control::ScrollAxis::Vertical);
-        let offset = hit.offset_for(list.x + tx + tw * 0.5, list.y + ty + th - 2.0);
-        assert!(offset > 0.0 && offset <= list.max_scroll_px(), "{offset}");
+        assert!(target.contains(50.0, 50.0));
+        assert!(!target.contains(5.0, 50.0));
+        assert!(target.hits_track(88.0, 70.0));
+        assert!(!target.hits_track(50.0, 50.0), "内容区不算轨道");
+
+        // 按在滑块上，抓住的是滑块里的相对位置。
+        assert!((target.grab(88.0, 28.0) - 4.0).abs() < 0.01);
+        // 按在轨道空白上，滑块中心对到指针。
+        assert!((target.grab(88.0, 70.0) - 6.5).abs() < 0.01);
+
+        let grab = target.grab(88.0, 50.0);
+        let offset = target.offset_for(88.0, 50.0, grab);
+        assert!((offset - 170.0).abs() < 1.0, "{offset}");
         assert!(
-            document
-                .list_box_scrollbar_at(list.x + 5.0, list.y + 5.0)
-                .is_none(),
-            "内容区不算滚动条"
+            (target.offset_for(88.0, f32::MAX, grab) - target.max).abs() < 0.01,
+            "超出轨道夹到最大偏移"
         );
 
-        let (hx, hy, hw, hh) = list.h_track_rect();
-        let hit = document
-            .list_box_scrollbar_at(list.x + hx + hw * 0.5, list.y + hy + hh * 0.5)
-            .expect("横向滚动条");
-        assert_eq!(hit.axis, crate::control::ScrollAxis::Horizontal);
-        assert!(
-            hit.offset_for(list.x + hx + hw * 0.5, list.y + hy + hh * 0.5) > 0.0,
-            "点在轨道中间对应一半偏移"
-        );
+        // 滚轮一格：向上滚偏移减小，向下滚增大，都夹在范围里。
+        handle.set(100.0);
+        assert!((target.scroll_by(1.0) - 74.0).abs() < 0.01);
+        assert!((target.scroll_by(-1.0) - 126.0).abs() < 0.01);
+        handle.set(0.0);
+        assert_eq!(target.scroll_by(1.0), 0.0);
+        handle.set(target.max);
+        assert!((target.scroll_by(-1.0) - target.max).abs() < 0.01);
     }
 
     /// 圆角矩形：四个角切掉的那块不算命中，边与中间算。
@@ -1832,6 +1858,7 @@ mod tests {
                 },
             ],
             instances: Default::default(),
+            scroll_targets: Vec::new(),
         };
         assert!(document.update_static_content(
             "hint",
