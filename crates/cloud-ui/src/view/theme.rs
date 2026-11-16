@@ -180,6 +180,7 @@ impl Theme {
     /// 文本列表（高度按行数自动算）。
     pub fn text_list(&self) -> cloudime_render::TextListStyle {
         cloudime_render::TextListStyle {
+            width: None,
             height: None,
             row_height: self.row_height,
             gap: 2.0,

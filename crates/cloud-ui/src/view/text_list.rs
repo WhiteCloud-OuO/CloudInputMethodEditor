@@ -43,7 +43,13 @@ where
             cloudime_render::text_list_auto_height(style, shown.len(), constraints.max_width, width)
         }
     };
-    Size::new(constraints.max_width, height.min(constraints.max_height))
+    Size::new(
+        style
+            .width
+            .unwrap_or(constraints.max_width)
+            .min(constraints.max_width),
+        height.min(constraints.max_height),
+    )
 }
 
 /// 把文本列表写进 document，并给可见行写命中区域。
@@ -137,7 +143,10 @@ impl View {
         state: TextListState,
     ) -> cloud_ui_core::NodeId {
         let mut node = cloud_ui_core::Node::new(cloud_ui_core::NodeKind::Control);
-        node.width = cloud_ui_core::SizeSpec::Auto;
+        node.width = match style.width {
+            Some(width) => cloud_ui_core::SizeSpec::Fixed(width),
+            None => cloud_ui_core::SizeSpec::Auto,
+        };
         node.height = match style.height {
             Some(height) => cloud_ui_core::SizeSpec::Fixed(height),
             None => cloud_ui_core::SizeSpec::Auto,

@@ -4432,6 +4432,7 @@ fn install_text_list_methods(
 /// [`cloudime_render::visible_items`] 里做，和 `cloud-ui::view` 共用同一套顺序。
 fn parse_text_list(table: &mlua::Table) -> mlua::Result<Element> {
     let style = TextListStyle {
+        width: None,
         row_height: optional_positive(table, "item_height")?
             .or(optional_positive(table, "row_height")?)
             .unwrap_or(26.0)

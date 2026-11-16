@@ -12,6 +12,9 @@ use crate::document::{Element, FontSlot};
 /// 文本列表的样式（点）。
 #[derive(Debug, Clone, Copy)]
 pub struct TextListStyle {
+    /// 固定宽度（点）；`None` = 横向铺满父容器（`cloud-ui::view` 用，JSON 布局那边用 `w`）。
+    pub width: Option<f32>,
+
     /// 固定视口高度；`None` = 按行数自动算（`cloud-ui::view` 用，JSON 布局那边用 `h`）。
     pub height: Option<f32>,
 
@@ -49,6 +52,7 @@ pub struct TextListStyle {
 impl Default for TextListStyle {
     fn default() -> Self {
         Self {
+            width: None,
             height: None,
             row_height: 26.0,
             gap: 2.0,

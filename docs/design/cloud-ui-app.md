@@ -142,6 +142,7 @@ Server 继续通过 `features = ["script"]` 打开全部 IME 能力。
 
 - 高度：`TextListStyle.height` 为 `None` 时按可见行数自动算（行少时没有滚动条）；
   给 `Some(h)` 时是固定视口，滚轮由应用自己更新 `TextListState.scroll_offset`。
+  宽度：`TextListStyle.width` 为 `None` 时铺满父容器，给 `Some(w)` 时固定宽度（截断效果要靠它）。
 - 长文本：`TextListStyle.allow_text_wrapping = true`（缺省）时一行放不下就截断并在末尾补「…」；
   `false` 时不截断，底部出现水平滚动条，应用要自己更新 `TextListState.h_scroll_offset`
   （脚本窗口里是 Shift+滚轮或拖那条滚动条）。

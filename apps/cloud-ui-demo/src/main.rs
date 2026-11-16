@@ -261,6 +261,8 @@ impl Application for Demo {
             let text_items: Vec<String> = TEXT_LIST.iter().map(|text| (*text).to_owned()).collect();
             let mut text_style = theme.text_list();
             text_style.allow_text_wrapping = !self.h_scroll_text;
+            // 缩到内容宽度的三分之一，才看得出截断 / 横向滚动。
+            text_style.width = Some((width - 48.0) / 3.0);
             ui.text_list(
                 "recent",
                 &text_items,
