@@ -28,6 +28,7 @@ mod renderer;
 mod shadow;
 mod svg;
 mod text;
+mod text_list;
 mod theme;
 
 pub use canvas::rounded_rect_pixmap;
@@ -73,6 +74,7 @@ pub use renderer::{
 pub use shadow::Shadow;
 pub use svg::svg_size;
 pub use text::{TextPainter, TextSize, TextStyle};
+pub use text_list::{TextListStyle, build as build_text_list, fuzzy_score, visible_items};
 pub use theme::{FontSpec, Palette, Theme};
 
 /// 让 `tiny_skia::Pixmap` 的使用方不用再单独依赖 tiny-skia。

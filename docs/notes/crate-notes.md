@@ -684,6 +684,13 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 （`retry_pending_candidate`，组句期间本来就在跑）；等满 500ms 还没等到小窗才退回鼠标。等待/补报都写 TSF 日志
 （`候选锚点：…`），方便对照不同宿主。
 
+**文本列表**（2026-11-16，`text_list.rs`）：`TextListStyle` + `visible_items` + `build_text_list`。
+数据只有一组字符串，**没有子页面 / 行内控件**；行照样装进 `ListBox`，所以裁剪、滚动条、选中 / 悬停
+都复用渲染器那一套。`visible_items` 做模糊过滤（子序列，大小写不敏感；整串相等 > 前缀 > 子串 >
+子序列，按分数、文本、原下标定序）与可选文本排序，`cloud-ui::view` 与 `cloudime-script` 的元素表
+共用这一份顺序。`build_text_list` 把 `items` 的**原下标**映射成可见行（`selected` / `hovered` 传原下标），
+行的 `key` 就是行文本（脚本事件里的 `event.item_key`）。
+
 ## crates/cloud-ui-core
 
 页面树与布局核心（2026-10-21 建立）：放几何 / 约束 / 页面树节点 / measure-arrange 布局引擎，

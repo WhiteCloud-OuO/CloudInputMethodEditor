@@ -13,7 +13,7 @@ use cloud_ui_core::{
     Align, Axis, Constraints, Edges, GridTrack, Insets, Justify, LayoutSpec, Measure, Node, NodeId,
     NodeKind, PageTree, Position, Size, SizeSpec, layout,
 };
-use cloudime_render::{ControlName, InstanceInfo};
+use cloudime_render::{ControlName, InstanceInfo, TextListStyle, visible_items};
 use mlua::{Lua, Table, Value as LuaValue};
 use serde_json::{Map, Number, Value};
 
@@ -752,6 +752,9 @@ fn parse_node(
 
     let mut node = Node::new(kind);
     apply_common(&mut node, object, (None, None))?;
+    if kind_name == "text_list" && object.get("children").is_some() {
+        return Err(runtime("text_list 不是容器，不能有 children"));
+    }
     if kind_name == "text_button" {
         let (min_width, min_height) = text_button_min_size(object, measure);
         node.min_width = node.min_width.max(min_width);
@@ -2723,6 +2726,45 @@ impl Measure for PayloadMeasure<'_> {
         if object.get("type").and_then(Value::as_str) == Some("text_button") {
             return self.text_button_extent(object, constraints);
         }
+        if object.get("type").and_then(Value::as_str) == Some("text_list") {
+            // 文本列表是叶子控件，高度按可见行数自动算；宽度铺满父容器。
+            let items = text_list_items(object);
+            let query = object.get("query").and_then(Value::as_str).unwrap_or("");
+            let sort = object.get("sort").and_then(Value::as_bool).unwrap_or(false);
+            let style = TextListStyle {
+                row_height: object
+                    .get("item_height")
+                    .or_else(|| object.get("row_height"))
+                    .and_then(Value::as_f64)
+                    .map(|height| height as f32)
+                    .unwrap_or(26.0)
+                    .max(1.0),
+                gap: object
+                    .get("gap")
+                    .and_then(Value::as_f64)
+                    .map(|gap| gap as f32)
+                    .unwrap_or(2.0)
+                    .max(0.0),
+                content_gap: object
+                    .get("the_gap_between_border_and_content")
+                    .and_then(Value::as_f64)
+                    .map(|gap| gap as f32)
+                    .unwrap_or(4.0)
+                    .max(0.0),
+                edge_width: object
+                    .get("edge_width")
+                    .and_then(Value::as_f64)
+                    .map(|width| width as f32)
+                    .unwrap_or(1.0)
+                    .max(0.0),
+                ..TextListStyle::default()
+            };
+            let shown = visible_items(&items, query, sort);
+            return Size::new(
+                constraints.max_width,
+                style.auto_height(shown.len()).min(constraints.max_height),
+            );
+        }
         let text = object
             .get("text")
             .and_then(Value::as_str)
@@ -2773,6 +2815,25 @@ impl Measure for PayloadMeasure<'_> {
         }
         Size::ZERO
     }
+}
+
+/// `text_list.items`：字符串数组；数字 / 布尔也转成文本，其它类型跳过。
+fn text_list_items(object: &Map<String, Value>) -> Vec<String> {
+    object
+        .get("items")
+        .and_then(Value::as_array)
+        .map(|items| {
+            items
+                .iter()
+                .filter_map(|item| match item {
+                    Value::String(text) => Some(text.clone()),
+                    Value::Number(number) => Some(number.to_string()),
+                    Value::Bool(flag) => Some(flag.to_string()),
+                    _ => None,
+                })
+                .collect()
+        })
+        .unwrap_or_default()
 }
 
 /// `text_button` 的最小尺寸：最宽一行 + 左右各 12、行数 × 行高 + 上下各 6。
@@ -2996,6 +3057,80 @@ mod tests {
             &serde_json::Value::Null,
             None,
         )
+    }
+
+    #[test]
+    fn text_list_measures_auto_height_from_visible_rows() {
+        let lua = Lua::new();
+        let layout = load(
+            &lua,
+            &json!({
+                "version": 2,
+                "page": {
+                    "w": 200, "h": 300,
+                    "layout": { "type": "linear" },
+                    "children": [{
+                        "type": "text_list", "name": "recent", "w": 200,
+                        "items": ["乙", "甲", "丙"], "sort": true
+                    }]
+                }
+            }),
+            std::path::Path::new("."),
+            (None, None),
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap();
+        assert_eq!(layout.table.raw_len(), 1);
+        let list: mlua::Table = layout.table.get(1).unwrap();
+        assert_eq!(list.get::<String>("type").unwrap(), "text_list");
+        let height: f32 = list.get("h").unwrap();
+        // 3 行 × (26 + 2) − 2 + (1 + 4) × 2 = 92
+        assert!((height - 92.0).abs() < 0.01, "{height}");
+    }
+
+    #[test]
+    fn text_list_auto_height_follows_the_fuzzy_filter() {
+        let lua = Lua::new();
+        let layout = load(
+            &lua,
+            &json!({
+                "version": 2,
+                "page": {
+                    "w": 200, "h": 300,
+                    "layout": { "type": "linear" },
+                    "children": [{
+                        "type": "text_list", "name": "recent", "w": 200,
+                        "items": ["甲乙", "丙"], "query": "甲"
+                    }]
+                }
+            }),
+            std::path::Path::new("."),
+            (None, None),
+            &serde_json::Value::Null,
+            None,
+        )
+        .unwrap();
+        let list: mlua::Table = layout.table.get(1).unwrap();
+        let height: f32 = list.get("h").unwrap();
+        // 只剩 1 行：26 + 10 = 36
+        assert!((height - 36.0).abs() < 0.01, "{height}");
+    }
+
+    #[test]
+    fn text_list_rejects_children() {
+        let error = run(json!({
+            "version": 2,
+            "page": {
+                "w": 100, "h": 100,
+                "children": [{
+                    "type": "text_list", "name": "recent", "items": ["甲"],
+                    "children": [{ "type": "text", "w": 10, "h": 10, "text": "x" }]
+                }]
+            }
+        }))
+        .unwrap_err();
+        assert!(error.to_string().contains("不是容器"), "{error}");
     }
 
     #[test]

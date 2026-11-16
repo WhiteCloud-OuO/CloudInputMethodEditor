@@ -177,6 +177,28 @@ impl Theme {
         }
     }
 
+    /// 文本列表（高度按行数自动算）。
+    pub fn text_list(&self) -> cloudime_render::TextListStyle {
+        cloudime_render::TextListStyle {
+            height: None,
+            row_height: self.row_height,
+            gap: 2.0,
+            content_gap: 4.0,
+            radius: self.radius.min(8.0),
+            fill: Some(self.surface),
+            edge_color: self.border,
+            edge_width: 1.0,
+            padding_x: 10.0,
+            row_radius: 5.0,
+            size: 14.0,
+            font: FontSlot::Candidate,
+            text: self.text,
+            selection: self.accent,
+            selection_text: self.accent_text,
+            hover: self.surface_alt,
+        }
+    }
+
     /// 单行文本编辑框。
     pub fn text_edit(&self) -> TextEditStyle {
         TextEditStyle {

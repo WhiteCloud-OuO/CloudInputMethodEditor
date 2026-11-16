@@ -41,7 +41,7 @@ Page（主页面，一窗口一棵）
 | `ControlsContainer` | 控件容器，例如 `panel` | 有背景 / 边框 / 圆角 / padding | 有，缺省 `flex` |
 | `SubpageContainer` | 子页面容器（只放 `subpage`；后续实现） | 无自己的视觉外观 | 有，缺省 `flex` |
 | `ListBox` | 子页面容器：列表盒，行内可放子页面 / 普通控件 | 有背景 / 边框 / 滚动条 | 有，内部行布局 |
-| `Control` | 叶子控件，例如 `label` / `flat_svg_button` / `text_edit` | 有 | 没有 |
+| `Control` | 叶子控件，例如 `label` / `flat_svg_button` / `text_edit` / `text_list` | 有 | 没有 |
 | `Subpage` | 引用另一份 Page 布局，可重复实例化 | 由子页面根决定 | 子页面内部有；父级只看到一个外框 |
 
 - `self_drawing_panel` **不是容器**，是带内部 draw list 的特殊控件；它的 `children` 是控件内部组合内容，不套用容器子节点矩阵。

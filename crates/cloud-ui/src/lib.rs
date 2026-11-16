@@ -74,5 +74,6 @@ pub use script_window::{ScriptWindowEvents, ScriptWindows};
 pub use view::{
     ButtonStyle, CLOSE_ACTION, IconButtonStyle, LabelStyle, ListBoxState, ListBoxStyle, ListItem,
     MAXIMIZE_ACTION, MINIMIZE_ACTION, PanelStyle, ScrollablePageMetrics, ScrollablePageState,
-    ScrollablePageStyle, StackStyle, TextEditStyle, Theme, TitleBarIcons, TitleBarStyle, View,
+    ScrollablePageStyle, StackStyle, TextEditStyle, TextListState, Theme, TitleBarIcons,
+    TitleBarStyle, View,
 };

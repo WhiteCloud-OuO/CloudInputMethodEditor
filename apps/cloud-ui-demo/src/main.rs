@@ -5,8 +5,8 @@
 
 use cloud_ui::{
     AppEvent, Application, CLOSE_ACTION, Context, Decorations, ListBoxState, ListItem,
-    MAXIMIZE_ACTION, MINIMIZE_ACTION, MessageDialog, StackStyle, TextInputDialog, Theme, TrayEvent,
-    TrayMenuItem, TrayOptions, View, WindowMask, WindowOptions, run_native,
+    MAXIMIZE_ACTION, MINIMIZE_ACTION, MessageDialog, StackStyle, TextInputDialog, TextListState,
+    Theme, TrayEvent, TrayMenuItem, TrayOptions, View, WindowMask, WindowOptions, run_native,
 };
 use cloudime_render::Document;
 
@@ -14,6 +14,15 @@ const LIST_ROWS: usize = 5;
 const LIST_HEIGHT: f32 = 170.0;
 const LOG_ROWS: usize = 12;
 const LOG_HEIGHT: f32 = 110.0;
+const TEXT_LIST: [&str; 7] = [
+    "张伟",
+    "张伟明",
+    "李娜",
+    "王芳",
+    "Alice",
+    "alphabet",
+    "欧阳娜娜",
+];
 
 #[derive(Default)]
 struct Demo {
@@ -23,6 +32,7 @@ struct Demo {
     notes: String,
     log_scroll: f32,
     selected: Option<usize>,
+    text_selected: Option<usize>,
     light: bool,
     masked: bool,
     dialog_result: Option<u8>,
@@ -111,6 +121,10 @@ impl Application for Demo {
                         && let Ok(index) = index.parse::<usize>()
                     {
                         self.selected = Some(index);
+                    } else if let Some(index) = name.strip_prefix("recent#")
+                        && let Ok(index) = index.parse::<usize>()
+                    {
+                        self.text_selected = Some(index);
                     }
                 }
                 AppEvent::MouseWheel { delta } => {
@@ -222,6 +236,23 @@ impl Application for Demo {
                 },
             );
             ui.spacer(0.0, 8.0);
+            ui.label(
+                "文本列表（用上面的输入框做模糊过滤，点行选中）：",
+                theme.muted(),
+            );
+            let text_items: Vec<String> = TEXT_LIST.iter().map(|text| (*text).to_owned()).collect();
+            ui.text_list(
+                "recent",
+                &text_items,
+                &typed,
+                true,
+                theme.text_list(),
+                TextListState {
+                    selected: self.text_selected,
+                    scroll_offset: 0.0,
+                },
+            );
+            ui.spacer(0.0, 8.0);
             ui.row(StackStyle::gap(16.0), |row| {
                 row.button("click", format!("点我（{clicks}）"), theme.button());
                 row.button("open", "打开子窗口", theme.button());
@@ -300,7 +331,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     run_native(
         WindowOptions {
             title: "Cloud UI Demo".to_owned(),
-            size: (760.0, 760.0),
+            size: (760.0, 900.0),
             min_size: Some((420.0, 360.0)),
             decorations: Decorations::None,
             top_most: false,

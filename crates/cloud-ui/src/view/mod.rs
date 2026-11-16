@@ -24,12 +24,14 @@ use cloudime_render::{Color, Document, Element, FontSlot, HitShape, Region, Wind
 mod list_box;
 mod scrollable_page;
 pub(crate) mod text_edit;
+mod text_list;
 mod theme;
 mod title_bar;
 
 pub use list_box::{ListBoxState, ListBoxStyle, ListItem};
 pub use scrollable_page::{ScrollablePageMetrics, ScrollablePageState, ScrollablePageStyle};
 pub use text_edit::TextEditStyle;
+pub use text_list::TextListState;
 pub use theme::Theme;
 pub use title_bar::{
     CLOSE_ACTION, IconButtonStyle, MAXIMIZE_ACTION, MINIMIZE_ACTION, TitleBarIcons, TitleBarStyle,
@@ -165,6 +167,14 @@ enum Widget {
         items: Vec<ListItem>,
         style: ListBoxStyle,
         state: ListBoxState,
+    },
+    TextList {
+        name: String,
+        items: Vec<String>,
+        query: String,
+        sort: bool,
+        style: cloudime_render::TextListStyle,
+        state: TextListState,
     },
     TextEdit {
         name: String,
@@ -575,6 +585,27 @@ impl View {
                     measure,
                 );
             }
+            Some(Widget::TextList {
+                name,
+                items,
+                query,
+                sort,
+                style,
+                state,
+            }) => text_list::build(
+                target.elements,
+                regions,
+                name,
+                items,
+                query,
+                *sort,
+                *style,
+                *state,
+                local,
+                drawn,
+                clip,
+                self.pointer,
+            ),
             Some(Widget::TextEdit { name, text, style }) => {
                 text_edit::build(target.elements, local, name, text, style)
             }
@@ -648,6 +679,13 @@ where
                 )
             }
             Widget::ListBox { style, .. } => list_box::measure(style, constraints),
+            Widget::TextList {
+                items,
+                query,
+                sort,
+                style,
+                ..
+            } => text_list::measure(items, query, *sort, style, constraints),
             Widget::TextEdit { style, .. } | Widget::TextBox { style, .. } => {
                 text_edit::measure(style, constraints)
             }
@@ -916,6 +954,79 @@ mod tests {
             .map(|region| region.name.as_str())
             .collect();
         assert_eq!(names, ["row-a", "row-b"]);
+    }
+
+    #[test]
+    fn text_list_filters_and_emits_row_regions() {
+        let mut view = View::new(300.0, 200.0);
+        let items: Vec<String> = ["张伟", "李娜", "张伟明"]
+            .iter()
+            .map(|text| (*text).to_owned())
+            .collect();
+        let style = Theme::dark().text_list();
+        view.text_list(
+            "names",
+            &items,
+            "张伟",
+            true,
+            style,
+            TextListState {
+                selected: Some(2),
+                scroll_offset: 0.0,
+            },
+        );
+        let document = view.build(measure);
+        let Some(Element::ListBox(list)) = document
+            .elements
+            .iter()
+            .find(|element| matches!(element, Element::ListBox(_)))
+        else {
+            panic!("应生成列表元素");
+        };
+        assert_eq!(list.row_count, 2, "「李娜」被过滤掉");
+        assert_eq!(list.selected_index, 1, "张伟明 是可见行里的第 2 行");
+        assert!(
+            (list.height - style.auto_height(2)).abs() < 0.01,
+            "自动高度"
+        );
+        assert!(!list.scrollbar_visible());
+        let names: Vec<&str> = document
+            .regions
+            .iter()
+            .map(|region| region.name.as_str())
+            .collect();
+        assert_eq!(names, ["names#0", "names#2"], "区域带的是原下标");
+    }
+
+    #[test]
+    fn text_list_fixed_height_keeps_a_scrollbar() {
+        let mut view = View::new(300.0, 200.0);
+        let items: Vec<String> = (0..10).map(|index| format!("第 {index} 项")).collect();
+        let mut style = Theme::dark().text_list();
+        style.height = Some(60.0);
+        style.row_height = 20.0;
+        view.text_list(
+            "recent",
+            &items,
+            "",
+            false,
+            style,
+            TextListState {
+                selected: None,
+                scroll_offset: 30.0,
+            },
+        );
+        let document = view.build(measure);
+        let Some(Element::ListBox(list)) = document
+            .elements
+            .iter()
+            .find(|element| matches!(element, Element::ListBox(_)))
+        else {
+            panic!("应生成列表元素");
+        };
+        assert!((list.height - 60.0).abs() < 0.01, "固定视口");
+        assert!(list.scrollbar_visible());
+        assert!((list.scroll_offset - 30.0).abs() < 0.01);
     }
 
     #[test]

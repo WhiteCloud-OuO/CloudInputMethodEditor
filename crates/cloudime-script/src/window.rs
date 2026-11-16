@@ -19,8 +19,9 @@ use cloudime_render::{
     Document, Element, FlatSvgButton, FontSlot, HitRect, HitShape, InstanceInfo, Label, LabelRun,
     ListBox, ListBoxAlign, ListBoxHit, ListBoxRow, ListBoxWindow, Panel, PathCommand, Pixmap,
     Region, ScrollAxis, ScrollBar, SelfDrawingPanel, StaticImage, StaticShape, StaticTextContent,
-    SvgAlign, TextBlock, TextBox, TextBoxScroll, TextEdit, flip_image, gray_image, load_image,
-    mask_image, rotate_image, scale_image, svg_size,
+    SvgAlign, TextBlock, TextBox, TextBoxScroll, TextEdit, TextListStyle, build_text_list,
+    flip_image, gray_image, load_image, mask_image, rotate_image, scale_image, svg_size,
+    visible_items,
 };
 
 use crate::mlua;
@@ -3504,6 +3505,7 @@ fn parse_element(
         "flat_svg_button" => parse_flat_svg_button(table),
         "text_button" => parse_text_button(table),
         "list_box" => parse_list_box(table, images, depth),
+        "text_list" => parse_text_list(table),
         "text_edit" => parse_text_edit(table),
         "text_box" => parse_text_box(table),
         "hscroll_bar" | "hscrollbar" => parse_scroll_bar(table, ScrollAxis::Horizontal),
@@ -3513,7 +3515,7 @@ fn parse_element(
         other => Err(mlua::Error::RuntimeError(format!(
             "元素 type 不认识：{other}（可用：rect / circle / line / text / svg / img / path / \
              label / text_block / static_shape / static_image / panel / self_drawing_panel / \
-             flat_svg_button / text_button / list_box / text_edit / hscroll_bar / vscroll_bar）"
+             flat_svg_button / text_button / list_box / text_list / text_edit / hscroll_bar / vscroll_bar）"
         ))),
     }
 }
@@ -4013,6 +4015,89 @@ fn text_button_extent(text: &str, size: f32) -> (f32, f32) {
 }
 
 /// `text_edit`：背景胶囊 + 可选 SVG + Windowless RichEdit 承载的文本区。
+/// `text_list`：一组字符串的叶子列表（不是容器）。行内只有文本；模糊查询 / 排序在
+/// [`cloudime_render::visible_items`] 里做，和 `cloud-ui::view` 共用同一套顺序。
+fn parse_text_list(table: &mlua::Table) -> mlua::Result<Element> {
+    let style = TextListStyle {
+        row_height: optional_positive(table, "item_height")?
+            .or(optional_positive(table, "row_height")?)
+            .unwrap_or(26.0)
+            .max(1.0),
+        height: None,
+        gap: number(table, "gap", 2.0)?.max(0.0),
+        content_gap: number(table, "the_gap_between_border_and_content", 4.0)?.max(0.0),
+        radius: number(table, "radius", 6.0)?.max(0.0),
+        fill: color(table, "fill", false)?.or(color(table, "back_color", false)?),
+        edge_color: color(table, "edge_color", false)?
+            .unwrap_or(Color::rgba(0xD2, 0xD2, 0xD2, 0xFF)),
+        edge_width: number(table, "edge_width", 1.0)?.max(0.0),
+        padding_x: number(table, "padding_x", 10.0)?.max(0.0),
+        row_radius: number(table, "row_radius", 5.0)?.max(0.0),
+        size: optional_size(table, "size")?
+            .or(optional_size(table, "font_size")?)
+            .unwrap_or(14.0),
+        font: table
+            .get::<Option<String>>("font")?
+            .as_deref()
+            .and_then(FontSlot::from_name)
+            .unwrap_or(FontSlot::Candidate),
+        text: color(table, "color", false)?.unwrap_or(Color::rgb(0xEC, 0xEC, 0xF2)),
+        selection: color(table, "selection", false)?.unwrap_or(Color::rgb(0x30, 0x6C, 0xDC)),
+        selection_text: color(table, "selection_text", false)?
+            .unwrap_or(Color::rgb(0xFF, 0xFF, 0xFF)),
+        hover: color(table, "hover", false)?.unwrap_or(Color::rgb(0x2D, 0x2D, 0x38)),
+    };
+    let items = text_list_items(table)?;
+    let query = table.get::<Option<String>>("query")?.unwrap_or_default();
+    let sort = table.get::<Option<bool>>("sort")?.unwrap_or(false);
+    let shown = visible_items(&items, &query, sort);
+    let allow_select = table.get::<Option<bool>>("allow_select")?.unwrap_or(true);
+    let selected = table
+        .get::<Option<usize>>("selected")?
+        .filter(|index| *index < items.len());
+    let height = optional_positive(table, "h")?.unwrap_or_else(|| style.auto_height(shown.len()));
+    let name = table.get::<Option<String>>("name")?.unwrap_or_default();
+    let mut list = build_text_list(
+        &style,
+        &items,
+        &shown,
+        selected,
+        None,
+        number(table, "scroll_offset", 0.0)?.max(0.0),
+        (
+            number(table, "x", 0.0)?,
+            number(table, "y", 0.0)?,
+            positive(table, "w", "width")?,
+            height,
+        ),
+        &name,
+    );
+    if !allow_select {
+        list.allow_select = false;
+        list.selected_index = -1;
+        list.hovered_index = None;
+    }
+    Ok(Element::ListBox(list))
+}
+
+/// `text_list.items`：字符串数组；数字 / 布尔也转成文本，其它类型跳过。
+fn text_list_items(table: &mlua::Table) -> mlua::Result<Vec<String>> {
+    let Some(items) = table.get::<Option<mlua::Table>>("items")? else {
+        return Ok(Vec::new());
+    };
+    let mut texts = Vec::new();
+    for item in items.sequence_values::<mlua::Value>() {
+        match item? {
+            mlua::Value::String(text) => texts.push(text.to_str()?.to_owned()),
+            mlua::Value::Integer(number) => texts.push(number.to_string()),
+            mlua::Value::Number(number) => texts.push(number.to_string()),
+            mlua::Value::Boolean(flag) => texts.push(flag.to_string()),
+            _ => {}
+        }
+    }
+    Ok(texts)
+}
+
 fn parse_text_edit(table: &mlua::Table) -> mlua::Result<Element> {
     let width = positive(table, "w", "width")?;
     let height = positive(table, "h", "height")?;
@@ -4936,6 +5021,57 @@ pub fn event_payload(lua: &mlua::Lua, event: &ScriptWindowEvent) -> mlua::Result
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn text_list_element_parses_items_and_auto_height() {
+        let lua = mlua::Lua::new();
+        let table: mlua::Table = lua
+            .load(
+                r#"{
+                    type = "text_list", name = "recent", x = 5, y = 6, w = 200,
+                    items = { "乙", "甲", "丙" }, sort = true,
+                }"#,
+            )
+            .eval()
+            .unwrap();
+        let mut images = ImageCache::default();
+        let Element::ListBox(list) = parse_element(&table, &mut images, 0).unwrap() else {
+            panic!("text_list 应生成列表元素");
+        };
+        assert_eq!(list.row_count, 3);
+        assert_eq!(list.region_name, "recent");
+        // 3 行 × (26 + 2) − 2 + (1 + 4) × 2 = 92
+        assert!((list.height - 92.0).abs() < 0.01, "{}", list.height);
+        assert_eq!(
+            list.rows
+                .iter()
+                .map(|row| row.key.as_deref().unwrap_or_default())
+                .collect::<Vec<_>>(),
+            ["丙", "乙", "甲"],
+            "sort 按文本（码点）排"
+        );
+        assert_eq!((list.x, list.y), (5.0, 6.0));
+    }
+
+    #[test]
+    fn text_list_selected_uses_the_original_index() {
+        let lua = mlua::Lua::new();
+        let table: mlua::Table = lua
+            .load(
+                r#"{
+                    type = "text_list", name = "recent", w = 200,
+                    items = { "甲乙", "丙" }, query = "甲", selected = 0,
+                }"#,
+            )
+            .eval()
+            .unwrap();
+        let mut images = ImageCache::default();
+        let Element::ListBox(list) = parse_element(&table, &mut images, 0).unwrap() else {
+            panic!("text_list 应生成列表元素");
+        };
+        assert_eq!(list.row_count, 1);
+        assert_eq!(list.selected_index, 0, "原下标 0 就是可见的第 1 行");
+    }
 
     #[test]
     fn list_box_selection_defaults_and_ranges_are_checked() {

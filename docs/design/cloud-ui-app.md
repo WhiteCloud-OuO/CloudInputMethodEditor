@@ -76,7 +76,7 @@ Server 继续通过 `features = ["script"]` 打开全部 IME 能力。
     `scrollable_page` 额外带固定视口、裁剪与滚动条；
   - **子页面容器**：`list_box`（`NodeKind::ListBox`，已实现）；`SubpageContainer` 预留给通用子页面，后续实现。
 - 布局分组：`column` / `row` 用 `Stem`，只负责结构与布局，不算上面两类容器；
-- 控件：`label`、`button`、`spacer`、`text_edit`、`text_box`，外加整窗 `background`；
+- 控件：`label`、`button`、`spacer`、`text_edit`、`text_box`、`text_list`，外加整窗 `background`；
 - 布局：`cloud_ui_core` 的 measure-arrange，文字尺寸由 `Painter::measure_text` 提供；
 - 输出：`View::build(measure)` 生成 `Document`，按钮 / 列表行同时写入 `Document.regions`；
 - 事件：`Context::measure_text` 给 view 用，`AppEvent::RegionClicked(name)` 让应用知道
@@ -91,8 +91,8 @@ Server 继续通过 `features = ["script"]` 打开全部 IME 能力。
 - 颜色：`background` / `surface` / `surface_alt` / `border` / `text` / `muted` / `accent` / `accent_text`；
 - 尺寸：`radius` / `font_size` / `title_size` / `muted_size` / `button_height` / `row_height`；
 - `Theme::dark()` / `Theme::light()` 两套缺省值，`Default` 是深色；
-- 派生样式：`title()` / `label()` / `muted()` / `button()` / `panel()` / `list_box(height)` / `text_edit()` /
-  `text_box(height)` / `scrollable_page(height)`。
+- 派生样式：`title()` / `label()` / `muted()` / `button()` / `panel()` / `list_box(height)` / `text_list()` /
+  `text_edit()` / `text_box(height)` / `scrollable_page(height)`。
   换主题 = 换一本 `Theme` 再重建一帧，控件样式跟着走。
 
 ## scrollable_page（可滚动页面，控件容器）
@@ -132,6 +132,22 @@ Server 继续通过 `features = ["script"]` 打开全部 IME 能力。
   行内容由渲染器的 `paint_scroll` 吸附到行首，滚到底时则按从下往上的整行窗口显示。
 - `scrollable_page` 是给任意内容的控件容器；**行列表**请用 `list_box`（子页面容器），
   才会得到上面这套整行 / 均匀间隙规则。
+
+## 文本列表（叶子控件）
+
+`View::text_list(name, items, query, sort, style, state)` 是**叶子控件**（`NodeKind::Control`，
+不是容器）：数据只有一组字符串，没有子页面、没有行内控件。它同样生成 `Element::ListBox`，
+渲染器负责行裁剪与滚动条；过滤 / 排序在 `cloudime_render::visible_items` 里做，与脚本窗口的
+`text_list` 共用同一套顺序。
+
+- 高度：`TextListStyle.height` 为 `None` 时按可见行数自动算（行少时没有滚动条）；
+  给 `Some(h)` 时是固定视口，滚轮由应用自己更新 `TextListState.scroll_offset`。
+- `query` 做模糊匹配（子序列，大小写不敏感；整串相等 > 前缀 > 子串 > 子序列），
+  `sort` 控制没有查询时是否按文本排序；有查询时按分数、同分再按 `sort` / 原顺序。
+- `TextListState.selected` 用 **`items` 原下标**（过滤后仍指向同一项）；`View` 内部换算成可见行。
+- 可见行写 `Document.regions`，名字是 `名字#原下标`，应用收到 `RegionClicked("名字#3")`；
+  悬停同样取自 `View::pointer`。
+- `Theme::text_list()` 给一套缺省样式（行高、内边距、选中 / 悬停色）。
 
 ## 文本编辑
 
