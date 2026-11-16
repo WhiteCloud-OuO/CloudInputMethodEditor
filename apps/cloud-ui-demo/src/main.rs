@@ -210,7 +210,19 @@ impl Application for Demo {
             });
             ui.spacer(0.0, 6.0);
             ui.text_edit("input", typed.clone(), theme.text_edit());
-            ui.label(format!("输入：{typed}"), theme.muted());
+            ui.row(StackStyle::gap(12.0), |row| {
+                row.label(format!("输入：{typed}"), theme.muted());
+                row.flex_spacer();
+                row.button(
+                    "text_wrap",
+                    if self.h_scroll_text {
+                        "文本列表：横向滚动"
+                    } else {
+                        "文本列表：截断"
+                    },
+                    theme.button(),
+                );
+            });
             ui.spacer(0.0, 6.0);
             ui.text_box("notes", notes.clone(), theme.text_box(80.0));
             ui.label("日志列表（滚轮滚动，行始终完整显示）：", theme.muted());
@@ -275,15 +287,6 @@ impl Application for Demo {
                     theme.button(),
                 );
                 row.button("dialog", "消息对话框", theme.button());
-                row.button(
-                    "text_wrap",
-                    if self.h_scroll_text {
-                        "文本列表：横向滚动"
-                    } else {
-                        "文本列表：截断"
-                    },
-                    theme.button(),
-                );
                 row.button("hide", "隐藏到托盘", theme.button());
             });
         });
