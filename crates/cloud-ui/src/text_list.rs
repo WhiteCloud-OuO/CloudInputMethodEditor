@@ -4,32 +4,19 @@
 
 use cloudime_render::{Document, Element, ListBox};
 
-/// 用新的 `text_list` 元素替换文档里同名的那一块：选中按行文本保留，滚动偏移夹到新范围。
+/// 用新的 `text_list` 元素替换文档里同名的那一块：滚动偏移保留并夹到新范围。
 ///
-/// 找不到同名列表时返回 `false`；调用方决定怎么记日志。
+/// 选中项由脚本侧副本算好（它会跟着 `selected_index_changed` 同步），这里不再按旧行文本覆盖，
+/// 否则脚本显式改 `selected_index` 会被旧选中项盖回去。
 pub(crate) fn replace(document: &mut Document, name: &str, mut list: ListBox) -> bool {
     let Some(index) = document.elements.iter().position(
         |element| matches!(element, Element::ListBox(current) if current.region_name == name),
     ) else {
         return false;
     };
-    let (key, scroll) = match document.elements.get(index) {
-        Some(Element::ListBox(old)) => (
-            (old.selected_index >= 0)
-                .then(|| old.row(old.selected_index as usize))
-                .flatten()
-                .and_then(|row| row.key.clone()),
-            old.scroll_offset,
-        ),
-        _ => (None, 0.0),
-    };
-    if list.allow_select
-        && let Some(key) = key
-        && let Some(row) = list.rows.iter().find(|row| row.key.as_ref() == Some(&key))
-    {
-        list.selected_index = row.index as i32;
+    if let Some(Element::ListBox(old)) = document.elements.get(index) {
+        list.scroll_offset = old.scroll_offset.min(list.max_scroll_px());
     }
-    list.scroll_offset = scroll.min(list.max_scroll_px());
     document.elements[index] = Element::ListBox(list);
     true
 }

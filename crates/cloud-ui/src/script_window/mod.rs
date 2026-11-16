@@ -4699,9 +4699,9 @@ mod tests {
     use super::*;
     use cloudime_render::HitRect;
 
-    /// 替换 `text_list`：选中项按行文本保留、滚动偏移保留并夹到新范围。
+    /// 替换 `text_list`：脚本给的选中项生效，滚动偏移保留并夹到新范围。
     #[test]
-    fn replacing_a_text_list_keeps_the_selected_row_by_text() {
+    fn replacing_a_text_list_keeps_the_built_selection_and_scroll() {
         use cloudime_render::{TextListStyle, build_text_list, visible_items};
 
         let style = TextListStyle::default();
@@ -4714,7 +4714,7 @@ mod tests {
             &style,
             &items,
             &shown,
-            Some(1),
+            Some(0),
             None,
             40.0,
             (0.0, 0.0, 100.0, 40.0),
@@ -4732,7 +4732,7 @@ mod tests {
             &style,
             &items,
             &shown,
-            Some(0),
+            Some(2),
             None,
             0.0,
             (0.0, 0.0, 100.0, 40.0),
@@ -4744,8 +4744,8 @@ mod tests {
         };
         assert_eq!(
             list.rows[list.selected_index as usize].key.as_deref(),
-            Some("乙"),
-            "按行文本保留选中"
+            Some("丙"),
+            "脚本显式给的选中项不被旧选中盖回去"
         );
         assert!((list.scroll_offset - 40.0).abs() < 0.01, "滚动保留");
     }

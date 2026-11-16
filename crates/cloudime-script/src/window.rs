@@ -1428,6 +1428,9 @@ pub(crate) fn handle(
     handle.set(
         "get_selected_index",
         lua.create_function(move |_, (_this, name): (mlua::Table, String)| {
+            if let Some(index) = text_list_selected(id, &name) {
+                return Ok(Some(index));
+            }
             Ok(cached_list_box_selected(id, &name))
         })?,
     )?;
@@ -1792,6 +1795,15 @@ pub(crate) fn handle(
     handle.set(
         "set_selected_index",
         lua.create_function(move |_, (_this, name, index): (mlua::Table, String, i32)| {
+            // `text_list` 与列表盒共用这个名字：按控件名先认列表（原下标，-1 清空）。
+            if is_text_list(id, &name) {
+                if !set_text_list_selected(id, &list_box_select_requests, &name, index) {
+                    return Err(mlua::Error::RuntimeError(format!(
+                        "text_list.selected_index = {index} 越界"
+                    )));
+                }
+                return Ok(());
+            }
             cache_list_box_selected(id, &name, index);
             let offset = (index >= 0)
                 .then(|| {
@@ -4088,6 +4100,38 @@ fn text_button_extent(text: &str, size: f32) -> (f32, f32) {
 }
 
 /// `text_edit`：背景胶囊 + 可选 SVG + Windowless RichEdit 承载的文本区。
+/// 控件名是不是一个 `text_list`（`clear` / `get_selected_index` / `set_selected_index` 按它分派）。
+fn is_text_list(id: WindowId, name: &str) -> bool {
+    TEXT_LISTS.with(|lists| lists.borrow().contains_key(&(id, name.to_owned())))
+}
+
+/// 设置 `text_list` 的选中项（0 起的原下标；`-1` 清空）；越界返回 `false`。
+fn set_text_list_selected(
+    id: WindowId,
+    requests: &Rc<RefCell<Vec<Request>>>,
+    name: &str,
+    index: i32,
+) -> bool {
+    let len = cached_text_list_items(id, name).len() as i32;
+    if index < -1 || index >= len {
+        return false;
+    }
+    mutate_text_list(id, requests, name, |entry| {
+        entry.selected = (index >= 0).then_some(index as usize);
+    })
+}
+
+/// 脚本侧 `text_list` 的选中项（0 起的原下标；没选中是 -1）。
+/// 名字不是 `text_list` 时返回 `None`，让 `get_selected_index` 走列表盒那条老路。
+fn text_list_selected(id: WindowId, name: &str) -> Option<i32> {
+    TEXT_LISTS.with(|lists| {
+        lists
+            .borrow()
+            .get(&(id, name.to_owned()))
+            .map(|entry| entry.selected.map_or(-1, |index| index as i32))
+    })
+}
+
 /// 脚本侧 `text_list` 的副本（按窗口 + 控件名）。
 fn cached_text_list_items(id: WindowId, name: &str) -> Vec<String> {
     TEXT_LISTS.with(|lists| {
@@ -4300,6 +4344,65 @@ fn install_text_list_methods(
                 array.set(index + 1, item.clone())?;
             }
             Ok(array)
+        })?,
+    )?;
+
+    handle.set(
+        "get_item_amount",
+        lua.create_function(move |_, (_this, name): (mlua::Table, String)| {
+            Ok(cached_text_list_items(id, &name).len())
+        })?,
+    )?;
+
+    let handle_requests = requests.clone();
+    handle.set(
+        "text_list",
+        lua.create_function(move |lua, (_this, name): (mlua::Table, String)| {
+            let list = lua.create_table()?;
+            let properties = lua.create_table()?;
+
+            let index_name = name.clone();
+            properties.set(
+                "__index",
+                lua.create_function(move |_, (this, key): (mlua::Table, String)| {
+                    match key.as_str() {
+                        "item_amount" => Ok(mlua::Value::Integer(
+                            cached_text_list_items(id, &index_name).len() as i64,
+                        )),
+                        "selected_index" => Ok(mlua::Value::Integer(
+                            text_list_selected(id, &index_name).unwrap_or(-1) as i64,
+                        )),
+                        _ => this.raw_get(key),
+                    }
+                })?,
+            )?;
+
+            let set_name = name.clone();
+            let set_requests = handle_requests.clone();
+            properties.set(
+                "__newindex",
+                lua.create_function(
+                    move |_, (this, key, value): (mlua::Table, String, mlua::Value)| {
+                        if key == "selected_index" {
+                            let index = value.as_i64().ok_or_else(|| {
+                                mlua::Error::RuntimeError(
+                                    "text_list.selected_index 需要整数".to_owned(),
+                                )
+                            })? as i32;
+                            if !set_text_list_selected(id, &set_requests, &set_name, index) {
+                                return Err(mlua::Error::RuntimeError(format!(
+                                    "text_list.selected_index = {index} 越界"
+                                )));
+                            }
+                        } else {
+                            this.raw_set(key, value)?;
+                        }
+                        Ok(())
+                    },
+                )?,
+            )?;
+            list.set_metatable(Some(properties))?;
+            Ok(list)
         })?,
     )?;
     Ok(())
@@ -5427,6 +5530,51 @@ mod tests {
                 .eval::<Vec<String>>()
                 .unwrap(),
             ["甲", "乙", "丙", "丁", "戊"]
+        );
+        assert_eq!(
+            lua.load("return win:get_item_amount('recent')")
+                .eval::<usize>()
+                .unwrap(),
+            5
+        );
+        assert_eq!(
+            lua.load("return win:get_selected_index('recent')")
+                .eval::<i32>()
+                .unwrap(),
+            -1,
+            "没有选中就是 -1"
+        );
+
+        // 句柄属性：item_amount / selected_index（可读可写，0 起，-1 清空）。
+        assert_eq!(
+            lua.load("return win:text_list('recent').item_amount")
+                .eval::<usize>()
+                .unwrap(),
+            5
+        );
+        lua.load("win:text_list('recent').selected_index = 1")
+            .exec()
+            .unwrap();
+        assert_eq!(
+            lua.load("return win:text_list('recent').selected_index")
+                .eval::<i32>()
+                .unwrap(),
+            1
+        );
+        lua.load("win:text_list('recent').selected_index = -1")
+            .exec()
+            .unwrap();
+        assert_eq!(
+            lua.load("return win:text_list('recent').selected_index")
+                .eval::<i32>()
+                .unwrap(),
+            -1
+        );
+        assert!(
+            lua.load("win:set_selected_index('recent', 9)")
+                .exec()
+                .is_err(),
+            "越界要报错"
         );
 
         assert_eq!(

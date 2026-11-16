@@ -436,6 +436,10 @@ local name = input:show()        -- 返回字符串
 | `win:update_item(name, index, text)` | 把第 `index` 项（1 起）改成新文本 |
 | `win:replace_item(name, old, new)` | 把第一处等于 `old` 的项换成 `new` |
 | `win:export_to_array(name)` | 返回项目字符串数组的副本（1 起） |
+| `win:get_selected_index(name)` | 选中项序号：`text_list` 给 **0 起的原下标**，`-1` 表示未选中；列表盒沿用旧行为 |
+| `win:set_selected_index(name, index)` | 设置选中项：`text_list` 用 0 起原下标，`-1` 清空，越界报错；列表盒沿用旧行为 |
+| `win:get_item_amount(name)` | `text_list` 的项目个数（不是列表时 0） |
+| `win:text_list(name)` | `text_list` 的句柄：属性 `item_amount`（只读）、`selected_index`（0 起的原下标，`-1` 未选中；可写，写 `-1` 清空，越界报错） |
 | `win:set_button_background(name, color)` | 改一个 `flat_svg_button` 三个状态的背景色，SVG 染色不动；颜色 `#RRGGBB` / `#AARRGGBB` |
 | `win:set_selection_background(name, color)` | 改一个 `text_edit` / `text_box` 的选区背景色（单选 / 多行都支持） |
 | `win:select_all(name[, all])` | 全选；`all = false` 取消选择 |
