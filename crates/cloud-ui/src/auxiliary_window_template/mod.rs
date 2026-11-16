@@ -520,6 +520,21 @@ impl AuxiliaryWindowTemplate {
         true
     }
 
+    /// 整块替换一个 `text_list`；选中按行文本保留、滚动偏移保留。
+    pub fn set_text_list(&self, name: &str, list: cloudime_render::ListBox) -> bool {
+        let mut content = self.content.borrow_mut();
+        let Content::Document(document) = &mut *content else {
+            tracing::warn!("辅助窗口：只有脚本内容才能替换文本列表");
+            return false;
+        };
+        if !crate::text_list::replace(document, name, list) {
+            tracing::warn!(control = name, "辅助窗口：text_list 名字不匹配");
+            return false;
+        }
+        self.revision.set(self.revision.get() + 1);
+        true
+    }
+
     /// 改一个扁平 SVG 按钮的背景色；只影响内容，不重建窗口。
     pub fn set_button_background(&self, name: &str, color: Color) -> bool {
         let mut document = self.content.borrow_mut();

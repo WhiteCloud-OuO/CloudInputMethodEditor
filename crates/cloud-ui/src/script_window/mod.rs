@@ -54,7 +54,7 @@ use crate::window_class::WindowClass;
 use cloud_ui_types::LayoutMode;
 use cloudime_render::{
     ButtonState, Color, DefaultButton, Document, Element, FontSlot, HitShape, InstanceInfo,
-    ListBoxWindow, Region, ScrollAxis, StaticTextContent, TextBoxScroll,
+    ListBox, ListBoxWindow, Region, ScrollAxis, StaticTextContent, TextBoxScroll,
 };
 use cloudime_script::{
     AuxiliarySpec, DialogSpec, ScriptWindowEvent, WindowAction, WindowId, WindowRequest, WindowSpec,
@@ -193,6 +193,20 @@ impl ScriptWindows {
                         id,
                         control = name,
                         "脚本窗口：update_content 时找不到这块窗口"
+                    );
+                }
+            }
+            WindowRequest::SetTextList { id, name, list } => {
+                if let Some(window) = self.windows.get(&id) {
+                    window.set_text_list(&name, list);
+                } else if let Some(aux) = self.auxiliaries.get(&id).cloned() {
+                    aux.set_text_list(&name, list);
+                    self.sync_owner(&aux);
+                } else {
+                    tracing::warn!(
+                        id,
+                        control = name,
+                        "脚本窗口：set_text_list 时找不到这块窗口"
                     );
                 }
             }
@@ -1475,6 +1489,24 @@ impl ScriptWindow {
                     control = name,
                     "静态文本：名字或内容类型不匹配"
                 );
+                return false;
+            }
+        }
+        self.revision.set(self.revision.get() + 1);
+        if self.shown.get()
+            && let Some(position) = self.position.get()
+        {
+            self.render_and_present(position);
+        }
+        true
+    }
+
+    /// 整块替换一个 `text_list`：选中项按行文本保留，滚动偏移保留并夹到新内容范围内。
+    fn set_text_list(&self, name: &str, list: ListBox) -> bool {
+        {
+            let mut document = self.document.borrow_mut();
+            if !crate::text_list::replace(&mut document, name, list) {
+                tracing::warn!(id = self.id, control = name, "text_list：找不到控件");
                 return false;
             }
         }
@@ -4133,6 +4165,11 @@ impl ScriptAuxiliary {
         self.template.set_button_background(name, color)
     }
 
+    /// 整块替换一个 `text_list`（辅助窗口也支持）。
+    fn set_text_list(&self, name: &str, list: ListBox) -> bool {
+        self.template.set_text_list(name, list)
+    }
+
     /// 动态改一个区域的命中范围（合并 / 剪除）。
     fn edit_region(&self, name: &str, shape: cloudime_render::HitShape, combine: bool) {
         self.template.edit_region(name, shape, combine);
@@ -4661,6 +4698,57 @@ unsafe extern "system" fn wndproc(hwnd: HWND, msg: u32, wparam: WPARAM, lparam: 
 mod tests {
     use super::*;
     use cloudime_render::HitRect;
+
+    /// 替换 `text_list`：选中项按行文本保留、滚动偏移保留并夹到新范围。
+    #[test]
+    fn replacing_a_text_list_keeps_the_selected_row_by_text() {
+        use cloudime_render::{TextListStyle, build_text_list, visible_items};
+
+        let style = TextListStyle::default();
+        let items: Vec<String> = ["甲", "乙", "丙"]
+            .iter()
+            .map(|text| (*text).to_owned())
+            .collect();
+        let shown = visible_items(&items, "", false);
+        let first = build_text_list(
+            &style,
+            &items,
+            &shown,
+            Some(1),
+            None,
+            40.0,
+            (0.0, 0.0, 100.0, 40.0),
+            "list",
+        );
+        let mut document = Document::empty(100.0, 40.0);
+        document.elements.push(Element::ListBox(first));
+
+        let items: Vec<String> = ["乙", "丁", "丙"]
+            .iter()
+            .map(|text| (*text).to_owned())
+            .collect();
+        let shown = visible_items(&items, "", false);
+        let next = build_text_list(
+            &style,
+            &items,
+            &shown,
+            Some(0),
+            None,
+            0.0,
+            (0.0, 0.0, 100.0, 40.0),
+            "list",
+        );
+        assert!(crate::text_list::replace(&mut document, "list", next));
+        let Some(Element::ListBox(list)) = document.elements.first() else {
+            panic!("应还是列表元素");
+        };
+        assert_eq!(
+            list.rows[list.selected_index as usize].key.as_deref(),
+            Some("乙"),
+            "按行文本保留选中"
+        );
+        assert!((list.scroll_offset - 40.0).abs() < 0.01, "滚动保留");
+    }
 
     /// 命中测试从最上面那个元素往下找：后画的盖住先画的。
     #[test]

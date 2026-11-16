@@ -35,6 +35,22 @@ struct CachedListBoxState {
     scroll: usize,
 }
 
+/// 一个 `text_list` 的脚本侧副本：增删改项目后据此重算行。
+#[derive(Clone)]
+struct CachedTextList {
+    items: Vec<String>,
+    query: String,
+    sort: bool,
+    style: TextListStyle,
+    x: f32,
+    y: f32,
+    width: f32,
+    height: f32,
+    auto_height: bool,
+    /// 选中项的原下标（0 起）。
+    selected: Option<usize>,
+}
+
 type ListScrollHandler = Rc<dyn Fn(&mlua::Lua, &str, usize) -> mlua::Result<()>>;
 
 /// 一个子页面实例的脚本上下文。
@@ -69,6 +85,14 @@ thread_local! {
 
     /// 关闭窗口时即使 Lua 还持有句柄，也要把页面树状态放掉。
     static WINDOW_PAGES: RefCell<HashMap<WindowId, Rc<RefCell<Option<crate::page_layout::PageLayout>>>>> =
+        RefCell::new(HashMap::new());
+
+    /// 刚解析完的 `text_list`（解析时先攒在这里，`cache_document_text_lists` 再按窗口收走）。
+    static PARSED_TEXT_LISTS: RefCell<Vec<(String, CachedTextList)>> =
+        const { RefCell::new(Vec::new()) };
+
+    /// 脚本侧的 `text_list` 数据副本：`(窗口编号, 控件名) → 项目 / 查询 / 样式 / 几何`。
+    static TEXT_LISTS: RefCell<HashMap<(WindowId, String), CachedTextList>> =
         RefCell::new(HashMap::new());
 }
 
@@ -113,6 +137,9 @@ pub(crate) fn forget_window(id: WindowId) {
     });
     LIST_BOX_STATES.with(|states| {
         states.borrow_mut().retain(|(window, _), _| *window != id);
+    });
+    TEXT_LISTS.with(|lists| {
+        lists.borrow_mut().retain(|(window, _), _| *window != id);
     });
     if let Some(page) = WINDOW_PAGES.with(|pages| pages.borrow_mut().remove(&id)) {
         *page.borrow_mut() = None;
@@ -347,6 +374,7 @@ pub(crate) fn observe_list_box_event(payload: &mlua::Table) {
     if action == "selected_index_changed" {
         if let Ok(Some(index)) = payload.get::<Option<i32>>("index") {
             cache_list_box_selected(id, &control, index);
+            mark_text_list_selected(id, &control, index);
         }
     } else if action == "scroll_changed"
         && let Ok(Some(value)) = payload.get::<Option<u64>>("value")
@@ -359,6 +387,18 @@ pub(crate) fn observe_list_box_event(payload: &mlua::Table) {
                 .scroll = value.min(usize::MAX as u64) as usize;
         });
     }
+}
+
+/// 选中项变了：`text_list` 的脚本副本也记下原下标（事件给的是显示行，按当前过滤 / 排序换算）。
+fn mark_text_list_selected(id: WindowId, name: &str, display: i32) {
+    TEXT_LISTS.with(|lists| {
+        let mut lists = lists.borrow_mut();
+        let Some(entry) = lists.get_mut(&(id, name.to_owned())) else {
+            return;
+        };
+        let visible = visible_items(&entry.items, &entry.query, entry.sort);
+        entry.selected = visible.get(display.max(0) as usize).copied();
+    });
 }
 
 /// 脚本侧看到的编辑框文本缓存：`(窗口编号, 控件名) → 最近一次文本`。
@@ -766,6 +806,13 @@ pub enum Request {
         content: StaticTextContent,
     },
 
+    /// 整块替换一个 `text_list`（增删改项目后脚本侧已按新项目重算好行）。
+    SetTextList {
+        id: WindowId,
+        name: String,
+        list: ListBox,
+    },
+
     /// 改一个 `flat_svg_button` 的背景色（三个状态一起改，SVG 染色不动）。
     SetButtonBackground {
         id: WindowId,
@@ -887,6 +934,7 @@ pub(crate) fn handle(
                 )
             })?;
             cache_document_texts(&document, id, &content_texts);
+            cache_document_text_lists(id);
             *content_regions.borrow_mut() = document.regions.clone();
             content_requests
                 .borrow_mut()
@@ -1001,6 +1049,8 @@ pub(crate) fn handle(
         )?,
     )?;
 
+    install_text_list_methods(lua, &handle, id, &requests)?;
+
     let button_requests = requests.clone();
     handle.set(
         "set_button_background",
@@ -1085,6 +1135,10 @@ pub(crate) fn handle(
     handle.set(
         "clear",
         lua.create_function(move |_, (_this, name): (mlua::Table, String)| {
+            // `text_list` 与文本编辑共用这个名字：按控件名先认列表。
+            if clear_text_list(id, &name, &clear_requests) {
+                return Ok(());
+            }
             clear_texts
                 .borrow_mut()
                 .insert((id, name.clone()), String::new());
@@ -1134,6 +1188,7 @@ pub(crate) fn handle(
                 )?;
                 let document = loaded.document;
                 cache_document_texts(&document, id, &layout_texts);
+                cache_document_text_lists(id);
                 this.set("width", document.width)?;
                 this.set("height", document.height)?;
                 *layout_regions.borrow_mut() = document.regions.clone();
@@ -1202,6 +1257,7 @@ pub(crate) fn handle(
             };
             let document = loaded.document;
             cache_document_texts(&document, id, &data_texts);
+            cache_document_text_lists(id);
             this.set("width", document.width)?;
             this.set("height", document.height)?;
             *data_regions.borrow_mut() = document.regions.clone();
@@ -1254,6 +1310,7 @@ pub(crate) fn handle(
                     }
                 };
                 cache_document_texts(&document, id, &visible_texts);
+                cache_document_text_lists(id);
                 this.set("width", document.width)?;
                 this.set("height", document.height)?;
                 *visible_regions.borrow_mut() = document.regions.clone();
@@ -1302,6 +1359,7 @@ pub(crate) fn handle(
                     }
                 };
                 cache_document_texts(&document, id, &scroll_texts);
+                cache_document_text_lists(id);
                 this.set("width", document.width)?;
                 this.set("height", document.height)?;
                 *scroll_regions.borrow_mut() = document.regions.clone();
@@ -2666,6 +2724,7 @@ fn update_page_and_render(
         }
     };
     cache_document_texts(&document, id, &texts);
+    cache_document_text_lists(id);
     this.set("width", document.width)?;
     this.set("height", document.height)?;
     *regions.borrow_mut() = document.regions.clone();
@@ -2698,12 +2757,26 @@ pub(crate) fn cache_document_texts(document: &Document, id: WindowId, cache: &Te
     }
 }
 
+/// 把刚解析出来的 `text_list` 副本按窗口收进 [`TEXT_LISTS`]；同一窗口的旧条目整份换掉。
+fn cache_document_text_lists(id: WindowId) {
+    let parsed: Vec<(String, CachedTextList)> =
+        PARSED_TEXT_LISTS.with(|lists| lists.borrow_mut().drain(..).collect());
+    TEXT_LISTS.with(|lists| {
+        let mut lists = lists.borrow_mut();
+        lists.retain(|(window, _), _| *window != id);
+        for (name, entry) in parsed {
+            lists.insert((id, name), entry);
+        }
+    });
+}
+
 /// 内容表 → [`Document`]：`width` / `height` 可省（用句柄里那份），元素是 1 起的数组。
 fn parse_document(
     content: &mlua::Table,
     fallback: (Option<f32>, Option<f32>),
     images: &mut ImageCache,
 ) -> mlua::Result<Document> {
+    PARSED_TEXT_LISTS.with(|lists| lists.borrow_mut().clear());
     let width = content
         .get::<Option<f32>>("width")?
         .or(fallback.0)
@@ -4015,6 +4088,223 @@ fn text_button_extent(text: &str, size: f32) -> (f32, f32) {
 }
 
 /// `text_edit`：背景胶囊 + 可选 SVG + Windowless RichEdit 承载的文本区。
+/// 脚本侧 `text_list` 的副本（按窗口 + 控件名）。
+fn cached_text_list_items(id: WindowId, name: &str) -> Vec<String> {
+    TEXT_LISTS.with(|lists| {
+        lists
+            .borrow()
+            .get(&(id, name.to_owned()))
+            .map(|entry| entry.items.clone())
+            .unwrap_or_default()
+    })
+}
+
+/// 改一个 `text_list` 的副本，按新项目重算列表元素并推给 UI 线程。
+fn mutate_text_list(
+    id: WindowId,
+    requests: &Rc<RefCell<Vec<Request>>>,
+    name: &str,
+    mutate: impl FnOnce(&mut CachedTextList),
+) -> bool {
+    let list = TEXT_LISTS.with(|lists| {
+        let mut lists = lists.borrow_mut();
+        let entry = lists.get_mut(&(id, name.to_owned()))?;
+        mutate(entry);
+        let visible = visible_items(&entry.items, &entry.query, entry.sort);
+        let height = if entry.auto_height {
+            entry.style.auto_height(visible.len())
+        } else {
+            entry.height
+        };
+        Some(build_text_list(
+            &entry.style,
+            &entry.items,
+            &visible,
+            entry.selected,
+            None,
+            0.0,
+            (entry.x, entry.y, entry.width, height),
+            name,
+        ))
+    });
+    let Some(list) = list else {
+        return false;
+    };
+    requests.borrow_mut().push(Request::SetTextList {
+        id,
+        name: name.to_owned(),
+        list,
+    });
+    true
+}
+
+/// 清空一个 `text_list`；控件名不是列表时返回 `false`（让 `clear` 走文本编辑那条老路）。
+fn clear_text_list(id: WindowId, name: &str, requests: &Rc<RefCell<Vec<Request>>>) -> bool {
+    let is_list = TEXT_LISTS.with(|lists| lists.borrow().contains_key(&(id, name.to_owned())));
+    if !is_list {
+        return false;
+    }
+    if !cached_text_list_items(id, name).is_empty() {
+        mutate_text_list(id, requests, name, |entry| {
+            entry.items.clear();
+            entry.selected = None;
+        });
+    }
+    true
+}
+
+/// 给窗口句柄装 `text_list` 的增删查改方法（项目序号一律 1 起，与 Lua 数组一致）。
+fn install_text_list_methods(
+    lua: &mlua::Lua,
+    handle: &mlua::Table,
+    id: WindowId,
+    requests: &Rc<RefCell<Vec<Request>>>,
+) -> mlua::Result<()> {
+    let add_requests = requests.clone();
+    handle.set(
+        "add_item",
+        lua.create_function(
+            move |_, (_this, name, value): (mlua::Table, String, mlua::Value)| {
+                let mlua::Value::String(text) = value else {
+                    return Ok(());
+                };
+                let text = text.to_str()?.to_owned();
+                mutate_text_list(id, &add_requests, &name, |entry| entry.items.push(text));
+                Ok(())
+            },
+        )?,
+    )?;
+
+    let adds_requests = requests.clone();
+    handle.set(
+        "add_items",
+        lua.create_function(
+            move |_, (_this, name, values): (mlua::Table, String, mlua::Value)| {
+                let mlua::Value::Table(values) = values else {
+                    return Ok(());
+                };
+                let mut added = Vec::new();
+                for value in values.sequence_values::<mlua::Value>() {
+                    if let mlua::Value::String(text) = value? {
+                        added.push(text.to_str()?.to_owned());
+                    }
+                }
+                if added.is_empty() {
+                    return Ok(());
+                }
+                mutate_text_list(id, &adds_requests, &name, |entry| entry.items.extend(added));
+                Ok(())
+            },
+        )?,
+    )?;
+
+    let remove_requests = requests.clone();
+    handle.set(
+        "remove_item",
+        lua.create_function(move |_, (_this, name, index): (mlua::Table, String, i64)| {
+            if index < 1 {
+                return Ok(());
+            }
+            let index = index as usize - 1;
+            if index >= cached_text_list_items(id, &name).len() {
+                return Ok(());
+            }
+            mutate_text_list(id, &remove_requests, &name, |entry| {
+                entry.items.remove(index);
+                entry.selected = match entry.selected {
+                    Some(selected) if selected == index => None,
+                    Some(selected) if selected > index => Some(selected - 1),
+                    other => other,
+                };
+            });
+            Ok(())
+        })?,
+    )?;
+
+    handle.set(
+        "find_item",
+        lua.create_function(
+            move |_, (_this, name, text): (mlua::Table, String, String)| {
+                Ok(cached_text_list_items(id, &name)
+                    .iter()
+                    .position(|item| item == &text)
+                    .map(|index| index + 1))
+            },
+        )?,
+    )?;
+
+    handle.set(
+        "query_item",
+        lua.create_function(
+            move |_, (_this, name, text): (mlua::Table, String, String)| {
+                Ok(cached_text_list_items(id, &name)
+                    .iter()
+                    .any(|item| item == &text))
+            },
+        )?,
+    )?;
+
+    let update_requests = requests.clone();
+    handle.set(
+        "update_item",
+        lua.create_function(
+            move |_, (_this, name, index, value): (mlua::Table, String, i64, mlua::Value)| {
+                let mlua::Value::String(text) = value else {
+                    return Ok(());
+                };
+                if index < 1 {
+                    return Ok(());
+                }
+                let index = index as usize - 1;
+                let text = text.to_str()?.to_owned();
+                let current = cached_text_list_items(id, &name);
+                if current.get(index) == Some(&text) || index >= current.len() {
+                    return Ok(());
+                }
+                mutate_text_list(id, &update_requests, &name, |entry| {
+                    if index < entry.items.len() {
+                        entry.items[index] = text;
+                    }
+                });
+                Ok(())
+            },
+        )?,
+    )?;
+
+    let replace_requests = requests.clone();
+    handle.set(
+        "replace_item",
+        lua.create_function(
+            move |_, (_this, name, old, new): (mlua::Table, String, String, String)| {
+                let Some(index) = cached_text_list_items(id, &name)
+                    .iter()
+                    .position(|item| item == &old)
+                else {
+                    return Ok(());
+                };
+                mutate_text_list(id, &replace_requests, &name, |entry| {
+                    if index < entry.items.len() {
+                        entry.items[index] = new;
+                    }
+                });
+                Ok(())
+            },
+        )?,
+    )?;
+
+    handle.set(
+        "export_to_array",
+        lua.create_function(move |lua, (_this, name): (mlua::Table, String)| {
+            let array = lua.create_table()?;
+            for (index, item) in cached_text_list_items(id, &name).iter().enumerate() {
+                array.set(index + 1, item.clone())?;
+            }
+            Ok(array)
+        })?,
+    )?;
+    Ok(())
+}
+
 /// `text_list`：一组字符串的叶子列表（不是容器）。行内只有文本；模糊查询 / 排序在
 /// [`cloudime_render::visible_items`] 里做，和 `cloud-ui::view` 共用同一套顺序。
 fn parse_text_list(table: &mlua::Table) -> mlua::Result<Element> {
@@ -4055,8 +4345,33 @@ fn parse_text_list(table: &mlua::Table) -> mlua::Result<Element> {
     let selected = table
         .get::<Option<usize>>("selected")?
         .filter(|index| *index < items.len());
-    let height = optional_positive(table, "h")?.unwrap_or_else(|| style.auto_height(shown.len()));
+    let explicit_height = optional_positive(table, "h")?;
+    // v2 页面树会把量好的 `h` 写进 payload，另外带一个 `auto_height` 标记说明它是不是自动高度。
+    let auto_height = table
+        .get::<Option<bool>>("auto_height")?
+        .unwrap_or(explicit_height.is_none());
+    let height = explicit_height.unwrap_or_else(|| style.auto_height(shown.len()));
     let name = table.get::<Option<String>>("name")?.unwrap_or_default();
+    let x = number(table, "x", 0.0)?;
+    let y = number(table, "y", 0.0)?;
+    let width = positive(table, "w", "width")?;
+    PARSED_TEXT_LISTS.with(|lists| {
+        lists.borrow_mut().push((
+            name.clone(),
+            CachedTextList {
+                items: items.clone(),
+                query: query.clone(),
+                sort,
+                style,
+                x,
+                y,
+                width,
+                height,
+                auto_height,
+                selected,
+            },
+        ));
+    });
     let mut list = build_text_list(
         &style,
         &items,
@@ -4064,12 +4379,7 @@ fn parse_text_list(table: &mlua::Table) -> mlua::Result<Element> {
         selected,
         None,
         number(table, "scroll_offset", 0.0)?.max(0.0),
-        (
-            number(table, "x", 0.0)?,
-            number(table, "y", 0.0)?,
-            positive(table, "w", "width")?,
-            height,
-        ),
+        (x, y, width, height),
         &name,
     );
     if !allow_select {
@@ -5071,6 +5381,116 @@ mod tests {
         };
         assert_eq!(list.row_count, 1);
         assert_eq!(list.selected_index, 0, "原下标 0 就是可见的第 1 行");
+    }
+
+    /// `text_list` 的增删查改：项目序号 1 起，非字符串 / 越界静默跳过。
+    #[test]
+    fn text_list_methods_add_remove_find_and_replace() {
+        let lua = mlua::Lua::new();
+        let requests = Rc::new(RefCell::new(Vec::new()));
+        let win = handle(
+            &lua,
+            Kind::Independent,
+            1,
+            "面板",
+            (Some(200.0), Some(160.0)),
+            requests.clone(),
+            Rc::new(RefCell::new(ImageCache::default())),
+            Rc::new(RefCell::new(HashMap::new())),
+            None,
+            None,
+            None,
+            serde_json::Value::Null,
+        )
+        .unwrap();
+        lua.globals().set("win", win).unwrap();
+        lua.load(
+            r#"win:set_content{
+                width = 200, height = 160,
+                { type = "text_list", name = "recent", x = 0, y = 0, w = 200,
+                  items = { "甲", "乙" } },
+            }"#,
+        )
+        .exec()
+        .unwrap();
+
+        lua.load(
+            r#"win:add_item("recent", "丙")
+               win:add_item("recent", 5)
+               win:add_items("recent", { "丁", 7, "戊" })
+               win:add_items("recent", {})"#,
+        )
+        .exec()
+        .unwrap();
+        assert_eq!(
+            lua.load("return win:export_to_array('recent')")
+                .eval::<Vec<String>>()
+                .unwrap(),
+            ["甲", "乙", "丙", "丁", "戊"]
+        );
+
+        assert_eq!(
+            lua.load("return win:find_item('recent', '丁')")
+                .eval::<Option<usize>>()
+                .unwrap(),
+            Some(4)
+        );
+        assert!(
+            lua.load("return win:find_item('recent', '无')")
+                .eval::<Option<usize>>()
+                .unwrap()
+                .is_none()
+        );
+        assert!(
+            lua.load("return win:query_item('recent', '甲')")
+                .eval::<bool>()
+                .unwrap()
+        );
+        assert!(
+            !lua.load("return win:query_item('recent', '无')")
+                .eval::<bool>()
+                .unwrap()
+        );
+
+        lua.load(
+            r#"win:update_item("recent", 1, "子")
+               win:update_item("recent", 9, "越界")
+               win:replace_item("recent", "乙", "丑")
+               win:remove_item("recent", 1)"#,
+        )
+        .exec()
+        .unwrap();
+        assert_eq!(
+            lua.load("return win:export_to_array('recent')")
+                .eval::<Vec<String>>()
+                .unwrap(),
+            ["丑", "丙", "丁", "戊"]
+        );
+
+        let last = requests
+            .borrow()
+            .iter()
+            .rev()
+            .find_map(|request| match request {
+                Request::SetTextList { list, .. } => Some(list.clone()),
+                _ => None,
+            });
+        let last = last.expect("应有 SetTextList 请求");
+        assert_eq!(last.row_count, 4);
+        assert!(
+            last.rows
+                .iter()
+                .map(|row| row.key.clone().unwrap_or_default())
+                .eq(["丑", "丙", "丁", "戊"])
+        );
+
+        lua.load("win:clear('recent')").exec().unwrap();
+        assert!(
+            lua.load("return win:export_to_array('recent')")
+                .eval::<Vec<String>>()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

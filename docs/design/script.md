@@ -427,11 +427,19 @@ local name = input:show()        -- 返回字符串
 | `win:get_text(name)` | 读某个 `text_edit` / `text_box` 的最近文本；没有 / 还没收到时给 `nil` |
 | `win:set_text(name, text)` | 设置某个 `text_edit` / `text_box` 的文本（按控件名找） |
 | `win:update_content(name, content)` | 更新静态 `label` / `text_block`：`text_block` 传字符串，`label` 传带颜色的 runs；不改尺寸、不参与交互 |
+| `win:add_item(name, item)` | `text_list` 末尾加一项（非字符串静默跳过） |
+| `win:add_items(name, items)` | 批量加字符串；数组里的非字符串、空数组都跳过 |
+| `win:remove_item(name, index)` | 删第 `index` 项（**1 起**）；越界静默忽略 |
+| `win:find_item(name, text)` | 按文本精确查，返回序号（1 起），没有给 `nil` |
+| `win:query_item(name, text)` | 同上，返回 `true` / `false` |
+| `win:clear(name)` | 清空 `text_list`；名字是 `text_edit` / `text_box` 时仍清编辑框文本 |
+| `win:update_item(name, index, text)` | 把第 `index` 项（1 起）改成新文本 |
+| `win:replace_item(name, old, new)` | 把第一处等于 `old` 的项换成 `new` |
+| `win:export_to_array(name)` | 返回项目字符串数组的副本（1 起） |
 | `win:set_button_background(name, color)` | 改一个 `flat_svg_button` 三个状态的背景色，SVG 染色不动；颜色 `#RRGGBB` / `#AARRGGBB` |
 | `win:set_selection_background(name, color)` | 改一个 `text_edit` / `text_box` 的选区背景色（单选 / 多行都支持） |
 | `win:select_all(name[, all])` | 全选；`all = false` 取消选择 |
 | `win:replace(name, find, text)` | 把 `find` 的全部出现替换为 `text` |
-| `win:clear(name)` | 清空编辑框 |
 | `win:show{ x = …, y = … }` | 显示；`x` / `y` 是内容区左上角的**屏幕坐标（点）**，不写 = 上次的位置 / 光标右下 16 点 |
 | `win:hide()` | 收起（不销毁；内容留着，再 `show` 原样回来）；**dialog 不允许 hide**，会记警告并忽略 |
 | `win:close()` | 销毁；独立窗口连名下资产一起放掉；dialog 销毁时自动解除模态、恢复上一件模态与宿主蒙版 |
@@ -443,8 +451,12 @@ local name = input:show()        -- 返回字符串
 | `win:region_contains(name, x, y)` | 点是否在区域里（含边界）；没有这个区域给 `nil` |
 | `win:region_relation(a, b)` | 两块区域的关系：`{ relation = "disjoint" / "intersect" / "contains" / "coincide", contains = "a" / "b" }`；没有区域给 `nil` |
 
-- 辅助窗口**默认不接鼠标**：`interactive = true` 只是「能」拿焦点，真要它接还得 `aux:focus(true)`
-  （§4 的规矩：只有所有者能指定）。宿主被收起时名下资产跟着收起，`win:show()` 时自己回来。
+- `text_list` 的增删改（`add_item` / `add_items` / `remove_item` / `update_item` / `replace_item` / `clear`）
+  直接改脚本侧的副本并整块重算列表：行按当前 `query` / `sort` 重新过滤排序，选中项按行文本保留，
+  滚动偏移保留；`auto_height` 的列表高度跟着行数变，但**不会重新跑页面布局**（要让邻居跟着挪，
+  再调一次 `set_content` / `set_data`）。项目序号都从 1 起；`find_item` 没有给 `nil`，越界 / 非字符串
+  静默跳过。
+- 辅助窗口**默认不接鼠标**：`interactive = true` 只是「能」拿焦点，真要它接还得 `aux:focus(true)`  （§4 的规矩：只有所有者能指定）。宿主被收起时名下资产跟着收起，`win:show()` 时自己回来。
 - **dialog** 用 `create_dialog` 创建：不需要 JSON 布局，正文由 Cloud UI 内部生成（当前先留空），创建即自动显示、
   自动压到模态栈顶；宿主已有模态资产时先临时挂起它，dialog 销毁后再恢复。`mask = true` 时由宿主开蒙版，
   销毁前恢复原蒙版。dialog 不能用 `set_modal(false)` 取消模态（会异常终止），也不能 `hide`，只能 `close`。

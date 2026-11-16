@@ -41,6 +41,7 @@ pub mod painter;
 pub mod script_window;
 #[cfg(windows)]
 pub(crate) mod text_edit;
+mod text_list;
 #[cfg(windows)]
 pub mod view;
 #[cfg(windows)]

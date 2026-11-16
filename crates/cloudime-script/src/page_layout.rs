@@ -2431,6 +2431,13 @@ fn flatten(
         object.insert("y".to_owned(), Value::from(rect.y - origin.1));
         object.insert("w".to_owned(), Value::from(rect.width));
         object.insert("h".to_owned(), Value::from(rect.height));
+        if object.get("type").and_then(Value::as_str) == Some("text_list") {
+            // 增删项目后脚本侧要按新行数重算高度：告诉它这一块是不是自动高度。
+            object.insert(
+                "auto_height".to_owned(),
+                Value::Bool(matches!(node.height, SizeSpec::Auto)),
+            );
+        }
         let name = object
             .get("name")
             .and_then(Value::as_str)

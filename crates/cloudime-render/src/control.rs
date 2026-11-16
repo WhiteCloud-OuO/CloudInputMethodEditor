@@ -732,6 +732,18 @@ pub struct ListBox {
     pub region_name: String,
 }
 
+impl std::fmt::Debug for ListBox {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("ListBox")
+            .field("width", &self.width)
+            .field("height", &self.height)
+            .field("row_count", &self.row_count)
+            .field("selected_index", &self.selected_index)
+            .field("region_name", &self.region_name)
+            .finish()
+    }
+}
+
 impl ListBox {
     pub fn viewport_height(&self) -> f32 {
         (self.height - self.edge_width * 2.0 - self.content_gap * 2.0).max(0.0)
