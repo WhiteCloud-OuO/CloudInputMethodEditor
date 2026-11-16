@@ -38,6 +38,9 @@ pub struct TextEditStyle {
     pub size: f32,
     pub font: FontSlot,
     pub read_only: bool,
+
+    /// 自动换行；多行编辑框设为 `false` 时内容超宽会出现底部水平滚动条。
+    pub auto_line_wrap: bool,
 }
 
 impl Default for TextEditStyle {
@@ -55,6 +58,7 @@ impl Default for TextEditStyle {
             size: 14.0,
             font: FontSlot::Candidate,
             read_only: false,
+            auto_line_wrap: true,
         }
     }
 }
@@ -141,7 +145,7 @@ pub(crate) fn build_box(
         text_color: style.text_color,
         read_only: style.read_only,
         deselect_on_blur: true,
-        auto_line_wrap: true,
+        auto_line_wrap: style.auto_line_wrap,
         line_spacing: 0,
         font_name: None,
         font_flag: 0,

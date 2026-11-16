@@ -4,11 +4,11 @@
 //! 属于控件容器，里面放任意子控件。`View` 把它们摆进一块
 //! [`cloudime_render::SelfDrawingPanel`]（`clip = true`），渲染器先画到独立画布再合成，
 //! 超出视口的部分自然被裁掉。行列表请用 `list_box`，那里有整行 / 均匀间隙规则。
-//! 滚动偏移由应用保存（[`ScrollablePageState`]），内容高度 / 可滚范围从
-//! [`ScrollablePageMetrics`] 读。
+//! 滚动偏移是共享句柄（[`ScrollablePageState`]），拖动滚动条 / 滚轮由窗口壳直接写；
+//! 内容高度 / 可滚范围从 [`ScrollablePageMetrics`] 读。
 
 use cloud_ui_core::{Edges, Rect};
-use cloudime_render::{Color, Element, SelfDrawingPanel};
+use cloudime_render::{Color, Element, ScrollHandle, SelfDrawingPanel};
 
 /// 可滚动页面的外观参数（点）。
 #[derive(Debug, Clone, Copy)]
@@ -78,10 +78,13 @@ impl ScrollablePageStyle {
 }
 
 /// 可滚动页面的每帧状态。
-#[derive(Debug, Clone, Copy, Default)]
+///
+/// 滚动偏移是 [`ScrollHandle`]：建一次、跨帧持有，每帧把 `clone()` 传给
+/// [`View::scrollable_page`]。窗口壳拖动滚动条 / 滚轮时直接写句柄。
+#[derive(Debug, Clone, Default)]
 pub struct ScrollablePageState {
-    /// 垂直滚动偏移（点）；会被内容高度夹住。
-    pub offset: f32,
+    /// 垂直滚动偏移句柄（点）；由 `build` 夹紧。
+    pub offset: ScrollHandle,
 }
 
 /// 一次布局后的可滚范围。
@@ -134,6 +137,42 @@ pub(super) fn panel(style: &ScrollablePageStyle, rect: Rect) -> SelfDrawingPanel
     }
 }
 
+/// 滚动条在面板里的两条矩形（左上角 + 宽高，面板坐标）。
+#[derive(Debug, Clone, Copy)]
+pub(super) struct ScrollbarRects {
+    pub track: (f32, f32, f32, f32),
+    pub thumb: (f32, f32, f32, f32),
+}
+
+/// 按当前偏移算滚动条的轨道 / 滑块；不需要滚动条时给 `None`。
+///
+/// 绘制（[`push_scrollbar`]）和窗口壳的命中（`Document.scroll_targets`）共用这一份几何，
+/// 保证点中的位置和画出来的位置一致。
+pub(super) fn scrollbar_rects(
+    style: &ScrollablePageStyle,
+    width: f32,
+    height: f32,
+    metrics: ScrollablePageMetrics,
+    offset: f32,
+) -> Option<ScrollbarRects> {
+    if !style.scrollbar || metrics.max_scroll() <= 0.5 {
+        return None;
+    }
+    let bar_width = style.scrollbar_width.max(1.0);
+    let track_x = width - bar_width - 2.0;
+    let track_y = 2.0;
+    let track_height = (height - 4.0).max(1.0);
+    let thumb_height = (track_height * metrics.viewport_height / metrics.content_height.max(1.0))
+        .max(16.0)
+        .min(track_height);
+    let travel = (track_height - thumb_height).max(0.0);
+    let ratio = (offset / metrics.max_scroll().max(1.0)).clamp(0.0, 1.0);
+    Some(ScrollbarRects {
+        track: (track_x, track_y, bar_width, track_height),
+        thumb: (track_x, track_y + travel * ratio, bar_width, thumb_height),
+    })
+}
+
 /// 在内容之后追加滚动条（轨道 + 滑块），保证它盖在子控件上方。
 pub(super) fn push_scrollbar(
     panel: &mut SelfDrawingPanel,
@@ -141,18 +180,11 @@ pub(super) fn push_scrollbar(
     metrics: ScrollablePageMetrics,
     offset: f32,
 ) {
-    if !style.scrollbar || metrics.max_scroll() <= 0.5 {
+    let Some(rects) = scrollbar_rects(style, panel.width, panel.height, metrics, offset) else {
         return;
-    }
-    let width = style.scrollbar_width.max(1.0);
-    let track_x = panel.width - width - 2.0;
-    let track_y = 2.0;
-    let track_height = (panel.height - 4.0).max(1.0);
-    let thumb_height = (track_height * metrics.viewport_height / metrics.content_height.max(1.0))
-        .max(16.0)
-        .min(track_height);
-    let travel = (track_height - thumb_height).max(0.0);
-    let ratio = (offset / metrics.max_scroll().max(1.0)).clamp(0.0, 1.0);
+    };
+    let (track_x, track_y, width, track_height) = rects.track;
+    let (_, thumb_y, _, thumb_height) = rects.thumb;
     panel.children.push(Element::Rect {
         x: track_x,
         y: track_y,
@@ -163,7 +195,7 @@ pub(super) fn push_scrollbar(
     });
     panel.children.push(Element::Rect {
         x: track_x,
-        y: track_y + travel * ratio,
+        y: thumb_y,
         width,
         height: thumb_height,
         radius: width * 0.5,

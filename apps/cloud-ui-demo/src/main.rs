@@ -5,8 +5,9 @@
 
 use cloud_ui::{
     AppEvent, Application, CLOSE_ACTION, Context, Decorations, ListBoxState, ListItem,
-    MAXIMIZE_ACTION, MINIMIZE_ACTION, MessageDialog, StackStyle, TextInputDialog, TextListState,
-    Theme, TrayEvent, TrayMenuItem, TrayOptions, View, WindowMask, WindowOptions, run_native,
+    MAXIMIZE_ACTION, MINIMIZE_ACTION, MessageDialog, ScrollablePageState, StackStyle,
+    TextInputDialog, TextListState, Theme, TrayEvent, TrayMenuItem, TrayOptions, View, WindowMask,
+    WindowOptions, run_native,
 };
 use cloudime_render::Document;
 
@@ -35,6 +36,9 @@ struct Demo {
     log: ListBoxState,
     list: ListBoxState,
     recent: TextListState,
+    page: ScrollablePageState,
+    /// 多行编辑框是否自动换行；`false` 时底部出水平滚动条。
+    wrap_notes: bool,
     /// 文本列表放不下时是出水平滚动条（true）还是截断（false，缺省）。
     h_scroll_text: bool,
     light: bool,
@@ -43,6 +47,14 @@ struct Demo {
 }
 
 impl Demo {
+    /// 带一段长文本的初始状态：多行编辑框一打开就能看到水平滚动条。
+    fn new() -> Self {
+        Self {
+            notes: "第一行：普通内容\n第二行：这是一段特别特别长的文本，用来验证多行编辑框底部的水平滚动条；拖动或滚轮都能滚动。\n第三行\n第四行\n第五行\n第六行\n第七行\n第八行\n第九行：结尾。".to_owned(),
+            ..Self::default()
+        }
+    }
+
     fn theme(&self) -> Theme {
         if self.light {
             Theme::light()
@@ -63,6 +75,9 @@ impl Application for Demo {
                 AppEvent::RegionClicked(name) if name == "mask" => self.masked = !self.masked,
                 AppEvent::RegionClicked(name) if name == "text_wrap" => {
                     self.h_scroll_text = !self.h_scroll_text
+                }
+                AppEvent::RegionClicked(name) if name == "notes_wrap" => {
+                    self.wrap_notes = !self.wrap_notes
                 }
                 AppEvent::RegionClicked(name) if name == "dialog" => {
                     let mut dialog = MessageDialog::new(
@@ -157,7 +172,12 @@ impl Application for Demo {
         let theme = self.theme();
         let items: Vec<ListItem> = (0..LIST_ROWS)
             .map(|index| {
-                ListItem::new(format!("第 {} 项", index + 1))
+                let title = if index == 2 {
+                    "第 3 项 · 这是一个特别长的标题，用来看列表盒底部的水平滚动条；再补一段文字把宽度撑到超过视口，确保横向滚动条出现。".to_owned()
+                } else {
+                    format!("第 {} 项", index + 1)
+                };
+                ListItem::new(title)
                     .detail(format!("detail {index}"))
                     .action(format!("row-{index}"))
             })
@@ -170,6 +190,8 @@ impl Application for Demo {
         let log_state = self.log.clone();
         let list_state = self.list.clone();
         let recent_state = self.recent.clone();
+        let page_state = self.page.clone();
+        let wrap_notes = self.wrap_notes;
         let pointer = self.pointer;
         let typed = self.typed.clone();
         let notes = self.notes.clone();
@@ -219,9 +241,20 @@ impl Application for Demo {
                     },
                     theme.button(),
                 );
+                row.button(
+                    "notes_wrap",
+                    if wrap_notes {
+                        "多行：横向"
+                    } else {
+                        "多行：换行"
+                    },
+                    theme.button(),
+                );
             });
             ui.spacer(0.0, 6.0);
-            ui.text_box("notes", notes.clone(), theme.text_box(80.0));
+            let mut notes_style = theme.text_box(80.0);
+            notes_style.auto_line_wrap = wrap_notes;
+            ui.text_box("notes", notes.clone(), notes_style);
             ui.label("日志列表（滚轮 / 拖动滚动条）：", theme.muted());
             ui.list_box("log", &log_items, theme.list_box(LOG_HEIGHT), log_state);
             ui.spacer(0.0, 10.0);
@@ -242,6 +275,8 @@ impl Application for Demo {
             let text_items: Vec<String> = TEXT_LIST.iter().map(|text| (*text).to_owned()).collect();
             let mut text_style = theme.text_list();
             text_style.allow_text_wrapping = !self.h_scroll_text;
+            // 固定视口：同时有竖向与横向滚动条，方便验证拖拽 / 滚轮。
+            text_style.height = Some(140.0);
             // 缩到内容宽度的三分之一，才看得出截断 / 横向滚动。
             text_style.width = Some((width - 48.0) / 3.0);
             ui.text_list(
@@ -252,6 +287,16 @@ impl Application for Demo {
                 text_style,
                 recent_state,
             );
+            ui.spacer(0.0, 8.0);
+            ui.label("可滚动页面（滚轮 / 拖动滚动条）：", theme.muted());
+            ui.scrollable_page("page", theme.scrollable_page(110.0), page_state, |page| {
+                for index in 0..10 {
+                    page.label(
+                        format!("可滚动行 {} · 内容会超出视口", index + 1),
+                        theme.label(),
+                    );
+                }
+            });
             ui.spacer(0.0, 8.0);
             ui.row(StackStyle::gap(16.0), |row| {
                 row.button("click", format!("点我（{clicks}）"), theme.button());
@@ -331,7 +376,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     run_native(
         WindowOptions {
             title: "Cloud UI Demo".to_owned(),
-            size: (760.0, 1020.0),
+            size: (760.0, 1180.0),
             min_size: Some((420.0, 360.0)),
             decorations: Decorations::None,
             top_most: false,
@@ -345,7 +390,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             ])),
             ..WindowOptions::default()
         },
-        Demo::default(),
+        Demo::new(),
     )?;
     Ok(())
 }

@@ -325,8 +325,9 @@ impl View {
 
     /// 固定高度、可垂直滚动的控件容器（可滚动页面）；内容超出视口时裁剪并画滚动条。
     ///
-    /// 控件容器与子页面容器并列；这里只放普通控件。滚动偏移由应用保存；
-    /// 布局后可以读 [`View::scrollable_page_metrics`] 拿到可滚范围。
+    /// 控件容器与子页面容器并列；这里只放普通控件。滚动偏移是共享句柄，
+    /// 拖动滚动条 / 滚轮由窗口壳直接写；布局后可以读
+    /// [`View::scrollable_page_metrics`] 拿到可滚范围。
     pub fn scrollable_page(
         &mut self,
         name: impl Into<String>,
@@ -533,7 +534,8 @@ impl View {
                     content_height,
                     viewport_height: viewport,
                 };
-                let offset = metrics.clamp(state.offset);
+                let offset = metrics.clamp(state.offset.get());
+                state.offset.set(offset);
                 let mut panel = scrollable_page::panel(style, local);
                 let panel_clip = intersect_rect(clip, rect);
                 {
@@ -556,6 +558,25 @@ impl View {
                     }
                 }
                 scrollable_page::push_scrollbar(&mut panel, style, metrics, offset);
+                if let Some(rects) = scrollable_page::scrollbar_rects(
+                    style,
+                    local.width,
+                    local.height,
+                    metrics,
+                    offset,
+                ) {
+                    let origin = (drawn.0 + local.x, drawn.1 + local.y);
+                    scroll_targets.push(ScrollTarget {
+                        name: name.clone(),
+                        axis: ScrollAxis::Vertical,
+                        area: origin_add(origin, (0.0, 0.0, local.width, local.height)),
+                        track: origin_add(origin, rects.track),
+                        thumb: origin_add(origin, rects.thumb),
+                        max: metrics.max_scroll(),
+                        step: (metrics.viewport_height * 0.25).max(20.0),
+                        handle: state.offset.clone(),
+                    });
+                }
                 target.elements.push(Element::SelfDrawingPanel(panel));
                 pages.insert(name.clone(), metrics);
                 return;
@@ -605,7 +626,7 @@ impl View {
                         (box_drawn.0, box_drawn.1, local.width, local.height),
                         list,
                         Some((state.scroll.clone(), style.row_stride())),
-                        None,
+                        Some((state.h_scroll.clone(), 30.0)),
                     );
                 }
             }
@@ -699,6 +720,11 @@ impl View {
         }
         bottom
     }
+}
+
+/// 把面板 / 控件内的矩形平移到文档坐标。
+fn origin_add(origin: (f32, f32), rect: (f32, f32, f32, f32)) -> (f32, f32, f32, f32) {
+    (origin.0 + rect.0, origin.1 + rect.1, rect.2, rect.3)
 }
 
 /// 把列表盒上的滚动条登记到文档：几何换算成**绝对文档坐标**，偏移句柄原样带过去。
@@ -1031,6 +1057,7 @@ mod tests {
             ListBoxState {
                 selected: Some(1),
                 scroll: ScrollHandle::default(),
+                h_scroll: ScrollHandle::default(),
             },
         );
         let document = view.build(measure);
@@ -1206,6 +1233,37 @@ mod tests {
     }
 
     #[test]
+    fn list_box_long_rows_get_a_horizontal_scroll_target() {
+        let items =
+            [ListItem::new("这是一个特别特别长的标题，用来触发底部水平滚动条").detail("detail")];
+        let state = ListBoxState::default();
+        let build = |state: ListBoxState| {
+            let mut view = View::new(200.0, 200.0);
+            view.list_box("list", &items, ListBoxStyle::with_height(60.0), state);
+            view.build(measure)
+        };
+        let document = build(state.clone());
+        let target = document
+            .scroll_targets
+            .iter()
+            .find(|target| target.name == "list" && target.axis == ScrollAxis::Horizontal)
+            .expect("应登记水平滚动目标");
+        assert!(target.max > 0.0);
+
+        // 句柄共享：写进去的偏移下一帧能作用到行上。
+        target.handle.set(20.0);
+        let document = build(state);
+        let Some(Element::ListBox(list)) = document
+            .elements
+            .iter()
+            .find(|element| matches!(element, Element::ListBox(_)))
+        else {
+            panic!("应生成列表盒元素");
+        };
+        assert!((list.h_scroll_offset - 20.0).abs() < 0.01);
+    }
+
+    #[test]
     fn list_box_hover_uses_local_pointer() {
         let items = [ListItem::new("a"), ListItem::new("b"), ListItem::new("c")];
         let mut view = View::new(300.0, 240.0);
@@ -1217,6 +1275,7 @@ mod tests {
             ListBoxState {
                 selected: None,
                 scroll: ScrollHandle::default(),
+                h_scroll: ScrollHandle::default(),
             },
         );
         view.pointer(10.0, 60.0);
@@ -1243,6 +1302,7 @@ mod tests {
             ListBoxState {
                 selected: None,
                 scroll: ScrollHandle::default(),
+                h_scroll: ScrollHandle::default(),
             },
         );
         view.pointer(10.0, 200.0);
@@ -1288,7 +1348,9 @@ mod tests {
         view.scrollable_page(
             "log",
             ScrollablePageStyle::with_height(50.0),
-            ScrollablePageState { offset: 20.0 },
+            ScrollablePageState {
+                offset: ScrollHandle::new(20.0),
+            },
             |ui| {
                 for index in 0..4 {
                     ui.label(format!("line {index}"), LabelStyle::default());
@@ -1307,6 +1369,14 @@ mod tests {
             panic!("第一个子元素应是文字");
         };
         assert!((*y + 20.0).abs() < 0.01, "滚动偏移应作用到子元素");
+        let target = document
+            .scroll_targets
+            .iter()
+            .find(|target| target.name == "log")
+            .expect("应登记可滚动页面的滚动目标");
+        assert_eq!(target.axis, ScrollAxis::Vertical);
+        assert!(target.max > 0.0);
+        assert!(target.contains(target.track.0, target.track.1));
         let metrics = view.scrollable_page_metrics("log").expect("应记录滚动范围");
         assert_eq!(metrics.viewport_height, 50.0);
         assert!(metrics.content_height > metrics.viewport_height);
@@ -1319,7 +1389,9 @@ mod tests {
         view.scrollable_page(
             "page",
             ScrollablePageStyle::with_height(80.0),
-            ScrollablePageState { offset: 10.0 },
+            ScrollablePageState {
+                offset: ScrollHandle::new(10.0),
+            },
             |ui| {
                 ui.spacer(0.0, 50.0);
                 ui.button("ok", "确定", ButtonStyle::default());
@@ -1344,7 +1416,9 @@ mod tests {
         view.scrollable_page(
             "page",
             ScrollablePageStyle::with_height(40.0),
-            ScrollablePageState { offset: 60.0 },
+            ScrollablePageState {
+                offset: ScrollHandle::new(60.0),
+            },
             |ui| {
                 ui.button("hidden", "上面", ButtonStyle::default());
                 ui.spacer(0.0, 40.0);
@@ -1379,6 +1453,7 @@ mod tests {
             ListBoxState {
                 selected: None,
                 scroll: ScrollHandle::new(40.0),
+                h_scroll: ScrollHandle::default(),
             },
         );
         let document = view.build(measure);

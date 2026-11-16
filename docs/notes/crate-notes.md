@@ -861,6 +861,9 @@ Windows 壳的公共层（2026-10-20 从 `apps/windows/server/src/ui/` 抽出）
   `View::text_edit` / `text_box` 生成的 `Element::TextEdit` / `TextBox` 由 `app` 的 `sync_text_edits`
   配 RichEdit 宿主（`Document::text_edits()` + `text_boxes()` 统一处理）；多行宿主建好后要
   `ensure_layout()`，再把 `scroll_info()` 回写成 `TextBox.h_scroll` / `v_scroll`，渲染器才画内部滚动条。
+  `TextEditStyle.auto_line_wrap = false` 时多行框不换行、底部出横向条；`sync_text_edits` 把两条
+  滚动条登记给窗口壳（偏移经 `EditScrollOwner` 写回 RichEdit），文本区滚轮由宿主转 `WM_TEXT_WHEEL`、
+  主窗口只滚竖向。比较文本前先归一化 `\r\n` / `\n`（`same_text`），否则每帧 `set_text` 会重置滚动。
   `AppEvent::TextChanged` / `TextFocusChanged` / `TextKey` 把编辑状态交回应用，文本仍由应用保存。
   `Decorations::None` 改走分层窗口（`WS_POPUP | WS_EX_LAYERED` + `UpdateLayeredWindow`），
   四周按 `Shadow::panel().margin()` 留透明边、内容区从留白内沿算起；`shadow` / `corner_radius` 决定
@@ -905,14 +908,21 @@ Windows 壳的公共层（2026-10-20 从 `apps/windows/server/src/ui/` 抽出）
   列表盒收到的 `pointer` 已经减过列表盒原点，`build` 直接和 `0..width` / `0..height` 比，
   `row_at` 也吃局部 y；不要再减 `rect.x` / `rect.y`，否则鼠标在列表外时反而会误高亮。
   `ListBoxStyle::auto_item_gap_averaging` 缺省 true，渲染器把剩余高度平均进行间隙、只画完整行；
+  `build` 按标题 / 右侧说明量出内容宽度，超出视口时底部出现水平滚动条（可拖拽）。
   行列表要用 `list_box`，`scrollable_page`（可滚动页面，控件容器）只负责任意内容的裁剪。
-- **内建滚动**（2026-11-16）：`ListBoxState.scroll` / `TextListState.scroll` / `h_scroll` 是
-  `ScrollHandle`，应用建一次、每帧 `clone()` 传入。`View::build` 把列表盒的两条滚动条登记到
-  `Document.scroll_targets`（几何用 `drawn + local` 的绝对坐标）；`cloud_ui::app` 保存上一帧的
-  `scroll_targets`，`WM_LBUTTONDOWN` 命中轨道就 `SetCapture` 开始拖、`WM_MOUSEMOVE` 直接写句柄并
-  重绘、`WM_LBUTTONUP` / `WM_CAPTURECHANGED` 结束；拖拽期间不向应用派 `MouseButton` / `RegionClicked`。
-  `WM_MOUSEWHEEL` 先换算屏幕坐标，指针在列表上就按 `step` 滚并消费掉（Shift 优先横向，
-  没有横向条退回纵向），应用收不到 `MouseWheel`。夹紧后的偏移由 `build` 回写句柄。
+- **内建滚动**（2026-11-16）：`ListBoxState` / `TextListState` / `ScrollablePageState` 的偏移字段
+  都是 `ScrollHandle`，应用建一次、每帧 `clone()` 传入。`View::build` 把列表盒 / 文本列表 /
+  可滚动页面的滚动条登记到 `Document.scroll_targets`（几何用 `drawn + local` 的绝对坐标）；
+  `sync_text_edits` 再把多行编辑框的两条滚动条按 `TextBoxScroll` 登记进来，几何来自
+  `EditSpec` 的绝对位置，偏移经 `EditScrollOwner` 写回 RichEdit 宿主。
+  `cloud_ui::app` 保存上一帧的 `scroll_targets`，`WM_LBUTTONDOWN` 命中轨道就 `SetCapture` 开始拖、
+  `WM_MOUSEMOVE` 直接写偏移并重绘、`WM_LBUTTONUP` / `WM_CAPTURECHANGED` 结束；拖拽期间不向应用派
+  `MouseButton` / `RegionClicked`。`WM_MOUSEWHEEL` 先换算屏幕坐标，**只命中竖向滚动条**并按 `step`
+  滚、消费掉，应用收不到 `MouseWheel`；横向只能拖拽。夹紧后的偏移由 `build` 回写句柄。
+  多行编辑框的文本区不在主窗口里：宿主收到滚轮后转 `WM_TEXT_WHEEL`，主窗口的 `text_wheel` 滚
+  RichEdit 的竖向位置；文本区外的滚动条由主窗口直接处理。
+- `sync_text_edits` 比较文本时要把 `\r\n` 与 `\n` 归一化（`same_text`）：RichEdit 内部用 `\r\n`，
+  直接比较会每帧 `set_text`，把滚动位置和插入点重置掉。
   `scrollable_page`（可滚动页面）是通用控件容器，生成 `Element::SelfDrawingPanel`（`clip = true`）：
   子控件按 `(panel 原点 + offset)` 换算坐标，
   超出视口由渲染器的面板图层裁掉；滚动条轨道 / 滑块作为面板 children 追加在内容之后。

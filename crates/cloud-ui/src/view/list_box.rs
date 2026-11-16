@@ -145,7 +145,7 @@ impl ListBoxStyle {
 
 /// 列表盒的每帧状态。
 ///
-/// 滚动偏移是 [`ScrollHandle`]：建一次、跨帧持有，每帧把 `clone()` 传给
+/// 两个滚动偏移都是 [`ScrollHandle`]：建一次、跨帧持有，每帧把 `clone()` 传给
 /// [`View::list_box`]。窗口壳拖动滚动条 / 滚轮时直接写句柄，应用不用自己接鼠标。
 #[derive(Debug, Clone, Default)]
 pub struct ListBoxState {
@@ -154,6 +154,9 @@ pub struct ListBoxState {
 
     /// 滚动偏移句柄（点）；超出内容范围时由 `build` 夹紧。
     pub scroll: ScrollHandle,
+
+    /// 水平滚动偏移句柄（点）；行内容超宽时出现底部水平滚动条。
+    pub h_scroll: ScrollHandle,
 }
 
 pub(super) struct ListBoxInput<'a> {
@@ -196,7 +199,24 @@ pub(super) fn build<F>(
     let content_height = input.items.len() as f32 * stride;
     let scrollbar = content_height > viewport + 0.01;
     let available = (rect.width - (edge + gap) * 2.0 - if scrollbar { 12.0 } else { 0.0 }).max(1.0);
-    let row_width = available;
+
+    // 行内容超宽时给底部水平滚动条：宽度按标题 + 右侧说明 + 左右留白量一遍。
+    let mut content_width: f32 = 0.0;
+    for item in input.items {
+        let (title_width, _) = measure(&item.title, style.font, style.size);
+        let detail_width = item.detail.as_deref().map_or(0.0, |detail| {
+            measure(detail, style.font, style.muted_size).0
+        });
+        let width = style.padding_x * 2.0
+            + title_width
+            + if detail_width > 0.0 {
+                16.0 + detail_width
+            } else {
+                0.0
+            };
+        content_width = content_width.max(width);
+    }
+    let row_width = available.max(content_width);
 
     let selected = state.selected.filter(|index| *index < input.items.len());
     let scroll_offset = state.scroll.get();
@@ -263,8 +283,8 @@ pub(super) fn build<F>(
         rows,
         row_count: input.items.len(),
         scroll_offset,
-        content_width: 0.0,
-        h_scroll_offset: 0.0,
+        content_width,
+        h_scroll_offset: state.h_scroll.get(),
         content_height,
         allow_select: true,
         selected_index: selected.map_or(-1, |index| index as i32),
@@ -275,7 +295,9 @@ pub(super) fn build<F>(
 
     // 夹紧后回写句柄，让应用与窗口壳看到同一个受限偏移。
     list.scroll_offset = list.clamp_scroll();
+    list.h_scroll_offset = list.clamp_h_scroll();
     state.scroll.set(list.scroll_offset);
+    state.h_scroll.set(list.h_scroll_offset);
 
     // `pointer` 已经是相对列表盒左上角的坐标，直接和 0..尺寸 比。
     if let Some((x, y)) = pointer
@@ -312,7 +334,7 @@ pub(super) fn build<F>(
             HitShape::Rect(HitRect::new(
                 rect.x + edge + gap,
                 region_top,
-                row_width,
+                available,
                 region_height,
             )),
             drawn,

@@ -28,8 +28,8 @@ use std::rc::Rc;
 use std::sync::OnceLock;
 
 use cloudime_render::{
-    Color, Document, Element, FontSlot, Pixmap, Region, ScrollAxis, ScrollTarget, Shadow,
-    TextBoxScroll,
+    Color, Document, Element, FontSlot, Pixmap, Region, ScrollAxis, ScrollHandle, ScrollTarget,
+    Shadow, TextBox, TextBoxScroll,
 };
 use windows::Win32::Foundation::{COLORREF, HWND, LPARAM, LRESULT, POINT, RECT, WPARAM};
 use windows::Win32::Graphics::Gdi::{
@@ -43,7 +43,7 @@ use windows::Win32::UI::HiDpi::{
     SetProcessDpiAwarenessContext,
 };
 use windows::Win32::UI::Input::KeyboardAndMouse::{
-    GetKeyState, ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent, VK_SHIFT,
+    ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
@@ -590,14 +590,92 @@ struct AppWindow {
     /// 上一次鼠标位置（内容坐标）；连续重复的 `WM_MOUSEMOVE` 不再触发重画。
     last_pointer: Option<(f32, f32)>,
     /// 当前帧的滚动条（绝对文档坐标）；窗口壳按它命中拖拽 / 滚轮。
-    scroll_targets: Vec<ScrollTarget>,
+    scroll_targets: Vec<ShellScrollTarget>,
     /// 正在拖的滚动条：命中项（几何按下时快照）与抓住位置。
     scroll_drag: Option<ScrollDrag>,
 }
 
+/// 窗口壳里的一条可拖 / 可滚滚动条。
+///
+/// 几何与范围来自 `Document.scroll_targets`（列表盒 / 文本列表 / 可滚动页面），
+/// 或多行编辑框宿主排版后的滚动范围；偏移写到哪由 `edit` 决定。
+#[derive(Clone)]
+struct ShellScrollTarget {
+    target: ScrollTarget,
+
+    /// 多行编辑框：偏移要经过 RichEdit 宿主；`None` = 直接写 `target.handle`。
+    edit: Option<EditScrollOwner>,
+}
+
+/// 多行编辑框的滚动偏移写成 RichEdit 的滚动位置。
+#[derive(Clone)]
+struct EditScrollOwner {
+    host: Rc<TextHostWindow>,
+
+    /// RichEdit 滚动范围起点；`target.handle` 存的是 `value - min`。
+    min: f32,
+}
+
+impl ShellScrollTarget {
+    fn from_document(target: ScrollTarget) -> Self {
+        Self { target, edit: None }
+    }
+
+    fn axis(&self) -> ScrollAxis {
+        self.target.axis
+    }
+
+    fn contains(&self, x: f32, y: f32) -> bool {
+        self.target.contains(x, y)
+    }
+
+    fn hits_track(&self, x: f32, y: f32) -> bool {
+        self.target.hits_track(x, y)
+    }
+
+    fn grab(&self, x: f32, y: f32) -> f32 {
+        self.target.grab(x, y)
+    }
+
+    fn offset_for(&self, x: f32, y: f32, grab: f32) -> f32 {
+        self.target.offset_for(x, y, grab)
+    }
+
+    /// 写入偏移；多行编辑框同时通过宿主滚动 RichEdit。
+    fn set_offset(&self, offset: f32) {
+        let offset = offset.clamp(0.0, self.target.max);
+        self.target.handle.set(offset);
+        if let Some(edit) = &self.edit {
+            edit.apply(self.target.axis, offset, self.target.max);
+        }
+    }
+
+    /// 滚轮一格后的偏移；`delta` 正数向上滚。
+    fn wheel_offset(&self, delta: f32) -> f32 {
+        (self.target.handle.get() - delta * self.target.step).clamp(0.0, self.target.max)
+    }
+}
+
+impl EditScrollOwner {
+    /// 把偏移写成 RichEdit 的滚动位置；只动这条轴，另一条轴保持原值。
+    fn apply(&self, axis: ScrollAxis, offset: f32, max: f32) {
+        let value = self.min + offset.clamp(0.0, max);
+        if !(0.0..=i32::MAX as f32).contains(&value) {
+            return;
+        }
+        let value = value.round() as i32;
+        let (horizontal, vertical) = self.host.scroll_info();
+        let (x, y) = match axis {
+            ScrollAxis::Horizontal => (value, vertical.pos),
+            ScrollAxis::Vertical => (horizontal.pos, value),
+        };
+        self.host.set_scroll(x, y);
+    }
+}
+
 /// 一次滚动条拖拽：几何用按下时的快照，指针移动只换偏移。
 struct ScrollDrag {
-    target: ScrollTarget,
+    target: ShellScrollTarget,
     grab: f32,
 }
 
@@ -606,6 +684,9 @@ struct EditHost {
     name: String,
     host: Rc<TextHostWindow>,
     colors: EditColors,
+    /// 最近一次排版后的滚动范围（多行编辑框滚轮 / 宿主让位用）。
+    h_scroll: TextBoxScroll,
+    v_scroll: TextBoxScroll,
 }
 
 /// 宿主建窗时用的颜色；主题切换后颜色对不上就重建宿主。
@@ -713,6 +794,12 @@ fn edit_specs(document: &Document) -> Vec<EditSpec> {
     specs
 }
 
+/// RichEdit 内部用 `\r\n` 存换行、应用文本可能只有 `\n`：比较前统一，
+/// 避免每帧都 `set_text` 把滚动位置和插入点重置掉。
+fn same_text(left: &str, right: &str) -> bool {
+    left.replace("\r\n", "\n") == right.replace("\r\n", "\n")
+}
+
 /// RichEdit 的滚动范围转成渲染器画滚动条用的状态。
 fn scroll_state(info: ScrollInfo) -> TextBoxScroll {
     let min = info.min.max(0) as u64;
@@ -743,7 +830,7 @@ impl AppWindow {
     }
 
     /// 指针落在哪条滚动条的轨道上（从后往前找，和命中测试顺序一致）。
-    fn scroll_target_at(&self, x: f32, y: f32) -> Option<ScrollTarget> {
+    fn scroll_target_at(&self, x: f32, y: f32) -> Option<ShellScrollTarget> {
         self.scroll_targets
             .iter()
             .rev()
@@ -751,23 +838,12 @@ impl AppWindow {
             .cloned()
     }
 
-    /// 滚轮该滚哪条：`horizontal`（Shift）优先横向，没有横向条就退回纵向。
-    fn scroll_target_for_wheel(&self, x: f32, y: f32, horizontal: bool) -> Option<ScrollTarget> {
-        let axis = if horizontal {
-            ScrollAxis::Horizontal
-        } else {
-            ScrollAxis::Vertical
-        };
+    /// 滚轮只滚纵向：指针压在列表 / 可滚动页面 / 多行编辑框上就返回它。
+    fn scroll_target_for_wheel(&self, x: f32, y: f32) -> Option<ShellScrollTarget> {
         self.scroll_targets
             .iter()
             .rev()
-            .find(|target| target.axis == axis && target.contains(x, y))
-            .or_else(|| {
-                self.scroll_targets
-                    .iter()
-                    .rev()
-                    .find(|target| target.contains(x, y))
-            })
+            .find(|target| target.axis() == ScrollAxis::Vertical && target.contains(x, y))
             .cloned()
     }
 
@@ -813,7 +889,12 @@ impl AppWindow {
         self.app.update(&mut ctx);
         let mut document = self.app.view(&ctx);
         // 这一帧的滚动条几何交给窗口壳，鼠标拖拽 / 滚轮直接用。
-        self.scroll_targets = document.scroll_targets.clone();
+        self.scroll_targets = document
+            .scroll_targets
+            .iter()
+            .cloned()
+            .map(ShellScrollTarget::from_document)
+            .collect();
         crate::current::set_background(document_background(&document));
         drop(current);
         if ctx.close.get() {
@@ -1017,17 +1098,24 @@ impl AppWindow {
         let mut next = Vec::new();
         for spec in specs {
             let (family, size, colors) = self.edit_settings(&spec);
-            let (host, created) = match old
+            let (host, created, previous) = match old
                 .iter()
                 .position(|item| item.name == spec.name && item.colors == colors)
             {
-                Some(index) => (old.swap_remove(index).host, false),
+                Some(index) => {
+                    let item = old.swap_remove(index);
+                    (item.host, false, (item.h_scroll, item.v_scroll))
+                }
                 None => match self.create_text_host(hwnd, &spec, family, size, colors, dpi) {
-                    Some(host) => (host, true),
+                    Some(host) => (
+                        host,
+                        true,
+                        (TextBoxScroll::default(), TextBoxScroll::default()),
+                    ),
                     None => continue,
                 },
             };
-            if host.text_string() != spec.text {
+            if !same_text(&host.text_string(), &spec.text) {
                 host.set_text(&spec.text);
             }
             if created
@@ -1051,8 +1139,18 @@ impl AppWindow {
                     name: spec.name.clone(),
                     host,
                     colors,
+                    h_scroll: TextBoxScroll::default(),
+                    v_scroll: TextBoxScroll::default(),
                 });
                 continue;
+            }
+            // 上一帧的滚动条可见性决定宿主让出多少：先套用，`edit_rect` 才会把滚动条区域
+            // 排除在外；否则宿主窗口会盖住滚动条，点击落到 RichEdit 上而不是窗口壳。
+            if spec.multiline
+                && let Some(Element::TextBox(edit)) = document.element_at_path_mut(&spec.path)
+            {
+                edit.h_scroll = previous.0;
+                edit.v_scroll = previous.1;
             }
             let (x, y, width, height) = match document.element_at_path(&spec.path) {
                 Some(Element::TextEdit(edit)) => edit.edit_rect(),
@@ -1063,6 +1161,8 @@ impl AppWindow {
                         name: spec.name.clone(),
                         host,
                         colors,
+                        h_scroll: TextBoxScroll::default(),
+                        v_scroll: TextBoxScroll::default(),
                     });
                     continue;
                 }
@@ -1082,6 +1182,8 @@ impl AppWindow {
                         name: spec.name.clone(),
                         host,
                         colors,
+                        h_scroll: TextBoxScroll::default(),
+                        v_scroll: TextBoxScroll::default(),
                     });
                     continue;
                 }
@@ -1103,28 +1205,102 @@ impl AppWindow {
             if !masked {
                 host.raise();
             }
-            if spec.multiline {
+            let (h_scroll, v_scroll) = if spec.multiline {
                 // 宿主排完版才知道真实滚动范围；写回 Document，渲染器下一帧画滚动条。
                 let (horizontal, vertical) = host.scroll_info();
+                let h_scroll = if spec.auto_line_wrap {
+                    TextBoxScroll::default()
+                } else {
+                    scroll_state(horizontal)
+                };
+                let v_scroll = scroll_state(vertical);
                 if let Some(Element::TextBox(edit)) = document.element_at_path_mut(&spec.path) {
-                    let horizontal = if edit.auto_line_wrap {
-                        TextBoxScroll::default()
-                    } else {
-                        scroll_state(horizontal)
-                    };
-                    edit.h_scroll = horizontal;
-                    edit.v_scroll = scroll_state(vertical);
+                    edit.h_scroll = h_scroll;
+                    edit.v_scroll = v_scroll;
                 }
-            }
+                if let Some(Element::TextBox(edit)) = document.element_at_path(&spec.path) {
+                    self.push_text_box_scroll_targets(&spec, edit, &host);
+                }
+                (h_scroll, v_scroll)
+            } else {
+                (TextBoxScroll::default(), TextBoxScroll::default())
+            };
             next.push(EditHost {
                 name: spec.name.clone(),
                 host,
                 colors,
+                h_scroll,
+                v_scroll,
             });
         }
         self.edits = next;
         // 不在这一帧里的旧宿主先寄存，等 `paint` 的借用结束再析构（析构会碰 TSF / 焦点）。
         self.retired.append(&mut old);
+    }
+
+    /// 多行编辑框的两条滚动条登记到窗口壳；几何用文档坐标，范围用 `TextBoxScroll`。
+    fn push_text_box_scroll_targets(
+        &mut self,
+        spec: &EditSpec,
+        edit: &TextBox,
+        host: &Rc<TextHostWindow>,
+    ) {
+        for axis in [ScrollAxis::Vertical, ScrollAxis::Horizontal] {
+            let scroll = edit.scroll(axis);
+            if !scroll.visible || scroll.max <= scroll.min {
+                continue;
+            }
+            let (bx, by, bw, bh) = edit.bar_rect(axis);
+            let (tx, ty, tw, th) = edit.thumb_rect(axis);
+            self.scroll_targets.push(ShellScrollTarget {
+                target: ScrollTarget {
+                    name: spec.name.clone(),
+                    axis,
+                    area: (spec.x, spec.y, edit.width, edit.height),
+                    track: (spec.x + bx, spec.y + by, bw, bh),
+                    thumb: (spec.x + tx, spec.y + ty, tw, th),
+                    max: (scroll.max - scroll.min) as f32,
+                    step: (scroll.page.max(16) / 4).max(8) as f32,
+                    handle: ScrollHandle::new(scroll.value.saturating_sub(scroll.min) as f32),
+                },
+                edit: Some(EditScrollOwner {
+                    host: host.clone(),
+                    min: scroll.min as f32,
+                }),
+            });
+        }
+    }
+
+    /// 滚轮落在多行编辑框上：宿主把 delta 转给窗口，这里滚竖向文本。
+    fn text_wheel(&mut self, hwnd: HWND, host_hwnd: HWND, delta: i32) {
+        let Some(index) = self
+            .edits
+            .iter()
+            .position(|edit| edit.host.hwnd() == host_hwnd)
+        else {
+            return;
+        };
+        let (host, mut scroll) = {
+            let edit = &self.edits[index];
+            (edit.host.clone(), edit.v_scroll)
+        };
+        if !scroll.visible || scroll.max <= scroll.min {
+            return;
+        }
+        let step = (scroll.page.max(16) / 4).max(8);
+        let value = if delta > 0 {
+            scroll.value.saturating_sub(step).max(scroll.min)
+        } else {
+            scroll.value.saturating_add(step).min(scroll.max)
+        };
+        if value == scroll.value {
+            return;
+        }
+        scroll.value = value;
+        self.edits[index].v_scroll = scroll;
+        let (horizontal, _) = host.scroll_info();
+        host.set_scroll(horizontal.pos, value.min(i32::MAX as u64) as i32);
+        self.redraw(hwnd);
     }
 
     /// 编辑框宿主需要的字体与颜色（主题切换后颜色变了会触发重建宿主）。
@@ -1384,7 +1560,7 @@ unsafe extern "system" fn wndproc(
                 window.last_pointer = Some((x, y));
                 if let Some(drag) = &window.scroll_drag {
                     let offset = drag.target.offset_for(x, y, drag.grab);
-                    drag.target.handle.set(offset);
+                    drag.target.set_offset(offset);
                     window.redraw(hwnd);
                     return;
                 }
@@ -1416,7 +1592,7 @@ unsafe extern "system" fn wndproc(
                     && let Some(target) = window.scroll_target_at(x, y)
                 {
                     let grab = target.grab(x, y);
-                    target.handle.set(target.offset_for(x, y, grab));
+                    target.set_offset(target.offset_for(x, y, grab));
                     window.pressed_region = None;
                     window.scroll_drag = Some(ScrollDrag { target, grab });
                     let _ = unsafe { SetCapture(hwnd) };
@@ -1428,8 +1604,7 @@ unsafe extern "system" fn wndproc(
                 {
                     // 松开时再按一次，保证停在最终指针位置而不是上一条移动消息。
                     drag.target
-                        .handle
-                        .set(drag.target.offset_for(x, y, drag.grab));
+                        .set_offset(drag.target.offset_for(x, y, drag.grab));
                     release_capture = true;
                     window.redraw(hwnd);
                     return;
@@ -1476,11 +1651,10 @@ unsafe extern "system" fn wndproc(
         WM_MOUSEWHEEL => {
             let delta = ((wparam.0 >> 16) & 0xFFFF) as u16 as i16 as f32 / 120.0;
             let (x, y) = wheel_point(hwnd, lparam.0);
-            let horizontal = unsafe { GetKeyState(VK_SHIFT.0 as i32) } < 0;
             let mut consumed = false;
             with_window(hwnd, |window| {
-                if let Some(target) = window.scroll_target_for_wheel(x, y, horizontal) {
-                    target.handle.set(target.scroll_by(delta));
+                if let Some(target) = window.scroll_target_for_wheel(x, y) {
+                    target.set_offset(target.wheel_offset(delta));
                     window.redraw(hwnd);
                     consumed = true;
                 }
@@ -1605,11 +1779,18 @@ unsafe extern "system" fn wndproc(
             });
             LRESULT(0)
         }
-        WM_TEXT_SCROLL | WM_TEXT_WHEEL => {
+        WM_TEXT_SCROLL => {
             // 多行编辑框内部滚动了：重新取滚动范围并重画。
             unsafe {
                 let _ = InvalidateRect(Some(hwnd), None, false);
             }
+            LRESULT(0)
+        }
+        WM_TEXT_WHEEL => {
+            // 编辑框宿主把滚轮转给窗口（文本区不在主窗口里），这里滚竖向文本。
+            let host = HWND(wparam.0 as *mut _);
+            let delta = lparam.0 as i32;
+            with_window(hwnd, |window| window.text_wheel(hwnd, host, delta));
             LRESULT(0)
         }
         WM_TRAY_ICON => {

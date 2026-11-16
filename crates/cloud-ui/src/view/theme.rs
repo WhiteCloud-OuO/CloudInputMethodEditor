@@ -216,6 +216,7 @@ impl Theme {
             size: 14.0,
             font: FontSlot::Candidate,
             read_only: false,
+            auto_line_wrap: true,
         }
     }
 
