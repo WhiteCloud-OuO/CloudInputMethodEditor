@@ -786,6 +786,109 @@ pub enum WindowGlyph {
     Restore,
 }
 
+/// 文档里点在某条列表滚动条上的命中。
+///
+/// 独立窗口的应用自己保存滚动状态；按下 / 拖动滚动条时用它把指针位置换算成新的偏移，
+/// 下一帧再传回 `ListBoxState` / `TextListState`。
+#[derive(Clone, Debug)]
+pub struct ScrollbarHit {
+    /// 列表盒的 `region_name`。
+    pub name: String,
+
+    pub axis: crate::control::ScrollAxis,
+
+    /// 轨道矩形（文档坐标）。
+    pub track: (f32, f32, f32, f32),
+
+    /// 滑块矩形（文档坐标）。
+    pub thumb: (f32, f32, f32, f32),
+
+    /// 按下点是否落在滑块上（否则是轨道空白）。
+    pub inside_thumb: bool,
+
+    /// 按下点相对滑块起点的偏移（点）。
+    pub grab: f32,
+
+    /// 最大滚动量（点）。
+    pub max: f32,
+}
+
+impl ScrollbarHit {
+    /// 指针在 `(x, y)` 时对应的滚动偏移；夹在 `0..=max`。
+    pub fn offset_for(&self, x: f32, y: f32) -> f32 {
+        let (track_start, thumb_length, pointer, track_length) = match self.axis {
+            crate::control::ScrollAxis::Vertical => (self.track.1, self.thumb.3, y, self.track.3),
+            crate::control::ScrollAxis::Horizontal => (self.track.0, self.thumb.2, x, self.track.2),
+        };
+        let travel = (track_length - thumb_length).max(0.0);
+        if travel <= 0.0 {
+            return 0.0;
+        }
+        // 点在滑块上按抓住的位置算；点在轨道空白上让滑块中心对到点击处。
+        let grab = if self.inside_thumb {
+            self.grab
+        } else {
+            thumb_length * 0.5
+        };
+        let ratio = ((pointer - grab - track_start) / travel).clamp(0.0, 1.0);
+        ratio * self.max
+    }
+}
+
+impl Document {
+    /// 文档坐标 `(x, y)` 落在哪个列表盒的滚动条上（先竖向、再横向）；不在滚动条上给 `None`。
+    ///
+    /// 元素按绘制顺序叠放，从后往前找，和命中测试的规则一致。
+    pub fn list_box_scrollbar_at(&self, x: f32, y: f32) -> Option<ScrollbarHit> {
+        for element in self.elements.iter().rev() {
+            let Element::ListBox(list) = element else {
+                continue;
+            };
+            if x < list.x || x > list.x + list.width || y < list.y || y > list.y + list.height {
+                continue;
+            }
+            let inside = |rect: (f32, f32, f32, f32)| {
+                x >= rect.0 && x <= rect.0 + rect.2 && y >= rect.1 && y <= rect.1 + rect.3
+            };
+            if list.scrollbar_visible() {
+                let (tx, ty, tw, th) = list.track_rect();
+                let track = (list.x + tx, list.y + ty, tw, th);
+                if inside(track) {
+                    let (hx, hy, hw, hh) = list.thumb_rect();
+                    let thumb = (list.x + hx, list.y + hy, hw, hh);
+                    return Some(ScrollbarHit {
+                        name: list.region_name.clone(),
+                        axis: crate::control::ScrollAxis::Vertical,
+                        track,
+                        thumb,
+                        inside_thumb: inside(thumb),
+                        grab: y - thumb.1,
+                        max: list.max_scroll_px(),
+                    });
+                }
+            }
+            if list.h_scrollbar_visible() {
+                let (tx, ty, tw, th) = list.h_track_rect();
+                let track = (list.x + tx, list.y + ty, tw, th);
+                if inside(track) {
+                    let (hx, hy, hw, hh) = list.h_thumb_rect();
+                    let thumb = (list.x + hx, list.y + hy, hw, hh);
+                    return Some(ScrollbarHit {
+                        name: list.region_name.clone(),
+                        axis: crate::control::ScrollAxis::Horizontal,
+                        track,
+                        thumb,
+                        inside_thumb: inside(thumb),
+                        grab: x - thumb.0,
+                        max: list.max_h_scroll_px(),
+                    });
+                }
+            }
+        }
+        None
+    }
+}
+
 /// 一类元素（坐标 / 尺寸都是**点**）。
 #[derive(Clone)]
 pub enum Element {
@@ -1480,6 +1583,63 @@ impl std::fmt::Debug for Document {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 列表盒两条滚动条都能被点中，指针位置能换算成滚动偏移。
+    #[test]
+    fn list_box_scrollbars_can_be_hit_and_mapped_to_offsets() {
+        let list = crate::control::ListBox {
+            x: 10.0,
+            y: 20.0,
+            width: 100.0,
+            height: 60.0,
+            radius: 0.0,
+            fill: None,
+            edge_color: Color::rgb(0, 0, 0),
+            edge_width: 1.0,
+            content_gap: 2.0,
+            gap: 0.0,
+            auto_item_gap_averaging: false,
+            align: crate::control::ListBoxAlign::Left,
+            rows: Vec::new(),
+            row_count: 20,
+            scroll_offset: 0.0,
+            content_width: 300.0,
+            h_scroll_offset: 0.0,
+            content_height: 400.0,
+            allow_select: false,
+            selected_index: -1,
+            auto_center_selected: false,
+            hovered_index: None,
+            region_name: "log".to_owned(),
+        };
+        let mut document = Document::empty(200.0, 200.0);
+        document.elements.push(Element::ListBox(list.clone()));
+
+        let (tx, ty, tw, th) = list.track_rect();
+        let hit = document
+            .list_box_scrollbar_at(list.x + tx + tw * 0.5, list.y + ty + th - 2.0)
+            .expect("竖向滚动条");
+        assert_eq!(hit.name, "log");
+        assert_eq!(hit.axis, crate::control::ScrollAxis::Vertical);
+        let offset = hit.offset_for(list.x + tx + tw * 0.5, list.y + ty + th - 2.0);
+        assert!(offset > 0.0 && offset <= list.max_scroll_px(), "{offset}");
+        assert!(
+            document
+                .list_box_scrollbar_at(list.x + 5.0, list.y + 5.0)
+                .is_none(),
+            "内容区不算滚动条"
+        );
+
+        let (hx, hy, hw, hh) = list.h_track_rect();
+        let hit = document
+            .list_box_scrollbar_at(list.x + hx + hw * 0.5, list.y + hy + hh * 0.5)
+            .expect("横向滚动条");
+        assert_eq!(hit.axis, crate::control::ScrollAxis::Horizontal);
+        assert!(
+            hit.offset_for(list.x + hx + hw * 0.5, list.y + hy + hh * 0.5) > 0.0,
+            "点在轨道中间对应一半偏移"
+        );
+    }
 
     /// 圆角矩形：四个角切掉的那块不算命中，边与中间算。
     #[test]

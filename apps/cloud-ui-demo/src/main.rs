@@ -5,10 +5,11 @@
 
 use cloud_ui::{
     AppEvent, Application, CLOSE_ACTION, Context, Decorations, ListBoxState, ListItem,
-    MAXIMIZE_ACTION, MINIMIZE_ACTION, MessageDialog, StackStyle, TextInputDialog, TextListState,
-    Theme, TrayEvent, TrayMenuItem, TrayOptions, View, WindowMask, WindowOptions, run_native,
+    MAXIMIZE_ACTION, MINIMIZE_ACTION, MessageDialog, MouseButton, StackStyle, TextInputDialog,
+    TextListState, Theme, TrayEvent, TrayMenuItem, TrayOptions, View, WindowMask, WindowOptions,
+    run_native,
 };
-use cloudime_render::Document;
+use cloudime_render::{Document, ScrollAxis, ScrollbarHit};
 
 const LIST_ROWS: usize = 5;
 const LIST_HEIGHT: f32 = 170.0;
@@ -34,6 +35,13 @@ struct Demo {
     log_scroll: f32,
     selected: Option<usize>,
     text_selected: Option<usize>,
+    /// 文本列表的竖向 / 横向滚动偏移。
+    text_scroll: f32,
+    text_h_scroll: f32,
+    /// 正在拖的滚动条；`None` = 没在拖。
+    scroll_drag: Option<ScrollbarHit>,
+    /// 上一帧画出去的文档，按下时用来找滚动条。
+    last_document: Option<Document>,
     /// 文本列表放不下时是出水平滚动条（true）还是截断（false，缺省）。
     h_scroll_text: bool,
     light: bool,
@@ -49,14 +57,54 @@ impl Demo {
             Theme::dark()
         }
     }
+
+    /// 把滚动条拖到的新偏移落到对应控件的状态里。
+    fn apply_scroll(&mut self, hit: &ScrollbarHit, offset: f32) {
+        match hit.name.as_str() {
+            "log" => self.log_scroll = offset,
+            "recent" => match hit.axis {
+                ScrollAxis::Vertical => self.text_scroll = offset,
+                ScrollAxis::Horizontal => self.text_h_scroll = offset,
+            },
+            _ => {}
+        }
+    }
 }
 
 impl Application for Demo {
     fn update(&mut self, ctx: &mut Context) {
         for event in ctx.events() {
             match event {
-                AppEvent::MouseMoved { x, y } => self.pointer = Some((*x, *y)),
+                AppEvent::MouseMoved { x, y } => {
+                    self.pointer = Some((*x, *y));
+                    if let Some(hit) = self.scroll_drag.clone() {
+                        let offset = hit.offset_for(*x, *y);
+                        self.apply_scroll(&hit, offset);
+                    }
+                }
                 AppEvent::MouseLeft => self.pointer = None,
+                AppEvent::MouseButton {
+                    button: MouseButton::Left,
+                    pressed,
+                    x,
+                    y,
+                } => {
+                    if *pressed {
+                        if let Some(hit) = self
+                            .last_document
+                            .as_ref()
+                            .and_then(|document| document.list_box_scrollbar_at(*x, *y))
+                        {
+                            if !hit.inside_thumb {
+                                let offset = hit.offset_for(*x, *y);
+                                self.apply_scroll(&hit, offset);
+                            }
+                            self.scroll_drag = Some(hit);
+                        }
+                    } else {
+                        self.scroll_drag = None;
+                    }
+                }
                 AppEvent::RegionClicked(name) if name == "click" => self.clicks += 1,
                 AppEvent::RegionClicked(name) if name == "theme" => self.light = !self.light,
                 AppEvent::RegionClicked(name) if name == "mask" => self.masked = !self.masked,
@@ -271,8 +319,8 @@ impl Application for Demo {
                 text_style,
                 TextListState {
                     selected: self.text_selected,
-                    scroll_offset: 0.0,
-                    h_scroll_offset: 0.0,
+                    scroll_offset: self.text_scroll,
+                    h_scroll_offset: self.text_h_scroll,
                 },
             );
             ui.spacer(0.0, 8.0);
@@ -292,7 +340,10 @@ impl Application for Demo {
                 row.button("hide", "隐藏到托盘", theme.button());
             });
         });
-        view.build(|text, slot, size| ctx.measure_text(text, slot, size))
+        let document = view.build(|text, slot, size| ctx.measure_text(text, slot, size));
+        // 下一帧按下时用这一份找滚动条。
+        self.last_document = Some(document.clone());
+        document
     }
 }
 

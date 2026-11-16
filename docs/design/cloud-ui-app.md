@@ -132,6 +132,9 @@ Server 继续通过 `features = ["script"]` 打开全部 IME 能力。
   行内容由渲染器的 `paint_scroll` 吸附到行首，滚到底时则按从下往上的整行窗口显示。
 - `scrollable_page` 是给任意内容的控件容器；**行列表**请用 `list_box`（子页面容器），
   才会得到上面这套整行 / 均匀间隙规则。
+- 滚动条拖拽（列表盒 / 文本列表都一样）：`Document::list_box_scrollbar_at(x, y)` 给出命中的
+  轨道 / 滑块、轴与 `offset_for(x, y)`；应用在按下时记住它，`MouseMoved` 时把新偏移写回自己的
+  `ListBoxState` / `TextListState`（demo 就是这么接的，独立窗口里没有内建拖拽）。
 
 ## 文本列表（叶子控件）
 
