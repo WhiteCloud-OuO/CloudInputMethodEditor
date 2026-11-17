@@ -83,7 +83,7 @@ pub(crate) fn measure(
     )
 }
 
-pub(crate) fn build(
+pub fn build(
     elements: &mut Vec<Element>,
     rect: cloud_ui_core::Rect,
     name: &str,

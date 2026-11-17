@@ -193,6 +193,27 @@ mod tests {
     }
 
     #[test]
+    fn round_trips_ids_kind_with_optional_component_section() {
+        let metadata = Metadata {
+            name: "IDS".to_owned(),
+            ..Metadata::default()
+        };
+        let path = tempfile_path::TempPath::new("ids-kind");
+        Writer::new(Kind::Ids, &metadata)
+            .unwrap()
+            .section(*b"TEXT", "⿰木木".as_bytes())
+            .write_to(&path.0)
+            .unwrap();
+
+        let container = Container::open(&path.0, Kind::Ids).unwrap();
+        assert_eq!(&*container.text(*b"TEXT").unwrap(), "⿰木木");
+        assert!(matches!(
+            Container::open(&path.0, Kind::Dictionary),
+            Err(FormatError::WrongKind { .. })
+        ));
+    }
+
+    #[test]
     fn reads_legacy_magic_from_before_the_rebrand() {
         // `data-v2` 这类改名前的随包数据只有魔数不同，容器布局一字未动：照读。
         let (path, metadata) = sample("legacy-magic");

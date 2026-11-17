@@ -1,0 +1,21 @@
+[package]
+name = "cloudime-ids-build"
+description = "生成 IDS 组字数据 ids.qj"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "ids-build"
+path = "src/main.rs"
+
+[dependencies]
+clap.workspace = true
+cloudime-format.workspace = true
+cloudime-ids.workspace = true
+thiserror.workspace = true
+zerocopy.workspace = true
+
+[lints]
+workspace = true

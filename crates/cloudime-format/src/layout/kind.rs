@@ -19,6 +19,9 @@ pub enum Kind {
 
     /// 车牌简称 → 车牌 / 所在地对照表（`cloudime-plate::PlateTable`）。
     Plate = 7,
+
+    /// 汉字 IDS 组字索引（`cloudime-ids::IdsDatabase`）：IDS → 字，附带可选部件表。
+    Ids = 8,
 }
 
 impl Kind {
@@ -30,6 +33,7 @@ impl Kind {
             5 => Self::WordList,
             6 => Self::Model,
             7 => Self::Plate,
+            8 => Self::Ids,
             _ => return None,
         })
     }

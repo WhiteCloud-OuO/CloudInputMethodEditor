@@ -1,0 +1,15 @@
+[package]
+name = "cloudime-ids"
+description = "汉字 IDS 组字索引：IDS 表达式到 Unicode 字，读取 `.qj` mmap 数据"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[dependencies]
+cloudime-format.workspace = true
+thiserror.workspace = true
+zerocopy.workspace = true
+
+[lints]
+workspace = true

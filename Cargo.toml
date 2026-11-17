@@ -8,6 +8,7 @@ members = [
     "crates/cloudime-platform",
     "crates/cloudime-lm",
     "crates/cloudime-format",
+    "crates/cloudime-ids",
     "crates/cloudime-translate",
     "crates/cloudime-script",
     "crates/cloudime-script-store",
@@ -18,7 +19,7 @@ members = [
     "crates/cloud-ui",
     "crates/cloudime-update",
     "crates/cloudime-mcp-client",
-    "apps/cli", "apps/mcp", "apps/mcp-client", "apps/cloud-ui-demo", "apps/windows/server", "apps/windows/tsf", "apps/windows/settings", "tools/dict-convert", "tools/release-sign", "apps/windows/tools/cloudime-wordbank-transformer", "apps/windows/tools/cloudime-uiless-host",
+    "apps/cli", "apps/mcp", "apps/mcp-client", "apps/cloud-ui-demo", "apps/windows/server", "apps/windows/tsf", "apps/windows/settings", "apps/windows/ids", "tools/dict-convert", "tools/ids-build", "tools/release-sign", "apps/windows/tools/cloudime-wordbank-transformer", "apps/windows/tools/cloudime-uiless-host",
 ]
 
 [workspace.package]
@@ -39,6 +40,7 @@ cloudime-learning = { path = "crates/cloudime-learning" }
 cloudime-platform = { path = "crates/cloudime-platform" }
 cloudime-lm = { path = "crates/cloudime-lm" }
 cloudime-format = { path = "crates/cloudime-format" }
+cloudime-ids = { path = "crates/cloudime-ids" }
 cloudime-translate = { path = "crates/cloudime-translate" }
 cloudime-script = { path = "crates/cloudime-script" }
 cloudime-script-store = { path = "crates/cloudime-script-store" }

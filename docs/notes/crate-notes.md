@@ -276,6 +276,52 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
 语言模型能 `write_qj` / 从 `.qj` 打开，启动 50 ms；`cargo run --release -p cloudime-dict-convert -- pack lm --name … --license …`
 生成 `data/generated/lm.qj`，Windows 打包（`apps/windows/installer/build.ps1`）在 TSV 更新时自动重打并只把 `.qj` 与 `WordBank\Dict.db` 打进包。词库改走 SQLite（`word-bank` 子命令写 `WordBank\Dict.db`）。设计见 `docs/design/architecture.md`「数据文件：`.qj` 容器」。
 
+## crates/cloudime-ids
+
+汉字 IDS 组字索引：`⿰木木` → `林`。数据文件是 `Kind::Ids = 8` 的 `.qj`，打开即 mmap：
+
+| 分节 | 内容 |
+|---|---|
+| `TEXT` | 规范化 IDS 首尾相接（UTF-8） |
+| `KEYS` | `IdsKey`（16 字节：`start` / `first_entry` / `len` / `entry_count` / 两个预留 `u16`），按 IDS 字节序排序 |
+| `HASH` | 开放寻址表，槽里是 `KEYS` 下标（`cloudime_format::hash`） |
+| `ENTR` | `IdsEntry`（8 字节：码位 / 来源位图 / 标记位图） |
+| `COMP` | 可选；难输入部件表（第二版）：`Component` 20 字节（码位 / 五类千分比 / 笔画 / 主分类 / 标记 / 预留），按码位排序 |
+
+来源位图按 BabelStone 文件里的字母顺序：`G/H/M/T/J/K/P/V/U/S/B/X/Z`（`SOURCE_LETTERS`）；
+`[K]` 这类方括号里是「虚拟字形」的来源，与括号外一样计入；`UCS2003` 单独一位（`SOURCE_UCS2003`）。
+标记位 `FLAG_VARIATION`（`〾`）、`FLAG_UNENCODED`（`{n}`）、`FLAG_WILDCARD`（`？`）。
+
+解析：前缀递归下降，支持标准运算符、两字母缩写（`LR/UD/OC/…`）、`？ ? ⬚` 统一成全角 `？`、
+`{n}` 记为未编码叶子；`〾` 可以出现在任意子树前（数据里有 `⿸{13}〾⿻一㇄`），解析时去掉、只留标记。
+精确查询不接受 `？` / `{n}`；通配查询按 `KEYS` 扫描，
+`？` 匹配任意单个子树，结果按码位升序、按字去重，最多 200 条。不做「水 → 氵」这类部件替换。
+
+生成（实测：108,175 个规范化 IDS 键、97,680 个字、108,403 条记录；
+`〾` 去掉后少数键合并，所以比源文件的 108,425 条少）：
+
+```powershell
+cargo run --release -p cloudime-ids-build -- --ids assets/ids/IDS.TXT --out data/generated/ids.qj
+```
+
+本机 release 实测：精确查询整进程约 12 ms（大头是打开时校验 10 万条键），
+`⿰木？` 通配整进程约 25 ms，UI 常驻打开后单次查询远低于这个数。
+
+命令行冒烟：`cargo run -p cloudime-ids --bin ids-query -- "⿰木木"`（缺省读
+`data/generated/ids.qj`，`--data` 可换路径）。
+
+源数据：`assets/ids/IDS.TXT`（BabelStone，Unicode 16.0，97,680 字，108,425 条 IDS，
+SHA256 `CC2A0A97E6A51ED6EBE59870EF2AF66E83F3C3C27387D79B4441BB2D791D78B1`）。
+文件头自相矛盾（顶部 16.0 / 97,680，正文第 3 节仍写 15.1 / 97,058），以实测 97,680 行为准。
+`.gitattributes` 把它标成 `-text`，避免换行转换改字节。
+
+`assets/ids/components.tsv` 是难输入部件清单（554 项）：字符 / 笔画（13 = 13+）/ 分类（留空 = 自动算）/ 启用。
+初始清单按字统网的笔画分组整理，字符与笔画是事实数据；分类由 `ids-build` 从 IDS 树的位置统计算出。
+
+`IdsDatabase::components()` / `component(char)` / `components_with_stroke(u8)` 读 `COMP`；
+`ComponentRole::{Surround, Top, Side, Bottom, Other}` 对应 `0..=4`；分类页用 `roles` 千分比
+（阈值 100‰）决定一个部件出现在哪些分类下。
+
 ## crates/cloudime-plate
 
 车牌对照表：`Kind::Plate = 7` 的 `.qj`，`PLAT` 定长记录（key / 车牌 / 完整地名 / 短地名的 `TEXT` 偏移与长度）+ `TEXT` 字符串 arena，打开即 mmap。
@@ -2099,6 +2145,8 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
   安装器直接把它拷到 `%APPDATA%\CloudIME`（`onlyifdoesntexist`），`cloudime_platform::smart_symbol`
   的 `SMART_SYMBOL_TEMPLATE` 也是 `include_str!` 这一份 —— 改规则只改这里，别在代码里另抄一份。
 - 英文词表词频：`uv run tools/corpus/english_frequency.py data/generated/english.tsv -o data/generated/english-frequency.tsv`，再 `... english <词表> --frequency <那个文件>`。
+- `assets/ids/`：BabelStone `IDS.TXT`（Unicode 16.0，SHA256 见 `## crates/cloudime-ids`）与难输入部件清单
+  `components.tsv`；`.gitattributes` 标成 `-text`，按原字节入库。
 
 ## tools/dict-convert
 
@@ -2137,6 +2185,75 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
 
 `glossary-db`：把青简那套释义表 `.qj` 转成翻译 Tip 用的 `.db`（总表 `words` + 副表 `contents`）：中文词与译词照搬（一个词几条译词就写几条记录），拼音与首字母从 `--word-bank` 指的词库查（云朵 TSV / `.db` / `.qj` 都认，装机目录的 `WordBank\Dict.db` 直接就行），查不到的留空；`--out` 给目录就放进去、缺省与输入同目录。写完用读端重新打开核对词条数 / 译词数，对不上报错。
 用法：`cargo run --release -p cloudime-dict-convert -- glossary-db LocalDictionary/glossary-en.qj --word-bank WordBank/Dict.db --out LocalDictionary`。
+
+## tools/ids-build
+
+生成 `data/generated/ids.qj` 的工具（包名 `cloudime-ids-build`，可执行文件 `ids-build`）。
+
+```powershell
+# 完整生成：IDS 查询 + 554 个难输入部件 + 分类报告
+cargo run --release -p cloudime-ids-build -- --ids assets/ids/IDS.TXT `
+  --components assets/ids/components.tsv --dict data/generated/dict.tsv `
+  --out data/generated/ids.qj --report data/generated/components-report.tsv
+
+# 自动候选：默认只列词库打不出的（--derive-include-typeable 放开，--derive-min 默认 20）
+cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
+  --components assets/ids/components.tsv --dict data/generated/dict.tsv `
+  --derive-out data/generated/components-candidates.tsv
+```
+
+- 读 `IDS.TXT`，按「规范化 IDS → 字」聚合，写 `TEXT / KEYS / HASH / ENTR`；
+  `〾` 只留标记、不参与键；方括号来源与 `UCS2003` 都计入来源位图；第三列起不以 `^` 开头的注释列跳过。
+- `COMP`：`components.tsv`（字符 / 笔画 / 分类 / 启用），按码位排序写 20 字节的 `Component`。
+  分类自动算：位置角色表 `⿰⿲ 旁`、`⿱ 頭/底`、`⿳ 頭/其它/底`、包围运算子 0 为 `圍`、子 1 按其它
+  且权重 ×0.5、`⿻` 其它、`㇯` 子 0 继承父角色、`⿾⿿` 继承；同字内每个角色取最大权重，跨字累加；
+  深度按 `1/(1+d)` 衰减；归一化成 1000‰；主分类不足 300‰ 归「其它」；平票顺序
+  `旁 > 頭 > 底 > 圍 > 其它`。
+- 笔画：`components.tsv` > Unihan `kTotalStrokes`（多区域值取第一个）> IDS 递归（CJK Strokes 叶子算
+  1 画）> 0；递归推算的条目打 `COMPONENT_FLAG_STROKE_ESTIMATED`。
+- 可打出：`--dict` 的 `dict.tsv` 里有单字词条就打 `COMPONENT_FLAG_TYPEABLE`，部件抽屉默认隐藏这类。
+- 报告 `components-report.tsv` 列：字符 / 码位 / 笔画 / 笔画来源 / 主分类 / 自动主分类 / 五类千分比 /
+  低置信 / 覆盖冲突；生成时顺带打印低置信与笔画未知数量。
+- 实测（554 个部件）：`旁 324 / 頭 105 / 底 53 / 其它 39 / 圍 33`，低置信 0，笔画未知 0；
+  `--derive` 默认门槛下给出 19 个候选（𤣩 / ㇒ / 𠆢 / 𩙿 / ⺄ / 𠘨 …）。
+- 生成结果不提交仓库（`/data` 已 gitignore）；同一输入两次生成的字节一致。
+
+## apps/windows/ids
+
+组字查字窗口 `cloudime-ids.exe`（`cargo run -p cloudime-windows-ids`，调试时可 `-- --data <ids.qj>`）。
+独立普通 Win32 进程，走 `cloud-ui` 的 `run_native`；**系统边框**（原生标题栏），不碰 Server / TSF / 协议。
+
+- 数据：`data/generated/ids.qj`，查找顺序是 `--data` > exe 同目录 `data/generated/ids.qj` > 当前目录；
+  找不到或打不开时整窗显示错误页（带生成命令），不 panic。
+- 渲染：不用 `View` 拼布局（递归槽位表达不了），直接建 `Document`；
+  只把 `cloud_ui::view::text_edit::build`、`cloudime_render::build_text_list` 与主题样式拿出来复用。
+- 字体：`RenderSettings.candidate_font` / `pinyin_font` 指定「Microsoft YaHei UI」——系统 UI 字体的
+  GDI 字体链接不覆盖 IDS 运算符（U+2FF0..），不指定会画成空心框；扩展区部件缺字仍可能显示占位
+  （设计上的降级：结果行仍可双击复制）。
+- 画布：`composer` 是纯状态机（`Node::{Empty, Char, Wildcard, Op}` + active 路径），
+  `canvas::layout` 按运算符切矩形（`⿰/⿲` 横、`⿱/⿳` 纵、包围内缩、`⿻` 左右分栏、一元内缩），
+  `canvas::paint` 画盒子 / 字 / 结构角标，每个槽写 `slot:<path>` 区域；点区域改 active。
+- 交互：结构按钮（`op:<IdsOp::ALL 下标>`）拆当前槽；部件输入框（宿主名 `ids.input`）+ 填入 / ？ / 退格 / 清空；
+  查询或回车把 `to_ids()` 交给 `IdsDatabase`（含 `？` 走通配，最多 200 条）；结果双击写剪贴板。
+- 复用：结果列表复用 `build_text_list`，自己补 `ids.results#<原下标>` 行区域与滚动条 `ScrollTarget`
+  （`apps/windows/ids/src/results.rs`，与 `cloud_ui::view::text_list` 同一套几何）。
+- 实测：`⿰木？` 返回 2484 条、列表可滚；双击第一行复制到 `U+3B41`；输入框粘贴中文正常。
+- 部件抽屉（P2）：右侧 300 点，宽屏时挤窄画布；`笔画 / 分类 / 最近` 三个标签，
+  笔画 `1..12 / 13+ / 未`，分类五个角色 chip；网格 4 列 56 点，滚轮滚动（只画位置提示条）。
+  点击 tile 走 `Composer::insert` 并自动跳槽，同时记进「最近」（去重、最多 12）。
+- 字形：`%APPDATA%\CloudIME\ids.toml` 可写 `[font] family` 与 `show_typeable`；
+  缺字形用 DirectWrite `HasCharacter` 判定（GDI 不支持非 BMP），退化成 IDS ASCII 缩写，
+  画布里插入的部件同样退化成缩写，不会只显示豆腐块。
+- 实测：分类页 `旁` 第一项「僉」能插入画布；非 BMP 部件 tile 显示 `UD丿口` 这类缩写；
+  `⿰木木` 填充、通配查询、双击复制均通过。
+- 已接入：悬浮状态条「工具 → 组字查字」固定项（`tools.rs` 的 `COMPOSER_COMMAND`，不走 `tools.list`，
+  因为清单是 `onlyifdoesntexist` 装的，老安装升级后不会多出新行）；构建与打包在
+  `apps/windows/installer/build.ps1`（CI 用）、本机 `cargo-build.ps1` / `push-local.ps1` /
+  `reconfigure.ps1`、`cloudime.iss` 里都带上 exe 与 `{app}\data\generated\ids.qj`；
+  `tools/release/data-bundle.sh` 的 `PRODUCT_FILES` 也加上了 `ids.qj`。
+- 发布验证（2026-11-17）：release 编出 `cloudime-ids.exe`（8.6 MB）；`push-local.ps1` 覆盖安装后
+  Server 正常启动；安装包 ISCC 编译通过（184.7 MB），stage 里确认有 `cloudime-ids.exe` 与 `ids.qj`；
+  安装目录的 exe 直接启动并读取 `data\generated\ids.qj`。
 
 ## apps/windows/tools/cloudime-wordbank-transformer
 

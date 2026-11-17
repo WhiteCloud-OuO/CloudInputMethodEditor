@@ -86,6 +86,7 @@ if (-not $SkipBuild) {
     try {
         Invoke-Checked 'cargo' @('build', '--release', '--locked',
             '-p', 'cloudime-windows-server', '-p', 'cloudime-windows-tsf', '-p', 'cloudime-windows-settings',
+            '-p', 'cloudime-windows-ids',
             '-p', 'cloudime-mcp-server', '-p', 'cloudime-mcp-client-sidecar', '-p', 'cloudime-wordbank-transformer')
         Invoke-Checked 'cargo' @('build', '--release', '--locked',
             '-p', 'cloudime-windows-tsf', '--target', 'i686-pc-windows-msvc')
@@ -109,12 +110,19 @@ $targets = @(
     'i686-pc-windows-msvc\release\cloudime_tsf_x86.dll',
     'release\cloudime-server.exe',
     'release\cloudime-settings.exe',
+    'release\cloudime-ids.exe',
     'release\cloudime-mcp-server.exe',
     'release\cloudime-mcp-client.exe'
 )
 foreach ($t in $targets) {
     $p = Join-Path $Repo "target\$t"
     if (-not (Test-Path $p)) { throw "缺产物 $p，先跑一次不带 -SkipBuild 的构建" }
+}
+
+# 组字数据与 `cloudime-ids.exe` 配套；`.iss` 没有 skipifsourcedoesntexist，缺了会编到那行才失败。
+$idsData = Join-Path $Repo 'data\generated\ids.qj'
+if (-not (Test-Path $idsData)) {
+    throw "缺组字数据：$idsData（先跑 cargo run --release -p cloudime-ids-build -- --ids assets/ids/IDS.TXT --components assets/ids/components.tsv --out data/generated/ids.qj）"
 }
 
 # 特殊字符输入器是随仓库带的成品（VFB 编，不参与 cargo 构建）：缺了 Inno 编到 [Files] 那行才报错，这里先说清楚。

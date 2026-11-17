@@ -564,6 +564,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "cloudime-ids"
+version = "0.0.3"
+dependencies = [
+ "cloudime-format",
+ "thiserror 2.0.21",
+ "zerocopy",
+]
+
+[[package]]
+name = "cloudime-ids-build"
+version = "0.0.3"
+dependencies = [
+ "clap",
+ "cloudime-format",
+ "cloudime-ids",
+ "thiserror 2.0.21",
+ "zerocopy",
+]
+
+[[package]]
 name = "cloudime-learning"
 version = "0.0.3"
 dependencies = [
@@ -761,6 +781,21 @@ dependencies = [
  "thiserror 2.0.21",
  "tokio",
  "tracing",
+]
+
+[[package]]
+name = "cloudime-windows-ids"
+version = "0.0.3"
+dependencies = [
+ "cloud-ui",
+ "cloudime-ids",
+ "cloudime-render",
+ "embed-manifest",
+ "thiserror 2.0.21",
+ "tracing",
+ "tracing-subscriber",
+ "windows",
+ "winresource",
 ]
 
 [[package]]

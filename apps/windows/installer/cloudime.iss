@@ -113,6 +113,8 @@ Source: "{#Repo}\target\release\cloudime_tsf_x64.dll"; DestDir: "{sys}\IME\Cloud
 Source: "{#Repo}\target\i686-pc-windows-msvc\release\cloudime_tsf_x86.dll"; DestDir: "{syswow64}\IME\CloudIME"; DestName: "{#TsfDll32}"; Flags: ignoreversion uninsrestartdelete; Tasks: full
 #endif
 Source: "{#Repo}\target\release\cloudime-settings.exe"; DestDir: "{app}"; Flags: ignoreversion
+; 组字查字：状态条「工具 → 组字查字」起的独立小窗口，数据在 {app}\data\generated\ids.qj
+Source: "{#Repo}\target\release\cloudime-ids.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; 设置程序自带一份 Windows App Runtime（自包含部署：Windows 10 上机器装的框架包用不了，见 docs\notes\windows-win10.md）；
 ; 文件由 build.ps1 按 settings-runtime.txt 从 target\release 挑进 target\installer\settings-runtime，必须与 exe 同级。
 Source: "{#Repo}\target\installer\settings-runtime\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
@@ -132,6 +134,7 @@ Source: "{#Repo}\apps\windows\tools\cloudime-wordbank-transformer\cwt-gui\releas
 Source: "{#Repo}\apps\windows\installer\tools.list"; DestDir: "{app}\tools"; Flags: onlyifdoesntexist
 ; —— 随包生成数据（只装运行时要的 .qj，不装 dev 中间产物）——
 Source: "{#Repo}\data\generated\lm.qj";          DestDir: "{app}\data\generated";       Flags: ignoreversion
+Source: "{#Repo}\data\generated\ids.qj";         DestDir: "{app}\data\generated";       Flags: ignoreversion
 ; —— 词库：主词库 Dict.db（中文 + 英文合一份）与用户导入的附加词库都放 WordBank\ ——
 ; Excludes 挡掉开发机自己的 UserWordBank.db（用户自造词库，运行时生成，绝不能进包）。
 Source: "{#Repo}\WordBank\*.db";   DestDir: "{app}\WordBank"; Flags: ignoreversion; Excludes: "UserWordBank.db"

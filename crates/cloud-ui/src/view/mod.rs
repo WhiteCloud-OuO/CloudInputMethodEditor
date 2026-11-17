@@ -26,7 +26,7 @@ use cloudime_render::{
 
 mod list_box;
 mod scrollable_page;
-pub(crate) mod text_edit;
+pub mod text_edit;
 mod text_list;
 mod theme;
 mod title_bar;
