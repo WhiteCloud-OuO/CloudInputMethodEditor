@@ -2241,6 +2241,9 @@ cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
 - 实测：`⿰木？` 返回 2484 条、列表可滚；双击第一行复制到 `U+3B41`；输入框粘贴中文正常。
 - 窗口壳：`Decorations::None` + `caption_height: 36`，`app/chrome.rs` 画标题、最小化 / 最大化 / 关闭，
   按钮区域不可拖动；窗口拖动与双击最大化由窗口壳负责。背景圆角随最大化在 12 / 0 之间切换。
+- 配色：`theme.rs` 读 `%APPDATA%\CloudIME\config.toml` 的 `[theme] curr_theme`，
+  在用户 / 随包 `Themes\` 里找 JSON，把候选窗口的背景 / 正文 / 页码 / `extra` 映射成
+  `cloud_ui::Theme`；找不到就用内置深色。打开时默认 `Composer::with_structure(⿰)`，两个空槽。
 - 部件抽屉（V2）：右侧 300 点，四个标签 `笔画 / 分类 / 收藏 / 最近`；顶部搜索框按字符、码位
   十六进制（`2008E`）或 IDS 片段 / 运算符缩写（`LR`、`RD`）过滤；收藏写在 `ids.toml` 的
   `favorites`，预览行星标按钮切换；网格 4 列 56 点，支持滚轮与拖动右侧滚动条。

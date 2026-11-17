@@ -789,6 +789,7 @@ version = "0.0.3"
 dependencies = [
  "cloud-ui",
  "cloudime-ids",
+ "cloudime-platform",
  "cloudime-render",
  "embed-manifest",
  "thiserror 2.0.21",

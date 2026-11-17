@@ -76,6 +76,13 @@ impl Composer {
         Self::default()
     }
 
+    /// 带一个初始结构（打开窗口时默认 `⿰`，两个空槽）。
+    pub fn with_structure(op: IdsOp) -> Self {
+        let mut composer = Self::new();
+        composer.split(op);
+        composer
+    }
+
     pub fn root(&self) -> &Node {
         &self.root
     }
@@ -271,6 +278,19 @@ fn write_node(node: &Node, out: &mut String) -> Result<(), ComposeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn default_structure_is_left_right() {
+        let composer = Composer::with_structure(IdsOp::LeftRight);
+        assert_eq!(composer.active(), &[0]);
+        assert_eq!(
+            composer.root(),
+            &Node::Op {
+                op: IdsOp::LeftRight,
+                children: vec![Node::Empty, Node::Empty]
+            }
+        );
+    }
 
     #[test]
     fn split_turns_an_empty_slot_into_structure() {

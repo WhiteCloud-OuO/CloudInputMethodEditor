@@ -14,6 +14,7 @@ mod drawer;
 mod glyph;
 mod preview;
 mod results;
+mod theme;
 mod ui;
 
 use std::path::PathBuf;
@@ -27,6 +28,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
 
     let database = data::resolve(data_argument().as_deref()).map_err(|error| error.to_string());
     let config = config::load();
+    let theme = theme::load();
     // 系统 UI 字体的 GDI 链接不覆盖 IDS 运算符（U+2FF0..），缺省用微软雅黑；
     // 扩展区部件缺字时由字形探测退回缩写。
     let render_settings = RenderSettings {
@@ -46,7 +48,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             render_settings,
             ..WindowOptions::default()
         },
-        app::IdsApp::new(database, config),
+        app::IdsApp::new(database, config, theme),
     )?;
     Ok(())
 }

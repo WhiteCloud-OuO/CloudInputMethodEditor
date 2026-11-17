@@ -9,7 +9,7 @@ use cloud_ui::{
     Rect, TextListState, Theme,
 };
 use cloudime_ids::{IdsDatabase, IdsMatch, IdsOp, canonicalize, source_label};
-use cloudime_render::{Color, Document, Element, FontSlot};
+use cloudime_render::{Document, Element, FontSlot};
 
 use crate::canvas;
 use crate::clipboard;
@@ -45,19 +45,21 @@ pub struct IdsApp {
     glyphs: GlyphProbe,
     component_ids: HashMap<char, String>,
     config: Config,
+    theme: Theme,
 }
 
 impl IdsApp {
-    pub fn new(database: Result<Database, String>, config: Config) -> Self {
+    pub fn new(database: Result<Database, String>, config: Config, theme: Theme) -> Self {
         let component_ids = match &database {
             Ok(database) => build_component_ids(&database.inner),
             Err(_) => HashMap::new(),
         };
         let drawer = Drawer::with_config(&config);
         let glyphs = GlyphProbe::new(&config.font_family);
+        let composer = Composer::with_structure(IdsOp::LeftRight);
         Self {
             database,
-            composer: Composer::new(),
+            composer,
             input: String::new(),
             matches: Vec::new(),
             total: None,
@@ -68,6 +70,7 @@ impl IdsApp {
             glyphs,
             component_ids,
             config,
+            theme,
         }
     }
 
@@ -305,7 +308,7 @@ impl Application for IdsApp {
 
     fn view(&mut self, ctx: &Context) -> Document {
         let (width, height) = ctx.size();
-        let theme = Theme::dark();
+        let theme = self.theme;
         let layout = Layout::compute(width, height, self.drawer.open);
         let mut elements: Vec<Element> = Vec::new();
         let mut regions = Vec::new();
@@ -411,7 +414,7 @@ impl Application for IdsApp {
         let mut expression_style = theme.muted();
         expression_style.size = 13.0;
         if incomplete {
-            expression_style.color = Color::rgb(214, 132, 120);
+            expression_style.color = crate::theme::danger(&theme);
         }
         ui::label(
             &mut elements,
@@ -478,7 +481,7 @@ impl Application for IdsApp {
         let (message, is_error) = self.status.text();
         let mut status_style = ui::muted_style(&theme);
         if is_error {
-            status_style.color = Color::rgb(214, 132, 120);
+            status_style.color = crate::theme::danger(&theme);
         }
         ui::label(
             &mut elements,
