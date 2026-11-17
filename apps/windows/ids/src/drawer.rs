@@ -1,13 +1,14 @@
-//! 难输入部件抽屉：按笔画 / 分类 / 最近浏览，点击填入当前槽。
+//! 难输入部件抽屉：按笔画 / 分类 / 收藏 / 最近浏览，点击填入当前槽。
 
 use std::collections::HashMap;
 
-use cloud_ui::{Rect, Theme};
-use cloudime_ids::{Component, ComponentRole, IdsDatabase};
+use cloud_ui::{Rect, TextEditStyle, Theme};
+use cloudime_ids::{Component, ComponentRole, IdsDatabase, IdsNode, parse};
 use cloudime_render::{
     Element, FontSlot, HitShape, Region, ScrollAxis, ScrollHandle, ScrollTarget,
 };
 
+use crate::config::Config;
 use crate::glyph::GlyphProbe;
 use crate::ui;
 
@@ -19,6 +20,7 @@ const GAP: f32 = 6.0;
 const COLUMNS: usize = 4;
 const HEADER_HEIGHT: f32 = 24.0;
 const TABS_HEIGHT: f32 = 28.0;
+const SEARCH_HEIGHT: f32 = 28.0;
 const CHIP_HEIGHT: f32 = 24.0;
 const CHIP_GAP: f32 = 4.0;
 const PREVIEW_HEIGHT: f32 = 18.0;
@@ -33,15 +35,19 @@ const ROLE_MINIMUM: u16 = 100;
 pub enum Tab {
     Stroke,
     Role,
+    Favorites,
     Recent,
 }
 
 impl Tab {
+    const ALL: [Self; 4] = [Self::Stroke, Self::Role, Self::Favorites, Self::Recent];
+
     fn index(self) -> usize {
         match self {
             Self::Stroke => 0,
             Self::Role => 1,
-            Self::Recent => 2,
+            Self::Favorites => 2,
+            Self::Recent => 3,
         }
     }
 
@@ -49,7 +55,8 @@ impl Tab {
         Some(match index {
             0 => Self::Stroke,
             1 => Self::Role,
-            2 => Self::Recent,
+            2 => Self::Favorites,
+            3 => Self::Recent,
             _ => return None,
         })
     }
@@ -58,6 +65,7 @@ impl Tab {
         match self {
             Self::Stroke => "笔画",
             Self::Role => "分类",
+            Self::Favorites => "收藏",
             Self::Recent => "最近",
         }
     }
@@ -71,12 +79,17 @@ pub struct Drawer {
     pub stroke: u8,
     pub role: ComponentRole,
     pub show_typeable: bool,
+    pub favorites: Vec<char>,
+    pub search: String,
     pub recent: Vec<char>,
     pub scroll: ScrollHandle,
 
     /// 当前页的部件（`paint` 时刷新），点击 `comp:<tab>:<i>` 用它反查。
     items: Vec<char>,
+    /// 指针正压在哪个 tile 上（只影响高亮）。
     hovered: Option<char>,
+    /// 预览行与收藏按钮针对的部件（离开 tile 后保留）。
+    preview: Option<char>,
 }
 
 impl Default for Drawer {
@@ -87,19 +100,23 @@ impl Default for Drawer {
             stroke: 3,
             role: ComponentRole::Side,
             show_typeable: false,
+            favorites: Vec::new(),
+            search: String::new(),
             recent: Vec::new(),
             scroll: ScrollHandle::new(0.0),
             items: Vec::new(),
             hovered: None,
+            preview: None,
         }
     }
 }
 
 impl Drawer {
-    /// 按用户配置决定是否显示「可打出」部件。
-    pub fn with_typeable(show_typeable: bool) -> Self {
+    /// 按用户配置初始化。
+    pub fn with_config(config: &Config) -> Self {
         Self {
-            show_typeable,
+            show_typeable: config.show_typeable,
+            favorites: config.favorites.clone(),
             ..Self::default()
         }
     }
@@ -109,17 +126,44 @@ impl Drawer {
         self.recent.retain(|item| *item != character);
         self.recent.insert(0, character);
         self.recent.truncate(12);
+        self.preview = Some(character);
+    }
+
+    /// 收藏 / 取消收藏当前预览的部件，返回 `(部件, 现在是否收藏)`。
+    pub fn toggle_favorite(&mut self) -> Option<(char, bool)> {
+        let character = self.preview?;
+        if let Some(index) = self.favorites.iter().position(|item| *item == character) {
+            self.favorites.remove(index);
+            Some((character, false))
+        } else {
+            self.favorites.insert(0, character);
+            Some((character, true))
+        }
+    }
+
+    /// 修改搜索词；调用方负责清空滚动。
+    pub fn set_search(&mut self, text: &str) {
+        self.search = text.to_owned();
+        self.reset_scroll();
     }
 
     /// 处理抽屉自己的区域名；不是抽屉的返回 `false`。
     pub fn click(&mut self, name: &str) -> bool {
-        if name == "drawer:toggle" || name == "drawer:close" {
+        if name == "drawer:toggle" {
             self.open = !self.open;
+            return true;
+        }
+        if name == "drawer:close" {
+            self.open = false;
             return true;
         }
         if name == "drawer:toggle-typeable" {
             self.show_typeable = !self.show_typeable;
             self.reset_scroll();
+            return true;
+        }
+        if name == "drawer:favorite" {
+            self.toggle_favorite();
             return true;
         }
         if let Some(index) = name
@@ -128,6 +172,7 @@ impl Drawer {
             && let Some(tab) = Tab::from_index(index)
         {
             self.tab = tab;
+            self.preview = None;
             self.reset_scroll();
             return true;
         }
@@ -136,6 +181,7 @@ impl Drawer {
             .and_then(|value| value.parse::<u8>().ok())
         {
             self.stroke = value;
+            self.preview = None;
             self.reset_scroll();
             return true;
         }
@@ -145,6 +191,7 @@ impl Drawer {
             && let Some(role) = ComponentRole::ALL.get(index).copied()
         {
             self.role = role;
+            self.preview = None;
             self.reset_scroll();
             return true;
         }
@@ -167,7 +214,7 @@ impl Drawer {
     }
 
     /// 当前页要显示的部件。
-    fn items(&self, database: &IdsDatabase) -> Vec<char> {
+    fn items(&self, database: &IdsDatabase, component_ids: &HashMap<char, String>) -> Vec<char> {
         let mut items = Vec::new();
         match self.tab {
             Tab::Stroke => {
@@ -188,6 +235,7 @@ impl Drawer {
                     }
                 }
             }
+            Tab::Favorites => items.extend(self.favorites.iter().copied()),
             Tab::Recent => {
                 for character in &self.recent {
                     if database.component(*character).is_some() {
@@ -195,6 +243,12 @@ impl Drawer {
                     }
                 }
             }
+        }
+        if !self.search.trim().is_empty() {
+            let query = self.search.trim().to_uppercase();
+            items.retain(|character| {
+                matches_search(*character, component_ids.get(character), &query)
+            });
         }
         items
     }
@@ -254,11 +308,8 @@ impl Drawer {
         );
 
         let mut y = rect.y + 8.0 + HEADER_HEIGHT + 6.0;
-        let tab_width = (inner_width - CHIP_GAP * 2.0) / 3.0;
-        for (index, tab) in [Tab::Stroke, Tab::Role, Tab::Recent]
-            .into_iter()
-            .enumerate()
-        {
+        let tab_width = (inner_width - CHIP_GAP * 3.0) / 4.0;
+        for (index, tab) in Tab::ALL.into_iter().enumerate() {
             let chip = Rect {
                 x: inner_x + (tab_width + CHIP_GAP) * index as f32,
                 y,
@@ -281,7 +332,30 @@ impl Drawer {
                 measure,
             );
         }
-        y += TABS_HEIGHT + 8.0;
+        y += TABS_HEIGHT + 6.0;
+
+        let search_rect = Rect {
+            x: inner_x,
+            y,
+            width: inner_width,
+            height: SEARCH_HEIGHT,
+        };
+        let edit_style = TextEditStyle {
+            height: SEARCH_HEIGHT,
+            radius: 6.0,
+            size: 12.0,
+            fill: Some(theme.background),
+            border: Some(theme.border),
+            ..TextEditStyle::default()
+        };
+        ui::text_edit(
+            elements,
+            search_rect,
+            "ids.drawer.search",
+            &self.search,
+            &edit_style,
+        );
+        y += SEARCH_HEIGHT + 6.0;
 
         if !database.has_components() {
             let mut hint = theme.muted();
@@ -327,7 +401,7 @@ impl Drawer {
                     measure,
                 );
             }
-            Tab::Recent => {}
+            Tab::Favorites | Tab::Recent => {}
         }
 
         let content_bottom = rect.y + rect.height - PREVIEW_HEIGHT - FOOTER_HEIGHT - 8.0;
@@ -337,7 +411,7 @@ impl Drawer {
             width: inner_width,
             height: (content_bottom - y).max(1.0),
         };
-        self.items = self.items(database);
+        self.items = self.items(database, component_ids);
 
         let stride = TILE + GAP;
         let rows = self.items.len().div_ceil(COLUMNS);
@@ -367,6 +441,7 @@ impl Drawer {
                 let hovered = pointer.is_some_and(|(x, y)| ui::inside(tile, x, y));
                 if hovered {
                     self.hovered = Some(character);
+                    self.preview = Some(character);
                 }
                 ui::panel(
                     elements,
@@ -427,19 +502,20 @@ impl Drawer {
             let thumb_height = (track_height * grid.height / content_height).max(20.0);
             let thumb_y = grid.y + (track_height - thumb_height) * (offset / max);
             elements.push(Element::Rect {
-                x: rect.x + rect.width - 6.0,
+                x: rect.x + rect.width - 7.0,
                 y: thumb_y,
                 width: 3.0,
                 height: thumb_height,
                 radius: 1.5,
                 color: theme.border,
             });
+            // 命中区比画出来的宽，方便拖动。
             scroll_targets.push(ScrollTarget {
                 name: "ids.drawer".to_owned(),
                 axis: ScrollAxis::Vertical,
                 area: (grid.x, grid.y, grid.width, grid.height),
-                track: (rect.x + rect.width - 6.0, grid.y, 3.0, grid.height),
-                thumb: (rect.x + rect.width - 6.0, thumb_y, 3.0, thumb_height),
+                track: (rect.x + rect.width - 12.0, grid.y, 12.0, grid.height),
+                thumb: (rect.x + rect.width - 10.0, thumb_y, 9.0, thumb_height),
                 max,
                 step: stride,
                 handle: self.scroll.clone(),
@@ -449,13 +525,13 @@ impl Drawer {
         let preview_rect = Rect {
             x: inner_x,
             y: content_bottom + 2.0,
-            width: inner_width,
+            width: (inner_width - 30.0).max(1.0),
             height: PREVIEW_HEIGHT,
         };
         let mut preview = theme.muted();
         preview.size = 12.0;
         let text = self
-            .hovered
+            .preview
             .and_then(|character| database.component(character).map(|item| (character, item)))
             .map_or_else(
                 || "悬停查看部件；点击填入当前槽".to_owned(),
@@ -476,6 +552,31 @@ impl Drawer {
                 },
             );
         ui::label(elements, preview_rect, &text, &preview, measure);
+
+        let star = Rect {
+            x: inner_x + inner_width - 26.0,
+            y: content_bottom,
+            width: 26.0,
+            height: PREVIEW_HEIGHT + 4.0,
+        };
+        let favorited = self
+            .preview
+            .is_some_and(|character| self.favorites.contains(&character));
+        let star_look = if favorited {
+            ui::ButtonLook::primary(theme)
+        } else {
+            ui::ButtonLook::normal(theme)
+        };
+        ui::button(
+            elements,
+            regions,
+            star,
+            "drawer:favorite",
+            if favorited { "★" } else { "☆" },
+            &star_look,
+            pointer,
+            measure,
+        );
 
         let footer = Rect {
             x: inner_x,
@@ -594,6 +695,45 @@ impl Drawer {
     }
 }
 
+fn matches_search(character: char, ids: Option<&String>, query: &str) -> bool {
+    if character.to_string().to_uppercase() == query {
+        return true;
+    }
+    if format!("{:04X}", character as u32).contains(query) {
+        return true;
+    }
+    ids.is_some_and(|ids| {
+        ids.to_uppercase().contains(query) || ids_abbreviation(ids).contains(query)
+    })
+}
+
+/// 把 IDS 里的运算符换成缩写、叶子保留，供搜索按 `RD` / `UD` 匹配。
+fn ids_abbreviation(ids: &str) -> String {
+    fn write(node: &IdsNode, out: &mut String) {
+        match node {
+            IdsNode::Leaf(character) => out.push(*character),
+            IdsNode::Unencoded(number) => {
+                out.push('{');
+                out.push_str(&number.to_string());
+                out.push('}');
+            }
+            IdsNode::Wildcard => out.push('?'),
+            IdsNode::Op { op, children } => {
+                out.push_str(op.abbreviation());
+                for child in children {
+                    write(child, out);
+                }
+            }
+        }
+    }
+    let Ok(node) = parse(ids) else {
+        return ids.to_uppercase();
+    };
+    let mut text = String::new();
+    write(&node, &mut text);
+    text.to_uppercase()
+}
+
 fn push_character(items: &mut Vec<char>, component: &Component) {
     if let Some(character) = component.character() {
         items.push(character);
@@ -674,10 +814,22 @@ mod tests {
     }
 
     #[test]
+    fn favorites_toggle_the_previewed_component() {
+        let mut drawer = Drawer {
+            preview: Some('木'),
+            ..Drawer::default()
+        };
+        assert_eq!(drawer.toggle_favorite(), Some(('木', true)));
+        assert_eq!(drawer.favorites, vec!['木']);
+        assert_eq!(drawer.toggle_favorite(), Some(('木', false)));
+        assert!(drawer.favorites.is_empty());
+    }
+
+    #[test]
     fn clicks_recognize_tabs_strokes_and_roles() {
         let mut drawer = Drawer::default();
-        assert!(drawer.click("drawer:tab:1"));
-        assert_eq!(drawer.tab, Tab::Role);
+        assert!(drawer.click("drawer:tab:2"));
+        assert_eq!(drawer.tab, Tab::Favorites);
         assert!(drawer.click("drawer:stroke:13"));
         assert_eq!(drawer.stroke, 13);
         assert!(drawer.click("drawer:role:3"));
@@ -696,5 +848,15 @@ mod tests {
         assert_eq!(drawer.component_at("comp:0:1"), Some('水'));
         assert_eq!(drawer.component_at("comp:1:1"), None);
         assert_eq!(drawer.component_at("comp:0:9"), None);
+    }
+
+    #[test]
+    fn search_matches_character_codepoint_and_ids() {
+        let mut ids = HashMap::new();
+        ids.insert('𠂇', "⿸𠂇一".to_owned());
+        assert!(matches_search('𠂇', ids.get(&'𠂇'), "𠂇"));
+        assert!(matches_search('𠂇', ids.get(&'𠂇'), "20087"));
+        assert!(matches_search('𠂇', ids.get(&'𠂇'), "RD"));
+        assert!(!matches_search('𠂇', ids.get(&'𠂇'), "木"));
     }
 }

@@ -39,7 +39,7 @@ fn place(node: &Node, path: &[usize], rect: Rect, gap: f32, out: &mut Vec<Placed
 }
 
 /// 某个子槽的矩形。
-fn child_rect(op: IdsOp, index: usize, rect: Rect, gap: f32) -> Rect {
+pub(crate) fn child_rect(op: IdsOp, index: usize, rect: Rect, gap: f32) -> Rect {
     let inset = (rect.width.min(rect.height) * 0.12).max(2.0);
     match op {
         IdsOp::LeftRight | IdsOp::Overlaid | IdsOp::Subtraction => split_x(rect, 2, gap, index),

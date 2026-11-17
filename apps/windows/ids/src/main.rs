@@ -12,6 +12,7 @@ mod config;
 mod data;
 mod drawer;
 mod glyph;
+mod preview;
 mod results;
 mod ui;
 
@@ -38,7 +39,10 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
             title: "组字查字".to_owned(),
             size: (980.0, 660.0),
             min_size: Some((760.0, 520.0)),
-            decorations: Decorations::System,
+            decorations: Decorations::None,
+            shadow: true,
+            corner_radius: 12.0,
+            caption_height: Some(36.0),
             render_settings,
             ..WindowOptions::default()
         },

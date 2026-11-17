@@ -3,4 +3,5 @@
 mod layout;
 mod paint;
 
+pub(crate) use layout::child_rect;
 pub use paint::{paint, parse_slot};

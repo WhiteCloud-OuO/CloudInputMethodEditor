@@ -9,10 +9,13 @@
 //!
 //! 查询严格按 IDS 匹配，不做「水 → 氵」这类部件替换。
 
+mod alias;
 mod component;
 mod database;
 mod error;
 mod parser;
+
+pub use alias::{GROUPS as ALIAS_GROUPS, canonical_char, canonicalize};
 
 pub use component::{
     COMPONENT_FLAG_DERIVED, COMPONENT_FLAG_STROKE_ESTIMATED, COMPONENT_FLAG_TYPEABLE,

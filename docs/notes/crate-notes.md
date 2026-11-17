@@ -2221,7 +2221,8 @@ cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
 ## apps/windows/ids
 
 组字查字窗口 `cloudime-ids.exe`（`cargo run -p cloudime-windows-ids`，调试时可 `-- --data <ids.qj>`）。
-独立普通 Win32 进程，走 `cloud-ui` 的 `run_native`；**系统边框**（原生标题栏），不碰 Server / TSF / 协议。
+独立普通 Win32 进程，走 `cloud-ui` 的 `run_native`；**整窗自绘**（`Decorations::None` + 自绘标题栏），
+不碰 Server / TSF / 协议。
 
 - 数据：`data/generated/ids.qj`，查找顺序是 `--data` > exe 同目录 `data/generated/ids.qj` > 当前目录；
   找不到或打不开时整窗显示错误页（带生成命令），不 panic。
@@ -2238,14 +2239,22 @@ cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
 - 复用：结果列表复用 `build_text_list`，自己补 `ids.results#<原下标>` 行区域与滚动条 `ScrollTarget`
   （`apps/windows/ids/src/results.rs`，与 `cloud_ui::view::text_list` 同一套几何）。
 - 实测：`⿰木？` 返回 2484 条、列表可滚；双击第一行复制到 `U+3B41`；输入框粘贴中文正常。
-- 部件抽屉（P2）：右侧 300 点，宽屏时挤窄画布；`笔画 / 分类 / 最近` 三个标签，
-  笔画 `1..12 / 13+ / 未`，分类五个角色 chip；网格 4 列 56 点，滚轮滚动（只画位置提示条）。
+- 窗口壳：`Decorations::None` + `caption_height: 36`，`app/chrome.rs` 画标题、最小化 / 最大化 / 关闭，
+  按钮区域不可拖动；窗口拖动与双击最大化由窗口壳负责。背景圆角随最大化在 12 / 0 之间切换。
+- 部件抽屉（V2）：右侧 300 点，四个标签 `笔画 / 分类 / 收藏 / 最近`；顶部搜索框按字符、码位
+  十六进制（`2008E`）或 IDS 片段 / 运算符缩写（`LR`、`RD`）过滤；收藏写在 `ids.toml` 的
+  `favorites`，预览行星标按钮切换；网格 4 列 56 点，支持滚轮与拖动右侧滚动条。
   点击 tile 走 `Composer::insert` 并自动跳槽，同时记进「最近」（去重、最多 12）。
-- 字形：`%APPDATA%\CloudIME\ids.toml` 可写 `[font] family` 与 `show_typeable`；
-  缺字形用 DirectWrite `HasCharacter` 判定（GDI 不支持非 BMP），退化成 IDS ASCII 缩写，
+- 部件替换（V2）：`crates/cloudime-ids/src/alias.rs` 维护等价部件组（水/氵、手/扌、火/灬…），
+  `canonicalize` 把整个 IDS 表达式换成规范形；输入框右侧「替换」开关控制，状态写 `aliases`。
+  只改查询，不改数据。
+- 动态字形（V2）：悬停结果行弹出 210×240 结构预览（`preview.rs`），把命中 IDS 递归切成盒子；
+  缺字形部件用缩写、`{n}` 显示为 `{n}`，系统字体没有字形时仍能看懂结构。
+- 字形：`%APPDATA%\CloudIME\ids.toml` 可写 `[font] family`、`show_typeable`、`favorites`、
+  `aliases`；缺字形用 DirectWrite `HasCharacter` 判定（GDI 不支持非 BMP），退化成 IDS ASCII 缩写，
   画布里插入的部件同样退化成缩写，不会只显示豆腐块。
 - 实测：分类页 `旁` 第一项「僉」能插入画布；非 BMP 部件 tile 显示 `UD丿口` 这类缩写；
-  `⿰木木` 填充、通配查询、双击复制均通过。
+  `⿰水木` 打开「替换」命中「沐」；收藏部件重启后仍在；`⿰木？` 悬停结果能看到 `木 / 乃` 结构图。
 - 已接入：悬浮状态条「工具 → 组字查字」固定项（`tools.rs` 的 `COMPOSER_COMMAND`，不走 `tools.list`，
   因为清单是 `onlyifdoesntexist` 装的，老安装升级后不会多出新行）；构建与打包在
   `apps/windows/installer/build.ps1`（CI 用）、本机 `cargo-build.ps1` / `push-local.ps1` /

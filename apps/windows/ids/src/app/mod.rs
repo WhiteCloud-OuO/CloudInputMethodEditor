@@ -1,18 +1,24 @@
 //! 窗口状态、布局与事件。
 
+mod chrome;
+
 use std::collections::{HashMap, HashSet};
 
-use cloud_ui::{AppEvent, Application, Context, LabelStyle, Rect, TextListState, Theme};
-use cloudime_ids::{IdsDatabase, IdsMatch, IdsOp, source_label};
+use cloud_ui::{
+    AppEvent, Application, CLOSE_ACTION, Context, LabelStyle, MAXIMIZE_ACTION, MINIMIZE_ACTION,
+    Rect, TextListState, Theme,
+};
+use cloudime_ids::{IdsDatabase, IdsMatch, IdsOp, canonicalize, source_label};
 use cloudime_render::{Color, Document, Element, FontSlot};
 
 use crate::canvas;
 use crate::clipboard;
 use crate::composer::{Composer, InsertOutcome};
-use crate::config::Config;
+use crate::config::{self, Config};
 use crate::data::Database;
 use crate::drawer::{self, Drawer};
 use crate::glyph::GlyphProbe;
+use crate::preview;
 use crate::results;
 use crate::ui;
 
@@ -38,6 +44,7 @@ pub struct IdsApp {
     drawer: Drawer,
     glyphs: GlyphProbe,
     component_ids: HashMap<char, String>,
+    config: Config,
 }
 
 impl IdsApp {
@@ -46,6 +53,8 @@ impl IdsApp {
             Ok(database) => build_component_ids(&database.inner),
             Err(_) => HashMap::new(),
         };
+        let drawer = Drawer::with_config(&config);
+        let glyphs = GlyphProbe::new(&config.font_family);
         Self {
             database,
             composer: Composer::new(),
@@ -55,9 +64,16 @@ impl IdsApp {
             status: Status::Idle,
             results: TextListState::default(),
             pointer: None,
-            drawer: Drawer::with_typeable(config.show_typeable),
-            glyphs: GlyphProbe::new(&config.font_family),
+            drawer,
+            glyphs,
             component_ids,
+            config,
+        }
+    }
+
+    fn save_config(&mut self) {
+        if let Err(error) = config::save(&self.config) {
+            self.status = Status::Error(error);
         }
     }
 
@@ -74,6 +90,20 @@ impl IdsApp {
     }
 
     fn click(&mut self, name: &str) {
+        if name == "drawer:favorite" {
+            if let Some((character, favorite)) = self.drawer.toggle_favorite() {
+                self.config.favorites = self.drawer.favorites.clone();
+                self.save_config();
+                self.status = Status::Favorite(character, favorite);
+            }
+            return;
+        }
+        if name == "drawer:toggle-typeable" {
+            self.drawer.click(name);
+            self.config.show_typeable = self.drawer.show_typeable;
+            self.save_config();
+            return;
+        }
         if self.drawer.click(name) {
             return;
         }
@@ -119,6 +149,11 @@ impl IdsApp {
                 self.status = Status::Idle;
             }
             "query" => self.query(),
+            "toggle-aliases" => {
+                self.config.aliases = !self.config.aliases;
+                self.save_config();
+                self.status = Status::Idle;
+            }
             _ => {}
         }
     }
@@ -141,13 +176,26 @@ impl IdsApp {
     }
 
     fn query(&mut self) {
-        let ids = match self.composer.to_ids() {
+        let mut ids = match self.composer.to_ids() {
             Ok(ids) => ids,
             Err(error) => {
                 self.status = Status::Incomplete(error.to_string());
                 return;
             }
         };
+        let mut relaxed = false;
+        if self.config.aliases {
+            match canonicalize(&ids) {
+                Ok(value) => {
+                    relaxed = value != ids;
+                    ids = value;
+                }
+                Err(error) => {
+                    self.status = Status::Error(error.to_string());
+                    return;
+                }
+            }
+        }
         let database = match &self.database {
             Ok(database) => &database.inner,
             Err(message) => {
@@ -159,7 +207,7 @@ impl IdsApp {
             match database.lookup_wildcard(&ids, 200) {
                 Ok(found) => {
                     self.total = Some(found.total);
-                    self.set_matches(found.matches);
+                    self.set_matches(found.matches, relaxed);
                 }
                 Err(error) => self.status = Status::Error(error.to_string()),
             }
@@ -167,14 +215,14 @@ impl IdsApp {
             match database.lookup_exact(&ids) {
                 Ok(matches) => {
                     self.total = None;
-                    self.set_matches(matches);
+                    self.set_matches(matches, relaxed);
                 }
                 Err(error) => self.status = Status::Error(error.to_string()),
             }
         }
     }
 
-    fn set_matches(&mut self, matches: Vec<IdsMatch>) {
+    fn set_matches(&mut self, matches: Vec<IdsMatch>, relaxed: bool) {
         let total = self.total.unwrap_or(matches.len());
         self.matches = matches;
         self.results.selected = None;
@@ -186,6 +234,7 @@ impl IdsApp {
             Status::Found {
                 shown: self.matches.len(),
                 total,
+                relaxed,
             }
         };
     }
@@ -235,10 +284,16 @@ impl Application for IdsApp {
             match event {
                 AppEvent::MouseMoved { x, y } => self.pointer = Some((*x, *y)),
                 AppEvent::MouseLeft => self.pointer = None,
+                AppEvent::RegionClicked(name) if name == MINIMIZE_ACTION => ctx.minimize(),
+                AppEvent::RegionClicked(name) if name == MAXIMIZE_ACTION => ctx.toggle_maximize(),
+                AppEvent::RegionClicked(name) if name == CLOSE_ACTION => ctx.close(),
                 AppEvent::RegionClicked(name) => self.click(name),
                 AppEvent::RegionDoubleClicked(name) => self.double_click(name),
                 AppEvent::TextChanged { name, text } if name == "ids.input" => {
                     self.input = text.clone();
+                }
+                AppEvent::TextChanged { name, text } if name == "ids.drawer.search" => {
+                    self.drawer.set_search(text);
                 }
                 AppEvent::TextKey { name, vk, .. } if name == "ids.input" && *vk == 0x0D => {
                     self.query();
@@ -267,7 +322,17 @@ impl Application for IdsApp {
                 height,
             },
             theme.background,
-            0.0,
+            if ctx.is_maximized() { 0.0 } else { 12.0 },
+        );
+        chrome::paint(
+            &mut elements,
+            &mut regions,
+            width,
+            "组字查字",
+            &theme,
+            self.pointer,
+            ctx.is_maximized(),
+            &mut measure,
         );
 
         let database = match &self.database {
@@ -383,6 +448,21 @@ impl Application for IdsApp {
                 &mut measure,
             );
         }
+        let look = if self.config.aliases {
+            ui::ButtonLook::primary(&theme)
+        } else {
+            ui::ButtonLook::normal(&theme)
+        };
+        ui::button(
+            &mut elements,
+            &mut regions,
+            layout.replace,
+            "toggle-aliases",
+            "替换",
+            &look,
+            self.pointer,
+            &mut measure,
+        );
         ui::button(
             &mut elements,
             &mut regions,
@@ -424,7 +504,7 @@ impl Application for IdsApp {
             &ui::muted_style(&theme),
             &mut measure,
         );
-        results::build(
+        let hovered_result = results::build(
             &mut elements,
             &mut regions,
             &mut scroll_targets,
@@ -432,6 +512,7 @@ impl Application for IdsApp {
             &rows,
             &self.results,
             &theme,
+            self.pointer,
             &mut measure,
         );
 
@@ -444,6 +525,32 @@ impl Application for IdsApp {
                 database,
                 &theme,
                 self.pointer,
+                &mut measure,
+                &self.component_ids,
+                &mut self.glyphs,
+            );
+        }
+
+        if let Some(index) = hovered_result
+            && let Some(item) = self.matches.get(index)
+            && let Some(anchor) = self.pointer
+        {
+            let ids = item.ids.clone();
+            let character = item.character;
+            let right = layout.drawer.map_or(width - 8.0, |drawer| drawer.x - 8.0);
+            let bounds = Rect {
+                x: 8.0,
+                y: chrome::HEIGHT + 8.0,
+                width: (right - 8.0).max(1.0),
+                height: (height - chrome::HEIGHT - 16.0).max(1.0),
+            };
+            preview::paint(
+                &mut elements,
+                character,
+                &ids,
+                anchor,
+                bounds,
+                &theme,
                 &mut measure,
                 &self.component_ids,
                 &mut self.glyphs,
@@ -478,9 +585,9 @@ fn draw_error(
 ) {
     let rect = Rect {
         x: MARGIN,
-        y: MARGIN,
+        y: chrome::HEIGHT + MARGIN,
         width: width - MARGIN * 2.0,
-        height: height - MARGIN * 2.0,
+        height: height - chrome::HEIGHT - MARGIN * 2.0,
     };
     ui::panel(elements, rect, theme.surface, theme.radius);
     let style = LabelStyle {
@@ -571,6 +678,7 @@ struct Layout {
     wildcard: Rect,
     backspace: Rect,
     clear: Rect,
+    replace: Rect,
     query: Rect,
     status: Rect,
     results_label: Rect,
@@ -587,7 +695,7 @@ impl Layout {
         };
         let content_width = (width - MARGIN * 2.0 - reserved_width).max(200.0);
         let toolbar_height = TOOLBAR_BUTTON_HEIGHT * 2.0 + TOOLBAR_BUTTON_GAP;
-        let mut y = MARGIN;
+        let mut y = chrome::HEIGHT + MARGIN;
 
         let toolbar = Rect {
             x: MARGIN,
@@ -617,7 +725,7 @@ impl Layout {
         };
         y += 20.0 + 8.0;
 
-        let buttons = SMALL_BUTTON_WIDTH * 4.0 + QUERY_BUTTON_WIDTH + 8.0 * 5.0;
+        let buttons = SMALL_BUTTON_WIDTH * 5.0 + QUERY_BUTTON_WIDTH + 8.0 * 6.0;
         let input = Rect {
             x: MARGIN,
             y,
@@ -639,6 +747,7 @@ impl Layout {
         let wildcard = next(SMALL_BUTTON_WIDTH);
         let backspace = next(SMALL_BUTTON_WIDTH);
         let clear = next(SMALL_BUTTON_WIDTH);
+        let replace = next(SMALL_BUTTON_WIDTH);
         let query = next(QUERY_BUTTON_WIDTH);
         y += INPUT_HEIGHT + 10.0;
 
@@ -667,9 +776,9 @@ impl Layout {
 
         let drawer = drawer_open.then(|| Rect {
             x: width - MARGIN - drawer::WIDTH,
-            y: MARGIN,
+            y: chrome::HEIGHT + MARGIN,
             width: drawer::WIDTH,
-            height: (height - MARGIN * 2.0).max(1.0),
+            height: (height - chrome::HEIGHT - MARGIN * 2.0).max(1.0),
         });
 
         Self {
@@ -681,6 +790,7 @@ impl Layout {
             wildcard,
             backspace,
             clear,
+            replace,
             query,
             status,
             results_label,
@@ -696,8 +806,13 @@ enum Status {
     Idle,
     Incomplete(String),
     NotFound,
-    Found { shown: usize, total: usize },
+    Found {
+        shown: usize,
+        total: usize,
+        relaxed: bool,
+    },
     Copied(char),
+    Favorite(char, bool),
     Error(String),
 }
 
@@ -710,11 +825,41 @@ impl Status {
             ),
             Self::Incomplete(message) => (message.clone(), true),
             Self::NotFound => ("没有找到：Unicode IDS 未收录这个结构".to_owned(), true),
-            Self::Found { shown, total } if total > shown => {
-                (format!("共 {total} 条，显示前 {shown} 条"), false)
-            }
-            Self::Found { shown, .. } => (format!("找到 {shown} 条；双击结果复制"), false),
+            Self::Found {
+                shown,
+                total,
+                relaxed,
+            } if total > shown => (
+                format!(
+                    "共 {total} 条，显示前 {shown} 条{}",
+                    if *relaxed {
+                        "（已按常见部件替换）"
+                    } else {
+                        ""
+                    }
+                ),
+                false,
+            ),
+            Self::Found { shown, relaxed, .. } => (
+                format!(
+                    "找到 {shown} 条{}；双击结果复制",
+                    if *relaxed {
+                        "（已按常见部件替换）"
+                    } else {
+                        ""
+                    }
+                ),
+                false,
+            ),
             Self::Copied(character) => (format!("已复制：{character}"), false),
+            Self::Favorite(character, favorite) => (
+                if *favorite {
+                    format!("已收藏：{character}")
+                } else {
+                    format!("已取消收藏：{character}")
+                },
+                false,
+            ),
             Self::Error(message) => (message.clone(), true),
         }
     }
@@ -736,6 +881,7 @@ mod tests {
             layout.wildcard,
             layout.backspace,
             layout.clear,
+            layout.replace,
             layout.query,
             layout.status,
             layout.results_label,
