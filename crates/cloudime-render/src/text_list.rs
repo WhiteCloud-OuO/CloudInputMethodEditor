@@ -244,7 +244,9 @@ pub fn build(
         edge_width: style.edge_width,
         content_gap: style.content_gap,
         gap: style.gap,
-        auto_item_gap_averaging: false,
+        // 与列表盒一致：视口装不下全部行时，把剩余高度平均成行间隙，保证每行完整、
+        // 相邻行之间的垂直空隙相等。
+        auto_item_gap_averaging: true,
         align: ListBoxAlign::Left,
         rows: Vec::with_capacity(visible.len()),
         row_count: visible.len(),
@@ -444,6 +446,52 @@ mod tests {
         assert_eq!(list.rows[1].key.as_deref(), Some("乙丙"));
         assert!(!list.scrollbar_visible(), "自动高度下没有滚动条");
         assert!(!list.h_scrollbar_visible(), "文字放得下，不出水平条");
+    }
+
+    #[test]
+    fn fixed_viewport_distributes_remaining_height_between_visible_rows() {
+        let style = TextListStyle {
+            row_height: 20.0,
+            gap: 2.0,
+            ..TextListStyle::default()
+        };
+        let all = items(&["a", "b", "c", "d", "e", "f"]);
+        let shown = visible_items(&all, "", false);
+        let mut measure = measure;
+        let list = build(
+            &style,
+            &all,
+            &shown,
+            None,
+            None,
+            0.0,
+            0.0,
+            (0.0, 0.0, 100.0, 80.0),
+            "list",
+            &mut measure,
+        );
+        assert!(list.auto_item_gap_averaging, "文本列表与列表盒同一套规则");
+        assert!(list.scrollbar_visible());
+        let viewport = list.viewport_height();
+        let visible: Vec<(f32, f32)> = list
+            .rows
+            .iter()
+            .filter_map(|row| list.row_view_top(row).map(|top| (top, row.height)))
+            .collect();
+        assert!(visible.len() >= 2, "{visible:?}");
+        assert!(visible[0].0.abs() < 0.01, "第一行贴顶：{visible:?}");
+        let gap = visible[1].0 - (visible[0].0 + visible[0].1);
+        for pair in visible.windows(2) {
+            let next_gap = pair[1].0 - (pair[0].0 + pair[0].1);
+            assert!((next_gap - gap).abs() < 0.01, "间隙应相等：{visible:?}");
+        }
+        for (top, height) in &visible {
+            assert!(*top >= -0.01, "行顶被裁：{visible:?}");
+            assert!(top + height <= viewport + 0.01, "行底被裁：{visible:?}");
+        }
+        assert!(gap > style.gap, "剩余高度应平均进间隙：{gap}");
+        let row = list.row_at(visible[1].0 + list.edge_width + list.content_gap + 1.0);
+        assert_eq!(row, Some(1), "命中要按平均后的行位置");
     }
 
     #[test]

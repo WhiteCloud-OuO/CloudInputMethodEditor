@@ -1151,6 +1151,7 @@ mod tests {
         };
         assert!((list.height - 60.0).abs() < 0.01, "固定视口");
         assert!(list.scrollbar_visible());
+        assert!(list.auto_item_gap_averaging, "文本列表也要平均行间隙");
         assert!((list.scroll_offset - 30.0).abs() < 0.01);
     }
 

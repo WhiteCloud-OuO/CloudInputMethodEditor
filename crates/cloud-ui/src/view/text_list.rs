@@ -78,26 +78,17 @@ pub(super) fn build<F>(
     let shown = visible_items(items, query, sort);
     let edge = style.edge_width.max(0.0);
     let gap = style.content_gap.max(0.0);
-    let stride = style.stride();
     let scroll = state.scroll.get();
 
     // 指针已经是相对整个 view 的坐标；换算到列表盒左上角后取行。
     let pointer = pointer.map(|(x, y)| (x - (drawn.0 + rect.x), y - (drawn.1 + rect.y)));
-    let hovered = pointer
-        .filter(|(x, y)| *x >= 0.0 && *x <= rect.width && *y >= 0.0 && *y <= rect.height)
-        .and_then(|(_, y)| {
-            let local = y - edge - gap + scroll;
-            (local >= 0.0).then(|| (local / stride) as usize)
-        })
-        .filter(|position| *position < shown.len())
-        .map(|position| shown[position]);
 
     let mut list = build_text_list(
         &style,
         items,
         &shown,
         state.selected,
-        hovered,
+        None,
         scroll,
         state.h_scroll.get(),
         (rect.x, rect.y, rect.width, rect.height),
@@ -111,12 +102,28 @@ pub(super) fn build<F>(
     state.scroll.set(list.scroll_offset);
     state.h_scroll.set(list.h_scroll_offset);
 
+    // 行位置由 `ListBox` 算（含平均间隙），悬停也按同一份位置取。
+    if let Some((x, y)) = pointer
+        && x >= 0.0
+        && x <= rect.width
+        && y >= 0.0
+        && y <= rect.height
+        && let Some(position) = list.row_at(y)
+    {
+        list.hovered_index = Some(position as i32);
+    }
+
     let viewport = list.viewport_width();
     let viewport_height = list.viewport_height();
-    for (position, &index) in shown.iter().enumerate() {
-        let top = (position as f32 * stride - list.clamp_scroll()).max(0.0);
-        let bottom = (position as f32 * stride - list.clamp_scroll() + style.row_height)
-            .min(viewport_height);
+    for row in &list.rows {
+        let Some(&index) = shown.get(row.index) else {
+            continue;
+        };
+        let Some(view_top) = list.row_view_top(row) else {
+            continue;
+        };
+        let top = view_top.max(0.0);
+        let bottom = (view_top + row.height).min(viewport_height);
         if bottom <= top {
             continue;
         }
