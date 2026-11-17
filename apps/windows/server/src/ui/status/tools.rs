@@ -6,14 +6,20 @@
 use std::path::{Path, PathBuf};
 
 use windows::Win32::Foundation::{HWND, LPARAM, POINT, WPARAM};
-use windows::Win32::UI::WindowsAndMessaging::{
-    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, MF_STRING, PostMessageW,
-    SetForegroundWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
+use windows::Win32::UI::Shell::{
+    ASSOCF_NONE, ASSOCSTR_EXECUTABLE, AssocQueryStringW, ShellExecuteW,
 };
-use windows::core::PCWSTR;
+use windows::Win32::UI::WindowsAndMessaging::{
+    AppendMenuW, CreatePopupMenu, DestroyMenu, GetCursorPos, MF_SEPARATOR, MF_STRING, PostMessageW,
+    SW_SHOWNORMAL, SetForegroundWindow, TPM_RETURNCMD, TPM_RIGHTBUTTON, TrackPopupMenu, WM_NULL,
+};
+use windows::core::{HSTRING, PCWSTR, w};
 
 /// 清单文件名（在 `tools\` 下）。
 const LIST_FILE: &str = "tools.list";
+
+/// 「查看帮助手册」的菜单命令 id；工具项用 1 起，避开一段距离。
+const HELP_COMMAND: usize = 0x7000;
 
 /// 一个菜单里能起的工具。
 struct Tool {
@@ -133,13 +139,11 @@ fn parse(text: &str, dir: &Path) -> Vec<(PathBuf, String)> {
     items
 }
 
-/// 在 `owner`（状态条窗口）上弹「工具」菜单；选了就起它。没有可用工具就什么都不做。
+/// 在 `owner`（状态条窗口）上弹「工具」菜单；选了工具就起它，选「查看帮助手册」就开手册。
+///
+/// 工具清单为空时菜单里仍保留「查看帮助手册」。
 pub(super) fn show_menu(owner: HWND) {
     let tools = Tool::load();
-    if tools.is_empty() {
-        tracing::debug!("「工具」菜单：tools.list 里没有可用项");
-        return;
-    }
     let Ok(menu) = (unsafe { CreatePopupMenu() }) else {
         tracing::warn!("建弹出菜单失败");
         return;
@@ -154,6 +158,16 @@ pub(super) fn show_menu(owner: HWND) {
             let _ = unsafe { DestroyMenu(menu) };
             return;
         }
+    }
+    if !tools.is_empty() {
+        let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
+    }
+    let help = wide_z("查看帮助手册");
+    if let Err(error) = unsafe { AppendMenuW(menu, MF_STRING, HELP_COMMAND, PCWSTR(help.as_ptr())) }
+    {
+        tracing::warn!(%error, "往菜单里加帮助项失败");
+        let _ = unsafe { DestroyMenu(menu) };
+        return;
     }
     let mut point = POINT::default();
     let _ = unsafe { GetCursorPos(&mut point) };
@@ -174,11 +188,76 @@ pub(super) fn show_menu(owner: HWND) {
     let _ = unsafe { PostMessageW(Some(owner), WM_NULL, WPARAM(0), LPARAM(0)) };
     let _ = unsafe { DestroyMenu(menu) };
     let command = command.0;
-    if command > 0
-        && let Some(tool) = tools.get(usize::try_from(command - 1).unwrap_or(usize::MAX))
-    {
+    if command <= 0 {
+        return;
+    }
+    let command = command as usize;
+    if command == HELP_COMMAND {
+        open_tutorial();
+    } else if let Some(tool) = tools.get(command - 1) {
         tool.launch();
     }
+}
+
+/// 用系统默认程序打开随包的使用手册（安装目录根部的 `tutorial.md`）。
+///
+/// `.md` 在很多机器上没有默认打开方式：没有就直接用记事本，别先弹「你要如何打开」。
+fn open_tutorial() {
+    let Some(root) = cloudime_platform::resources::bundled_root() else {
+        tracing::warn!("找不到随包资源根目录，打不开帮助手册");
+        return;
+    };
+    let path = root.join("tutorial.md");
+    if !path.is_file() {
+        tracing::warn!(path = %path.display(), "帮助手册不在，跳过");
+        return;
+    }
+    if !has_open_association(&path) {
+        if let Err(error) = std::process::Command::new("notepad.exe").arg(&path).spawn() {
+            tracing::warn!(%error, path = %path.display(), "用记事本打开帮助手册失败");
+        }
+        return;
+    }
+    let file = HSTRING::from(path.as_os_str());
+    let workdir = path
+        .parent()
+        .map(|dir| HSTRING::from(dir.as_os_str()))
+        .unwrap_or_default();
+    let code = unsafe {
+        ShellExecuteW(
+            None,
+            w!("open"),
+            PCWSTR(file.as_ptr()),
+            PCWSTR::null(),
+            PCWSTR(workdir.as_ptr()),
+            SW_SHOWNORMAL,
+        )
+    };
+    // ShellExecuteW 返回值 > 32 才算成功。
+    if (code.0 as isize) <= 32 {
+        tracing::warn!(code = code.0 as isize, path = %path.display(), "打开帮助手册失败");
+    }
+}
+
+/// 这个文件类型在系统里有没有「默认打开方式」。
+fn has_open_association(path: &Path) -> bool {
+    let Some(extension) = path.extension().and_then(|extension| extension.to_str()) else {
+        return false;
+    };
+    let extension = HSTRING::from(format!(".{extension}"));
+    let mut size = 0u32;
+    let queried = unsafe {
+        AssocQueryStringW(
+            ASSOCF_NONE,
+            ASSOCSTR_EXECUTABLE,
+            PCWSTR(extension.as_ptr()),
+            PCWSTR::null(),
+            None,
+            &mut size,
+        )
+    };
+    // 「要给多大缓冲」是 S_FALSE，也算成功；真没关联时 size 为 0。
+    queried.is_ok() && size > 1
 }
 
 /// 以 0 结尾的宽字符串。
