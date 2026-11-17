@@ -800,7 +800,8 @@ Windows 壳的公共层（2026-10-20 从 `apps/windows/server/src/ui/` 抽出）
   `Content::Empty` 只是通用 dialog 的占位。
   焦点：`Assets::add` 对 dialog 会把焦点从其他资产经 `return_focus_to_owner` 收回，再指定给 dialog。
   **对话框都是类**：`MessageDialog::new(title, text, icon, &buttons)` /
-  `TextInputDialog::new(title, text, allow_multiline, default_text)` 返回实例，`pub style: DialogStyle`
+  `TextInputDialog::new(title, text, allow_multiline, default_text)` /
+  `TextListDialog::new(title, text, items)` 返回实例，`pub style: DialogStyle`
   可改字体槽 / 字号 / 五种颜色；`show(self)` 吃掉实例并同步阻塞，所以「属性只在 show 之前有效」
   在 Rust 由编译器保证。`DialogStyle`（`dialog/style.rs`）把颜色覆盖写进主题副本，字号 / 字体槽由各对话框
   传给 `dialog/layout.rs` 的标题 / 正文 / 按钮绘制。
@@ -818,6 +819,14 @@ Windows 壳的公共层（2026-10-20 从 `apps/windows/server/src/ui/` 抽出）
   编辑框实际由 `TextHostWindow` 承载，宿主位置取元素 `edit_rect()`（避开边框 / 圆角），背景 / 边框仍由元素画；
   打开即 `select_all(true)` + `host.focus()`，直接输入替换缺省文本。
   确定返回编辑框文本，取消返回 `default_text`（空则空串）；单行模式先把 `default_text` 的换行转成字面量 `\n`。
+  **文本列表选择对话框**（`crate::dialog::TextListDialog`）：`show(self) -> i32`。
+  布局是标题 / 提示 `TextBlock` / `TextList` / 确定取消按钮；列表用 `build_text_list`，固定视口，
+  每行写 `text_list_dialog.item.<原下标>` 命中区域，滚轮按行高滚动。点行只更新选中项并
+  `set_document`，不关闭对话框；确定返回选中项原下标（0 起），取消 / 关闭 / 空列表返回 `-1`。
+  `BlockingPanel` 为此新增 `open_with`：事件线程只把非按钮点击 / 滚轮入队并唤醒，
+  `pump_value` 在 UI 线程取出队列交给 `on_event` 更新文档；`pump_value` 用 `i32::MIN` 当「还没选」哨兵，
+  `pump` 仍只返回 0–255 的按钮下标。辅助窗口模板没有 `WM_PAINT` 重绘路径，换文档后要由
+  `DialogHandle::set_document` 再 `show_centered` 一次才会重新出图。
   **共用部分**：`dialog/layout.rs` 独占尺寸常数、折行、标题文字与按钮绘制；`dialog/blocking.rs` 的
   `BlockingPanel` 独占「禁用所有者 → 屏蔽 RichEdit → `show_centered` → 嵌套 `GetMessageW` → `Drop` 恢复」。
   所有者名下的 RichEdit 宿主列表来自 `current::CurrentWindow.edit_hosts`（独立窗口进入 `current` 时传入），

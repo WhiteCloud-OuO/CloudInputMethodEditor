@@ -9,7 +9,9 @@ mod layout;
 mod message;
 mod style;
 mod text_input;
+mod text_list;
 
 pub use message::MessageDialog;
 pub use style::DialogStyle;
 pub use text_input::TextInputDialog;
+pub use text_list::TextListDialog;

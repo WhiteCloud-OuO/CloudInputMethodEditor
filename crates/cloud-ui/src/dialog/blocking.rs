@@ -4,8 +4,11 @@
 //! 跑嵌套消息循环等按钮点击，期间挡住所有者。这个模块只负责这套壳子，具体内容由调用方
 //! 生成 [`Document`] 并给出「区域名 → 返回下标」的映射。
 
+use std::cell::RefCell;
+use std::collections::VecDeque;
 use std::rc::Rc;
 use std::sync::Arc;
+use std::sync::Mutex;
 use std::sync::atomic::{AtomicI32, AtomicIsize, Ordering};
 
 use windows::Win32::Foundation::{HWND, LPARAM, RECT, WPARAM};
@@ -28,6 +31,36 @@ use crate::view::Theme;
 
 /// 按钮点击后叫醒嵌套消息循环的自定义消息。
 const WAKE: u32 = WM_APP + 0x62;
+
+/// 对话框里的非按钮事件处理器（行点击 / 滚轮）。
+type RegionEvents = Box<dyn FnMut(&PanelEvent, &DialogHandle)>;
+
+/// 对话框内容的更新入口：换文档后重新渲染并贴图。
+///
+/// 辅助窗口模板是分层的、没有 `WM_PAINT` 重绘路径，内容变了必须再走一次
+/// `show_centered` 才会重新出图。
+pub(super) struct DialogHandle {
+    template: Rc<AuxiliaryWindowTemplate>,
+    owner: HWND,
+}
+
+impl DialogHandle {
+    /// 换掉对话框内容并立即重画。
+    pub(super) fn set_document(&self, document: Document) {
+        self.template.set_document(document);
+        self.refresh();
+    }
+
+    /// 按当前所有者矩形重新居中并贴图。
+    pub(super) fn refresh(&self) {
+        let mut owner = RECT::default();
+        unsafe {
+            let _ = GetWindowRect(self.owner, &mut owner);
+        }
+        self.template
+            .show_centered(owner, cloud_ui_types::LayoutMode::Vertical);
+    }
+}
 
 /// 按当前独立窗口最近一帧的背景色选深 / 浅主题。
 pub(super) fn theme() -> Theme {
@@ -58,6 +91,10 @@ pub(super) struct BlockingPanel {
     edit_hosts: Vec<Rc<TextHostWindow>>,
     /// 打开之前线程里的焦点窗口；关闭时还给所有者。
     previous_focus: Option<HWND>,
+    /// 非按钮点击 / 滚轮：事件线程只入队，`pump_value` 里再交给 `on_event`。
+    pending: Arc<Mutex<VecDeque<PanelEvent>>>,
+    /// 处理行点击 / 滚轮（可更新对话框内容）；只在 UI 线程的 `pump_value` 里调用。
+    on_event: RefCell<Option<RegionEvents>>,
 }
 
 impl BlockingPanel {
@@ -69,6 +106,36 @@ impl BlockingPanel {
         document: Document,
         button: fn(&str) -> Option<u8>,
     ) -> windows::core::Result<Self> {
+        Self::open_inner(
+            current,
+            document,
+            move |region| button(region).map(i32::from),
+            None,
+        )
+    }
+
+    /// 打开对话框，并把非按钮点击 / 滚轮交给 `on_event`。
+    ///
+    /// `button` 返回 `Some` 时关闭对话框、把该值作为结果；返回 `None` 的点击与滚轮
+    /// 排进队列，在 [`pump_value`](Self::pump_value) 里交给 `on_event`，可以更新文档后继续等。
+    pub(super) fn open_with(
+        current: &CurrentWindow,
+        document: Document,
+        button: fn(&str) -> Option<i32>,
+        on_event: impl FnMut(&PanelEvent, &DialogHandle) + 'static,
+    ) -> windows::core::Result<Self> {
+        Self::open_inner(current, document, button, Some(Box::new(on_event)))
+    }
+
+    fn open_inner<F>(
+        current: &CurrentWindow,
+        document: Document,
+        button: F,
+        on_event: Option<RegionEvents>,
+    ) -> windows::core::Result<Self>
+    where
+        F: Fn(&str) -> Option<i32> + Send + 'static,
+    {
         // 先记下焦点：建模板 / 禁用所有者都会让原点窗口先丢掉焦点，关闭时要还回去。
         let previous_focus = unsafe { GetFocus() };
         let previous_focus = (!previous_focus.0.is_null()).then_some(previous_focus);
@@ -87,21 +154,35 @@ impl BlockingPanel {
         template.set_focused(true);
         template.set_modal(true);
 
-        let result = Arc::new(AtomicI32::new(-1));
+        // `i32::MIN` = 还没选；按钮结果可以是 0.. / -1（取消）。
+        let result = Arc::new(AtomicI32::new(i32::MIN));
+        let pending = Arc::new(Mutex::new(VecDeque::new()));
+        let forward = on_event.is_some();
         let dialog_hwnd = Arc::new(AtomicIsize::new(template.hwnd().0 as isize));
         template.set_events(Box::new({
             let result = Arc::clone(&result);
+            let pending = Arc::clone(&pending);
+            let dialog_hwnd = Arc::clone(&dialog_hwnd);
             move |event: PanelEvent| {
-                if event.action != PanelAction::Click {
+                let wake = || {
+                    let hwnd = HWND(dialog_hwnd.load(Ordering::SeqCst) as *mut _);
+                    unsafe {
+                        let _ = PostMessageW(Some(hwnd), WAKE, WPARAM(0), LPARAM(0));
+                    }
+                };
+                if event.action == PanelAction::Click
+                    && let Some(index) = event.region.as_deref().and_then(&button)
+                {
+                    result.store(index, Ordering::SeqCst);
+                    wake();
                     return;
                 }
-                let Some(index) = event.region.as_deref().and_then(button) else {
-                    return;
-                };
-                result.store(i32::from(index), Ordering::SeqCst);
-                let hwnd = HWND(dialog_hwnd.load(Ordering::SeqCst) as *mut _);
-                unsafe {
-                    let _ = PostMessageW(Some(hwnd), WAKE, WPARAM(0), LPARAM(0));
+                if forward && matches!(event.action, PanelAction::Click | PanelAction::Wheel) {
+                    pending
+                        .lock()
+                        .expect("对话框事件队列被毒化")
+                        .push_back(event);
+                    wake();
                 }
             }
         }));
@@ -129,6 +210,8 @@ impl BlockingPanel {
             owner_was_enabled,
             edit_hosts: current.edit_hosts.clone(),
             previous_focus,
+            pending,
+            on_event: RefCell::new(on_event),
         })
     }
 
@@ -142,16 +225,19 @@ impl BlockingPanel {
         unsafe { IsWindowVisible(self.template.hwnd()).as_bool() }
     }
 
-    /// 跑嵌套消息循环直到按钮返回 / 窗口销毁。
-    pub(super) fn pump(&self) -> u8 {
+    /// 跑嵌套消息循环直到按钮返回 / 窗口销毁，返回按钮结果（取消 / 关闭为 `-1`）。
+    pub(super) fn pump_value(&self) -> i32 {
         if !self.is_visible() {
-            return 0;
+            return -1;
         }
         let mut message = MSG::default();
         loop {
             let value = self.result.load(Ordering::SeqCst);
-            if value >= 0 {
-                return value as u8;
+            if value != i32::MIN {
+                return value;
+            }
+            if self.drain_pending() {
+                continue;
             }
             let received = unsafe { GetMessageW(&mut message, None, 0, 0) };
             if !received.as_bool() {
@@ -159,15 +245,51 @@ impl BlockingPanel {
                     // 把外层的 quit 还回去，别让应用以为消息循环已经结束。
                     unsafe { PostQuitMessage(0) };
                 }
-                return 0;
+                return -1;
             }
             unsafe {
                 let _ = TranslateMessage(&message);
                 DispatchMessageW(&message);
             }
             if !unsafe { IsWindow(Some(self.template.hwnd())) }.as_bool() {
-                return 0;
+                return -1;
             }
+            self.drain_pending();
+        }
+    }
+
+    /// 把排队的点击 / 滚轮交给调用方；处理过事件返回 `true`。
+    fn drain_pending(&self) -> bool {
+        let mut handled = false;
+        loop {
+            let event = self
+                .pending
+                .lock()
+                .expect("对话框事件队列被毒化")
+                .pop_front();
+            let Some(event) = event else {
+                return handled;
+            };
+            handled = true;
+            if let Some(handler) = self.on_event.borrow_mut().as_mut() {
+                handler(
+                    &event,
+                    &DialogHandle {
+                        template: Rc::clone(&self.template),
+                        owner: self.owner,
+                    },
+                );
+            }
+        }
+    }
+
+    /// 老接口：只关心 0–255 的按钮下标；取消 / 关闭都按 0 返回。
+    pub(super) fn pump(&self) -> u8 {
+        let value = self.pump_value();
+        if (0..=i32::from(u8::MAX)).contains(&value) {
+            value as u8
+        } else {
+            0
         }
     }
 }

@@ -6,8 +6,8 @@
 use cloud_ui::{
     AppEvent, Application, CLOSE_ACTION, Context, Decorations, ListBoxState, ListItem,
     MAXIMIZE_ACTION, MINIMIZE_ACTION, MessageDialog, ScrollablePageState, StackStyle,
-    TextInputDialog, TextListState, Theme, TrayEvent, TrayMenuItem, TrayOptions, View, WindowMask,
-    WindowOptions, run_native,
+    TextInputDialog, TextListDialog, TextListState, Theme, TrayEvent, TrayMenuItem, TrayOptions,
+    View, WindowMask, WindowOptions, run_native,
 };
 use cloudime_render::Document;
 
@@ -44,6 +44,7 @@ struct Demo {
     light: bool,
     masked: bool,
     dialog_result: Option<u8>,
+    list_dialog_result: Option<i32>,
 }
 
 impl Demo {
@@ -89,6 +90,15 @@ impl Application for Demo {
                     // 对话框是类：属性在 `show` 之前改才有效。
                     dialog.style.text_size = Some(15.0);
                     self.dialog_result = Some(dialog.show());
+                }
+                AppEvent::RegionClicked(name) if name == "list_dialog" => {
+                    let mut dialog = TextListDialog::new(
+                        "选择一项",
+                        "请选择列表中的一项；确定返回选中项下标，取消返回 -1。",
+                        TEXT_LIST.iter().copied(),
+                    );
+                    dialog.selected = Some(2);
+                    self.list_dialog_result = Some(dialog.show());
                 }
                 AppEvent::RegionClicked(name) if name == "text_input" => {
                     let dialog = TextInputDialog::new(
@@ -312,6 +322,14 @@ impl Application for Demo {
                     theme.button(),
                 );
                 row.button("dialog", "消息对话框", theme.button());
+                row.button(
+                    "list_dialog",
+                    match self.list_dialog_result {
+                        Some(index) => format!("列表对话框（{index}）"),
+                        None => "列表对话框".to_owned(),
+                    },
+                    theme.button(),
+                );
                 row.button("hide", "隐藏到托盘", theme.button());
             });
         });

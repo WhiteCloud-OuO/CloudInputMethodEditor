@@ -66,7 +66,7 @@ pub use cloud_ui_types::{
     TipTheme,
 };
 #[cfg(windows)]
-pub use dialog::{DialogStyle, MessageDialog, TextInputDialog};
+pub use dialog::{DialogStyle, MessageDialog, TextInputDialog, TextListDialog};
 pub use mask::WindowMask;
 pub use render_settings::RenderSettings;
 #[cfg(all(windows, feature = "script"))]
