@@ -935,6 +935,13 @@ Windows 壳的公共层（2026-10-20 从 `apps/windows/server/src/ui/` 抽出）
   滚、消费掉，应用收不到 `MouseWheel`；横向只能拖拽。夹紧后的偏移由 `build` 回写句柄。
   多行编辑框的文本区不在主窗口里：宿主收到滚轮后转 `WM_TEXT_WHEEL`，主窗口的 `text_wheel` 滚
   RichEdit 的竖向位置；文本区外的滚动条由主窗口直接处理。
+- **行底色**（2026-11-17）：`ListBoxRow` 新增 `background` / `selected_background` /
+  `hovered_background`（`RowBackground { color, radius }`）。渲染器按内容区**可视宽度**画圆角矩形，
+  不随 `h_scroll_offset` 平移，所以横向滚动时左右圆角始终完整；行里的文字仍按偏移移动。
+  脚本列表行不填这三个字段，仍按行内元素原样绘制。
+- **双击**（2026-11-17）：独立窗口的窗口类加 `CS_DBLCLKS`，`WM_LBUTTONDBLCLK` 命中区域时派
+  `AppEvent::RegionDoubleClicked(name)`，随后照常派按下 / 松开（松开会再派一次 `RegionClicked`）。
+  文本列表行名与单击一致，是 `名字#原下标`。脚本窗口本来就有 `double_clicked`。
 - `sync_text_edits` 比较文本时要把 `\r\n` 与 `\n` 归一化（`same_text`）：RichEdit 内部用 `\r\n`，
   直接比较会每帧 `set_text`，把滚动位置和插入点重置掉。
   `scrollable_page`（可滚动页面）是通用控件容器，生成 `Element::SelfDrawingPanel`（`clip = true`）：

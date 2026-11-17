@@ -45,6 +45,8 @@ struct Demo {
     masked: bool,
     dialog_result: Option<u8>,
     list_dialog_result: Option<i32>,
+    /// 最近一次双击的区域名（文本列表行是 `名字#原下标`）。
+    double_click: Option<String>,
 }
 
 impl Demo {
@@ -71,6 +73,7 @@ impl Application for Demo {
             match event {
                 AppEvent::MouseMoved { x, y } => self.pointer = Some((*x, *y)),
                 AppEvent::MouseLeft => self.pointer = None,
+                AppEvent::RegionDoubleClicked(name) => self.double_click = Some(name.clone()),
                 AppEvent::RegionClicked(name) if name == "click" => self.clicks += 1,
                 AppEvent::RegionClicked(name) if name == "theme" => self.light = !self.light,
                 AppEvent::RegionClicked(name) if name == "mask" => self.masked = !self.masked,
@@ -202,6 +205,7 @@ impl Application for Demo {
         let recent_state = self.recent.clone();
         let page_state = self.page.clone();
         let wrap_notes = self.wrap_notes;
+        let double_click = self.double_click.clone();
         let pointer = self.pointer;
         let typed = self.typed.clone();
         let notes = self.notes.clone();
@@ -241,6 +245,12 @@ impl Application for Demo {
             ui.text_edit("input", typed.clone(), theme.text_edit());
             ui.row(StackStyle::gap(12.0), |row| {
                 row.label(format!("输入：{typed}"), theme.muted());
+                row.label(
+                    double_click
+                        .as_deref()
+                        .map_or_else(|| "双击：—".to_owned(), |name| format!("双击：{name}")),
+                    theme.muted(),
+                );
                 row.flex_spacer();
                 row.button(
                     "text_wrap",

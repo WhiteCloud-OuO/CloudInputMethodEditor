@@ -7,7 +7,7 @@
 
 use cloudime_render::{
     Color, Element, FontSlot, HitRect, HitShape, ListBox, ListBoxAlign, ListBoxRow, Region,
-    ScrollHandle,
+    RowBackground, ScrollHandle,
 };
 
 use super::View;
@@ -223,21 +223,12 @@ pub(super) fn build<F>(
 
     let mut rows = Vec::with_capacity(input.items.len());
     for (index, item) in input.items.iter().enumerate() {
-        let normal = row_elements(
-            &style,
-            item,
-            row_width,
-            None,
-            style.text,
-            style.muted,
-            measure,
-        );
+        let normal = row_elements(&style, item, row_width, style.text, style.muted, measure);
         let selected_elements = if selected == Some(index) {
             row_elements(
                 &style,
                 item,
                 row_width,
-                Some(style.selection),
                 style.selection_text,
                 style.selection_text,
                 measure,
@@ -245,15 +236,8 @@ pub(super) fn build<F>(
         } else {
             Vec::new()
         };
-        let hovered_elements = row_elements(
-            &style,
-            item,
-            row_width,
-            Some(style.hover),
-            style.text,
-            style.muted,
-            measure,
-        );
+        let hovered_elements =
+            row_elements(&style, item, row_width, style.text, style.muted, measure);
         rows.push(ListBoxRow {
             index,
             top: index as f32 * stride,
@@ -264,6 +248,15 @@ pub(super) fn build<F>(
             selected_elements,
             hovered_elements,
             hits: Vec::new(),
+            background: None,
+            selected_background: Some(RowBackground {
+                color: style.selection,
+                radius: style.row_radius,
+            }),
+            hovered_background: Some(RowBackground {
+                color: style.hover,
+                radius: style.row_radius,
+            }),
         });
     }
 
@@ -350,7 +343,6 @@ fn row_elements<F>(
     style: &ListBoxStyle,
     item: &ListItem,
     width: f32,
-    background: Option<Color>,
     text: Color,
     muted: Color,
     measure: &mut F,
@@ -359,16 +351,6 @@ where
     F: FnMut(&str, FontSlot, f32) -> (f32, f32),
 {
     let mut elements = Vec::new();
-    if let Some(color) = background {
-        elements.push(Element::Rect {
-            x: 0.0,
-            y: 0.0,
-            width,
-            height: style.row_height,
-            radius: style.row_radius,
-            color,
-        });
-    }
     let (_, title_height) = measure(&item.title, style.font, style.size);
     elements.push(Element::Text {
         x: style.padding_x,

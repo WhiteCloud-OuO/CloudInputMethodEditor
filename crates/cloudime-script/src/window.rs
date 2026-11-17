@@ -4051,6 +4051,9 @@ fn parse_list_box_window(
                 selected_elements,
                 hovered_elements,
                 hits,
+                background: None,
+                selected_background: None,
+                hovered_background: None,
             });
         }
     }

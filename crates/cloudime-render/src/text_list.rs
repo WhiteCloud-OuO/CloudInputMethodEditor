@@ -6,7 +6,7 @@
 //! [`TextListStyle::allow_text_wrapping`] 决定是截断加「…」还是出水平滚动条。
 
 use crate::color::Color;
-use crate::control::{ListBox, ListBoxAlign, ListBoxRow};
+use crate::control::{ListBox, ListBoxAlign, ListBoxRow, RowBackground};
 use crate::document::{Element, FontSlot};
 
 /// 文本列表的样式（点）。
@@ -312,16 +312,19 @@ pub fn build(
             height: style.row_height,
             width: row_width,
             key: Some(text),
-            elements: row_elements(style, &shown, row_width, None, style.text),
-            selected_elements: row_elements(
-                style,
-                &shown,
-                row_width,
-                Some(style.selection),
-                style.selection_text,
-            ),
-            hovered_elements: row_elements(style, &shown, row_width, Some(style.hover), style.text),
+            elements: row_elements(style, &shown, style.text),
+            selected_elements: row_elements(style, &shown, style.selection_text),
+            hovered_elements: row_elements(style, &shown, style.text),
             hits: Vec::new(),
+            background: None,
+            selected_background: Some(RowBackground {
+                color: style.selection,
+                radius: style.row_radius,
+            }),
+            hovered_background: Some(RowBackground {
+                color: style.hover,
+                radius: style.row_radius,
+            }),
         });
     }
 
@@ -367,26 +370,9 @@ fn truncate_to_width(
     truncated
 }
 
-fn row_elements(
-    style: &TextListStyle,
-    text: &str,
-    width: f32,
-    background: Option<Color>,
-    color: Color,
-) -> Vec<Element> {
-    let mut elements = Vec::new();
-    if let Some(fill) = background {
-        elements.push(Element::Rect {
-            x: 0.0,
-            y: 0.0,
-            width,
-            height: style.row_height,
-            radius: style.row_radius,
-            color: fill,
-        });
-    }
+fn row_elements(style: &TextListStyle, text: &str, color: Color) -> Vec<Element> {
     let text_height = style.size * 1.25;
-    elements.push(Element::Text {
+    vec![Element::Text {
         x: style.padding_x,
         y: ((style.row_height - text_height) / 2.0).max(0.0),
         text: text.to_owned(),
@@ -394,8 +380,7 @@ fn row_elements(
         slot: style.font,
         color,
         italic: false,
-    });
-    elements
+    }]
 }
 
 fn chars(text: &str) -> usize {

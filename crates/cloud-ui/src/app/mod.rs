@@ -46,17 +46,17 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
     ReleaseCapture, SetCapture, TME_LEAVE, TRACKMOUSEEVENT, TrackMouseEvent,
 };
 use windows::Win32::UI::WindowsAndMessaging::{
-    AdjustWindowRectEx, CreateWindowExW, DefWindowProcW, DestroyWindow, DispatchMessageW,
-    GetClientRect, GetMessageW, GetWindowRect, HTCAPTION, HTCLIENT, HTTRANSPARENT, IDC_ARROW,
-    IsIconic, IsWindowVisible, IsZoomed, LoadCursorW, MINMAXINFO, MSG, PostMessageW,
-    PostQuitMessage, RegisterWindowMessageW, SIZE_MINIMIZED, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE,
-    SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowPos,
-    ShowWindow, TranslateMessage, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_DESTROY, WM_DPICHANGED,
-    WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS, WM_LBUTTONDOWN,
-    WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE, WM_NCDESTROY, WM_NCHITTEST,
-    WM_NCLBUTTONDBLCLK, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP, WM_SETFOCUS, WM_SHOWWINDOW,
-    WM_SIZE, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED, WS_EX_TOPMOST, WS_MAXIMIZEBOX,
-    WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    AdjustWindowRectEx, CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow,
+    DispatchMessageW, GetClientRect, GetMessageW, GetWindowRect, HTCAPTION, HTCLIENT,
+    HTTRANSPARENT, IDC_ARROW, IsIconic, IsWindowVisible, IsZoomed, LoadCursorW, MINMAXINFO, MSG,
+    PostMessageW, PostQuitMessage, RegisterWindowMessageW, SIZE_MINIMIZED, SW_HIDE, SW_MAXIMIZE,
+    SW_MINIMIZE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
+    SetWindowPos, ShowWindow, TranslateMessage, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_DESTROY,
+    WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
+    WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
+    WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED,
+    WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
@@ -181,6 +181,10 @@ pub enum AppEvent {
 
     /// 左键在某个 `View` 按钮 / 区域里按下并松开；`name` 是 `View::button` 的名字。
     RegionClicked(String),
+
+    /// 左键双击某个区域；`name` 与 [`RegionClicked`](Self::RegionClicked) 相同
+    /// （文本列表的可见行是 `名字#原下标`）。
+    RegionDoubleClicked(String),
 
     /// 滚轮；`delta` 以 120 为一格。
     MouseWheel { delta: f32 },
@@ -441,6 +445,7 @@ fn create_window(
 ) -> Result<(HWND, Rc<RefCell<AppWindow>>)> {
     let class_name = w!("CloudUIAppWindow");
     CLASS.ensure(|| WNDCLASSEXW {
+        style: CS_DBLCLKS,
         lpfnWndProc: Some(wndproc),
         hInstance: module_handle(),
         hCursor: unsafe { LoadCursorW(None, IDC_ARROW) }.unwrap_or_default(),
@@ -1578,13 +1583,13 @@ unsafe extern "system" fn wndproc(
             });
             LRESULT(0)
         }
-        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_RBUTTONDOWN | WM_RBUTTONUP => {
+        WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK | WM_RBUTTONDOWN | WM_RBUTTONUP => {
             let (x, y) = mouse_point(hwnd, lparam.0);
             let button = match message {
-                WM_LBUTTONDOWN | WM_LBUTTONUP => MouseButton::Left,
+                WM_LBUTTONDOWN | WM_LBUTTONUP | WM_LBUTTONDBLCLK => MouseButton::Left,
                 _ => MouseButton::Right,
             };
-            let pressed = matches!(message, WM_LBUTTONDOWN | WM_RBUTTONDOWN);
+            let pressed = matches!(message, WM_LBUTTONDOWN | WM_LBUTTONDBLCLK | WM_RBUTTONDOWN);
             let mut release_capture = false;
             with_window(hwnd, |window| {
                 // 左键按在滚动条上：窗口壳自己拖，应用既收不到按下也收不到点击。
@@ -1617,6 +1622,11 @@ unsafe extern "system" fn wndproc(
                     .find(|region| region.contains(x, y))
                     .map(|region| region.name.clone());
                 if message == WM_LBUTTONDOWN {
+                    window.pressed_region = hit;
+                } else if message == WM_LBUTTONDBLCLK {
+                    if let Some(name) = hit.as_ref() {
+                        window.push(hwnd, AppEvent::RegionDoubleClicked(name.clone()));
+                    }
                     window.pressed_region = hit;
                 } else if message == WM_LBUTTONUP
                     && let Some(name) = window.pressed_region.take()

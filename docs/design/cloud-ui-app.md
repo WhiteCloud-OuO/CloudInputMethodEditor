@@ -29,7 +29,8 @@ LuaJIT / 脚本窗口。
 - `Application`：`update(&mut Context)` + `view(&Context) -> Document`。
 - `Context`：事件列表、客户区尺寸、DPI、`request_redraw()`、`close()`。
 - `AppEvent`：尺寸变化、鼠标移动 / 离开、按键、滚轮、键盘、字符输入、焦点，
-  `RegionClicked(name)`（左键在 `View::button` / 区域里按下并松开），以及
+  `RegionClicked(name)`（左键在 `View::button` / 区域里按下并松开）、
+  `RegionDoubleClicked(name)`（左键双击同一区域，名字与 `RegionClicked` 相同），以及
   `TextChanged` / `TextFocusChanged` / `TextKey`（`View::text_edit`）。
 - `run_native(options, app)`：`Decorations::System` 注册普通 `WS_OVERLAPPEDWINDOW | WS_EX_APPWINDOW` 窗口；
   `Decorations::None` 改成分层弹出窗（`WS_POPUP | WS_EX_LAYERED`），四周留阴影白边、内容完全自绘。
@@ -162,7 +163,8 @@ Server 继续通过 `features = ["script"]` 打开全部 IME 能力。
   `sort` 控制没有查询时是否按文本排序；有查询时按分数、同分再按 `sort` / 原顺序。
 - `TextListState.selected` 用 **`items` 原下标**（过滤后仍指向同一项）；`View` 内部换算成可见行。
 - 可见行写 `Document.regions`，名字是 `名字#原下标`，应用收到 `RegionClicked("名字#3")`；
-  悬停同样取自 `View::pointer`。
+  双击同一行收到 `RegionDoubleClicked("名字#3")`；悬停同样取自 `View::pointer`。
+- 选中 / 悬停行底色固定在可视宽度，横向滚动时只移动文字，左右圆角始终完整。
 - `Theme::text_list()` 给一套缺省样式（行高、内边距、选中 / 悬停色）。
 
 ## 文本编辑

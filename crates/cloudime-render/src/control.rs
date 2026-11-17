@@ -635,6 +635,16 @@ struct ButtonTextBox {
     scale: f32,
 }
 
+/// 列表行选中 / 悬停的底色。
+///
+/// 渲染时宽度取内容区可视宽度、不随水平滚动偏移，因此横向滚动时左右圆角始终完整；
+/// 行里的文字 / 其它元素仍按水平偏移移动。
+#[derive(Clone, Copy, Debug)]
+pub struct RowBackground {
+    pub color: Color,
+    pub radius: f32,
+}
+
 /// 列表盒的一行内容。元素坐标相对行左上角。
 #[derive(Clone, Debug)]
 pub struct ListBoxRow {
@@ -654,6 +664,12 @@ pub struct ListBoxRow {
     pub hovered_elements: Vec<crate::document::Element>,
     /// 行内可交互控件的矩形与事件处理器。
     pub hits: Vec<ListBoxHit>,
+    /// 普通行底色。
+    pub background: Option<RowBackground>,
+    /// 选中行底色。
+    pub selected_background: Option<RowBackground>,
+    /// 悬停行底色。
+    pub hovered_background: Option<RowBackground>,
 }
 
 /// 虚拟化列表的一次可见窗口。
@@ -673,6 +689,17 @@ impl ListBoxRow {
             &self.hovered_elements
         } else {
             &self.elements
+        }
+    }
+
+    /// 当前状态该画哪一块行底色。
+    pub fn active_background(&self, selected: bool, hovered: bool) -> Option<RowBackground> {
+        if selected {
+            self.selected_background.or(self.background)
+        } else if hovered {
+            self.hovered_background.or(self.background)
+        } else {
+            self.background
         }
     }
 }
@@ -1599,6 +1626,9 @@ mod tests {
             selected_elements: Vec::new(),
             hovered_elements: Vec::new(),
             elements: Vec::new(),
+            background: None,
+            selected_background: None,
+            hovered_background: None,
         }
     }
 

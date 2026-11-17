@@ -1373,6 +1373,20 @@ fn draw_list_box(
             let Some(row_y) = list.row_view_top(row) else {
                 continue;
             };
+            let selected = list.selected_index == row.index as i32;
+            let hovered = list.hovered_index == Some(row.index as i32);
+            // 行底色固定在可视区域：横向滚动只移动文字，左右圆角始终完整。
+            if let Some(background) = row.active_background(selected, hovered) {
+                let element = Element::Rect {
+                    x: 0.0,
+                    y: 0.0,
+                    width: available,
+                    height: row.height,
+                    radius: background.radius,
+                    color: background.color,
+                };
+                let _ = draw_element(&mut content, &element, &local, 0.0, (0.0, row_y));
+            }
             let row_width = if row.width > 0.0 {
                 row.width
             } else {
@@ -1383,10 +1397,7 @@ fn draw_list_box(
                 crate::control::ListBoxAlign::Center => (available - row_width).max(0.0) * 0.5,
                 crate::control::ListBoxAlign::Right => (available - row_width).max(0.0),
             } - h_offset;
-            let elements = row.active_elements(
-                list.selected_index == row.index as i32,
-                list.hovered_index == Some(row.index as i32),
-            );
+            let elements = row.active_elements(selected, hovered);
             for element in elements {
                 let _ = draw_element(&mut content, element, &local, 0.0, (row_x, row_y));
             }
@@ -2859,6 +2870,9 @@ mod tests {
                         radius: 0.0,
                         color: Color::rgb(255, 0, 0),
                     }],
+                    background: None,
+                    selected_background: None,
+                    hovered_background: None,
                 },
                 ListBoxRow {
                     index: 1,
@@ -2870,6 +2884,9 @@ mod tests {
                     selected_elements: Vec::new(),
                     hovered_elements: Vec::new(),
                     elements: Vec::new(),
+                    background: None,
+                    selected_background: None,
+                    hovered_background: None,
                 },
             ],
             row_count: 2,
