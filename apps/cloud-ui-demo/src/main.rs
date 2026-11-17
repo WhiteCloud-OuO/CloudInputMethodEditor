@@ -95,12 +95,11 @@ impl Application for Demo {
                     self.dialog_result = Some(dialog.show());
                 }
                 AppEvent::RegionClicked(name) if name == "list_dialog" => {
-                    let mut dialog = TextListDialog::new(
+                    let dialog = TextListDialog::new(
                         "选择一项",
                         "请选择列表中的一项；确定返回选中项下标，取消返回 -1。",
                         TEXT_LIST.iter().copied(),
                     );
-                    dialog.selected = Some(2);
                     self.list_dialog_result = Some(dialog.show());
                 }
                 AppEvent::RegionClicked(name) if name == "text_input" => {

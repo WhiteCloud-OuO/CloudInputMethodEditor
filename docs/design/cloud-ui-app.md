@@ -288,9 +288,9 @@ Cloud UI 内置 **dialog**（`AuxiliaryWindowTemplate::dialog` / 脚本 `create_
 对话框都是类：`MessageDialog::new(title, text, icon, buttons)` / `TextInputDialog::new(title, text, allow_multiline, default_text)`
 / `TextListDialog::new(title, text, items)` 建实例，先改 `style` 里的字体 / 颜色等属性，再 `show()`。
 `show` 在 `Application::update` / `view` 里同步阻塞、自动禁用当前窗口：消息对话框返回按钮下标，
-文本输入对话框返回字符串，文本列表选择对话框返回选中项下标（0 起；取消 / 关闭 / 空列表返回 `-1`）。
-消息对话框的 `buttons` 1–4 个，没有标题栏关闭按钮；文本列表对话框点行只更新选中项，
-滚轮滚动列表，「确定」返回选中项，「取消」返回 `-1`。
+文本输入对话框返回字符串，文本列表选择对话框返回选中项下标（0 起；取消 / 关闭 / 空列表 / 未选中返回 `-1`）。
+消息对话框的 `buttons` 1–4 个，没有标题栏关闭按钮；文本列表对话框每次显示都从未选中（-1）开始，
+点行只更新选中项，滚轮滚动列表，「确定」返回选中项，「取消」返回 `-1`，双击一行等同选中并确定。
 
 打开对话框时：
 

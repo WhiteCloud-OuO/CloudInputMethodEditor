@@ -1,16 +1,19 @@
 //! 文本列表选择对话框：同步、模态，返回选中项下标（取消 / 关闭为 -1）。
 //!
 //! 布局与消息 / 文本输入对话框同一套：标题栏 / 说明文本 / 文本列表 / 按钮组（确定 / 取消）。
-//! 列表复用 [`build_text_list`]，行命中区域由对话框自己生成；点行只更新选中项，不关闭对话框。
+//! 列表复用 [`build_text_list`]，行命中区域由对话框自己生成；点行只更新选中项，不关闭对话框；
+//! 双击一行等同「选中并确定」。每次显示都从**未选中**（`-1`）开始。
 //!
 //! 对话框是类：`new` 建实例，属性在 `show` 之前改。
 
 use std::cell::Cell;
 use std::rc::Rc;
+use std::time::Instant;
 
 use cloudime_render::{
     Document, Element, HitRect, HitShape, Region, TextListStyle, build_text_list,
 };
+use windows::Win32::UI::Input::KeyboardAndMouse::GetDoubleClickTime;
 
 use super::blocking::{self, BlockingPanel, DialogHandle};
 use super::layout;
@@ -40,10 +43,6 @@ pub struct TextListDialog {
     /// 可选项。
     pub items: Vec<String>,
 
-    /// 打开时选中的项（`items` 原下标）；`None` 表示不预选。
-    /// 缺省选中第一项；越界的值在 `show` 时按未选中处理。
-    pub selected: Option<usize>,
-
     /// 列表视口高度（点）。
     pub list_height: f32,
 
@@ -59,12 +58,10 @@ impl TextListDialog {
         S: Into<String>,
     {
         let items: Vec<String> = items.into_iter().map(Into::into).collect();
-        let selected = (!items.is_empty()).then_some(0);
         Self {
             title: title.into(),
             text: text.into(),
             items,
-            selected,
             list_height: LIST_HEIGHT,
             style: DialogStyle::default(),
         }
@@ -72,20 +69,17 @@ impl TextListDialog {
 
     /// 同步显示对话框。
     ///
-    /// 点「确定」返回选中项的原下标（0 起）；选中项在 `items` 之外、列表为空或点
-    /// 「取消」/关闭窗口时返回 `-1`。
+    /// 每次显示都从**未选中**（-1）开始。点「确定」返回选中项的原下标（0 起）；
+    /// 双击一行等同选中并确定。没选中、列表为空或点「取消」/关闭窗口时返回 `-1`。
     pub fn show(self) -> i32 {
         let Self {
             title,
             text,
             items,
-            mut selected,
             list_height,
             style,
         } = self;
-        if selected.is_some_and(|index| index >= items.len()) {
-            selected = None;
-        }
+        let selected = None;
         let Some(current) = current::get() else {
             blocking::abort_with("TextListDialog: 没有当前独立窗口（必须在 UI 回调里调用）");
         };
@@ -119,6 +113,7 @@ impl TextListDialog {
             let title = title.clone();
             let text = text.clone();
             let items = items.clone();
+            let mut last_click: Option<(Instant, usize)> = None;
             move |event: &PanelEvent, host: &DialogHandle| {
                 match event.action {
                     PanelAction::Click => {
@@ -128,14 +123,30 @@ impl TextListDialog {
                             .and_then(|region| region.strip_prefix("text_list_dialog.item."))
                             .and_then(|index| index.parse::<usize>().ok())
                         else {
+                            last_click = None;
                             return;
                         };
-                        if index >= items.len() || selected.get() == Some(index) {
+                        if index >= items.len() {
+                            last_click = None;
+                            return;
+                        }
+                        let now = Instant::now();
+                        let interval = unsafe { GetDoubleClickTime() };
+                        let double = is_double_click(last_click, now, index, interval);
+                        last_click = Some((now, index));
+                        if double {
+                            // 双击一行等同选中并按下「确定」。
+                            selected.set(Some(index));
+                            host.finish(index as i32);
+                            return;
+                        }
+                        if selected.get() == Some(index) {
                             return;
                         }
                         selected.set(Some(index));
                     }
                     PanelAction::Wheel => {
+                        last_click = None;
                         let max = max_scroll(&list_style, items.len(), list_height);
                         let notches = event.delta.unwrap_or(0) as f32 / 120.0;
                         let next = (scroll.get() - notches * list_style.stride()).clamp(0.0, max);
@@ -144,7 +155,10 @@ impl TextListDialog {
                         }
                         scroll.set(next);
                     }
-                    _ => return,
+                    _ => {
+                        last_click = None;
+                        return;
+                    }
                 }
                 let document = {
                     let mut borrowed = painter.borrow_mut();
@@ -178,7 +192,8 @@ impl TextListDialog {
         if value == OK {
             selected_cell.get().map_or(-1, |index| index as i32)
         } else {
-            -1
+            // 双击行直接返回下标；取消 / 关闭是 -1。
+            value
         }
     }
 }
@@ -190,6 +205,18 @@ fn button(region: &str) -> Option<i32> {
         "text_list_dialog.cancel" => Some(-1),
         _ => None,
     }
+}
+
+/// 两次点在同一行、间隔小于系统双击时间，算一次双击。
+fn is_double_click(
+    last: Option<(Instant, usize)>,
+    now: Instant,
+    index: usize,
+    interval_ms: u32,
+) -> bool {
+    last.is_some_and(|(then, last_index)| {
+        last_index == index && now.duration_since(then).as_millis() < u128::from(interval_ms)
+    })
 }
 
 /// 按对话框主题与正文字号生成文本列表样式；固定视口，滚动由滚轮 / 滚动条处理。
@@ -353,11 +380,27 @@ mod tests {
     }
 
     #[test]
-    fn new_selects_the_first_item_and_keeps_empty_lists_unselected() {
-        let dialog = TextListDialog::new("t", "m", ["甲", "乙"]);
-        assert_eq!(dialog.selected, Some(0));
-        let dialog = TextListDialog::new("t", "m", Vec::<String>::new());
-        assert_eq!(dialog.selected, None);
+    fn double_click_requires_the_same_row_within_the_interval() {
+        let now = Instant::now();
+        let last = Some((now, 3));
+        assert!(is_double_click(
+            last,
+            now + std::time::Duration::from_millis(200),
+            3,
+            500
+        ));
+        assert!(!is_double_click(
+            last,
+            now + std::time::Duration::from_millis(200),
+            4,
+            500
+        ));
+        assert!(!is_double_click(
+            last,
+            now + std::time::Duration::from_millis(600),
+            3,
+            500
+        ));
     }
 
     #[test]

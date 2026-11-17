@@ -821,8 +821,9 @@ Windows 壳的公共层（2026-10-20 从 `apps/windows/server/src/ui/` 抽出）
   确定返回编辑框文本，取消返回 `default_text`（空则空串）；单行模式先把 `default_text` 的换行转成字面量 `\n`。
   **文本列表选择对话框**（`crate::dialog::TextListDialog`）：`show(self) -> i32`。
   布局是标题 / 提示 `TextBlock` / `TextList` / 确定取消按钮；列表用 `build_text_list`，固定视口，
-  每行写 `text_list_dialog.item.<原下标>` 命中区域，滚轮按行高滚动。点行只更新选中项并
-  `set_document`，不关闭对话框；确定返回选中项原下标（0 起），取消 / 关闭 / 空列表返回 `-1`。
+  每行写 `text_list_dialog.item.<原下标>` 命中区域，滚轮按行高滚动。每次显示都从未选中（-1）开始；
+  点行只更新选中项并 `set_document`，不关闭对话框；双击同一行（系统双击时间内）直接返回该下标。
+  确定返回选中项原下标（0 起），取消 / 关闭 / 空列表 / 未选中返回 `-1`。
   `BlockingPanel` 为此新增 `open_with`：事件线程只把非按钮点击 / 滚轮入队并唤醒，
   `pump_value` 在 UI 线程取出队列交给 `on_event` 更新文档；`pump_value` 用 `i32::MIN` 当「还没选」哨兵，
   `pump` 仍只返回 0–255 的按钮下标。辅助窗口模板没有 `WM_PAINT` 重绘路径，换文档后要由

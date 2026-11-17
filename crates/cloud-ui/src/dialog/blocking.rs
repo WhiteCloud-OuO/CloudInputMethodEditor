@@ -42,6 +42,7 @@ type RegionEvents = Box<dyn FnMut(&PanelEvent, &DialogHandle)>;
 pub(super) struct DialogHandle {
     template: Rc<AuxiliaryWindowTemplate>,
     owner: HWND,
+    result: Arc<AtomicI32>,
 }
 
 impl DialogHandle {
@@ -49,6 +50,14 @@ impl DialogHandle {
     pub(super) fn set_document(&self, document: Document) {
         self.template.set_document(document);
         self.refresh();
+    }
+
+    /// 结束对话框并返回结果（双击行之类不走按钮的出口）。
+    pub(super) fn finish(&self, value: i32) {
+        self.result.store(value, Ordering::SeqCst);
+        unsafe {
+            let _ = PostMessageW(Some(self.template.hwnd()), WAKE, WPARAM(0), LPARAM(0));
+        }
     }
 
     /// 按当前所有者矩形重新居中并贴图。
@@ -277,6 +286,7 @@ impl BlockingPanel {
                     &DialogHandle {
                         template: Rc::clone(&self.template),
                         owner: self.owner,
+                        result: Arc::clone(&self.result),
                     },
                 );
             }
