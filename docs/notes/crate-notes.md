@@ -695,6 +695,9 @@ cosmic-text 打了 `opsz` 光学字号补丁（qingjian-team/cosmic-text 分支 
 `cloud-ui` 的独立窗口由壳内建处理）。两条滚动条互相让位（`ListBox::scrollbars` 迭代两次求稳定）。
 固定视口装不下全部行时，`auto_item_gap_averaging = true`，剩余高度平均到可见行之间（与列表盒同一套
 `row_view_top`）；`cloud-ui::view` 的悬停 / 命中区域也改用 `row_at` / `row_view_top`，不再按固定 stride 估算。
+`TextListStyle.auto_height`（缺省 true）按可见行数算高度，并用 `content_inset()` 把项目到上下边框的
+间隙取成 `gap`；`auto_height = false` 时才用显式 `height` 与 `content_gap`。`show_border`（缺省 true）
+为 false 时 `edge()` 返回 0，边框描边与内缩一起去掉。
 
 **滚动句柄**（2026-11-16，`document.rs`）：`ScrollHandle` 用 `Arc<AtomicU32>` 存 f32 位模式
 （`Document` 要从脚本工人线程交给 UI 线程，不能用 `Rc<Cell>`）。`Document.scroll_targets` 里每项

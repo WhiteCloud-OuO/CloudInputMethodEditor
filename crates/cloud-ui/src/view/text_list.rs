@@ -27,7 +27,7 @@ pub struct TextListState {
     pub h_scroll: ScrollHandle,
 }
 
-/// 量宽：横向铺满父容器；高度有固定值用固定值，否则按可见行数自动算。
+/// 量宽：横向铺满父容器；`auto_height` 为真或没有固定高度时按可见行数自动算。
 pub(super) fn measure<F>(
     items: &[String],
     query: &str,
@@ -40,12 +40,13 @@ where
     F: FnMut(&str, FontSlot, f32) -> (f32, f32),
 {
     let shown = visible_items(items, query, sort);
+    let mut auto = || {
+        let width = cloudime_render::text_list_measured_width(style, items, &shown, measure);
+        cloudime_render::text_list_auto_height(style, shown.len(), constraints.max_width, width)
+    };
     let height = match style.height {
-        Some(height) => height,
-        None => {
-            let width = cloudime_render::text_list_measured_width(style, items, &shown, measure);
-            cloudime_render::text_list_auto_height(style, shown.len(), constraints.max_width, width)
-        }
+        Some(height) if !style.auto_height => height,
+        _ => auto(),
     };
     Size::new(
         style
@@ -166,9 +167,13 @@ impl View {
             Some(width) => cloud_ui_core::SizeSpec::Fixed(width),
             None => cloud_ui_core::SizeSpec::Auto,
         };
-        node.height = match style.height {
-            Some(height) => cloud_ui_core::SizeSpec::Fixed(height),
-            None => cloud_ui_core::SizeSpec::Auto,
+        node.height = if style.auto_height {
+            cloud_ui_core::SizeSpec::Auto
+        } else {
+            match style.height {
+                Some(height) => cloud_ui_core::SizeSpec::Fixed(height),
+                None => cloud_ui_core::SizeSpec::Auto,
+            }
         };
         self.push(
             node,

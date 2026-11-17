@@ -2764,6 +2764,14 @@ impl Measure for PayloadMeasure<'_> {
                     .map(|width| width as f32)
                     .unwrap_or(1.0)
                     .max(0.0),
+                show_border: object
+                    .get("show_border")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
+                auto_height: object
+                    .get("auto_height")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(true),
                 padding_x: object
                     .get("padding_x")
                     .and_then(Value::as_f64)
@@ -3130,8 +3138,8 @@ mod tests {
         let list: mlua::Table = layout.table.get(1).unwrap();
         assert_eq!(list.get::<String>("type").unwrap(), "text_list");
         let height: f32 = list.get("h").unwrap();
-        // 3 行 × (26 + 2) − 2 + (1 + 4) × 2 = 92
-        assert!((height - 92.0).abs() < 0.01, "{height}");
+        // 3 行 × (26 + 2) − 2 + (1 + 2) × 2 = 88（自动高度时上下间隙取项目间隙）
+        assert!((height - 88.0).abs() < 0.01, "{height}");
     }
 
     #[test]
@@ -3158,8 +3166,8 @@ mod tests {
         .unwrap();
         let list: mlua::Table = layout.table.get(1).unwrap();
         let height: f32 = list.get("h").unwrap();
-        // 只剩 1 行：26 + 10 = 36
-        assert!((height - 36.0).abs() < 0.01, "{height}");
+        // 只剩 1 行：26 + (1 + 2) × 2 = 32
+        assert!((height - 32.0).abs() < 0.01, "{height}");
     }
 
     #[test]

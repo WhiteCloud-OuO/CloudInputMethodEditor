@@ -182,6 +182,7 @@ impl Theme {
         cloudime_render::TextListStyle {
             width: None,
             height: None,
+            auto_height: true,
             row_height: self.row_height,
             gap: 2.0,
             content_gap: 4.0,
@@ -189,6 +190,7 @@ impl Theme {
             fill: Some(self.surface),
             edge_color: self.border,
             edge_width: 1.0,
+            show_border: true,
             padding_x: 10.0,
             row_radius: 5.0,
             size: 14.0,

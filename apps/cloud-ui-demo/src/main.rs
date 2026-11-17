@@ -276,6 +276,7 @@ impl Application for Demo {
             let mut text_style = theme.text_list();
             text_style.allow_text_wrapping = !self.h_scroll_text;
             // 固定视口：同时有竖向与横向滚动条，方便验证拖拽 / 滚轮。
+            text_style.auto_height = false;
             text_style.height = Some(140.0);
             // 缩到内容宽度的三分之一，才看得出截断 / 横向滚动。
             text_style.width = Some((width - 48.0) / 3.0);

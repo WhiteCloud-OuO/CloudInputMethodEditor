@@ -16,7 +16,12 @@ pub struct TextListStyle {
     pub width: Option<f32>,
 
     /// 固定视口高度；`None` = 按行数自动算（`cloud-ui::view` 用，JSON 布局那边用 `h`）。
+    ///
+    /// 只有 `auto_height = false` 时才使用；自动高度时忽略。
     pub height: Option<f32>,
+
+    /// 自动调节高度（缺省 true）：按可见行数算高度，并让项目到边框的间隙等于项目间隙。
+    pub auto_height: bool,
 
     /// 每行高度。
     pub row_height: f32,
@@ -31,6 +36,9 @@ pub struct TextListStyle {
     pub fill: Option<Color>,
     pub edge_color: Color,
     pub edge_width: f32,
+
+    /// 画不画边框（缺省 true）；关闭时边框宽度按 0 算。
+    pub show_border: bool,
 
     /// 行内文字左右留白。
     pub padding_x: f32,
@@ -54,6 +62,7 @@ impl Default for TextListStyle {
         Self {
             width: None,
             height: None,
+            auto_height: true,
             row_height: 26.0,
             gap: 2.0,
             content_gap: 4.0,
@@ -61,6 +70,7 @@ impl Default for TextListStyle {
             fill: Some(Color::rgb(30, 30, 38)),
             edge_color: Color::rgb(58, 58, 70),
             edge_width: 1.0,
+            show_border: true,
             padding_x: 10.0,
             row_radius: 5.0,
             size: 14.0,
@@ -89,9 +99,28 @@ impl TextListStyle {
         }
     }
 
+    /// 实际边框宽度：`show_border = false` 时不画边框，也不占内缩。
+    pub fn edge(&self) -> f32 {
+        if self.show_border {
+            self.edge_width.max(0.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// 边框到内容的间隙：自动高度时取项目间隙，保证「项目到边框」与「项目之间」相等；
+    /// 固定高度时用显式的 `content_gap`。
+    pub fn content_inset(&self) -> f32 {
+        if self.auto_height {
+            self.gap.max(0.0)
+        } else {
+            self.content_gap.max(0.0)
+        }
+    }
+
     /// `rows` 行时控件应有的总高度（含边框与内间隙），自动高度用它。
     pub fn auto_height(&self, rows: usize) -> f32 {
-        self.content_height(rows) + (self.edge_width.max(0.0) + self.content_gap.max(0.0)) * 2.0
+        self.content_height(rows) + (self.edge() + self.content_inset()) * 2.0
     }
 }
 
@@ -197,7 +226,7 @@ pub fn measured_width(
 /// 自动高度：`allow_text_wrapping = false` 且内容超宽时，把底部水平滚动条的高度也算进去。
 pub fn auto_height(style: &TextListStyle, rows: usize, width: f32, content_width: f32) -> f32 {
     let mut height = style.auto_height(rows);
-    let inner = (width - (style.edge_width.max(0.0) + style.content_gap.max(0.0)) * 2.0).max(0.0);
+    let inner = (width - (style.edge() + style.content_inset()) * 2.0).max(0.0);
     if !style.allow_text_wrapping && content_width > inner + 0.01 {
         height += ListBox::SCROLLBAR_THICKNESS + ListBox::SCROLLBAR_GAP;
     }
@@ -241,8 +270,8 @@ pub fn build(
         radius: style.radius,
         fill: style.fill,
         edge_color: style.edge_color,
-        edge_width: style.edge_width,
-        content_gap: style.content_gap,
+        edge_width: style.edge(),
+        content_gap: style.content_inset(),
         gap: style.gap,
         // 与列表盒一致：视口装不下全部行时，把剩余高度平均成行间隙，保证每行完整、
         // 相邻行之间的垂直空隙相等。
@@ -492,6 +521,90 @@ mod tests {
         assert!(gap > style.gap, "剩余高度应平均进间隙：{gap}");
         let row = list.row_at(visible[1].0 + list.edge_width + list.content_gap + 1.0);
         assert_eq!(row, Some(1), "命中要按平均后的行位置");
+    }
+
+    #[test]
+    fn auto_height_uses_the_item_gap_between_rows_and_border() {
+        let style = TextListStyle {
+            auto_height: true,
+            gap: 6.0,
+            content_gap: 4.0,
+            ..TextListStyle::default()
+        };
+        let all = items(&["a", "b", "c"]);
+        let shown = visible_items(&all, "", false);
+        let mut measure = measure;
+        let height = style.auto_height(shown.len());
+        let list = build(
+            &style,
+            &all,
+            &shown,
+            None,
+            None,
+            0.0,
+            0.0,
+            (0.0, 0.0, 100.0, height),
+            "list",
+            &mut measure,
+        );
+        assert!(
+            (list.content_gap - 6.0).abs() < 0.01,
+            "边框到内容的间隙应等于项目间隙"
+        );
+        assert!((list.gap - 6.0).abs() < 0.01);
+        let expected = style.content_height(shown.len()) + (style.edge_width + style.gap) * 2.0;
+        assert!((height - expected).abs() < 0.01, "{height} != {expected}");
+        assert!(!list.scrollbar_visible(), "自动高度不应出现滚动条");
+
+        // 固定高度仍用显式的 content_gap。
+        let fixed = TextListStyle {
+            auto_height: false,
+            gap: 6.0,
+            content_gap: 4.0,
+            ..TextListStyle::default()
+        };
+        let mut ruler = measure;
+        let list = build(
+            &fixed,
+            &all,
+            &shown,
+            None,
+            None,
+            0.0,
+            0.0,
+            (0.0, 0.0, 100.0, 80.0),
+            "list",
+            &mut ruler,
+        );
+        assert!((list.gap - 6.0).abs() < 0.01);
+        assert!((list.content_gap - 4.0).abs() < 0.01);
+    }
+
+    #[test]
+    fn hiding_the_border_removes_the_stroke_and_its_inset() {
+        let style = TextListStyle {
+            show_border: false,
+            ..TextListStyle::default()
+        };
+        let all = items(&["a"]);
+        let shown = visible_items(&all, "", false);
+        let mut measure = measure;
+        let height = style.auto_height(1);
+        let list = build(
+            &style,
+            &all,
+            &shown,
+            None,
+            None,
+            0.0,
+            0.0,
+            (0.0, 0.0, 100.0, height),
+            "list",
+            &mut measure,
+        );
+        assert_eq!(list.edge_width, 0.0, "关闭边框后不画描边");
+        let expected = style.content_height(1) + style.content_inset() * 2.0;
+        assert!((height - expected).abs() < 0.01);
     }
 
     #[test]

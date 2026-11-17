@@ -148,9 +148,11 @@ Server 继续通过 `features = ["script"]` 打开全部 IME 能力。
 渲染器负责行裁剪与滚动条；过滤 / 排序在 `cloudime_render::visible_items` 里做，与脚本窗口的
 `text_list` 共用同一套顺序。
 
-- 高度：`TextListStyle.height` 为 `None` 时按可见行数自动算（行少时没有滚动条）；
-  给 `Some(h)` 时是固定视口，滚动由窗口壳内建处理。
+- 高度：`TextListStyle.auto_height` 缺省 true，按可见行数算高度，并让项目到上下边框的间隙
+  等于项目间隙 `gap`；`auto_height = false` 且给了 `height` 时才是固定视口（滚动由窗口壳处理）。
   宽度：`TextListStyle.width` 为 `None` 时铺满父容器，给 `Some(w)` 时固定宽度（截断效果要靠它）。
+- `gap` 缺省 2（点），是项目之间的间隙；固定高度时 `content_gap` 才是边框到内容的间隙。
+  `show_border` 缺省 true，设为 false 后不画边框，也不占边框内缩。
 - 行间隙：固定视口装不下全部行时，和列表盒一样把剩余高度平均进可见行之间，
   行始终完整显示、相邻行垂直空隙相等；悬停与命中都按这份平均后的位置计算。
 - 长文本：`TextListStyle.allow_text_wrapping = true`（缺省）时一行放不下就截断并在末尾补「…」；

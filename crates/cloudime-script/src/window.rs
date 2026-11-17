@@ -4432,13 +4432,14 @@ fn install_text_list_methods(
 /// `text_list`：一组字符串的叶子列表（不是容器）。行内只有文本；模糊查询 / 排序在
 /// [`cloudime_render::visible_items`] 里做，和 `cloud-ui::view` 共用同一套顺序。
 fn parse_text_list(table: &mlua::Table) -> mlua::Result<Element> {
-    let style = TextListStyle {
+    let mut style = TextListStyle {
         width: None,
         row_height: optional_positive(table, "item_height")?
             .or(optional_positive(table, "row_height")?)
             .unwrap_or(26.0)
             .max(1.0),
         height: None,
+        auto_height: true,
         gap: number(table, "gap", 2.0)?.max(0.0),
         content_gap: number(table, "the_gap_between_border_and_content", 4.0)?.max(0.0),
         radius: number(table, "radius", 6.0)?.max(0.0),
@@ -4446,6 +4447,7 @@ fn parse_text_list(table: &mlua::Table) -> mlua::Result<Element> {
         edge_color: color(table, "edge_color", false)?
             .unwrap_or(Color::rgba(0xD2, 0xD2, 0xD2, 0xFF)),
         edge_width: number(table, "edge_width", 1.0)?.max(0.0),
+        show_border: table.get::<Option<bool>>("show_border")?.unwrap_or(true),
         padding_x: number(table, "padding_x", 10.0)?.max(0.0),
         row_radius: number(table, "row_radius", 5.0)?.max(0.0),
         size: optional_size(table, "size")?
@@ -4478,6 +4480,7 @@ fn parse_text_list(table: &mlua::Table) -> mlua::Result<Element> {
     let auto_height = table
         .get::<Option<bool>>("auto_height")?
         .unwrap_or(explicit_height.is_none());
+    style.auto_height = auto_height;
     let height = explicit_height.unwrap_or(0.0);
     let name = table.get::<Option<String>>("name")?.unwrap_or_default();
     let x = number(table, "x", 0.0)?;
@@ -5510,8 +5513,8 @@ mod tests {
         };
         assert_eq!(list.row_count, 3);
         assert_eq!(list.region_name, "recent");
-        // 3 行 × (26 + 2) − 2 + (1 + 4) × 2 = 92
-        assert!((list.height - 92.0).abs() < 0.01, "{}", list.height);
+        // 3 行 × (26 + 2) − 2 + (1 + 2) × 2 = 88（自动高度时上下间隙取项目间隙）
+        assert!((list.height - 88.0).abs() < 0.01, "{}", list.height);
         assert_eq!(
             list.rows
                 .iter()

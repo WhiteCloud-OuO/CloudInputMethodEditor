@@ -1127,6 +1127,7 @@ mod tests {
         let mut view = View::new(300.0, 200.0);
         let items: Vec<String> = (0..10).map(|index| format!("第 {index} 项")).collect();
         let mut style = Theme::dark().text_list();
+        style.auto_height = false;
         style.height = Some(60.0);
         style.row_height = 20.0;
         view.text_list(
@@ -1167,6 +1168,7 @@ mod tests {
             })
             .collect();
         let mut style = Theme::dark().text_list();
+        style.auto_height = false;
         style.height = Some(60.0);
         style.row_height = 20.0;
         style.width = Some(90.0);
