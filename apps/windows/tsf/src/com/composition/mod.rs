@@ -57,6 +57,10 @@ pub(crate) struct Update {
     /// 这一拍是 Chromium 宿主的成对补全：在按键上下文里同步提交，跳过读前文 / 报光标这些
     /// 额外操作，只做插入 + 落光标。
     pub sync_pair: bool,
+
+    /// 这一拍的宿主是 Word（`_WwG`）：Word 会把编辑会话里的文本更新排到注入的输入后面，
+    /// 光标改走 TSF `SetSelection`，不能注入方向键。
+    pub caret_by_tsf: bool,
 }
 
 impl Update {
@@ -101,7 +105,7 @@ pub(crate) fn apply(
             text,
             update.caret_shift,
             update.delete_before,
-            update.sync_pair,
+            update.caret_by_tsf,
         )?,
         // 没有要上屏的文本：先按 Server 要求删光标前字符（u 模式 Backspace），再挪补全光标。
         None if update.delete_before > 0 => {
@@ -224,7 +228,7 @@ fn commit_text(
     text: &str,
     caret_shift: i16,
     delete_before: u16,
-    sync_pair: bool,
+    caret_by_tsf: bool,
 ) -> Result<()> {
     let utf16: Vec<u16> = text.encode_utf16().collect();
     match shared.composition() {
@@ -238,7 +242,7 @@ fn commit_text(
                 &range,
                 utf16.len(),
                 caret_shift,
-                sync_pair,
+                caret_by_tsf,
             );
             unsafe { composition.EndComposition(ec)? };
             shared.set_composition(None);
@@ -271,17 +275,23 @@ fn commit_text(
                 &range,
                 utf16.len(),
                 caret_shift,
-                sync_pair,
+                caret_by_tsf,
             );
         }
     }
     Ok(())
 }
 
-/// 落光标。成对补全（`caret_shift` 不为 0）优先**注入方向键**：TSF 的 `SetSelection` 在部分宿主里会被应用
-/// 自己改回来（真机上成对补全的光标一直停在末尾，而同一个应用对方向键的响应是好的）；注入不了
-///（AppContainer / UIPI 拦下来）再退回 TSF 位移。普通上屏（`caret_shift == 0`）只走 TSF。
-/// Shift / Ctrl / Alt 还按着时方向键延后到抬起（[`flush_pending_caret_shift`]），不然会变成选中。
+/// 落光标。成对补全（`caret_shift` 不为 0）分两条路：
+///
+/// - **Word**（[`Update::caret_by_tsf`]）：它在异步编辑会话里会把文本更新排到注入的输入后面，
+///   立刻注入方向键会排在文本前面（真机：光标停在符号左边，接着输入的字符落到括号外），
+///   所以在会话里用 `move_selection` 直接把选区放到两个符号之间。
+/// - **其余宿主**：交给应用自己的方向键。Chromium / Electron 的 TSF 实现会接受 `SetSelection`
+///   却不动 DOM 插入点（Edge / OpenCode 实测返回成功、光标仍停在末尾），记事本则会把选区改回去。
+///   Shift / Ctrl / Alt 还按着时延后到抬起，否则 `Shift + 9` 打 `(` 会变成 `Shift + Left` 选中。
+///
+/// 注入不了（AppContainer / UIPI 拦下来）再退回 TSF 位移。普通上屏（`caret_shift == 0`）只走 TSF。
 fn settle_caret(
     shared: &Shared,
     context: &ITfContext,
@@ -289,16 +299,17 @@ fn settle_caret(
     range: &ITfRange,
     text_chars: usize,
     caret_shift: i16,
-    sync_pair: bool,
+    caret_by_tsf: bool,
 ) {
     if caret_shift != 0 {
-        // Chromium 宿主的同步提交：TSF 选区在上屏后可能还停在起点，直接把选区设到两符号之间。
-        // 宿主认 SetSelection 时不再发方向键，避免“选区已对、方向键又挪一格”。
-        if sync_pair && move_selection(context, ec, range, text_chars, caret_shift).is_ok() {
+        if caret_by_tsf && move_selection(context, ec, range, text_chars, caret_shift).is_ok() {
             super::log::log(&format!("成对补全: TSF 选区已设到中间 shift={caret_shift}"));
             return;
         }
-        if nudge_caret_by_key(shared, i32::from(caret_shift), sync_pair) {
+        if nudge_caret_by_key(shared, i32::from(caret_shift), true) {
+            return;
+        }
+        if move_selection(context, ec, range, text_chars, caret_shift).is_ok() {
             return;
         }
     }
@@ -703,9 +714,10 @@ fn move_selection(
 
 /// 没有要走文本的这一拍（成对补全跳过右半边）：把当前光标右移几个字符。
 ///
-/// 先试注入方向键（应用自己的光标逻辑永远可用），注入不了再走 TSF：收成**末尾**再 `ShiftEnd`。
+/// 先注入方向键（应用自己的光标逻辑永远可用，修饰键还按着时延后到抬起），注入不了再走 TSF：
+/// 收成**末尾**再 `ShiftEnd`。
 fn shift_caret(shared: &Shared, context: &ITfContext, ec: u32, caret_shift: i16) -> Result<()> {
-    if nudge_caret_by_key(shared, i32::from(caret_shift), false) {
+    if nudge_caret_by_key(shared, i32::from(caret_shift), true) {
         return Ok(());
     }
     // GetSelection 给的 range 归调用方释放：借它当光标，挪好这一轮就放掉

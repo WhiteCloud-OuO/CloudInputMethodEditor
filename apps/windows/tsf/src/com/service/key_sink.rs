@@ -472,6 +472,7 @@ impl TextService_Impl {
                         delete_before,
                         delete_after,
                         sync_pair: false,
+                        caret_by_tsf: false,
                     },
                 );
                 true

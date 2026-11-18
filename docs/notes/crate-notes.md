@@ -1555,17 +1555,19 @@ Server `dispatch/key/input.rs::ctrl_digit` 按键码认数字（按住 Ctrl 时 
 范围 `ShiftStart` 报告「挪了 0」，怎么都不动），拉不开再按 `ITfRangeACP` 的位置圈；范围两条路都失败时补发一个退格键，
 这时**替换文本也必须用 `SendInput` 的 Unicode 输入跟在退格后面**（`inject_text`）—— 不能在同一个编辑会话里先用 TSF 插新符号：
 应用按顺序先处理退格，会删掉刚插的新符号，原来的旧标点反而留着（智能符号真机踩过）。
-成对补全的光标落点分两条路：
-- **Chromium / Electron 宿主**（QQ、VS Code、飞书等；`edit/update.rs::is_chromium_context` 按
-  `Chrome_WidgetWin_*` / `Chrome_RenderWidgetHostHWND` 判断，QQNT 视图类拿不到时按 exe 名兜底）：
-  成对补全用 `TF_ES_SYNC | TF_ES_READWRITE` 在**按键上下文**里同步提交（`Update.sync_pair`，跳过读前文 / 报光标），
-  然后直接用 TSF `move_selection` 把选区设到两符号之间。异步会话只更新 TSF 选区、宿主的插入点不跟着走，
+成对补全的光标落点分两条路（`composition/mod.rs::settle_caret`，宿主在 `edit/update.rs` 判定）：
+- **Word**（视图类 `_WwG`，`is_word_class`）：在编辑会话里用 TSF `move_selection` 把选区设到两符号之间。
+  Word 把异步会话的文本更新排到注入的输入后面，立刻注入方向键会排在文本前面 —— 真机表现是
+  `()` 照常插入，但光标停在符号**左边**，接着输入的字落到括号外面。
+- **其余宿主**：注入方向键（`SendInput` 左 / 右），让应用自己挪光标。Chromium / Electron
+  （`Chrome_WidgetWin_*`、QQ 等）的 TSF 实现会接受 `SetSelection` 却不动 DOM 插入点 ——
+  Edge / OpenCode 实测返回成功、光标仍停在末尾；Windows 11 记事本则会把选区改回去。
+- Chromium / Electron 的成对补全仍用 `TF_ES_SYNC | TF_ES_READWRITE` 在**按键上下文**里同步提交
+  （`Update.sync_pair`，跳过读前文 / 报光标）：异步会话只更新 TSF 选区、宿主的插入点不跟着走，
   下一次组句就会从符号左边插入（QQ 真机踩过，同步提交后正常）；同步请求失败再退回异步。
-- **其他宿主**：仍走异步提交 + 注入方向键（`SendInput` 左 / 右，在编辑会话里发、会话返回后应用才处理，
-  那时文本已落好）。部分宿主会覆盖 TSF 的 `SetSelection`，但方向键响应是好的。
-- 同步路径里 `SetSelection` 失败才退回注入方向键；此时若 Shift / Ctrl / Alt 还按着，方向键延后到抬起
-  （`Shared::defer_caret_shift` / `flush_pending_caret_shift`），避免 `Shift + 9` 打 `(` 时变成 `Shift + Left` 选中。
-- `SendInput` 被拒（AppContainer / UIPI）只记日志，不把这一键的上屏带崩。
+- 注入方向键前查修饰键：Shift / Ctrl / Alt 还按着就延后到抬起（`Shared::defer_caret_shift` /
+  `flush_pending_caret_shift`），避免 `Shift + 9` 打 `(` 时变成 `Shift + Left` 选中。
+- 注入被拒（AppContainer / UIPI）才退回 TSF `move_selection`，只记日志，不把这一键的上屏带崩。
 
 全角字符（状态条「全角 / 半角」）：开关是 Server 的会话内状态（`RouterConfig.full_width_chars`），随 `InputSettings.full_width_chars`
 下发给 DLL；DLL 开着时把字母也吃掉送来（`key_sink.rs::eats_key`，英文模式本来送都不送），Server 在直通那条路上问 Core

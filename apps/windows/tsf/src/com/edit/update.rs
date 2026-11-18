@@ -70,23 +70,27 @@ pub(crate) fn request_update(
     shared: Rc<Shared>,
     mut update: Update,
 ) -> Result<()> {
-    // 成对补全在 Chromium / Electron 宿主（QQ、VS Code、飞书等）里必须**在按键上下文同步提交**：
-    // 异步会话只更新 TSF 选区，宿主的插入点不跟着走，紧接着注入的方向键便从一个失效的插入点算起。
+    // 成对补全在 Chromium / Electron 宿主（QQ、VS Code、飞书、OpenCode 等）里必须**在按键上下文同步提交**：
+    // 异步会话只更新 TSF 选区，宿主的插入点不跟着走，下一次上屏就会从符号左边插入。
     // 非 Chromium 仍走异步（Win11 记事本的跨进程文本存区同步读写会让 textinputhandler.dll 崩溃）。
-    let sync = update.commit.is_some()
+    // 光标怎么落另算（`settle_caret`）：Word 走 TSF 选区，Chromium / 记事本等走注入的方向键。
+    let pairing = update.commit.is_some()
         && update.caret_shift != 0
         && update.preedit.is_empty()
         && update.delete_before == 0
-        && update.delete_after == 0
-        && (is_chromium_context(context) || host_is_chromium_like());
-    if update.commit.is_some() && update.caret_shift != 0 {
+        && update.delete_after == 0;
+    let chromium_view = pairing && is_chromium_context(context);
+    let view_class = pairing.then(|| context_view_class(context)).flatten();
+    // Word（`_WwG`）的异步会话把文本更新排到注入的输入后面，光标只能走 TSF 选区。
+    let word_view = view_class.as_deref().is_some_and(is_word_class);
+    let sync = pairing && (chromium_view || host_is_chromium_like());
+    if pairing {
         log(&format!(
-            "成对补全提交: sync={sync} chromium={} class={:?} host={:?}",
-            is_chromium_context(context),
-            context_view_class(context),
+            "成对补全提交: sync={sync} chromium={chromium_view} word={word_view} class={view_class:?} host={:?}",
             crate::com::host_app_name()
         ));
     }
+    update.caret_by_tsf = word_view;
     if sync {
         update.sync_pair = true;
         let session = UpdateSession {
@@ -128,6 +132,11 @@ fn is_chromium_class(class: &str) -> bool {
     class.starts_with("Chrome_WidgetWin_") || class == "Chrome_RenderWidgetHostHWND"
 }
 
+/// Word 的文档视图窗口类：它的编辑会话与注入输入次序相反，光标要走 TSF。
+fn is_word_class(class: &str) -> bool {
+    class == "_WwG"
+}
+
 /// 已知 Chromium / Electron 外壳的 exe 名：视图类拿不到时兜底（QQNT 的视图可能报 `TXGuiFoundation`）。
 const CHROMIUM_HOSTS: &[&str] = &["QQ.exe", "Code.exe", "Feishu.exe", "Weixin.exe"];
 
@@ -162,7 +171,7 @@ pub(super) fn request(
 
 #[cfg(test)]
 mod tests {
-    use super::{host_matches_chromium, is_chromium_class};
+    use super::{host_matches_chromium, is_chromium_class, is_word_class};
 
     #[test]
     fn chromium_view_classes_are_recognized() {
@@ -170,6 +179,13 @@ mod tests {
         assert!(is_chromium_class("Chrome_RenderWidgetHostHWND"));
         assert!(!is_chromium_class("Edit"));
         assert!(!is_chromium_class("TXGuiFoundation"));
+    }
+
+    #[test]
+    fn word_view_class_is_recognized() {
+        assert!(is_word_class("_WwG"));
+        assert!(!is_word_class("Edit"));
+        assert!(!is_word_class("Chrome_WidgetWin_1"));
     }
 
     #[test]
