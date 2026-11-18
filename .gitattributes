@@ -2,3 +2,4 @@
 # 禁止 Git 的换行转换，否则 Windows / Linux / CI 拿到的文件内容不同。
 assets/ids/IDS.TXT -text
 assets/ids/components.tsv -text
+assets/ids/component-glyphs.tsv -text

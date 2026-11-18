@@ -5,21 +5,19 @@
 //! - `TEXT`：规范化 IDS 首尾相接；
 //! - `KEYS`：定长 [`IdsKey`]，按 IDS 字节序排序；
 //! - `HASH`：开放寻址表，槽里是 `KEYS` 下标；
-//! - `ENTR`：定长 [`IdsEntry`]，一个 IDS 对应的字 / 来源 / 标记。
+//! - `ENTR`：定长 [`IdsEntry`]，一个 IDS 对应的字 / 来源 / 标记；
+//! - `COMP` / `CTEXT`：可选，难输入部件表与它们的 SVG 字形。
 //!
 //! 查询严格按 IDS 匹配，不做「水 → 氵」这类部件替换。
 
-mod alias;
 mod component;
 mod database;
 mod error;
 mod parser;
 
-pub use alias::{GROUPS as ALIAS_GROUPS, canonical_char, canonicalize};
-
 pub use component::{
     COMPONENT_FLAG_DERIVED, COMPONENT_FLAG_STROKE_ESTIMATED, COMPONENT_FLAG_TYPEABLE,
-    COMPONENT_TAG, Component, ComponentRole, MAX_STROKE,
+    COMPONENT_NO_SVG, COMPONENT_TAG, COMPONENT_TEXT_TAG, Component, ComponentRole, MAX_STROKE,
 };
 pub use database::{
     ENTR_TAG, HASH_TAG, IdsDatabase, IdsEntry, IdsKey, IdsMatch, KEYS_TAG, TEXT_TAG,

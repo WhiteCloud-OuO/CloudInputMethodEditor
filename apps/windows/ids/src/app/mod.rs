@@ -8,17 +8,16 @@ use cloud_ui::{
     AppEvent, Application, CLOSE_ACTION, Context, LabelStyle, MAXIMIZE_ACTION, MINIMIZE_ACTION,
     Rect, TextListState, Theme,
 };
-use cloudime_ids::{IdsDatabase, IdsMatch, IdsOp, canonicalize, source_label};
+use cloudime_ids::{IdsDatabase, IdsMatch, IdsOp, source_label};
 use cloudime_render::{Document, Element, FontSlot};
 
-use crate::canvas;
+use crate::canvas::{self, FallbackGlyph};
 use crate::clipboard;
 use crate::composer::{Composer, InsertOutcome};
 use crate::config::{self, Config};
 use crate::data::Database;
 use crate::drawer::{self, Drawer};
 use crate::glyph::GlyphProbe;
-use crate::preview;
 use crate::results;
 use crate::ui;
 
@@ -26,7 +25,7 @@ use crate::ui;
 const MARGIN: f32 = 20.0;
 const GAP: f32 = 10.0;
 const TOOLBAR_BUTTON_HEIGHT: f32 = 30.0;
-const TOOLBAR_BUTTON_GAP: f32 = 6.0;
+const TOOLBAR_BUTTON_GAP: f32 = 4.0;
 const TOOLBAR_PER_ROW: usize = 9;
 const INPUT_HEIGHT: f32 = 34.0;
 const SMALL_BUTTON_WIDTH: f32 = 54.0;
@@ -41,9 +40,11 @@ pub struct IdsApp {
     status: Status,
     results: TextListState,
     pointer: Option<(f32, f32)>,
+    focus_input: bool,
     drawer: Drawer,
     glyphs: GlyphProbe,
     component_ids: HashMap<char, String>,
+    component_svgs: HashMap<char, String>,
     config: Config,
     theme: Theme,
 }
@@ -52,6 +53,10 @@ impl IdsApp {
     pub fn new(database: Result<Database, String>, config: Config, theme: Theme) -> Self {
         let component_ids = match &database {
             Ok(database) => build_component_ids(&database.inner),
+            Err(_) => HashMap::new(),
+        };
+        let component_svgs = match &database {
+            Ok(database) => build_component_svgs(&database.inner),
             Err(_) => HashMap::new(),
         };
         let drawer = Drawer::with_config(&config);
@@ -66,9 +71,11 @@ impl IdsApp {
             status: Status::Idle,
             results: TextListState::default(),
             pointer: None,
+            focus_input: false,
             drawer,
             glyphs,
             component_ids,
+            component_svgs,
             config,
             theme,
         }
@@ -116,6 +123,7 @@ impl IdsApp {
         }
         if let Some(path) = canvas::parse_slot(name) {
             self.composer.set_active(path);
+            self.focus_input = true;
             self.status = Status::Idle;
             return;
         }
@@ -136,7 +144,6 @@ impl IdsApp {
             return;
         }
         match name {
-            "fill" => self.fill_from_input(),
             "wildcard" => {
                 self.composer.insert(None);
                 self.status = Status::Idle;
@@ -152,53 +159,18 @@ impl IdsApp {
                 self.status = Status::Idle;
             }
             "query" => self.query(),
-            "toggle-aliases" => {
-                self.config.aliases = !self.config.aliases;
-                self.save_config();
-                self.status = Status::Idle;
-            }
             _ => {}
         }
     }
 
-    fn fill_from_input(&mut self) {
-        let Some(character) = self.input.trim().chars().next() else {
-            self.status = Status::Error("先在输入框里打一个部件".to_owned());
-            return;
-        };
-        match self.composer.insert(Some(character)) {
-            InsertOutcome::NoSlot => {
-                self.status = Status::Error("当前结构已经填满，先点一个空槽".to_owned());
-            }
-            _ => {
-                self.drawer.push_recent(character);
-                self.input.clear();
-                self.status = Status::Idle;
-            }
-        }
-    }
-
     fn query(&mut self) {
-        let mut ids = match self.composer.to_ids() {
+        let ids = match self.composer.to_ids() {
             Ok(ids) => ids,
             Err(error) => {
                 self.status = Status::Incomplete(error.to_string());
                 return;
             }
         };
-        let mut relaxed = false;
-        if self.config.aliases {
-            match canonicalize(&ids) {
-                Ok(value) => {
-                    relaxed = value != ids;
-                    ids = value;
-                }
-                Err(error) => {
-                    self.status = Status::Error(error.to_string());
-                    return;
-                }
-            }
-        }
         let database = match &self.database {
             Ok(database) => &database.inner,
             Err(message) => {
@@ -210,7 +182,7 @@ impl IdsApp {
             match database.lookup_wildcard(&ids, 200) {
                 Ok(found) => {
                     self.total = Some(found.total);
-                    self.set_matches(found.matches, relaxed);
+                    self.set_matches(found.matches);
                 }
                 Err(error) => self.status = Status::Error(error.to_string()),
             }
@@ -218,14 +190,14 @@ impl IdsApp {
             match database.lookup_exact(&ids) {
                 Ok(matches) => {
                     self.total = None;
-                    self.set_matches(matches, relaxed);
+                    self.set_matches(matches);
                 }
                 Err(error) => self.status = Status::Error(error.to_string()),
             }
         }
     }
 
-    fn set_matches(&mut self, matches: Vec<IdsMatch>, relaxed: bool) {
+    fn set_matches(&mut self, matches: Vec<IdsMatch>) {
         let total = self.total.unwrap_or(matches.len());
         self.matches = matches;
         self.results.selected = None;
@@ -237,7 +209,6 @@ impl IdsApp {
             Status::Found {
                 shown: self.matches.len(),
                 total,
-                relaxed,
             }
         };
     }
@@ -293,7 +264,15 @@ impl Application for IdsApp {
                 AppEvent::RegionClicked(name) => self.click(name),
                 AppEvent::RegionDoubleClicked(name) => self.double_click(name),
                 AppEvent::TextChanged { name, text } if name == "ids.input" => {
-                    self.input = text.clone();
+                    if let Some(character) = single_han(text) {
+                        let changed = !self.input.starts_with(character);
+                        self.input = character.to_string();
+                        if changed {
+                            self.insert_component(character);
+                        }
+                    } else {
+                        self.input.clear();
+                    }
                 }
                 AppEvent::TextChanged { name, text } if name == "ids.drawer.search" => {
                     self.drawer.set_search(text);
@@ -303,6 +282,10 @@ impl Application for IdsApp {
                 }
                 _ => {}
             }
+        }
+        if self.focus_input {
+            ctx.focus_text("ids.input");
+            self.focus_input = false;
         }
     }
 
@@ -354,24 +337,28 @@ impl Application for IdsApp {
         );
         for (index, op) in IdsOp::ALL.iter().enumerate() {
             let rect = op_button(layout.toolbar, index);
+            let mut look = ui::ButtonLook::normal(&theme);
+            look.size = 13.0;
             ui::button(
                 &mut elements,
                 &mut regions,
                 rect,
                 &format!("op:{index}"),
-                &format!("{} {}", op.symbol(), op.abbreviation()),
-                &ui::ButtonLook::normal(&theme),
+                &format!("{} {}", op.symbol(), op.label()),
+                &look,
                 self.pointer,
                 &mut measure,
             );
         }
+        let mut toggle_look = ui::ButtonLook::normal(&theme);
+        toggle_look.size = 13.0;
         ui::button(
             &mut elements,
             &mut regions,
             op_button(layout.toolbar, IdsOp::ALL.len()),
             "drawer:toggle",
             if self.drawer.open { "收起" } else { "部件" },
-            &ui::ButtonLook::normal(&theme),
+            &toggle_look,
             self.pointer,
             &mut measure,
         );
@@ -384,18 +371,15 @@ impl Application for IdsApp {
             theme.radius,
         );
         let glyphs = &mut self.glyphs;
-        let component_ids = &self.component_ids;
-        let mut fallback = |character: char| -> Option<String> {
+        let component_svgs = &self.component_svgs;
+        let mut fallback = |character: char| -> Option<FallbackGlyph> {
             if glyphs.has_glyph(character) {
                 return None;
             }
-            let ids = component_ids.get(&character)?;
-            Some(crate::glyph::abbreviation(
-                ids,
-                2,
-                component_ids,
-                &mut |nested| glyphs.has_glyph(nested),
-            ))
+            if let Some(svg) = component_svgs.get(&character) {
+                return Some(FallbackGlyph::Svg(svg.clone()));
+            }
+            Some(FallbackGlyph::Text(format!("U+{:04X}", character as u32)))
         };
         canvas::paint(
             &mut elements,
@@ -434,7 +418,6 @@ impl Application for IdsApp {
             &edit_style,
         );
         for (rect, name, text) in [
-            (layout.fill, "fill", "填入"),
             (layout.wildcard, "wildcard", "？"),
             (layout.backspace, "backspace", "退格"),
             (layout.clear, "clear", "清空"),
@@ -450,21 +433,6 @@ impl Application for IdsApp {
                 &mut measure,
             );
         }
-        let look = if self.config.aliases {
-            ui::ButtonLook::primary(&theme)
-        } else {
-            ui::ButtonLook::normal(&theme)
-        };
-        ui::button(
-            &mut elements,
-            &mut regions,
-            layout.replace,
-            "toggle-aliases",
-            "替换",
-            &look,
-            self.pointer,
-            &mut measure,
-        );
         ui::button(
             &mut elements,
             &mut regions,
@@ -506,7 +474,7 @@ impl Application for IdsApp {
             &ui::muted_style(&theme),
             &mut measure,
         );
-        let hovered_result = results::build(
+        results::build(
             &mut elements,
             &mut regions,
             &mut scroll_targets,
@@ -514,7 +482,6 @@ impl Application for IdsApp {
             &rows,
             &self.results,
             &theme,
-            self.pointer,
             &mut measure,
         );
 
@@ -529,32 +496,7 @@ impl Application for IdsApp {
                 self.pointer,
                 &mut measure,
                 &self.component_ids,
-                &mut self.glyphs,
-            );
-        }
-
-        if let Some(index) = hovered_result
-            && let Some(item) = self.matches.get(index)
-            && let Some(anchor) = self.pointer
-        {
-            let ids = item.ids.clone();
-            let character = item.character;
-            let right = layout.drawer.map_or(width - 8.0, |drawer| drawer.x - 8.0);
-            let bounds = Rect {
-                x: 8.0,
-                y: chrome::HEIGHT + 8.0,
-                width: (right - 8.0).max(1.0),
-                height: (height - chrome::HEIGHT - 16.0).max(1.0),
-            };
-            preview::paint(
-                &mut elements,
-                character,
-                &ids,
-                anchor,
-                bounds,
-                &theme,
-                &mut measure,
-                &self.component_ids,
+                &self.component_svgs,
                 &mut self.glyphs,
             );
         }
@@ -615,6 +557,17 @@ fn draw_error(
     }
 }
 
+fn single_han(text: &str) -> Option<char> {
+    text.chars().rev().find(|character| is_han(*character))
+}
+
+fn is_han(character: char) -> bool {
+    matches!(
+        u32::from(character),
+        0x2E80..=0x2FFF | 0x3400..=0x4DBF | 0x4E00..=0x9FFF | 0xF900..=0xFAFF | 0x20000..=0x3FFFF
+    )
+}
+
 fn expand(rect: Rect, by: f32) -> Rect {
     Rect {
         x: rect.x - by,
@@ -624,7 +577,20 @@ fn expand(rect: Rect, by: f32) -> Rect {
     }
 }
 
-/// 为每个部件找一条 IDS（缺字形时画缩写用）。
+/// 为每个部件取内置 SVG。
+fn build_component_svgs(database: &IdsDatabase) -> HashMap<char, String> {
+    database
+        .components()
+        .iter()
+        .filter_map(|component| {
+            let character = component.character()?;
+            let svg = database.component_svg(component)?;
+            Some((character, svg.to_owned()))
+        })
+        .collect()
+}
+
+/// 为每个部件找一条 IDS（搜索匹配用）。
 fn build_component_ids(database: &IdsDatabase) -> HashMap<char, String> {
     let wanted: HashSet<char> = database
         .components()
@@ -660,7 +626,7 @@ fn build_component_ids(database: &IdsDatabase) -> HashMap<char, String> {
 fn op_button(toolbar: Rect, index: usize) -> Rect {
     let width = ((toolbar.width - TOOLBAR_BUTTON_GAP * (TOOLBAR_PER_ROW as f32 - 1.0))
         / TOOLBAR_PER_ROW as f32)
-        .min(64.0);
+        .min(100.0);
     let row = index / TOOLBAR_PER_ROW;
     let column = index % TOOLBAR_PER_ROW;
     Rect {
@@ -676,11 +642,9 @@ struct Layout {
     canvas: Rect,
     expression: Rect,
     input: Rect,
-    fill: Rect,
     wildcard: Rect,
     backspace: Rect,
     clear: Rect,
-    replace: Rect,
     query: Rect,
     status: Rect,
     results_label: Rect,
@@ -727,7 +691,7 @@ impl Layout {
         };
         y += 20.0 + 8.0;
 
-        let buttons = SMALL_BUTTON_WIDTH * 5.0 + QUERY_BUTTON_WIDTH + 8.0 * 6.0;
+        let buttons = SMALL_BUTTON_WIDTH * 3.0 + QUERY_BUTTON_WIDTH + 8.0 * 4.0;
         let input = Rect {
             x: MARGIN,
             y,
@@ -745,11 +709,9 @@ impl Layout {
             x += width + 8.0;
             rect
         };
-        let fill = next(SMALL_BUTTON_WIDTH);
         let wildcard = next(SMALL_BUTTON_WIDTH);
         let backspace = next(SMALL_BUTTON_WIDTH);
         let clear = next(SMALL_BUTTON_WIDTH);
-        let replace = next(SMALL_BUTTON_WIDTH);
         let query = next(QUERY_BUTTON_WIDTH);
         y += INPUT_HEIGHT + 10.0;
 
@@ -788,11 +750,9 @@ impl Layout {
             canvas,
             expression,
             input,
-            fill,
             wildcard,
             backspace,
             clear,
-            replace,
             query,
             status,
             results_label,
@@ -808,11 +768,7 @@ enum Status {
     Idle,
     Incomplete(String),
     NotFound,
-    Found {
-        shown: usize,
-        total: usize,
-        relaxed: bool,
-    },
+    Found { shown: usize, total: usize },
     Copied(char),
     Favorite(char, bool),
     Error(String),
@@ -822,37 +778,15 @@ impl Status {
     fn text(&self) -> (String, bool) {
         match self {
             Self::Idle => (
-                "点结构按钮开始；部件框可粘贴 IDS（如 LR木木），？ 表示任意部件".to_owned(),
+                "输入一个汉字部件，自动填入当前槽；？ 表示任意部件".to_owned(),
                 false,
             ),
             Self::Incomplete(message) => (message.clone(), true),
             Self::NotFound => ("没有找到：Unicode IDS 未收录这个结构".to_owned(), true),
-            Self::Found {
-                shown,
-                total,
-                relaxed,
-            } if total > shown => (
-                format!(
-                    "共 {total} 条，显示前 {shown} 条{}",
-                    if *relaxed {
-                        "（已按常见部件替换）"
-                    } else {
-                        ""
-                    }
-                ),
-                false,
-            ),
-            Self::Found { shown, relaxed, .. } => (
-                format!(
-                    "找到 {shown} 条{}；双击结果复制",
-                    if *relaxed {
-                        "（已按常见部件替换）"
-                    } else {
-                        ""
-                    }
-                ),
-                false,
-            ),
+            Self::Found { shown, total } if total > shown => {
+                (format!("共 {total} 条，显示前 {shown} 条"), false)
+            }
+            Self::Found { shown, .. } => (format!("找到 {shown} 条；双击结果复制"), false),
             Self::Copied(character) => (format!("已复制：{character}"), false),
             Self::Favorite(character, favorite) => (
                 if *favorite {
@@ -872,6 +806,14 @@ mod tests {
     use super::*;
 
     #[test]
+    fn single_han_keeps_the_last_chinese_character() {
+        assert_eq!(single_han("木"), Some('木'));
+        assert_eq!(single_han("a木b水"), Some('水'));
+        assert_eq!(single_han("木木"), Some('木'));
+        assert_eq!(single_han("abc"), None);
+    }
+
+    #[test]
     fn layout_keeps_everything_inside_the_window() {
         let layout = Layout::compute(980.0, 660.0, false);
         for rect in [
@@ -879,11 +821,9 @@ mod tests {
             layout.canvas,
             layout.expression,
             layout.input,
-            layout.fill,
             layout.wildcard,
             layout.backspace,
             layout.clear,
-            layout.replace,
             layout.query,
             layout.status,
             layout.results_label,

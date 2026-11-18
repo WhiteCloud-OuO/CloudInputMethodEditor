@@ -158,6 +158,29 @@ impl IdsOp {
         }
     }
 
+    /// 中文短名，按钮与角标用。
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::LeftRight => "左右结构",
+            Self::LeftMiddleRight => "左中右结构",
+            Self::AboveBelow => "上下结构",
+            Self::AboveMiddleBelow => "上中下结构",
+            Self::FullSurround => "全包围结构",
+            Self::SurroundAbove => "上包围结构",
+            Self::SurroundBelow => "下包围结构",
+            Self::SurroundLeft => "左包围结构",
+            Self::SurroundUpperLeft => "左上包围结构",
+            Self::SurroundUpperRight => "右上包围结构",
+            Self::SurroundLowerLeft => "左下包围结构",
+            Self::SurroundRight => "右包围结构",
+            Self::SurroundLowerRight => "右下包围结构",
+            Self::Overlaid => "重叠结构",
+            Self::HorizontalReflection => "镜像结构",
+            Self::Rotation => "旋转结构",
+            Self::Subtraction => "减除结构",
+        }
+    }
+
     /// 两字母缩写取运算符；大小写敏感。
     pub fn from_abbreviation(text: &str) -> Option<Self> {
         let bytes = text.as_bytes();
@@ -208,6 +231,7 @@ mod tests {
         for op in IdsOp::ALL {
             assert_eq!(IdsOp::from_char(op.symbol()), Some(op));
             assert_eq!(IdsOp::from_abbreviation(op.abbreviation()), Some(op));
+            assert!(!op.label().is_empty());
         }
         assert_eq!(IdsOp::LeftMiddleRight.arity(), 3);
         assert_eq!(IdsOp::AboveMiddleBelow.arity(), 3);

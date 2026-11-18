@@ -2145,8 +2145,9 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
   安装器直接把它拷到 `%APPDATA%\CloudIME`（`onlyifdoesntexist`），`cloudime_platform::smart_symbol`
   的 `SMART_SYMBOL_TEMPLATE` 也是 `include_str!` 这一份 —— 改规则只改这里，别在代码里另抄一份。
 - 英文词表词频：`uv run tools/corpus/english_frequency.py data/generated/english.tsv -o data/generated/english-frequency.tsv`，再 `... english <词表> --frequency <那个文件>`。
-- `assets/ids/`：BabelStone `IDS.TXT`（Unicode 16.0，SHA256 见 `## crates/cloudime-ids`）与难输入部件清单
-  `components.tsv`；`.gitattributes` 标成 `-text`，按原字节入库。
+- `assets/ids/`：BabelStone `IDS.TXT`（Unicode 16.0，SHA256 见 `## crates/cloudime-ids`）、难输入部件清单
+  `components.tsv`、部件 SVG `component-glyphs.tsv`（186 个部件的 path 段，来自字统网难输入部件接口）；
+  `.gitattributes` 标成 `-text`，按原字节入库。
 
 ## tools/dict-convert
 
@@ -2193,12 +2194,12 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
 ```powershell
 # 完整生成：IDS 查询 + 554 个难输入部件 + 分类报告
 cargo run --release -p cloudime-ids-build -- --ids assets/ids/IDS.TXT `
-  --components assets/ids/components.tsv --dict data/generated/dict.tsv `
+  --components assets/ids/components.tsv --glyphs assets/ids/component-glyphs.tsv --dict data/generated/dict.tsv `
   --out data/generated/ids.qj --report data/generated/components-report.tsv
 
 # 自动候选：默认只列词库打不出的（--derive-include-typeable 放开，--derive-min 默认 20）
 cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
-  --components assets/ids/components.tsv --dict data/generated/dict.tsv `
+  --components assets/ids/components.tsv --glyphs assets/ids/component-glyphs.tsv --dict data/generated/dict.tsv `
   --derive-out data/generated/components-candidates.tsv
 ```
 
@@ -2239,25 +2240,25 @@ cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
 - 复用：结果列表复用 `build_text_list`，自己补 `ids.results#<原下标>` 行区域与滚动条 `ScrollTarget`
   （`apps/windows/ids/src/results.rs`，与 `cloud_ui::view::text_list` 同一套几何）。
 - 实测：`⿰木？` 返回 2484 条、列表可滚；双击第一行复制到 `U+3B41`；输入框粘贴中文正常。
-- 窗口壳：`Decorations::None` + `caption_height: 36`，`app/chrome.rs` 画标题、最小化 / 最大化 / 关闭，
-  按钮区域不可拖动；窗口拖动与双击最大化由窗口壳负责。背景圆角随最大化在 12 / 0 之间切换。
+- 窗口壳：`Decorations::None` + `caption_height: 36`，`app/chrome.rs` 画标题、最小化 / 关闭（没有最大化），
+  尺寸与配色对齐 `cloud-ui-demo` 的浅色 / 深色标题栏（38×28、圆角 6、图标 12、关闭悬停红底）；
+  窗口拖动与双击最大化由窗口壳负责，背景圆角随最大化在 12 / 0 之间切换。
 - 配色：`theme.rs` 读 `%APPDATA%\CloudIME\config.toml` 的 `[theme] curr_theme`，
   在用户 / 随包 `Themes\` 里找 JSON，把候选窗口的背景 / 正文 / 页码 / `extra` 映射成
   `cloud_ui::Theme`；找不到就用内置深色。打开时默认 `Composer::with_structure(⿰)`，两个空槽。
+- 交互：结构按钮显示 `⿰ 左右结构` 这类中文名（发送的仍是 `op:<下标>`）；部件输入框只保留一个汉字，
+  `TextChanged` 时直接写入当前槽并跳槽，不再需要「填入」按钮；点画布任意槽会通过
+  `Context::focus_text("ids.input")` 把焦点交回输入框。
 - 部件抽屉（V2）：右侧 300 点，四个标签 `笔画 / 分类 / 收藏 / 最近`；顶部搜索框按字符、码位
   十六进制（`2008E`）或 IDS 片段 / 运算符缩写（`LR`、`RD`）过滤；收藏写在 `ids.toml` 的
   `favorites`，预览行星标按钮切换；网格 4 列 56 点，支持滚轮与拖动右侧滚动条。
   点击 tile 走 `Composer::insert` 并自动跳槽，同时记进「最近」（去重、最多 12）。
-- 部件替换（V2）：`crates/cloudime-ids/src/alias.rs` 维护等价部件组（水/氵、手/扌、火/灬…），
-  `canonicalize` 把整个 IDS 表达式换成规范形；输入框右侧「替换」开关控制，状态写 `aliases`。
-  只改查询，不改数据。
-- 动态字形（V2）：悬停结果行弹出 210×240 结构预览（`preview.rs`），把命中 IDS 递归切成盒子；
-  缺字形部件用缩写、`{n}` 显示为 `{n}`，系统字体没有字形时仍能看懂结构。
-- 字形：`%APPDATA%\CloudIME\ids.toml` 可写 `[font] family`、`show_typeable`、`favorites`、
-  `aliases`；缺字形用 DirectWrite `HasCharacter` 判定（GDI 不支持非 BMP），退化成 IDS ASCII 缩写，
-  画布里插入的部件同样退化成缩写，不会只显示豆腐块。
-- 实测：分类页 `旁` 第一项「僉」能插入画布；非 BMP 部件 tile 显示 `UD丿口` 这类缩写；
-  `⿰水木` 打开「替换」命中「沐」；收藏部件重启后仍在；`⿰木？` 悬停结果能看到 `木 / 乃` 结构图。
+- 部件字形：`assets/ids/component-glyphs.tsv` 存字统网 186 个难输入部件的 SVG path；
+  `ids-build` 把它们写成 `ids.qj` 的 `CTEXT` 分节，`Component.svg_off/svg_len` 指过去。
+  抽屉与画布优先画 `Element::Svg`，其次系统字体，最后只显示码位 `U+XXXX`；
+  不再出现 `UD丿口` 这类结构缩写。`GlyphProbe` 仍用 DirectWrite `HasCharacter` 判断系统字形。
+- 实测：分类页 `旁` 第一项「僉」能插入画布；非 BMP 部件 tile 画 SVG 轮廓；单击画布槽后
+  直接粘贴「木」即填入，再点另一槽粘贴「水」，查询命中 `⿰木水`；收藏部件重启后仍在。
 - 已接入：悬浮状态条「工具 → 组字工具」固定项（`tools.rs` 的 `COMPOSER_COMMAND`，不走 `tools.list`，
   因为清单是 `onlyifdoesntexist` 装的，老安装升级后不会多出新行）；构建与打包在
   `apps/windows/installer/build.ps1`（CI 用）、本机 `cargo-build.ps1` / `push-local.ps1` /

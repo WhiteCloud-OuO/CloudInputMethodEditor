@@ -6,7 +6,8 @@
 use std::collections::{HashMap, HashSet};
 
 use cloudime_ids::{
-    COMPONENT_FLAG_STROKE_ESTIMATED, COMPONENT_FLAG_TYPEABLE, Component, ComponentRole, MAX_STROKE,
+    COMPONENT_FLAG_STROKE_ESTIMATED, COMPONENT_FLAG_TYPEABLE, COMPONENT_NO_SVG, Component,
+    ComponentRole, MAX_STROKE,
 };
 
 use crate::BuildError;
@@ -42,11 +43,12 @@ impl StrokeSource {
     }
 }
 
-/// 组装结果：`COMP` 表 + 给人工复核的报告行。
+/// 组装结果：`COMP` 表 + 给人工复核的报告行 + 部件 SVG arena。
 #[derive(Debug, Default)]
 pub struct Resolved {
     pub components: Vec<Component>,
     pub report: Vec<ReportRow>,
+    pub component_text: Vec<u8>,
 }
 
 /// 一行原始数据。
@@ -117,6 +119,7 @@ pub fn resolve(
     unihan: &Unihan,
     classifications: &HashMap<char, Classification>,
     typeable: &HashSet<char>,
+    glyphs: &HashMap<char, String>,
 ) -> Resolved {
     let ids_by_character = ids.first_ids_by_character();
     let mut resolved = Resolved::default();
@@ -162,6 +165,21 @@ pub fn resolve(
             (Some(overridden), Some(automatic)) if overridden != automatic
         );
 
+        let (svg_off, svg_len) = match glyphs.get(&character) {
+            Some(path) => {
+                let svg = svg_document(path);
+                let offset = u32::try_from(resolved.component_text.len()).unwrap_or(u32::MAX);
+                if offset == u32::MAX || svg.len() > u16::MAX as usize {
+                    eprintln!("警告：部件 {character} 的 SVG 太大，跳过");
+                    (COMPONENT_NO_SVG, 0)
+                } else {
+                    resolved.component_text.extend_from_slice(svg.as_bytes());
+                    (offset, svg.len() as u16)
+                }
+            }
+            None => (COMPONENT_NO_SVG, 0),
+        };
+
         resolved.components.push(Component {
             codepoint: character as u32,
             roles,
@@ -169,6 +187,9 @@ pub fn resolve(
             primary,
             flags,
             reserved: 0,
+            svg_off,
+            svg_len,
+            reserved2: 0,
         });
         resolved.report.push(ReportRow {
             character,
@@ -185,6 +206,17 @@ pub fn resolve(
         .sort_by_key(|component| component.codepoint);
     resolved.report.sort_by_key(|row| row.character as u32);
     resolved
+}
+
+fn svg_document(paths: &str) -> String {
+    let mut svg = String::from(r#"<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 200 200">"#);
+    for segment in paths.split('|').map(str::trim).filter(|s| !s.is_empty()) {
+        svg.push_str(r#"<path d=""#);
+        svg.push_str(segment);
+        svg.push_str(r#"" fill="black"/>"#);
+    }
+    svg.push_str("</svg>");
+    svg
 }
 
 fn optional_number(
@@ -291,7 +323,14 @@ mod tests {
                 enabled: false,
             },
         ];
-        let resolved = resolve(&rows, &ids, &unihan, &HashMap::new(), &HashSet::new());
+        let resolved = resolve(
+            &rows,
+            &ids,
+            &unihan,
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        );
         assert_eq!(resolved.components.len(), 2);
         assert_eq!(resolved.report.len(), 2);
         assert_eq!(resolved.components[0].character(), Some('木'));
@@ -336,6 +375,7 @@ mod tests {
             &Unihan::default(),
             &classifications,
             &HashSet::new(),
+            &HashMap::new(),
         );
         let wood = &resolved.components[0];
         assert_eq!(wood.primary, 2);
@@ -356,7 +396,15 @@ mod tests {
             category: None,
             enabled: true,
         }];
-        let components = resolve(&rows, &ids, &unihan, &HashMap::new(), &HashSet::new()).components;
+        let components = resolve(
+            &rows,
+            &ids,
+            &unihan,
+            &HashMap::new(),
+            &HashSet::new(),
+            &HashMap::new(),
+        )
+        .components;
         assert_eq!(components[0].stroke, 8);
         assert_ne!(components[0].flags & COMPONENT_FLAG_STROKE_ESTIMATED, 0);
     }
@@ -376,6 +424,7 @@ mod tests {
             &Unihan::default(),
             &HashMap::new(),
             &typeable,
+            &HashMap::new(),
         );
         assert_ne!(
             resolved.components[0].flags & cloudime_ids::COMPONENT_FLAG_TYPEABLE,
@@ -398,6 +447,7 @@ mod tests {
             &Unihan::default(),
             &HashMap::new(),
             &HashSet::new(),
+            &HashMap::new(),
         )
         .components;
         assert_eq!(components[0].stroke, 0);

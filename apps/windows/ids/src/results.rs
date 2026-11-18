@@ -19,11 +19,10 @@ pub fn build(
     items: &[String],
     state: &TextListState,
     theme: &Theme,
-    pointer: Option<(f32, f32)>,
     measure: &mut dyn FnMut(&str, FontSlot, f32) -> (f32, f32),
-) -> Option<usize> {
+) {
     if items.is_empty() {
-        return None;
+        return;
     }
     let mut style = theme.text_list();
     style.auto_height = false;
@@ -51,13 +50,6 @@ pub fn build(
 
     let edge = style.edge_width.max(0.0);
     let gap = style.content_gap.max(0.0);
-    let hovered = pointer.and_then(|(x, y)| {
-        if x < rect.x || x > rect.x + rect.width || y < rect.y || y > rect.y + rect.height {
-            return None;
-        }
-        let position = list.row_at(y - rect.y)?;
-        visible.get(position).copied()
-    });
     let viewport = list.viewport_width();
     let viewport_height = list.viewport_height();
     for row in &list.rows {
@@ -93,7 +85,6 @@ pub fn build(
         Some((state.h_scroll.clone(), style.stride())),
     );
     elements.push(Element::ListBox(list));
-    hovered
 }
 
 fn push_scroll_targets(

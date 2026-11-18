@@ -1,12 +1,18 @@
 //! `COMP` 分节：难输入部件表。
 //!
-//! 每项 20 字节、4 字节对齐、没有内部填充，可以整表零拷贝读取。分类用五位千分比存分布，
-//! 一个部件可以同时属于多个分类（比如「木」既是旁、也能当底）。
+//! 每项 28 字节、4 字节对齐、没有内部填充，可以整表零拷贝读取。分类用五位千分比存分布，
+//! 一个部件可以同时属于多个分类（比如「木」既是旁、也能当底）；部件 SVG 存在 `CTEXT`。
 
 use zerocopy::{FromBytes, Immutable, IntoBytes, KnownLayout};
 
 /// 部件表分节的标签。
 pub const COMPONENT_TAG: [u8; 4] = *b"COMP";
+
+/// 部件字形的 SVG arena 分节。
+pub const COMPONENT_TEXT_TAG: [u8; 4] = *b"CTXT";
+
+/// `Component.svg_off` 取这个值表示没有内置字形。
+pub const COMPONENT_NO_SVG: u32 = u32::MAX;
 
 /// 这个部件能用拼音打出来（词库里有单字词条）。
 pub const COMPONENT_FLAG_TYPEABLE: u16 = 1;
@@ -93,6 +99,15 @@ pub struct Component {
 
     /// 预留。
     pub reserved: u16,
+
+    /// `CTEXT` 里 SVG 的字节偏移；[`COMPONENT_NO_SVG`] = 没有。
+    pub svg_off: u32,
+
+    /// SVG 字节长度。
+    pub svg_len: u16,
+
+    /// 预留。
+    pub reserved2: u16,
 }
 
 impl Component {
@@ -115,6 +130,11 @@ impl Component {
     pub fn is_typeable(&self) -> bool {
         self.flags & COMPONENT_FLAG_TYPEABLE != 0
     }
+
+    /// 有没有内置 SVG 字形。
+    pub fn has_svg(&self) -> bool {
+        self.svg_off != COMPONENT_NO_SVG
+    }
 }
 
 #[cfg(test)]
@@ -125,7 +145,7 @@ mod tests {
 
     #[test]
     fn layout_has_no_padding_and_fits_the_file_format() {
-        assert_eq!(size_of::<Component>(), 20);
+        assert_eq!(size_of::<Component>(), 28);
         assert_eq!(align_of::<Component>(), 4);
     }
 

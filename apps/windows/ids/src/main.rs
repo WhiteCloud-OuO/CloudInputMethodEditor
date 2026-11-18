@@ -12,7 +12,6 @@ mod config;
 mod data;
 mod drawer;
 mod glyph;
-mod preview;
 mod results;
 mod theme;
 mod ui;

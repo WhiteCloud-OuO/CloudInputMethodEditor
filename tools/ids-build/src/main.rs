@@ -54,7 +54,13 @@ fn run_build(args: &Args) -> Result<(), BuildError> {
         entries: 0,
         generator: format!("ids-build {}", env!("CARGO_PKG_VERSION")),
     };
-    let stats = write::write(&args.out, &rows, &resolved.components, metadata)?;
+    let stats = write::write(
+        &args.out,
+        &rows,
+        &resolved.components,
+        &resolved.component_text,
+        metadata,
+    )?;
     println!(
         "写出 {}：{} 个 IDS 键，{} 个字，{} 条记录，{} 个部件",
         args.out.display(),
@@ -136,13 +142,53 @@ fn load_components(
     }
     let unihan = load_unihan(args)?;
     let classifications = classify::classify(ids);
+    let glyphs = load_glyphs(args)?;
     Ok(components::resolve(
         &rows,
         ids,
         &unihan,
         &classifications,
         typeable,
+        &glyphs,
     ))
+}
+
+fn load_glyphs(args: &Args) -> Result<std::collections::HashMap<char, String>, BuildError> {
+    if !args.glyphs.is_file() {
+        return Ok(std::collections::HashMap::new());
+    }
+    let source = std::fs::read_to_string(&args.glyphs).map_err(|source| BuildError::Read {
+        path: args.glyphs.clone(),
+        source,
+    })?;
+    let mut glyphs = std::collections::HashMap::new();
+    for (index, line) in source.lines().enumerate() {
+        let line = line.trim();
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((character, path)) = line.split_once('\t') else {
+            return Err(BuildError::BadLine {
+                line: index + 1,
+                reason: "字形行要 `字符 <TAB> path`".to_owned(),
+            });
+        };
+        let mut characters = character.chars();
+        let Some(character) = characters.next() else {
+            return Err(BuildError::BadLine {
+                line: index + 1,
+                reason: "字形行缺字符".to_owned(),
+            });
+        };
+        if characters.next().is_some() {
+            return Err(BuildError::BadLine {
+                line: index + 1,
+                reason: "字形行第一列不是单个字符".to_owned(),
+            });
+        }
+        glyphs.insert(character, path.trim().to_owned());
+    }
+    Ok(glyphs)
 }
 
 fn load_component_rows(args: &Args) -> Result<Vec<ComponentRow>, BuildError> {

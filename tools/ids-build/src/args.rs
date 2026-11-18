@@ -22,6 +22,10 @@ pub struct Args {
     #[arg(long)]
     pub unihan: Option<PathBuf>,
 
+    /// 部件字形 TSV：字符 + 字统网 SVG path 段。
+    #[arg(long, default_value = "assets/ids/component-glyphs.tsv")]
+    pub glyphs: PathBuf,
+
     /// 分类报告输出（可选）；建议写 `data/generated/components-report.tsv`。
     #[arg(long)]
     pub report: Option<PathBuf>,

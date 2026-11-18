@@ -4,7 +4,8 @@ use std::path::Path;
 
 use cloudime_format::{Kind, Metadata, Writer, hash};
 use cloudime_ids::{
-    COMPONENT_TAG, Component, ENTR_TAG, HASH_TAG, IdsEntry, IdsKey, KEYS_TAG, TEXT_TAG,
+    COMPONENT_TAG, COMPONENT_TEXT_TAG, Component, ENTR_TAG, HASH_TAG, IdsEntry, IdsKey, KEYS_TAG,
+    TEXT_TAG,
 };
 use zerocopy::IntoBytes;
 
@@ -25,6 +26,7 @@ pub fn write(
     path: &Path,
     rows: &Rows,
     components: &[Component],
+    component_text: &[u8],
     mut metadata: Metadata,
 ) -> Result<Stats, BuildError> {
     if rows.keys.is_empty() {
@@ -81,6 +83,9 @@ pub fn write(
     if !components.is_empty() {
         writer = writer.section(COMPONENT_TAG, components.as_bytes());
     }
+    if !component_text.is_empty() {
+        writer = writer.section(COMPONENT_TEXT_TAG, component_text);
+    }
     writer.write_to(path)?;
 
     Ok(Stats {
@@ -121,7 +126,7 @@ mod tests {
     fn writes_a_file_that_the_reader_can_query() {
         let rows = read::parse(SAMPLE).unwrap();
         let file = path("round-trip");
-        let stats = write(&file, &rows, &[], metadata()).unwrap();
+        let stats = write(&file, &rows, &[], &[], metadata()).unwrap();
         assert_eq!(stats.characters, 3);
         assert_eq!(stats.keys, 4);
         assert_eq!(stats.components, 0);
@@ -144,9 +149,12 @@ mod tests {
             primary: 2,
             flags: 0,
             reserved: 0,
+            svg_off: cloudime_ids::COMPONENT_NO_SVG,
+            svg_len: 0,
+            reserved2: 0,
         }];
         let file = path("components");
-        let stats = write(&file, &rows, &components, metadata()).unwrap();
+        let stats = write(&file, &rows, &components, &[], metadata()).unwrap();
         assert_eq!(stats.components, 1);
 
         let database = IdsDatabase::open(&file).unwrap();
@@ -159,8 +167,8 @@ mod tests {
         let rows = read::parse(SAMPLE).unwrap();
         let first = path("deterministic-a");
         let second = path("deterministic-b");
-        write(&first, &rows, &[], metadata()).unwrap();
-        write(&second, &rows, &[], metadata()).unwrap();
+        write(&first, &rows, &[], &[], metadata()).unwrap();
+        write(&second, &rows, &[], &[], metadata()).unwrap();
         assert_eq!(
             std::fs::read(&first).unwrap(),
             std::fs::read(&second).unwrap()
@@ -171,7 +179,7 @@ mod tests {
     fn empty_input_is_rejected() {
         let rows = read::parse("# 只有注释\n").unwrap();
         assert!(matches!(
-            write(&path("empty"), &rows, &[], metadata()),
+            write(&path("empty"), &rows, &[], &[], metadata()),
             Err(BuildError::Empty)
         ));
     }

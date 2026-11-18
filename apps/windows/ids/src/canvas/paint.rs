@@ -9,6 +9,15 @@ use crate::composer::{Composer, Node};
 /// 槽位区域名前缀。
 pub const SLOT_PREFIX: &str = "slot:";
 
+/// 缺字形时的画法。
+pub enum FallbackGlyph {
+    /// 用内置 SVG 画。
+    Svg(String),
+
+    /// 用一段文字（例如 `U+20087`）。
+    Text(String),
+}
+
 /// 画整个画布。
 #[allow(clippy::too_many_arguments)]
 pub fn paint(
@@ -18,7 +27,7 @@ pub fn paint(
     rect: Rect,
     theme: &Theme,
     pointer: Option<(f32, f32)>,
-    fallback: &mut dyn FnMut(char) -> Option<String>,
+    fallback: &mut dyn FnMut(char) -> Option<FallbackGlyph>,
     measure: &mut dyn FnMut(&str, FontSlot, f32) -> (f32, f32),
 ) {
     let placed = layout(composer.root(), rect, 8.0);
@@ -51,7 +60,7 @@ fn paint_node(
     placed: &Placed,
     theme: &Theme,
     hovered: bool,
-    fallback: &mut dyn FnMut(char) -> Option<String>,
+    fallback: &mut dyn FnMut(char) -> Option<FallbackGlyph>,
     measure: &mut dyn FnMut(&str, FontSlot, f32) -> (f32, f32),
 ) {
     let Some(node) = composer.node_at(&placed.path) else {
@@ -102,17 +111,28 @@ fn paint_node(
                 measure,
             );
         }
-        Node::Char(character) => {
-            if let Some(label) = fallback(*character) {
+        Node::Char(character) => match fallback(*character) {
+            Some(FallbackGlyph::Svg(source)) => {
+                let size = (side * 0.62).clamp(8.0, 96.0);
+                elements.push(Element::Svg {
+                    x: rect.x + (rect.width - size) / 2.0,
+                    y: rect.y + (rect.height - size) / 2.0,
+                    size,
+                    source,
+                    tint: Some(theme.text),
+                });
+            }
+            Some(FallbackGlyph::Text(label)) => {
                 centered_text(
                     elements,
                     rect,
                     &label,
-                    (side * 0.28).clamp(8.0, 20.0),
+                    (side * 0.24).clamp(8.0, 18.0),
                     theme.muted,
                     measure,
                 );
-            } else {
+            }
+            None => {
                 centered_text(
                     elements,
                     rect,
@@ -122,7 +142,7 @@ fn paint_node(
                     measure,
                 );
             }
-        }
+        },
         Node::Wildcard => {
             centered_text(
                 elements,

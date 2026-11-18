@@ -14,7 +14,6 @@ pub struct Config {
     pub font_family: String,
     pub show_typeable: bool,
     pub favorites: Vec<char>,
-    pub aliases: bool,
 }
 
 impl Default for Config {
@@ -23,7 +22,6 @@ impl Default for Config {
             font_family: DEFAULT_FAMILY.to_owned(),
             show_typeable: false,
             favorites: Vec::new(),
-            aliases: false,
         }
     }
 }
@@ -45,11 +43,10 @@ pub fn save(config: &Config) -> Result<(), String> {
     }
     let favorites: String = config.favorites.iter().collect();
     let text = format!(
-        "[font]\nfamily = \"{}\"\nshow_typeable = {}\nfavorites = \"{}\"\naliases = {}\n",
+        "[font]\nfamily = \"{}\"\nshow_typeable = {}\nfavorites = \"{}\"\n",
         config.font_family.replace('"', ""),
         config.show_typeable,
-        favorites.replace('"', ""),
-        config.aliases
+        favorites.replace('"', "")
     );
     std::fs::write(&path, text).map_err(|error| format!("写 {} 失败：{error}", path.display()))
 }
@@ -80,7 +77,6 @@ pub fn parse(text: &str) -> Config {
         match (in_font, key) {
             (true, "family") if !value.is_empty() => config.font_family = value.to_owned(),
             (_, "show_typeable") => config.show_typeable = value.eq_ignore_ascii_case("true"),
-            (_, "aliases") => config.aliases = value.eq_ignore_ascii_case("true"),
             (_, "favorites") => {
                 config.favorites = value.chars().collect();
                 config.favorites.dedup();
@@ -97,12 +93,10 @@ mod tests {
 
     #[test]
     fn reads_font_typeable_and_favorites() {
-        let config = parse(
-            "[font]\nfamily = \"SimSun\"\nshow_typeable = true\nfavorites = \"𠂇木\"\naliases = true\n",
-        );
+        let config =
+            parse("[font]\nfamily = \"SimSun\"\nshow_typeable = true\nfavorites = \"𠂇木\"\n");
         assert_eq!(config.font_family, "SimSun");
         assert!(config.show_typeable);
-        assert!(config.aliases);
         assert_eq!(config.favorites, vec!['𠂇', '木']);
     }
 

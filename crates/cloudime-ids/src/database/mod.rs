@@ -7,7 +7,9 @@ use std::path::Path;
 
 use cloudime_format::{Container, FormatError, Kind, Metadata, Table, Text, hash};
 
-use crate::component::{COMPONENT_TAG, Component, ComponentRole, MAX_STROKE};
+use crate::component::{
+    COMPONENT_NO_SVG, COMPONENT_TAG, COMPONENT_TEXT_TAG, Component, ComponentRole, MAX_STROKE,
+};
 use crate::error::IdsError;
 
 pub use layout::{ENTR_TAG, HASH_TAG, IdsEntry, IdsKey, KEYS_TAG, TEXT_TAG};
@@ -46,6 +48,7 @@ pub struct IdsDatabase {
     hash: Table<u32>,
     entries: Table<IdsEntry>,
     components: Table<Component>,
+    component_text: Option<Text>,
     metadata: Metadata,
 }
 
@@ -59,12 +62,18 @@ impl IdsDatabase {
             Err(FormatError::MissingSection(_)) => Table::default(),
             Err(error) => return Err(IdsError::Format(error)),
         };
+        let component_text = match container.text(COMPONENT_TEXT_TAG) {
+            Ok(text) => Some(text),
+            Err(FormatError::MissingSection(_)) => None,
+            Err(error) => return Err(IdsError::Format(error)),
+        };
         let database = Self {
             text: container.text(TEXT_TAG)?,
             keys: container.table::<IdsKey>(KEYS_TAG)?,
             hash: container.table::<u32>(HASH_TAG)?,
             entries: container.table::<IdsEntry>(ENTR_TAG)?,
             components,
+            component_text,
             metadata: container.metadata().clone(),
         };
         database.validate()?;
@@ -112,6 +121,23 @@ impl IdsDatabase {
             .binary_search_by_key(&(character as u32), |item| item.codepoint)
             .ok()?;
         self.components.get(index)
+    }
+
+    /// 部件的内置 SVG（完整 `<svg>` 文档）。
+    pub fn component_svg(&self, component: &Component) -> Option<&str> {
+        if component.svg_off == COMPONENT_NO_SVG {
+            return None;
+        }
+        let text = self.component_text.as_ref()?;
+        let start = component.svg_off as usize;
+        let end = start.checked_add(component.svg_len as usize)?;
+        std::str::from_utf8(text.as_bytes().get(start..end)?).ok()
+    }
+
+    /// 按字符取内置 SVG。
+    pub fn component_svg_for(&self, character: char) -> Option<&str> {
+        self.component(character)
+            .and_then(|component| self.component_svg(component))
     }
 
     /// 某个笔画档位的部件（顺序与 `COMP` 一致）。
@@ -227,6 +253,23 @@ impl IdsDatabase {
                 || ComponentRole::from_index(component.primary).is_none()
             {
                 return Err(IdsError::BadComponent(index));
+            }
+            if component.svg_off != COMPONENT_NO_SVG {
+                let text = self
+                    .component_text
+                    .as_ref()
+                    .ok_or(IdsError::BadComponent(index))?;
+                let start = component.svg_off as usize;
+                let end = start
+                    .checked_add(component.svg_len as usize)
+                    .ok_or(IdsError::BadComponent(index))?;
+                let bytes = text
+                    .as_bytes()
+                    .get(start..end)
+                    .ok_or(IdsError::BadComponent(index))?;
+                if std::str::from_utf8(bytes).is_err() {
+                    return Err(IdsError::BadComponent(index));
+                }
             }
             let total: u32 = component.roles.iter().map(|score| u32::from(*score)).sum();
             if total != 1000 {
@@ -422,6 +465,9 @@ mod tests {
                 primary: 2,
                 flags: 0,
                 reserved: 0,
+                svg_off: COMPONENT_NO_SVG,
+                svg_len: 0,
+                reserved2: 0,
             },
             Component {
                 codepoint: '錒' as u32,
@@ -430,6 +476,9 @@ mod tests {
                 primary: 4,
                 flags: 0,
                 reserved: 0,
+                svg_off: COMPONENT_NO_SVG,
+                svg_len: 0,
+                reserved2: 0,
             },
         ];
         let hash = hash::build(1, |_| "⿰木木");
@@ -481,6 +530,9 @@ mod tests {
                 primary: 1,
                 flags: 0,
                 reserved: 0,
+                svg_off: COMPONENT_NO_SVG,
+                svg_len: 0,
+                reserved2: 0,
             },
             Component {
                 codepoint: '木' as u32,
@@ -489,6 +541,9 @@ mod tests {
                 primary: 2,
                 flags: 0,
                 reserved: 0,
+                svg_off: COMPONENT_NO_SVG,
+                svg_len: 0,
+                reserved2: 0,
             },
             Component {
                 codepoint: '目' as u32,
@@ -497,6 +552,9 @@ mod tests {
                 primary: 2,
                 flags: 0,
                 reserved: 0,
+                svg_off: COMPONENT_NO_SVG,
+                svg_len: 0,
+                reserved2: 0,
             },
             Component {
                 codepoint: '眼' as u32,
@@ -505,6 +563,9 @@ mod tests {
                 primary: 2,
                 flags: 0,
                 reserved: 0,
+                svg_off: COMPONENT_NO_SVG,
+                svg_len: 0,
+                reserved2: 0,
             },
         ];
         let hash = hash::build(1, |_| "⿰木木");
@@ -538,6 +599,53 @@ mod tests {
     }
 
     #[test]
+    fn reads_component_svg_from_ctext() {
+        let file = path("component-svg");
+        let metadata = Metadata::default();
+        let text = "⿰木木";
+        let keys = [IdsKey {
+            start: 0,
+            first_entry: 0,
+            len: 9,
+            entry_count: 1,
+            reserved: 0,
+            reserved2: 0,
+        }];
+        let entries = [IdsEntry {
+            codepoint: '林' as u32,
+            sources: 1,
+            flags: 0,
+        }];
+        let svg = "<svg></svg>";
+        let components = [Component {
+            codepoint: '木' as u32,
+            roles: [0, 0, 1000, 0, 0],
+            stroke: 4,
+            primary: 2,
+            flags: 0,
+            reserved: 0,
+            svg_off: 0,
+            svg_len: svg.len() as u16,
+            reserved2: 0,
+        }];
+        let hash = hash::build(1, |_| "⿰木木");
+        Writer::new(Kind::Ids, &metadata)
+            .unwrap()
+            .section(TEXT_TAG, text.as_bytes())
+            .section(KEYS_TAG, keys.as_slice().as_bytes())
+            .section(HASH_TAG, hash.as_slice().as_bytes())
+            .section(ENTR_TAG, entries.as_slice().as_bytes())
+            .section(COMPONENT_TAG, components.as_slice().as_bytes())
+            .section(COMPONENT_TEXT_TAG, svg.as_bytes())
+            .write_to(&file)
+            .unwrap();
+
+        let database = IdsDatabase::open(&file).unwrap();
+        assert_eq!(database.component_svg_for('木'), Some(svg));
+        assert_eq!(database.component_svg_for('水'), None);
+    }
+
+    #[test]
     fn component_table_with_bad_scores_is_rejected() {
         let file = path("bad-components");
         let metadata = Metadata::default();
@@ -562,6 +670,9 @@ mod tests {
             primary: 2,
             flags: 0,
             reserved: 0,
+            svg_off: COMPONENT_NO_SVG,
+            svg_len: 0,
+            reserved2: 0,
         }];
         let hash = hash::build(1, |_| "⿰木木");
         Writer::new(Kind::Ids, &metadata)

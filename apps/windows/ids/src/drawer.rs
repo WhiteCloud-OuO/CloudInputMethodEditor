@@ -270,6 +270,7 @@ impl Drawer {
         pointer: Option<(f32, f32)>,
         measure: &mut dyn FnMut(&str, FontSlot, f32) -> (f32, f32),
         component_ids: &HashMap<char, String>,
+        component_svgs: &HashMap<char, String>,
         glyphs: &mut GlyphProbe,
     ) {
         ui::panel(elements, rect, theme.surface, theme.radius);
@@ -480,7 +481,7 @@ impl Drawer {
                     character,
                     theme,
                     measure,
-                    component_ids,
+                    component_svgs,
                     glyphs,
                 );
                 regions.push(Region::new(
@@ -746,10 +747,21 @@ fn paint_glyph(
     character: char,
     theme: &Theme,
     measure: &mut dyn FnMut(&str, FontSlot, f32) -> (f32, f32),
-    component_ids: &HashMap<char, String>,
+    component_svgs: &HashMap<char, String>,
     glyphs: &mut GlyphProbe,
 ) {
     let font = FontSlot::Candidate;
+    if let Some(svg) = component_svgs.get(&character) {
+        let size = 40.0;
+        elements.push(Element::Svg {
+            x: tile.x + (tile.width - size) / 2.0,
+            y: tile.y + (tile.height - size) / 2.0,
+            size,
+            source: svg.clone(),
+            tint: Some(theme.text),
+        });
+        return;
+    }
     if glyphs.has_glyph(character) {
         let size = 30.0;
         let (width, height) = measure(&character.to_string(), font, size);
@@ -765,16 +777,9 @@ fn paint_glyph(
         return;
     }
 
-    // 系统字体缺字：画 ASCII 缩写（`UD丿罒`），最多展开两层。
-    let text = component_ids
-        .get(&character)
-        .map(|ids| {
-            let mut has_glyph = |candidate| glyphs.has_glyph(candidate);
-            crate::glyph::abbreviation(ids, 2, component_ids, &mut has_glyph)
-        })
-        .filter(|text| !text.is_empty())
-        .unwrap_or_else(|| format!("U+{:04X}", character as u32));
-    let size = 10.0;
+    // 没有内置 SVG、系统字体也缺字：只标码位，不再画结构缩写。
+    let text = format!("U+{:04X}", character as u32);
+    let size = 8.0;
     let (width, height) = measure(&text, font, size);
     elements.push(Element::Text {
         x: tile.x + (tile.width - width).max(0.0) / 2.0,
@@ -784,15 +789,6 @@ fn paint_glyph(
         slot: font,
         color: theme.muted,
         italic: false,
-    });
-    // 右下角小点：提醒这不是正常字形。
-    elements.push(Element::Rect {
-        x: tile.x + tile.width - 8.0,
-        y: tile.y + tile.height - 8.0,
-        width: 3.0,
-        height: 3.0,
-        radius: 1.5,
-        color: theme.accent,
     });
 }
 

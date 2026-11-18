@@ -251,6 +251,7 @@ pub struct Context {
     hwnd: HWND,
     close: Cell<bool>,
     command: Cell<Option<WindowCommand>>,
+    focus_text: Cell<Option<&'static str>>,
     mask: Cell<Option<WindowMask>>,
     painter: SharedPainter,
 }
@@ -290,6 +291,11 @@ impl Context {
     /// 请求关闭窗口。
     pub fn close(&self) {
         self.close.set(true);
+    }
+
+    /// 把焦点交给某个文本编辑框（`region_name`）；这一帧同步宿主之后执行。
+    pub fn focus_text(&self, name: &'static str) {
+        self.focus_text.set(Some(name));
     }
 
     /// 窗口是否最大化 / 还原态。
@@ -870,6 +876,7 @@ impl AppWindow {
             hwnd,
             close: Cell::new(false),
             command: Cell::new(None),
+            focus_text: Cell::new(None),
             mask: Cell::new(self.mask),
             painter: self.painter.clone(),
         };
@@ -911,6 +918,9 @@ impl AppWindow {
         self.regions = document.regions.clone();
         self.mask = ctx.mask.get();
         self.sync_text_edits(hwnd, &mut document, dpi);
+        if let Some(name) = ctx.focus_text.take() {
+            self.focus_edit(name);
+        }
         self.sync_mask(hwnd);
         if self.layered {
             let shadow = (self.shadow && !zoomed).then_some(Shadow::panel());
@@ -1033,6 +1043,7 @@ impl AppWindow {
             hwnd,
             close: Cell::new(false),
             command: Cell::new(None),
+            focus_text: Cell::new(None),
             mask: Cell::new(self.mask),
             painter: self.painter.clone(),
         };
@@ -1092,6 +1103,13 @@ impl AppWindow {
     }
 
     /// 按当前 `Document` 摆放 / 增删 RichEdit 宿主（`View::text_edit` / `text_box`）。
+    /// 把焦点交给名字匹配的文本宿主。
+    fn focus_edit(&self, name: &str) {
+        if let Some(edit) = self.edits.iter().find(|edit| edit.name == name) {
+            edit.host.focus();
+        }
+    }
+
     fn sync_text_edits(&mut self, hwnd: HWND, document: &mut Document, dpi: u32) {
         let visible = unsafe { IsWindowVisible(hwnd).as_bool() };
         // 蒙版在上面时不要再把宿主抬到蒙版之上，否则每帧 z-order 来回切会让编辑框背景闪。
