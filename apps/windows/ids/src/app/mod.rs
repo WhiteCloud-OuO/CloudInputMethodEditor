@@ -13,7 +13,7 @@ use cloudime_render::{Document, Element, FontSlot};
 
 use crate::canvas::{self, FallbackGlyph};
 use crate::clipboard;
-use crate::composer::{Composer, InsertOutcome};
+use crate::composer::{Composer, InsertOutcome, Node};
 use crate::config::{self, Config};
 use crate::data::Database;
 use crate::drawer::{self, Drawer};
@@ -87,6 +87,26 @@ impl IdsApp {
         }
     }
 
+    /// 点槽位时同步到输入框的文字：部件本身，或完整结构对应的字。
+    fn slot_input_text(&self, path: &[usize]) -> Option<String> {
+        match self.composer.node_at(path)? {
+            Node::Char(character) => Some(character.to_string()),
+            Node::Op { .. } => {
+                let ids = self.composer.ids_at(path).ok()?;
+                let database = match &self.database {
+                    Ok(database) => &database.inner,
+                    Err(_) => return None,
+                };
+                database
+                    .lookup_exact(&ids)
+                    .ok()?
+                    .first()
+                    .map(|item| item.character.to_string())
+            }
+            Node::Empty | Node::Wildcard => None,
+        }
+    }
+
     fn insert_component(&mut self, character: char) {
         match self.composer.insert(Some(character)) {
             InsertOutcome::NoSlot => {
@@ -114,7 +134,8 @@ impl IdsApp {
             return;
         }
         if let Some(path) = canvas::parse_slot(name) {
-            self.composer.set_active(path);
+            self.composer.set_active(path.clone());
+            self.input = self.slot_input_text(&path).unwrap_or_default();
             self.focus_input = true;
             self.status = Status::Idle;
             return;

@@ -88,7 +88,9 @@ ids.qj
 ├─ KEYS   Table<IdsKey>：按 IDS 字节序排序
 ├─ HASH   Table<u32>：开放寻址，槽里是 KEYS 下标
 ├─ ENTR   Table<IdsEntry>：IDS → 字
-└─ COMP   Table<Component>：难输入部件（可选）
+├─ BYCH   Table<CharKey>：字 → 第一条 IDS 下标（可选，递归展开用）
+├─ COMP   Table<Component>：难输入部件（可选）
+└─ CTEXT  UTF-8：部件 SVG 文档首尾相接（可选）
 ```
 
 `COMP` 缺失时：第一版功能照常，部件抽屉置灰提示「部件库缺失」。
@@ -198,6 +200,10 @@ generator = "ids-build <version>"
 normalize(query) → hash::find(HASH, key, |id| key_str(id))
                  → IdsKey → ENTR[first..first+count] → Vec<IdsMatch>
 ```
+
+精确命中 0 条时再走一次「递归展开」：逐条 `KEYS` 解析成树，把数据里的叶子（如 `吅`）
+用 `BYCH` 换成它自己的 IDS（`⿰口口`）再比，深度上限 12，按字去重。这样画布拼出
+`⿱口⿰口口` 也能查到「品」，与字统网一致。展开只在未命中时发生，命中路径不受影响。
 
 命中 0 条 → `Unrecorded`；同一字合并显示。
 
@@ -385,6 +391,9 @@ struct Composer {
 输入框只保留一个汉字：`TextChanged` 时取最后一个汉字，内容变化就直接写入当前槽，
 不再需要点「填入」；单击画布任意槽会把焦点交给输入框。抽屉点 tile 走同一个入口。
 插入成功后按深度优先跳到下一个空叶子；没有就停在原地。
+
+单击槽位时输入框同步显示这个槽的内容：叶子就是那个字；结构子树先拼成 IDS 再精确查询
+（含递归展开），查到就把对应的字填进输入框，查不到（不能用文字表示）就清空。
 
 退格：current 变 `Empty`；current 是 `Op` 则整棵子树折叠成 `Empty`。清空：根变 `Empty`。
 

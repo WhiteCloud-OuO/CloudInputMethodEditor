@@ -12,6 +12,9 @@ pub const HASH_TAG: [u8; 4] = *b"HASH";
 /// 一个 IDS 对应的字 / 来源 / 标记。
 pub const ENTR_TAG: [u8; 4] = *b"ENTR";
 
+/// 字 → 第一条 IDS 键的索引（递归展开查询用），按码位排序。
+pub const CHAR_TAG: [u8; 4] = *b"BYCH";
+
 /// `KEYS` 的一项：IDS 在 `TEXT` 里的位置，以及它对应的一段 `ENTR`。
 ///
 /// 字段顺序按「无内部填充」排：`u32, u32, u16, u16, u16, u16` = 16 字节，
@@ -50,4 +53,15 @@ pub struct IdsEntry {
 
     /// [`FLAG_VARIATION`](crate::FLAG_VARIATION) 等标记。
     pub flags: u16,
+}
+
+/// `BYCH` 的一项：一个字和它的第一条 IDS 在 `KEYS` 里的下标。
+#[derive(Debug, Clone, Copy, PartialEq, Eq, FromBytes, Immutable, KnownLayout, IntoBytes)]
+#[repr(C)]
+pub struct CharKey {
+    /// Unicode 标量值。
+    pub codepoint: u32,
+
+    /// `KEYS` 下标。
+    pub key: u32,
 }

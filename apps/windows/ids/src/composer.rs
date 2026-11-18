@@ -208,6 +208,17 @@ impl Composer {
         Ok(text)
     }
 
+    /// 某个槽位自己的 IDS（子树必须完整）。
+    pub fn ids_at(&self, path: &[usize]) -> Result<String, ComposeError> {
+        let node = self.node_at(path).ok_or(ComposeError::Empty)?;
+        if matches!(node, Node::Empty) {
+            return Err(ComposeError::Empty);
+        }
+        let mut text = String::new();
+        write_node(node, &mut text)?;
+        Ok(text)
+    }
+
     fn node_mut(&mut self, path: &[usize]) -> Option<&mut Node> {
         let mut node = &mut self.root;
         for &index in path {
@@ -278,6 +289,20 @@ fn write_node(node: &Node, out: &mut String) -> Result<(), ComposeError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn ids_at_returns_the_subtree_expression() {
+        let mut composer = Composer::new();
+        composer.split(IdsOp::AboveBelow);
+        composer.insert(Some('口'));
+        composer.split(IdsOp::LeftRight);
+        composer.insert(Some('口'));
+        composer.insert(Some('口'));
+        assert_eq!(composer.ids_at(&[]).unwrap(), "⿱口⿰口口");
+        assert_eq!(composer.ids_at(&[0]).unwrap(), "口");
+        assert_eq!(composer.ids_at(&[1]).unwrap(), "⿰口口");
+        assert!(composer.ids_at(&[0, 0]).is_err());
+    }
 
     #[test]
     fn default_structure_is_left_right() {

@@ -12,7 +12,7 @@ use crate::component::{
 };
 use crate::error::IdsError;
 
-pub use layout::{ENTR_TAG, HASH_TAG, IdsEntry, IdsKey, KEYS_TAG, TEXT_TAG};
+pub use layout::{CHAR_TAG, CharKey, ENTR_TAG, HASH_TAG, IdsEntry, IdsKey, KEYS_TAG, TEXT_TAG};
 
 /// 一条查出来的字。
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -47,6 +47,7 @@ pub struct IdsDatabase {
     keys: Table<IdsKey>,
     hash: Table<u32>,
     entries: Table<IdsEntry>,
+    char_keys: Table<CharKey>,
     components: Table<Component>,
     component_text: Option<Text>,
     metadata: Metadata,
@@ -67,11 +68,17 @@ impl IdsDatabase {
             Err(FormatError::MissingSection(_)) => None,
             Err(error) => return Err(IdsError::Format(error)),
         };
+        let char_keys = match container.table::<CharKey>(CHAR_TAG) {
+            Ok(table) => table,
+            Err(FormatError::MissingSection(_)) => Table::default(),
+            Err(error) => return Err(IdsError::Format(error)),
+        };
         let database = Self {
             text: container.text(TEXT_TAG)?,
             keys: container.table::<IdsKey>(KEYS_TAG)?,
             hash: container.table::<u32>(HASH_TAG)?,
             entries: container.table::<IdsEntry>(ENTR_TAG)?,
+            char_keys,
             components,
             component_text,
             metadata: container.metadata().clone(),
@@ -96,6 +103,16 @@ impl IdsDatabase {
     /// 第 `id` 个键的 IDS 字符串。
     pub fn key_str(&self, id: u32) -> Option<&str> {
         self.key_text(self.keys.get(id as usize)?)
+    }
+
+    /// 一个字在 `KEYS` 里的第一条 IDS（递归展开用）。
+    pub fn first_ids_for(&self, character: char) -> Option<&str> {
+        let index = self
+            .char_keys
+            .binary_search_by_key(&(character as u32), |item| item.codepoint)
+            .ok()?;
+        let key = self.char_keys.get(index)?.key;
+        self.key_str(key)
     }
 
     /// 第 `id` 个键对应的全部条目。
@@ -233,7 +250,24 @@ impl IdsDatabase {
                 last = Some(entry.codepoint);
             }
         }
-        self.validate_components()
+        self.validate_components()?;
+        self.validate_char_keys()
+    }
+
+    fn validate_char_keys(&self) -> Result<(), IdsError> {
+        let mut previous: Option<u32> = None;
+        for (index, item) in self.char_keys.iter().enumerate() {
+            if char::from_u32(item.codepoint).is_none() || item.key as usize >= self.keys.len() {
+                return Err(IdsError::BadCharacterIndex(index));
+            }
+            if let Some(previous) = previous
+                && item.codepoint <= previous
+            {
+                return Err(IdsError::BadCharacterIndex(index));
+            }
+            previous = Some(item.codepoint);
+        }
+        Ok(())
     }
 
     fn validate_components(&self) -> Result<(), IdsError> {
@@ -328,6 +362,19 @@ mod tests {
             ids.push(*ids_text);
         }
         let hash = hash::build(ids.len(), |id| ids[id as usize]);
+        let mut seen = std::collections::HashSet::new();
+        let mut char_keys = Vec::new();
+        for (index, (_, items)) in rows.iter().enumerate() {
+            for (character, _, _) in *items {
+                if seen.insert(*character) {
+                    char_keys.push(CharKey {
+                        codepoint: *character as u32,
+                        key: index as u32,
+                    });
+                }
+            }
+        }
+        char_keys.sort_by_key(|item| item.codepoint);
         let metadata = Metadata {
             name: "IDS 测试".to_owned(),
             ..Metadata::default()
@@ -339,6 +386,7 @@ mod tests {
             .section(KEYS_TAG, keys.as_slice().as_bytes())
             .section(HASH_TAG, hash.as_slice().as_bytes())
             .section(ENTR_TAG, entries.as_slice().as_bytes())
+            .section(CHAR_TAG, char_keys.as_slice().as_bytes())
             .write_to(&file)
             .unwrap();
         file
@@ -388,6 +436,19 @@ mod tests {
             Err(IdsError::WildcardNotAllowed)
         ));
         assert!(database.lookup_exact("⿰木火").unwrap().is_empty());
+    }
+
+    #[test]
+    fn exact_lookup_expands_characters_inside_the_stored_ids() {
+        let database = sample("expand");
+        // 数据里「森」是 `⿱木林`；把「林」展开成 `⿰木木` 后应当也能命中。
+        let matches = database.lookup_exact("⿱木⿰木木").unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].character, '森');
+        assert_eq!(matches[0].ids, "⿱木林");
+
+        // 完全对不上的结构仍然查不到。
+        assert!(database.lookup_exact("⿱木⿰水火").unwrap().is_empty());
     }
 
     #[test]

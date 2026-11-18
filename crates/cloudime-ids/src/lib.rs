@@ -20,8 +20,8 @@ pub use component::{
     COMPONENT_NO_SVG, COMPONENT_TAG, COMPONENT_TEXT_TAG, Component, ComponentRole, MAX_STROKE,
 };
 pub use database::{
-    ENTR_TAG, HASH_TAG, IdsDatabase, IdsEntry, IdsKey, IdsMatch, KEYS_TAG, TEXT_TAG,
-    WildcardMatches,
+    CHAR_TAG, CharKey, ENTR_TAG, HASH_TAG, IdsDatabase, IdsEntry, IdsKey, IdsMatch, KEYS_TAG,
+    TEXT_TAG, WildcardMatches,
 };
 pub use error::{IdsError, ParseError};
 pub use parser::{IdsNode, IdsOp, is_variation, normalize, parse};

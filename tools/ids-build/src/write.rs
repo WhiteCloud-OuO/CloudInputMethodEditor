@@ -4,8 +4,8 @@ use std::path::Path;
 
 use cloudime_format::{Kind, Metadata, Writer, hash};
 use cloudime_ids::{
-    COMPONENT_TAG, COMPONENT_TEXT_TAG, Component, ENTR_TAG, HASH_TAG, IdsEntry, IdsKey, KEYS_TAG,
-    TEXT_TAG,
+    CHAR_TAG, COMPONENT_TAG, COMPONENT_TEXT_TAG, CharKey, Component, ENTR_TAG, HASH_TAG, IdsEntry,
+    IdsKey, KEYS_TAG, TEXT_TAG,
 };
 use zerocopy::IntoBytes;
 
@@ -75,11 +75,28 @@ pub fn write(
     let hash = hash::build(ids.len(), |id| ids[id as usize]);
     metadata.entries = rows.characters.len() as u64;
 
+    let mut seen = std::collections::HashSet::new();
+    let mut char_keys = Vec::with_capacity(rows.characters.len());
+    for (index, (_, characters)) in rows.keys.iter().enumerate() {
+        for character in characters.keys() {
+            if seen.insert(*character) {
+                char_keys.push(CharKey {
+                    codepoint: *character as u32,
+                    key: index as u32,
+                });
+            }
+        }
+    }
+    char_keys.sort_by_key(|item| item.codepoint);
+
     let mut writer = Writer::new(Kind::Ids, &metadata)?
         .section(TEXT_TAG, &text)
         .section(KEYS_TAG, keys.as_slice().as_bytes())
         .section(HASH_TAG, hash.as_slice().as_bytes())
         .section(ENTR_TAG, entries.as_slice().as_bytes());
+    if !char_keys.is_empty() {
+        writer = writer.section(CHAR_TAG, char_keys.as_slice().as_bytes());
+    }
     if !components.is_empty() {
         writer = writer.section(COMPONENT_TAG, components.as_bytes());
     }

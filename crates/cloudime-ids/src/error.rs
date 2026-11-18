@@ -58,9 +58,13 @@ pub enum IdsError {
     #[error("IDS 哈希表与键表不一致")]
     BadHash,
 
-    /// `COMP` 里的部件数据不合法（码位乱序、笔画越界、分类越界、分类和不是 1000）。
+    /// 部件表第 {0} 项不合法
     #[error("部件表第 {0} 项不合法")]
     BadComponent(usize),
+
+    /// 字 → IDS 索引不合法（码位乱序或越界）。
+    #[error("字索引第 {0} 项不合法")]
+    BadCharacterIndex(usize),
 
     /// 精确查询里出现了 `？`。
     #[error("精确查询里不能有通配符")]
