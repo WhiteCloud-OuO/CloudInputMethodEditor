@@ -2220,7 +2220,7 @@ cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
 
 ## apps/windows/ids
 
-组字查字窗口 `cloudime-ids.exe`（`cargo run -p cloudime-windows-ids`，调试时可 `-- --data <ids.qj>`）。
+组字工具窗口 `cloudime-ids.exe`（`cargo run -p cloudime-windows-ids`，调试时可 `-- --data <ids.qj>`）。
 独立普通 Win32 进程，走 `cloud-ui` 的 `run_native`；**整窗自绘**（`Decorations::None` + 自绘标题栏），
 不碰 Server / TSF / 协议。
 
@@ -2258,7 +2258,7 @@ cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
   画布里插入的部件同样退化成缩写，不会只显示豆腐块。
 - 实测：分类页 `旁` 第一项「僉」能插入画布；非 BMP 部件 tile 显示 `UD丿口` 这类缩写；
   `⿰水木` 打开「替换」命中「沐」；收藏部件重启后仍在；`⿰木？` 悬停结果能看到 `木 / 乃` 结构图。
-- 已接入：悬浮状态条「工具 → 组字查字」固定项（`tools.rs` 的 `COMPOSER_COMMAND`，不走 `tools.list`，
+- 已接入：悬浮状态条「工具 → 组字工具」固定项（`tools.rs` 的 `COMPOSER_COMMAND`，不走 `tools.list`，
   因为清单是 `onlyifdoesntexist` 装的，老安装升级后不会多出新行）；构建与打包在
   `apps/windows/installer/build.ps1`（CI 用）、本机 `cargo-build.ps1` / `push-local.ps1` /
   `reconfigure.ps1`、`cloudime.iss` 里都带上 exe 与 `{app}\data\generated\ids.qj`；

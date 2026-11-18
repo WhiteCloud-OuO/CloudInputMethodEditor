@@ -1,4 +1,4 @@
-# 组字查字（IDS 组字）实施计划
+# 组字工具（IDS 组字）实施计划
 
 > 依据：[`docs/design/ids-composer.md`](../design/ids-composer.md)（已确认）。
 > 本文只拆执行顺序、文件与验证点；格式、算法与交互细节以设计文档为准。
@@ -16,7 +16,7 @@
 - `cargo run --release -p cloudime-ids-build -- …` 生成 `data/generated/ids.qj`；
 - `cargo run -p cloudime-ids --bin ids-query -- "⿰木木"` 输出 `林`；
 - 独立窗口能：点结构按钮拆槽 → 填部件 → 查询 → 结果列表滚动 → 双击复制；
-- 从悬浮状态条「工具 → 组字查字」打开 `cloudime-ids.exe`；
+- 从悬浮状态条「工具 → 组字工具」打开 `cloudime-ids.exe`；
 - `ids.qj` 缺失、表达式错误、未收录、结果过多都有明确提示。
 
 第二版（P2）：
@@ -282,7 +282,7 @@ Requirement Ready Check：`ready`。设计已在 [`docs/design/ids-composer.md`]
 
 改动：
 
-1. `run_native` + `Application`，默认 980×640、最小 760×520，标题「组字查字」；
+1. `run_native` + `Application`，默认 980×640、最小 760×520，标题「组字工具」；
 2. `data::resolve()`：`--data <path>` → exe 同目录 `data/generated/ids.qj` → cwd `data/generated/ids.qj`；
 3. 加载失败显示整窗错误页（路径 + 生成命令），不 panic；
 4. `build.rs` 参照 `apps/cloud-ui-demo/build.rs`，manifest `CloudIME.Ids`、图标、`windows_subsystem = "windows"`（release）。
@@ -476,7 +476,7 @@ Requirement Ready Check：`ready`。设计已在 [`docs/design/ids-composer.md`]
 
 改动：
 
-1. 固定命令 `COMPOSER_COMMAND = 0x7001`，菜单项「组字查字」放在分隔线上方；
+1. 固定命令 `COMPOSER_COMMAND = 0x7001`，菜单项「组字工具」放在分隔线上方；
 2. 点击启动 `bundled_root().join("cloudime-ids.exe")`，工作目录为安装根；
 3. 文件不存在只记 `warn`，不弹错误。
 
@@ -507,7 +507,7 @@ Requirement Ready Check：`ready`。设计已在 [`docs/design/ids-composer.md`]
 
 文件：
 
-- `docs/user/组字查字.md`（新增）
+- `docs/user/tools/ids-composer.md`（新增）
 - `docs/user/keys.md`（若新增键位需要）
 - `tutorial.md`
 - `docs/notes/crate-notes.md`
@@ -516,7 +516,7 @@ Requirement Ready Check：`ready`。设计已在 [`docs/design/ids-composer.md`]
 改动：
 
 1. 用户页：窗口布局、缩写表、画布操作、结果复制、部件抽屉、缺字形说明、字体设置；
-2. `tutorial.md`：悬浮状态条「工具」菜单补「组字查字」；
+2. `tutorial.md`：悬浮状态条「工具」菜单补「组字工具」；
 3. `crate-notes.md`：数据版本 / SHA / 生成命令 / 分类算法与阈值 / 限制；
 4. `release.md`：发布前生成 `ids.qj` 的命令与校验。
 
@@ -536,7 +536,7 @@ pwsh -File apps\windows\scripts\push-local.ps1
 
 冒烟清单：
 
-1. 悬浮状态条「工具 → 组字查字」能打开；
+1. 悬浮状态条「工具 → 组字工具」能打开；
 2. 点 `⿰` → 填 `木` `木` → 查询得到 `林`；
 3. `⿰木？` 返回多条，列表可滚；
 4. 双击结果，记事本粘贴正确；

@@ -21,7 +21,7 @@ const LIST_FILE: &str = "tools.list";
 /// 「查看帮助手册」的菜单命令 id；工具项用 1 起，避开一段距离。
 const HELP_COMMAND: usize = 0x7000;
 
-/// 「组字查字」的菜单命令 id。
+/// 「组字工具」的菜单命令 id。
 const COMPOSER_COMMAND: usize = 0x7001;
 
 /// 一个菜单里能起的工具。
@@ -165,11 +165,11 @@ pub(super) fn show_menu(owner: HWND) {
     if !tools.is_empty() {
         let _ = unsafe { AppendMenuW(menu, MF_SEPARATOR, 0, PCWSTR::null()) };
     }
-    let composer = wide_z("组字查字");
+    let composer = wide_z("组字工具");
     if let Err(error) =
         unsafe { AppendMenuW(menu, MF_STRING, COMPOSER_COMMAND, PCWSTR(composer.as_ptr())) }
     {
-        tracing::warn!(%error, "往菜单里加组字查字失败");
+        tracing::warn!(%error, "往菜单里加组字工具失败");
         let _ = unsafe { DestroyMenu(menu) };
         return;
     }
@@ -213,21 +213,21 @@ pub(super) fn show_menu(owner: HWND) {
     }
 }
 
-/// 起安装目录里的 `cloudime-ids.exe`（组字查字）。
+/// 起安装目录里的 `cloudime-ids.exe`（组字工具）。
 ///
 /// 走固定文件名而不是 `tools\tools.list`：清单是 `onlyifdoesntexist` 装的，老安装升级后不会多出这一行。
 fn open_composer() {
     let Some(root) = cloudime_platform::resources::bundled_root() else {
-        tracing::warn!("找不到随包资源根目录，打不开组字查字");
+        tracing::warn!("找不到随包资源根目录，打不开组字工具");
         return;
     };
     let path = root.join("cloudime-ids.exe");
     if !path.is_file() {
-        tracing::warn!(path = %path.display(), "组字查字程序不在，跳过");
+        tracing::warn!(path = %path.display(), "组字工具程序不在，跳过");
         return;
     }
     if let Err(error) = std::process::Command::new(&path).current_dir(&root).spawn() {
-        tracing::warn!(%error, path = %path.display(), "起组字查字失败");
+        tracing::warn!(%error, path = %path.display(), "起组字工具失败");
     }
 }
 

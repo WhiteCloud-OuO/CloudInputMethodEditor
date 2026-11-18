@@ -1,4 +1,4 @@
-# 组字查字（IDS 组字）：设计
+# 组字工具（IDS 组字）：设计
 
 > 状态：设计已确认（2026-11-17）。执行步骤见 [`docs/plan/ids-composer.md`](../plan/ids-composer.md)。
 >
@@ -13,7 +13,7 @@
 - 画布按字统网「互动编辑」的样子做：结构是**可见的嵌套槽位**，不是文本框加一排结构按钮；
 - 第二版补「难输入部件」：按笔画 / 位置分类点选那些打不出来的部件；
 - 数据全部离线，`ids.qj` 用现有 `.qj` 容器 mmap 打开，启动不解析源文件；
-- 独立小工具 `cloudime-ids.exe`，从悬浮状态条「工具 → 组字查字」启动，不进 Server、不改 TSF 协议。
+- 独立小工具 `cloudime-ids.exe`，从悬浮状态条「工具 → 组字工具」启动，不进 Server、不改 TSF 协议。
 
 ### 1.2 非目标
 
@@ -467,5 +467,5 @@ struct Composer {
 - `assets/ids/IDS.TXT` 与 `assets/ids/components.tsv` 进仓库；`data/generated/ids.qj` 在 `.gitignore` 的 `/data` 下，不进仓库；
 - `docs/notes/crate-notes.md`：数据版本、SHA、统计、生成命令、分类算法与阈值、限制；
 - `docs/notes/release.md`：发布前生成 `ids.qj` 的命令与校验；
-- `docs/user/组字查字.md`：窗口用法、缩写表、缺字形说明、字体设置；
+- `docs/user/tools/ids-composer.md`：窗口用法、缩写表、缺字形说明、字体设置；
 - `tutorial.md`：悬浮状态条「工具」菜单一节补一句。

@@ -1,4 +1,4 @@
-//! 组字查字窗口：IDS 组字查询 + 互动画布。
+//! 组字工具窗口：IDS 组字查询 + 互动画布。
 //!
 //! 数据从 `ids.qj` 读取（mmap），窗口只是一个普通 Win32 进程；不经过 Server / TSF。
 
@@ -38,7 +38,7 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     };
     run_native(
         WindowOptions {
-            title: "组字查字".to_owned(),
+            title: "组字工具".to_owned(),
             size: (980.0, 660.0),
             min_size: Some((760.0, 520.0)),
             decorations: Decorations::None,

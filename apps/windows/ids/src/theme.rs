@@ -61,11 +61,16 @@ fn mix(base: Color, other: Color, t: f32) -> Color {
 
 /// 错误 / 提示文字：浅色背景用深红，深色背景用浅红。
 pub fn danger(theme: &Theme) -> Color {
-    if luminance(theme.background) > 150.0 {
+    if is_light(theme) {
         Color::rgb(170, 35, 35)
     } else {
         Color::rgb(214, 132, 120)
     }
+}
+
+/// 当前窗口主题是不是浅色。
+pub fn is_light(theme: &Theme) -> bool {
+    luminance(theme.background) > 150.0
 }
 
 fn luminance(color: Color) -> f32 {

@@ -29,7 +29,7 @@ impl ButtonLook {
         }
     }
 
-    /// 主按钮（查询）：强调色。
+    /// 主按钮 / 选中态：背景取主题的强调色，`theme.rs` 把它映射成候选窗口的 `extra`。
     pub fn primary(theme: &Theme) -> Self {
         Self {
             size: 14.0,

@@ -331,10 +331,9 @@ impl Application for IdsApp {
             &mut elements,
             &mut regions,
             width,
-            "组字查字",
+            "组字工具",
             &theme,
             self.pointer,
-            ctx.is_maximized(),
             &mut measure,
         );
 
