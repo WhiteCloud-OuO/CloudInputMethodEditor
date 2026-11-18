@@ -7,6 +7,7 @@ use cloudime_format::hash;
 use crate::database::{IdsDatabase, IdsMatch, WildcardMatches};
 use crate::error::IdsError;
 use crate::parser::{IdsNode, parse};
+use crate::variants::same_component;
 
 impl IdsDatabase {
     /// 精确查询：`？` 与 `{n}` 都不接受，缩写会先展开。
@@ -27,9 +28,11 @@ impl IdsDatabase {
         self.expanded_matches(&node)
     }
 
-    /// 精确匹配没命中时，把数据里的部件递归展开再比一次。
+    /// 精确匹配没命中时，把数据里的部件递归展开再比一次，叶子按
+    /// [`same_component`](crate::same_component) 认偏旁写法。
     ///
-    /// 例如数据里的「品」是 `⿱口吅`，用户摆出 `⿱口⿰口口` 也能命中。
+    /// 例如数据里的「品」是 `⿱口吅`，用户摆出 `⿱口⿰口口` 也能命中；
+    /// 「鑫」是 `⿱金鍂`、`鍂` 是 `⿰釒金`，用户摆出 `⿱金⿰金金` 也能命中。
     fn expanded_matches(&self, query: &IdsNode) -> Result<Vec<IdsMatch>, IdsError> {
         let mut found: BTreeMap<char, IdsMatch> = BTreeMap::new();
         let mut cache: HashMap<char, Option<IdsNode>> = HashMap::new();
@@ -161,7 +164,7 @@ fn matches_expanded(
     }
     match (query, haystack) {
         (IdsNode::Wildcard, _) => true,
-        (IdsNode::Leaf(expected), IdsNode::Leaf(actual)) => expected == actual,
+        (IdsNode::Leaf(expected), IdsNode::Leaf(actual)) => same_component(*expected, *actual),
         (IdsNode::Unencoded(expected), IdsNode::Unencoded(actual)) => expected == actual,
         (
             IdsNode::Op {

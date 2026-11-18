@@ -452,6 +452,24 @@ mod tests {
     }
 
     #[test]
+    fn expansion_accepts_radical_forms_of_the_same_component() {
+        let database = IdsDatabase::open(&write(
+            "expand-radical",
+            vec![("⿰釒金", &[('鍂', 1, 0)]), ("⿱金鍂", &[('鑫', 1, 0)])],
+        ))
+        .unwrap();
+        let matches = database.lookup_exact("⿱金⿰金金").unwrap();
+        assert_eq!(matches.len(), 1);
+        assert_eq!(matches[0].character, '鑫');
+        assert_eq!(matches[0].ids, "⿱金鍂");
+        // 字母表里的写法本身仍然精确命中。
+        assert_eq!(
+            database.lookup_exact("⿱金⿰釒金").unwrap()[0].character,
+            '鑫'
+        );
+    }
+
+    #[test]
     fn wildcard_lookup_matches_one_subtree_and_sorts_by_codepoint() {
         let database = sample("wildcard");
         let found = database.lookup_wildcard("⿰木？", 200).unwrap();

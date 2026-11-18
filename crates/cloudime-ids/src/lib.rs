@@ -8,12 +8,14 @@
 //! - `ENTR`：定长 [`IdsEntry`]，一个 IDS 对应的字 / 来源 / 标记；
 //! - `COMP` / `CTEXT`：可选，难输入部件表与它们的 SVG 字形。
 //!
-//! 查询严格按 IDS 匹配，不做「水 → 氵」这类部件替换。
+//! 精确查询先按 IDS 字面匹配；没命中时做一次「递归展开」：数据里的复合部件换成它自己的
+//! IDS 再比，并按 [`same_component`] 认偏旁写法（`釒` ≈ `金`）。
 
 mod component;
 mod database;
 mod error;
 mod parser;
+mod variants;
 
 pub use component::{
     COMPONENT_FLAG_DERIVED, COMPONENT_FLAG_STROKE_ESTIMATED, COMPONENT_FLAG_TYPEABLE,
@@ -25,6 +27,7 @@ pub use database::{
 };
 pub use error::{IdsError, ParseError};
 pub use parser::{IdsNode, IdsOp, is_variation, normalize, parse};
+pub use variants::same_component;
 
 /// BabelStone 的来源字母，按文件里的顺序排（G/H/M/T/J/K/P/V/U/S/B/X/Z）。
 pub const SOURCE_LETTERS: [char; 13] = [
