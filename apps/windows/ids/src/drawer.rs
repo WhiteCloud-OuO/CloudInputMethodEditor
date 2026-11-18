@@ -1,4 +1,4 @@
-//! 难输入部件抽屉：按笔画 / 分类 / 收藏 / 最近浏览，点击填入当前槽。
+//! 难输入部件抽屉：按笔画 / 分类 / 最近浏览，点击填入当前槽。
 
 use std::collections::HashMap;
 
@@ -35,19 +35,17 @@ const ROLE_MINIMUM: u16 = 100;
 pub enum Tab {
     Stroke,
     Role,
-    Favorites,
     Recent,
 }
 
 impl Tab {
-    const ALL: [Self; 4] = [Self::Stroke, Self::Role, Self::Favorites, Self::Recent];
+    const ALL: [Self; 3] = [Self::Stroke, Self::Role, Self::Recent];
 
     fn index(self) -> usize {
         match self {
             Self::Stroke => 0,
             Self::Role => 1,
-            Self::Favorites => 2,
-            Self::Recent => 3,
+            Self::Recent => 2,
         }
     }
 
@@ -55,8 +53,7 @@ impl Tab {
         Some(match index {
             0 => Self::Stroke,
             1 => Self::Role,
-            2 => Self::Favorites,
-            3 => Self::Recent,
+            2 => Self::Recent,
             _ => return None,
         })
     }
@@ -65,7 +62,6 @@ impl Tab {
         match self {
             Self::Stroke => "笔画",
             Self::Role => "分类",
-            Self::Favorites => "收藏",
             Self::Recent => "最近",
         }
     }
@@ -79,7 +75,6 @@ pub struct Drawer {
     pub stroke: u8,
     pub role: ComponentRole,
     pub show_typeable: bool,
-    pub favorites: Vec<char>,
     pub search: String,
     pub recent: Vec<char>,
     pub scroll: ScrollHandle,
@@ -88,7 +83,7 @@ pub struct Drawer {
     items: Vec<char>,
     /// 指针正压在哪个 tile 上（只影响高亮）。
     hovered: Option<char>,
-    /// 预览行与收藏按钮针对的部件（离开 tile 后保留）。
+    /// 预览行针对的部件（离开 tile 后保留）。
     preview: Option<char>,
 }
 
@@ -100,7 +95,6 @@ impl Default for Drawer {
             stroke: 3,
             role: ComponentRole::Side,
             show_typeable: false,
-            favorites: Vec::new(),
             search: String::new(),
             recent: Vec::new(),
             scroll: ScrollHandle::new(0.0),
@@ -116,7 +110,6 @@ impl Drawer {
     pub fn with_config(config: &Config) -> Self {
         Self {
             show_typeable: config.show_typeable,
-            favorites: config.favorites.clone(),
             ..Self::default()
         }
     }
@@ -127,18 +120,6 @@ impl Drawer {
         self.recent.insert(0, character);
         self.recent.truncate(12);
         self.preview = Some(character);
-    }
-
-    /// 收藏 / 取消收藏当前预览的部件，返回 `(部件, 现在是否收藏)`。
-    pub fn toggle_favorite(&mut self) -> Option<(char, bool)> {
-        let character = self.preview?;
-        if let Some(index) = self.favorites.iter().position(|item| *item == character) {
-            self.favorites.remove(index);
-            Some((character, false))
-        } else {
-            self.favorites.insert(0, character);
-            Some((character, true))
-        }
     }
 
     /// 修改搜索词；调用方负责清空滚动。
@@ -153,17 +134,9 @@ impl Drawer {
             self.open = !self.open;
             return true;
         }
-        if name == "drawer:close" {
-            self.open = false;
-            return true;
-        }
         if name == "drawer:toggle-typeable" {
             self.show_typeable = !self.show_typeable;
             self.reset_scroll();
-            return true;
-        }
-        if name == "drawer:favorite" {
-            self.toggle_favorite();
             return true;
         }
         if let Some(index) = name
@@ -235,7 +208,6 @@ impl Drawer {
                     }
                 }
             }
-            Tab::Favorites => items.extend(self.favorites.iter().copied()),
             Tab::Recent => {
                 for character in &self.recent {
                     if database.component(*character).is_some() {
@@ -284,32 +256,16 @@ impl Drawer {
             Rect {
                 x: inner_x,
                 y: rect.y + 8.0,
-                width: inner_width - 24.0,
+                width: inner_width,
                 height: HEADER_HEIGHT,
             },
             "难输入部件",
             &style,
             measure,
         );
-        let close = Rect {
-            x: rect.x + rect.width - 30.0,
-            y: rect.y + 8.0,
-            width: 22.0,
-            height: 22.0,
-        };
-        ui::button(
-            elements,
-            regions,
-            close,
-            "drawer:close",
-            "×",
-            &ui::ButtonLook::normal(theme),
-            pointer,
-            measure,
-        );
 
         let mut y = rect.y + 8.0 + HEADER_HEIGHT + 6.0;
-        let tab_width = (inner_width - CHIP_GAP * 3.0) / 4.0;
+        let tab_width = (inner_width - CHIP_GAP * 2.0) / 3.0;
         for (index, tab) in Tab::ALL.into_iter().enumerate() {
             let chip = Rect {
                 x: inner_x + (tab_width + CHIP_GAP) * index as f32,
@@ -402,7 +358,7 @@ impl Drawer {
                     measure,
                 );
             }
-            Tab::Favorites | Tab::Recent => {}
+            Tab::Recent => {}
         }
 
         let content_bottom = rect.y + rect.height - PREVIEW_HEIGHT - FOOTER_HEIGHT - 8.0;
@@ -526,7 +482,7 @@ impl Drawer {
         let preview_rect = Rect {
             x: inner_x,
             y: content_bottom + 2.0,
-            width: (inner_width - 30.0).max(1.0),
+            width: inner_width,
             height: PREVIEW_HEIGHT,
         };
         let mut preview = theme.muted();
@@ -553,31 +509,6 @@ impl Drawer {
                 },
             );
         ui::label(elements, preview_rect, &text, &preview, measure);
-
-        let star = Rect {
-            x: inner_x + inner_width - 26.0,
-            y: content_bottom,
-            width: 26.0,
-            height: PREVIEW_HEIGHT + 4.0,
-        };
-        let favorited = self
-            .preview
-            .is_some_and(|character| self.favorites.contains(&character));
-        let star_look = if favorited {
-            ui::ButtonLook::primary(theme)
-        } else {
-            ui::ButtonLook::normal(theme)
-        };
-        ui::button(
-            elements,
-            regions,
-            star,
-            "drawer:favorite",
-            if favorited { "★" } else { "☆" },
-            &star_look,
-            pointer,
-            measure,
-        );
 
         let footer = Rect {
             x: inner_x,
@@ -810,22 +741,11 @@ mod tests {
     }
 
     #[test]
-    fn favorites_toggle_the_previewed_component() {
-        let mut drawer = Drawer {
-            preview: Some('木'),
-            ..Drawer::default()
-        };
-        assert_eq!(drawer.toggle_favorite(), Some(('木', true)));
-        assert_eq!(drawer.favorites, vec!['木']);
-        assert_eq!(drawer.toggle_favorite(), Some(('木', false)));
-        assert!(drawer.favorites.is_empty());
-    }
-
-    #[test]
     fn clicks_recognize_tabs_strokes_and_roles() {
         let mut drawer = Drawer::default();
         assert!(drawer.click("drawer:tab:2"));
-        assert_eq!(drawer.tab, Tab::Favorites);
+        assert_eq!(drawer.tab, Tab::Recent);
+        assert!(!drawer.click("drawer:tab:9"));
         assert!(drawer.click("drawer:stroke:13"));
         assert_eq!(drawer.stroke, 13);
         assert!(drawer.click("drawer:role:3"));

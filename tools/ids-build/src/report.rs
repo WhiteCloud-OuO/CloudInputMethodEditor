@@ -42,9 +42,9 @@ pub fn write(path: &Path, rows: &[ReportRow]) -> Result<(), BuildError> {
 pub fn render(rows: &[ReportRow]) -> String {
     let mut text = String::new();
     text.push_str("# 难输入部件分类报告\n");
-    text.push_str("# 主分类阈值 300‰；分类页收录阈值 100‰；平票顺序 旁 > 頭 > 底 > 圍 > 其它\n");
+    text.push_str("# 主分类阈值 300‰；分类页收录阈值 100‰；平票顺序 旁 > 头 > 底 > 围 > 其它\n");
     text.push_str(
-        "字符\t码位\t笔画\t笔画来源\t主分类\t自动主分类\t圍\t頭\t旁\t底\t其它\t低置信\t覆盖冲突\n",
+        "字符\t码位\t笔画\t笔画来源\t主分类\t自动主分类\t围\t头\t旁\t底\t其它\t低置信\t覆盖冲突\n",
     );
     for row in rows {
         let low_confidence = row

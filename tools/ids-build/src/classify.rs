@@ -1,4 +1,4 @@
-//! 部件位置分类：从 IDS 树统计「圍 / 頭 / 旁 / 底 / 其它」的分布。
+//! 部件位置分类：从 IDS 树统计「围 / 头 / 旁 / 底 / 其它」的分布。
 //!
 //! 每个字只算一次：同一个部件在同一个字里出现多次时取最大权重，避免 `森` / `⿲木木木`
 //! 把「木」刷成三倍。权重随深度衰减；包围结构里的「被围内容」按其它计、再打 5 折。
@@ -154,7 +154,7 @@ fn normalize(weights: &[f32; 5]) -> Classification {
     Classification { roles, primary }
 }
 
-/// 主分类：分值最高者；平票按 旁 > 頭 > 底 > 圍 > 其它；最高不到 300‰ 归其它。
+/// 主分类：分值最高者；平票按 旁 > 头 > 底 > 围 > 其它；最高不到 300‰ 归其它。
 fn choose_primary(roles: &[u16; 5]) -> u8 {
     const PREFERENCE: [usize; 5] = [2, 1, 3, 0, 4];
     let mut best = ComponentRole::Other.index() as usize;
@@ -209,7 +209,7 @@ mod tests {
             primary_of(&sample, '灬').primary,
             ComponentRole::Bottom.index()
         );
-        // 被围内容不算圍，只能算其它。
+        // 被围内容不算围，只能算其它。
         assert_eq!(
             primary_of(&sample, '巳').primary,
             ComponentRole::Other.index()

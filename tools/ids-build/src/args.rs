@@ -18,13 +18,13 @@ pub struct Args {
     #[arg(long, default_value = "assets/ids/components.tsv")]
     pub components: PathBuf,
 
-    /// Unihan `IRGSources`（可选）：给 `components.tsv` 里没写笔画的部件补笔画。
-    #[arg(long)]
-    pub unihan: Option<PathBuf>,
-
     /// 部件字形 TSV：字符 + 字统网 SVG path 段。
     #[arg(long, default_value = "assets/ids/component-glyphs.tsv")]
     pub glyphs: PathBuf,
+
+    /// Unihan `IRGSources`（可选）：给 `components.tsv` 里没写笔画的部件补笔画。
+    #[arg(long)]
+    pub unihan: Option<PathBuf>,
 
     /// 分类报告输出（可选）；建议写 `data/generated/components-report.tsv`。
     #[arg(long)]

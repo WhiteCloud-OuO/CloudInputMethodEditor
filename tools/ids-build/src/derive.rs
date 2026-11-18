@@ -140,7 +140,7 @@ pub fn render(candidates: &[Candidate]) -> String {
     let mut text = String::new();
     text.push_str("# 难输入部件自动候选（出现得多、词库里打不出来）\n");
     text.push_str("# 人工挑选后并入 assets/ids/components.tsv；出现字数 = 用到它的不同字的个数\n");
-    text.push_str("字符\t出现字数\t笔画\t主分类\t圍\t頭\t旁\t底\t其它\t可打出\n");
+    text.push_str("字符\t出现字数\t笔画\t主分类\t围\t头\t旁\t底\t其它\t可打出\n");
     for candidate in candidates {
         text.push_str(&format!(
             "{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\t{}\n",
@@ -254,6 +254,6 @@ mod tests {
         }];
         let text = render(&candidates);
         assert!(text.contains("字符\t出现字数\t笔画"));
-        assert!(text.contains("𠂹\t42\t8\t頭\t0\t800\t100\t50\t50\t否\n"));
+        assert!(text.contains("𠂹\t42\t8\t头\t0\t800\t100\t50\t50\t否\n"));
     }
 }

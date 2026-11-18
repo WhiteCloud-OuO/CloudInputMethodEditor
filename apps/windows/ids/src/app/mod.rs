@@ -100,14 +100,6 @@ impl IdsApp {
     }
 
     fn click(&mut self, name: &str) {
-        if name == "drawer:favorite" {
-            if let Some((character, favorite)) = self.drawer.toggle_favorite() {
-                self.config.favorites = self.drawer.favorites.clone();
-                self.save_config();
-                self.status = Status::Favorite(character, favorite);
-            }
-            return;
-        }
         if name == "drawer:toggle-typeable" {
             self.drawer.click(name);
             self.config.show_typeable = self.drawer.show_typeable;
@@ -659,14 +651,15 @@ impl Layout {
         } else {
             0.0
         };
-        let content_width = (width - MARGIN * 2.0 - reserved_width).max(200.0);
+        let full_width = (width - MARGIN * 2.0).max(200.0);
+        let content_width = (full_width - reserved_width).max(200.0);
         let toolbar_height = TOOLBAR_BUTTON_HEIGHT * 2.0 + TOOLBAR_BUTTON_GAP;
         let mut y = chrome::HEIGHT + MARGIN;
 
         let toolbar = Rect {
             x: MARGIN,
             y,
-            width: content_width,
+            width: full_width,
             height: toolbar_height,
         };
         y += toolbar_height + GAP;
@@ -740,9 +733,9 @@ impl Layout {
 
         let drawer = drawer_open.then(|| Rect {
             x: width - MARGIN - drawer::WIDTH,
-            y: chrome::HEIGHT + MARGIN,
+            y: canvas.y - 8.0,
             width: drawer::WIDTH,
-            height: (height - chrome::HEIGHT - MARGIN * 2.0).max(1.0),
+            height: (height - MARGIN - (canvas.y - 8.0)).max(1.0),
         });
 
         Self {
@@ -770,7 +763,6 @@ enum Status {
     NotFound,
     Found { shown: usize, total: usize },
     Copied(char),
-    Favorite(char, bool),
     Error(String),
 }
 
@@ -788,14 +780,6 @@ impl Status {
             }
             Self::Found { shown, .. } => (format!("找到 {shown} 条；双击结果复制"), false),
             Self::Copied(character) => (format!("已复制：{character}"), false),
-            Self::Favorite(character, favorite) => (
-                if *favorite {
-                    format!("已收藏：{character}")
-                } else {
-                    format!("已取消收藏：{character}")
-                },
-                false,
-            ),
             Self::Error(message) => (message.clone(), true),
         }
     }

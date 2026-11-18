@@ -2206,16 +2206,16 @@ cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
 - 读 `IDS.TXT`，按「规范化 IDS → 字」聚合，写 `TEXT / KEYS / HASH / ENTR`；
   `〾` 只留标记、不参与键；方括号来源与 `UCS2003` 都计入来源位图；第三列起不以 `^` 开头的注释列跳过。
 - `COMP`：`components.tsv`（字符 / 笔画 / 分类 / 启用），按码位排序写 20 字节的 `Component`。
-  分类自动算：位置角色表 `⿰⿲ 旁`、`⿱ 頭/底`、`⿳ 頭/其它/底`、包围运算子 0 为 `圍`、子 1 按其它
+  分类自动算：位置角色表 `⿰⿲ 旁`、`⿱ 头/底`、`⿳ 头/其它/底`、包围运算子 0 为 `围`、子 1 按其它
   且权重 ×0.5、`⿻` 其它、`㇯` 子 0 继承父角色、`⿾⿿` 继承；同字内每个角色取最大权重，跨字累加；
   深度按 `1/(1+d)` 衰减；归一化成 1000‰；主分类不足 300‰ 归「其它」；平票顺序
-  `旁 > 頭 > 底 > 圍 > 其它`。
+  `旁 > 头 > 底 > 围 > 其它`。
 - 笔画：`components.tsv` > Unihan `kTotalStrokes`（多区域值取第一个）> IDS 递归（CJK Strokes 叶子算
   1 画）> 0；递归推算的条目打 `COMPONENT_FLAG_STROKE_ESTIMATED`。
 - 可打出：`--dict` 的 `dict.tsv` 里有单字词条就打 `COMPONENT_FLAG_TYPEABLE`，部件抽屉默认隐藏这类。
 - 报告 `components-report.tsv` 列：字符 / 码位 / 笔画 / 笔画来源 / 主分类 / 自动主分类 / 五类千分比 /
   低置信 / 覆盖冲突；生成时顺带打印低置信与笔画未知数量。
-- 实测（554 个部件）：`旁 324 / 頭 105 / 底 53 / 其它 39 / 圍 33`，低置信 0，笔画未知 0；
+- 实测（554 个部件）：`旁 324 / 头 105 / 底 53 / 其它 39 / 围 33`，低置信 0，笔画未知 0；
   `--derive` 默认门槛下给出 19 个候选（𤣩 / ㇒ / 𠆢 / 𩙿 / ⺄ / 𠘨 …）。
 - 生成结果不提交仓库（`/data` 已 gitignore）；同一输入两次生成的字节一致。
 
@@ -2249,16 +2249,16 @@ cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
 - 交互：结构按钮显示 `⿰ 左右结构` 这类中文名（发送的仍是 `op:<下标>`）；部件输入框只保留一个汉字，
   `TextChanged` 时直接写入当前槽并跳槽，不再需要「填入」按钮；点画布任意槽会通过
   `Context::focus_text("ids.input")` 把焦点交回输入框。
-- 部件抽屉（V2）：右侧 300 点，四个标签 `笔画 / 分类 / 收藏 / 最近`；顶部搜索框按字符、码位
-  十六进制（`2008E`）或 IDS 片段 / 运算符缩写（`LR`、`RD`）过滤；收藏写在 `ids.toml` 的
-  `favorites`，预览行星标按钮切换；网格 4 列 56 点，支持滚轮与拖动右侧滚动条。
+- 部件抽屉（V2）：右侧 300 点，三个标签 `笔画 / 分类 / 最近`；顶部搜索框按字符、码位
+  十六进制（`2008E`）或 IDS 片段 / 运算符缩写（`LR`、`RD`）过滤；网格 4 列 56 点，
+  支持滚轮与拖动右侧滚动条。抽屉顶端与组字画布外框顶端对齐，结构按钮行不随抽屉缩窄。
   点击 tile 走 `Composer::insert` 并自动跳槽，同时记进「最近」（去重、最多 12）。
 - 部件字形：`assets/ids/component-glyphs.tsv` 存字统网 186 个难输入部件的 SVG path；
   `ids-build` 把它们写成 `ids.qj` 的 `CTEXT` 分节，`Component.svg_off/svg_len` 指过去。
   抽屉与画布优先画 `Element::Svg`，其次系统字体，最后只显示码位 `U+XXXX`；
   不再出现 `UD丿口` 这类结构缩写。`GlyphProbe` 仍用 DirectWrite `HasCharacter` 判断系统字形。
 - 实测：分类页 `旁` 第一项「僉」能插入画布；非 BMP 部件 tile 画 SVG 轮廓；单击画布槽后
-  直接粘贴「木」即填入，再点另一槽粘贴「水」，查询命中 `⿰木水`；收藏部件重启后仍在。
+  直接粘贴「木」即填入，再点另一槽粘贴「水」，查询命中 `⿰木水`。
 - 已接入：悬浮状态条「工具 → 组字工具」固定项（`tools.rs` 的 `COMPOSER_COMMAND`，不走 `tools.list`，
   因为清单是 `onlyifdoesntexist` 装的，老安装升级后不会多出新行）；构建与打包在
   `apps/windows/installer/build.ps1`（CI 用）、本机 `cargo-build.ps1` / `push-local.ps1` /

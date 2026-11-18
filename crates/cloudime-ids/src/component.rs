@@ -69,8 +69,8 @@ impl ComponentRole {
     /// 中文名，UI 标签与报告用。
     pub fn name(self) -> &'static str {
         match self {
-            Self::Surround => "圍",
-            Self::Top => "頭",
+            Self::Surround => "围",
+            Self::Top => "头",
             Self::Side => "旁",
             Self::Bottom => "底",
             Self::Other => "其它",
@@ -156,5 +156,7 @@ mod tests {
             assert!(!role.name().is_empty());
         }
         assert_eq!(ComponentRole::from_index(5), None);
+        assert_eq!(ComponentRole::Surround.name(), "围");
+        assert_eq!(ComponentRole::Top.name(), "头");
     }
 }
