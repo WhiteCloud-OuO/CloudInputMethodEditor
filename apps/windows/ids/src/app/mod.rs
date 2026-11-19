@@ -350,8 +350,7 @@ impl Application for IdsApp {
         );
         for (index, op) in IdsOp::ALL.iter().enumerate() {
             let rect = op_button(layout.toolbar, index);
-            let mut look = ui::ButtonLook::normal(&theme);
-            look.size = 13.0;
+            let look = ui::ButtonLook::structure(&theme);
             ui::button(
                 &mut elements,
                 &mut regions,
@@ -409,6 +408,8 @@ impl Application for IdsApp {
         let (expression, incomplete) = ui::expression_text(&self.composer);
         let mut expression_style = theme.muted();
         expression_style.size = 13.0;
+        // 运算符用结构字体（霞鹜文楷），和其它文字混排时基线一致。
+        expression_style.slot = FontSlot::ItemNumber;
         if incomplete {
             expression_style.color = crate::theme::danger(&theme);
         }

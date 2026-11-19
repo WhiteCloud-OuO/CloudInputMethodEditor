@@ -2241,6 +2241,12 @@ cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
 - 字体：`RenderSettings.candidate_font` / `pinyin_font` 指定「Microsoft YaHei UI」——系统 UI 字体的
   GDI 字体链接不覆盖 IDS 运算符（U+2FF0..），不指定会画成空心框；扩展区部件缺字仍可能显示占位
   （设计上的降级：结果行仍可双击复制）。
+- 结构符号字体：启动时 `glyph.rs::installed_family` 用 DirectWrite `FindFamilyName` 依次找
+  `LXGW WenKai / 霞鹜文楷 / … Screen / … GB / … TC`，找到就把 `RenderSettings.item_number_font`
+  配成它。组字工具没有序号，`FontSlot::ItemNumber` 这一槽借给结构符号：结构按钮（整颗按钮、
+  含中文结构名）、画布 `Node::Op` 角标、表达式行都用它；一个都没装时这一槽写配置里的字体，
+  外观与普通按钮一致。霞鹜文楷的 U+2FF0.. 本身画成虚线框 + 分隔线（字体设计如此，不是缺字）。
+  换字体要重启 `cloudime-ids.exe` 才生效。
 - 画布：`composer` 是纯状态机（`Node::{Empty, Char, Wildcard, Op}` + active 路径），
   `canvas::layout` 按运算符切矩形（`⿰/⿲` 横、`⿱/⿳` 纵、包围内缩、`⿻` 左右分栏、一元内缩），
   `canvas::paint` 画盒子 / 字 / 结构角标，每个槽写 `slot:<path>` 区域；点区域改 active。

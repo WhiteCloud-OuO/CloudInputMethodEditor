@@ -160,7 +160,8 @@ fn paint_node(
                     y: rect.y + 3.0,
                     text: format!("{} {}", op.symbol(), op.abbreviation()),
                     size: 10.0,
-                    slot: FontSlot::Candidate,
+                    // 结构符号用霞鹜文楷那一槽（没装时就是普通字体）。
+                    slot: FontSlot::ItemNumber,
                     color: theme.muted,
                     italic: false,
                 });

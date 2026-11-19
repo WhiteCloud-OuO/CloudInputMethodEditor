@@ -40,6 +40,17 @@ impl ButtonLook {
             radius: 6.0,
         }
     }
+
+    /// 结构按钮：运算符与整颗按钮的文字都用结构字体。
+    ///
+    /// 组字工具把「序号」槽借给结构符号（窗口里没有序号），`main.rs` 把这一槽的字族
+    /// 配成霞鹜文楷；本机没装时那一槽就是配置里的普通字体，外观与 [`Self::normal`] 一致。
+    pub fn structure(theme: &Theme) -> Self {
+        Self {
+            slot: FontSlot::ItemNumber,
+            ..Self::normal(theme)
+        }
+    }
 }
 
 /// 一块圆角底色。

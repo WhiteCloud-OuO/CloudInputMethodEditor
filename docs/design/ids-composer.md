@@ -438,13 +438,18 @@ struct Composer {
 
 1. 字体族默认「Microsoft YaHei UI」（系统 UI 字体的 GDI 字体链接不覆盖 IDS 运算符），
    可在 `%APPDATA%\CloudIME\ids.toml` 的 `[font] family` 改；
-2. 抽屉打开时用 DirectWrite 的 `IDWriteFont::HasCharacter` 探测字形并缓存
+2. **结构符号单独一套字体**：启动时用 DirectWrite `FindFamilyName` 依次找
+   `LXGW WenKai / 霞鹜文楷 / … Screen / … GB / … TC`，找到就把 `RenderSettings.item_number_font`
+   配成它（组字工具没有序号，`FontSlot::ItemNumber` 这一槽借给结构符号）；结构按钮
+   （整颗按钮的文字）、画布上的结构角标、表达式行都用这一槽。一个都没装时这一槽回落成
+   配置里的字体，外观与普通按钮一致；
+3. 抽屉打开时用 DirectWrite 的 `IDWriteFont::HasCharacter` 探测字形并缓存
    （GDI 的 `GetGlyphIndicesW` 不支持非 BMP，扩展区部件会全部误判）；
-3. 部件有内置 SVG（`COMP.svg_off` 指向 `CTEXT`）时优先画 `Element::Svg`：
+4. 部件有内置 SVG（`COMP.svg_off` 指向 `CTEXT`）时优先画 `Element::Svg`：
    抽屉 tile 40px、画布槽位按槽宽等比；字统网 `font` 数据已生成 `assets/ids/component-glyphs.tsv`；
-4. 没有 SVG 但系统字体有字形：`Element::Text`；
-5. 两者都没有：只显示码位 `U+XXXX`，不再画 `UD丿罒` 这类结构缩写；
-6. `show_typeable = true` 时部件抽屉列出「能用拼音打出」的部件，缺省隐藏。
+5. 没有 SVG 但系统字体有字形：`Element::Text`；
+6. 两者都没有：只显示码位 `U+XXXX`，不再画 `UD丿罒` 这类结构缩写；
+7. `show_typeable = true` 时部件抽屉列出「能用拼音打出」的部件，缺省隐藏。
 
 ### 7.7 键位
 

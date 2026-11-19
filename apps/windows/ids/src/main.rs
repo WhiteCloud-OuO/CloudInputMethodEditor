@@ -28,11 +28,19 @@ fn main() -> Result<(), Box<dyn std::error::Error>> {
     let database = data::resolve(data_argument().as_deref()).map_err(|error| error.to_string());
     let config = config::load();
     let theme = theme::load();
+    // 结构符号（`⿰` / `⿱` …）优先用霞鹜文楷；本机没装就退回配置里的字体。
+    let structure_family = glyph::installed_family(glyph::STRUCTURE_FAMILIES);
+    if let Some(family) = &structure_family {
+        tracing::info!(font = family, "结构符号使用霞鹜文楷");
+    }
+    let structure_font = structure_family.unwrap_or_else(|| config.font_family.clone());
     // 系统 UI 字体的 GDI 链接不覆盖 IDS 运算符（U+2FF0..），缺省用微软雅黑；
     // 扩展区部件缺字时由字形探测退回缩写。
     let render_settings = RenderSettings {
         candidate_font: (config.font_family.clone(), 13.0),
         pinyin_font: (config.font_family.clone(), 11.0),
+        // 组字工具没有「序号」，这个槽借给结构符号（`FontSlot::ItemNumber`）。
+        item_number_font: (structure_font, 13.0),
         ..RenderSettings::default()
     };
     run_native(

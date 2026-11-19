@@ -5,6 +5,29 @@
 
 use std::collections::HashMap;
 
+/// 结构符号（`⿰` `⿱` 这类）优先用的字体族，按顺序找第一个装了的。
+///
+/// 霞鹜文楷（LXGW WenKai）把 IDS 运算符画得比系统界面字体清楚；没装就退回配置里的字体。
+pub const STRUCTURE_FAMILIES: &[&str] = &[
+    "LXGW WenKai",
+    "霞鹜文楷",
+    "LXGW WenKai Screen",
+    "霞鹜文楷 Screen",
+    "LXGW WenKai GB",
+    "霞鹜文楷 GB",
+    "LXGW WenKai TC",
+    "霞鹜文楷 TC",
+];
+
+/// 本机装了的第一个字体族（按 `families` 顺序）；一个都没装返回 `None`。
+pub fn installed_family(families: &[&str]) -> Option<String> {
+    families
+        .iter()
+        .copied()
+        .find(|family| family_exists(family))
+        .map(str::to_owned)
+}
+
 /// 探测某个字体族有没有某个字符的字形。
 pub struct GlyphProbe {
     cached: HashMap<char, bool>,
@@ -83,4 +106,52 @@ fn find_font(family: &str) -> Option<windows::Win32::Graphics::DirectWrite::IDWr
 #[cfg(not(windows))]
 fn find_font(_family: &str) -> Option<()> {
     None
+}
+
+/// DirectWrite 的系统字体集里有没有这个字族；`installed_family` 用。
+#[cfg(windows)]
+fn family_exists(family: &str) -> bool {
+    use windows::Win32::Graphics::DirectWrite::{
+        DWRITE_FACTORY_TYPE_SHARED, DWriteCreateFactory, IDWriteFactory,
+    };
+    use windows::core::{BOOL, PCWSTR};
+
+    unsafe {
+        let Ok(factory) = DWriteCreateFactory::<IDWriteFactory>(DWRITE_FACTORY_TYPE_SHARED) else {
+            return false;
+        };
+        let mut collection = None;
+        if factory
+            .GetSystemFontCollection(&mut collection, false)
+            .is_err()
+        {
+            return false;
+        }
+        let Some(collection) = collection else {
+            return false;
+        };
+        let name: Vec<u16> = family.encode_utf16().chain(std::iter::once(0)).collect();
+        let mut index = 0u32;
+        let mut exists = BOOL(0);
+        collection
+            .FindFamilyName(PCWSTR(name.as_ptr()), &mut index, &mut exists)
+            .is_ok()
+            && exists.as_bool()
+    }
+}
+
+#[cfg(not(windows))]
+fn family_exists(_family: &str) -> bool {
+    false
+}
+
+#[cfg(test)]
+mod tests {
+    #[test]
+    fn unknown_family_is_not_installed() {
+        assert_eq!(
+            super::installed_family(&["__CloudIME No Such Font__"]),
+            None
+        );
+    }
 }
