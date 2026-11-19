@@ -218,6 +218,22 @@ impl SsiApp {
             text.to_owned()
         }
     }
+
+    /// 按钮上要显示的文本：假名页的浊音 / 半浊音模式换成对应写法；
+    /// 没有变体的假名返回 `None`（隐藏，和旧版一致）。
+    fn display_text(&self, text: &str) -> Option<String> {
+        if self.page != KANA_PAGE {
+            return Some(text.to_owned());
+        }
+        match self.kana {
+            Variant::Plain => Some(text.to_owned()),
+            mode => text
+                .chars()
+                .next()
+                .and_then(|character| mode.map(character))
+                .map(String::from),
+        }
+    }
 }
 
 impl Application for SsiApp {
@@ -450,6 +466,10 @@ impl SsiApp {
                 );
                 continue;
             }
+            // 假名页按当前变体模式换字；没有对应变体的假名在浊音 / 半浊音模式下隐藏（旧版做法）。
+            let Some(shown) = self.display_text(&glyph.text) else {
+                continue;
+            };
             if self.pointer.is_some_and(|(x, y)| ui::inside(rect, x, y)) {
                 self.hovered = Some(index);
             }
@@ -464,13 +484,13 @@ impl SsiApp {
                 regions,
                 rect,
                 &format!("glyph:{index}"),
-                glyph,
+                &shown,
                 slot,
                 &theme,
                 self.pointer,
                 measure,
             );
-            self.glyph_rects.push((rect, glyph.text.clone()));
+            self.glyph_rects.push((rect, shown));
         }
     }
 
@@ -645,10 +665,11 @@ impl SsiApp {
                 .get(self.page)
                 .and_then(|page| page.glyphs.get(index))
         {
-            let character = glyph.text.chars().next().unwrap_or(' ');
+            let display = self.output_text(&glyph.text);
+            let character = display.chars().next().unwrap_or(' ');
             return format!(
-                "{} · U+{:04X}    左键输入 · 右键复制",
-                glyph.text, character as u32
+                "{display} · U+{:04X}    左键输入 · 右键复制",
+                character as u32
             );
         }
         if self.page == KANA_PAGE {
@@ -741,6 +762,20 @@ mod tests {
         assert_eq!(app.output_text("か"), "が");
         app.kana = Variant::SemiVoiced;
         assert_eq!(app.output_text("は"), "ぱ");
+    }
+
+    #[test]
+    fn display_text_shows_variants_and_hides_the_rest() {
+        let mut app = SsiApp::new(cloud_ui::Theme::dark(), None);
+        app.page = KANA_PAGE;
+        assert_eq!(app.display_text("か").as_deref(), Some("か"));
+        app.kana = Variant::Voiced;
+        assert_eq!(app.display_text("か").as_deref(), Some("が"));
+        assert_eq!(app.display_text("ん"), None);
+        assert_eq!(app.display_text("ア"), None);
+        app.kana = Variant::SemiVoiced;
+        assert_eq!(app.display_text("は").as_deref(), Some("ぱ"));
+        assert_eq!(app.display_text("か"), None);
     }
 
     #[test]

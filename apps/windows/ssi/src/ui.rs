@@ -3,8 +3,6 @@
 use cloud_ui::{LabelStyle, Rect, TextEditStyle, Theme};
 use cloudime_render::{Color, Element, FontSlot, HitShape, Region};
 
-use crate::data::Glyph;
-
 /// 按钮配色。
 #[derive(Debug, Clone, Copy)]
 pub struct ButtonLook {
@@ -138,7 +136,7 @@ pub fn tile(
     regions: &mut Vec<Region>,
     rect: Rect,
     name: &str,
-    glyph: &Glyph,
+    text: &str,
     slot: FontSlot,
     theme: &Theme,
     pointer: Option<(f32, f32)>,
@@ -178,13 +176,13 @@ pub fn tile(
         );
     }
     // 单字符按格子宽度的 58% 给字号；「浊゛」这种两字缩小一号。
-    let characters = glyph.text.chars().count().max(1) as f32;
+    let characters = text.chars().count().max(1) as f32;
     let size = if characters > 1.0 {
         (rect.width * 0.38).max(8.0)
     } else {
         (rect.width * 0.58).clamp(10.0, 30.0)
     };
-    centered(elements, rect, &glyph.text, size, slot, theme.text, measure);
+    centered(elements, rect, text, size, slot, theme.text, measure);
     regions.push(Region::new(
         name,
         HitShape::RoundRect {
