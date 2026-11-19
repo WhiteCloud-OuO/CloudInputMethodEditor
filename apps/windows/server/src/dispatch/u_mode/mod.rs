@@ -240,6 +240,11 @@ impl Router {
             self.update_u_aux();
             return Some(Effect::Changed(None));
         }
+        // 同样只在裸 `u` 时：Tab 起特殊字符输入器（候选窗的提示行里写着）。
+        if event.virtual_key == 0x09 && self.engine.composition().text() == "u" {
+            self.candidates.open_special_symbols();
+            return Some(Effect::Changed(None));
+        }
         None
     }
 

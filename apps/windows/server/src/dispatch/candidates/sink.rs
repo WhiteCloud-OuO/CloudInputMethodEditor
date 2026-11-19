@@ -32,6 +32,9 @@ pub trait CandidateSink: Send {
     /// V 模式说明窗口的开关（拼音串只有一个 `v` 时为真）。不画的实现默认什么都不做。
     fn set_v_mode_help(&self, _on: bool) {}
 
+    /// 打开特殊字符输入器（u 模式里按 Tab）。不画的实现默认什么都不做。
+    fn open_special_symbols(&self) {}
+
     /// 高级数学计算界面的说明窗口开关。不画的实现默认什么都不做。
     fn set_calculator_help(&self, _on: bool) {}
 

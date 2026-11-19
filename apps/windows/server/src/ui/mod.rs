@@ -180,6 +180,11 @@ impl CandidateSink for UiHandle {
         self.post(UiCommand::Configure(Box::new(settings)));
     }
 
+    /// u 模式按 Tab：让 UI 线程去起特殊字符输入器。
+    fn open_special_symbols(&self) {
+        self.post(UiCommand::OpenSpecialSymbols);
+    }
+
     fn viewport(&self) -> Option<(f32, f32)> {
         self.viewport.get()
     }
@@ -510,6 +515,7 @@ fn apply(
             );
             window.set_symbol_key_map(layout);
         }
+        UiCommand::OpenSpecialSymbols => open_spec_chars(),
         UiCommand::StatusShow(view) => {
             if let Some(status) = status {
                 status.update(*view);

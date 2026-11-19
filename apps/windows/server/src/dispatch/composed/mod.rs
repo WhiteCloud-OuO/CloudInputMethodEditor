@@ -437,15 +437,20 @@ impl Router {
         if self.config.translate_enabled {
             frame.tip = self.translate.tip(&self.highlighted_text());
         }
-        // u 模式：支持中英混输时在翻译 Tip 那一行告诉用户可以直接打英文单词。
+        // u 模式：拼音串只有裸 `u` 时隐藏页码与翻译 Tip，把两条按键提示放进「额外内容」；
+        // 多打出字母（up / undo…）就恢复普通 Tip + 页码，英文单词和符号输入互不打扰。
         if let Some(u_mode) = self.u_mode {
-            frame.tip = self.mixture_enabled().then(|| {
-                hint_tip(if u_mode.symbol_ui {
-                    "按空格退出符号输入"
-                } else {
-                    "按空格进入符号输入"
-                })
-            });
+            if !u_mode.symbol_ui && self.engine.composition().text() == "u" {
+                frame.tip = None;
+                frame.online = None;
+                frame.hide_page = true;
+                frame.hints = vec![
+                    "按空格进入快速符号输入".to_owned(),
+                    "按Tab打开特殊字符输入器".to_owned(),
+                ];
+            } else if u_mode.symbol_ui && self.mixture_enabled() {
+                frame.tip = Some(hint_tip("按空格退出符号输入"));
+            }
         }
         // 表达式计算面板：只有一条「结果」候选，不画序号
         frame.hide_index = self.engine.calculator();
@@ -491,6 +496,8 @@ impl Router {
                 hide_index: false,
                 tip_choices: None,
                 notice: self.notice.clone(),
+                hints: Vec::new(),
+                hide_page: false,
             },
             Some(Composed::Candidates {
                 preedit,
@@ -525,6 +532,8 @@ impl Router {
                     hide_index: false,
                     tip_choices: None,
                     notice: self.notice.clone(),
+                    hints: Vec::new(),
+                    hide_page: false,
                 }
             }
         }

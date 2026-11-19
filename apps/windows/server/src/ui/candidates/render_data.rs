@@ -45,6 +45,9 @@ pub(crate) struct RenderData {
 
     /// 底部 Tip 下面**单独一行**的在线翻译（`Ctrl+T`），没按过 / 已收起时为空。
     pub(super) online: Vec<TipSegment>,
+
+    /// 「额外内容」区的按键提示（u 模式）：每句一行，逐行画在 Tip / 在线翻译下面。
+    pub(super) extra: Vec<TipSegment>,
 }
 
 impl RenderData {
@@ -61,6 +64,7 @@ impl RenderData {
             index_style: ItemNumberStyle::default(),
             tip: Vec::new(),
             online: Vec::new(),
+            extra: Vec::new(),
         }
     }
 
@@ -76,6 +80,7 @@ impl RenderData {
         self.index_style = index_style;
         self.tip = tip_segments(frame);
         self.online = online_segments(frame);
+        self.extra = hint_segments(frame);
         // 多释义选择（Ctrl + 反引号之后）：顶部那一行换成被翻译的词条、候选行换成各条释义
         match &frame.tip_choices {
             Some(choices) => {
@@ -119,10 +124,9 @@ impl RenderData {
             }
         }
         // 页码一直显示（只有一页也显示 `1/1`）：底部那一行（翻译 Tip 在左）的位置总在。
-        // 释义选择那一屏不是候选页，没有页码（也就没有底部那一行）。
-        self.footer = frame
-            .tip_choices
-            .is_none()
+        // 释义选择那一屏不是候选页，没有页码（也就没有底部那一行）；u 模式的按键提示
+        // 也把页码藏掉（`hide_page`），免得和「额外内容」挤在一起。
+        self.footer = (frame.tip_choices.is_none() && !frame.hide_page)
             .then(|| format!("{}/{}", frame.page + 1, frame.page_count));
         self.notice = frame.notice.clone();
     }
@@ -161,6 +165,7 @@ impl RenderData {
             footer: self.footer.clone(),
             tip: (!self.tip.is_empty()).then(|| self.tip.clone()),
             online: (!self.online.is_empty()).then(|| self.online.clone()),
+            extra: (!self.extra.is_empty()).then(|| self.extra.clone()),
             status: self.notice.clone(),
             reverse_vertical: false,
             compact_horizontal: false,
@@ -233,6 +238,18 @@ fn online_segments(frame: &Frame) -> Vec<TipSegment> {
     ]
 }
 
+/// 「额外内容」区的按键提示（u 模式）：多个句子拼成一段、用换行分行，逐行左对齐。
+fn hint_segments(frame: &Frame) -> Vec<TipSegment> {
+    if frame.hints.is_empty() {
+        return Vec::new();
+    }
+    vec![TipSegment::new(
+        frame.hints.join("\n"),
+        Tone::TranslateMeta,
+        false,
+    )]
+}
+
 /// 窗口顶部要画的拼音行：`[general] preedit` 配成「只在行内」时为空（拼音已经在应用里）；
 /// 整句补全仍画在这一行上，所以空行时窗口仍可能留出这条线。
 fn window_preedit(frame: &Frame) -> Vec<(String, PreeditKind)> {
@@ -251,7 +268,7 @@ mod tests {
     use cloudime_platform::PreeditMode;
     use cloudime_platform::protocol::{Frame, PreeditKind, PreeditSegment};
 
-    use super::window_preedit;
+    use super::{RenderData, window_preedit};
 
     fn frame(mode: PreeditMode) -> Frame {
         Frame {
@@ -270,5 +287,34 @@ mod tests {
         assert_eq!(window_preedit(&frame(PreeditMode::Both)).len(), 1);
         assert_eq!(window_preedit(&frame(PreeditMode::Window)).len(), 1);
         assert!(window_preedit(&frame(PreeditMode::Inline)).is_empty());
+    }
+
+    /// u 模式的按键提示：藏页码，两句话进「额外内容」。
+    #[test]
+    fn hints_hide_the_page_and_fill_the_extra_area() {
+        let frame = Frame {
+            page_count: 2,
+            hide_page: true,
+            hints: vec![
+                "按空格进入快速符号输入".to_owned(),
+                "按Tab打开特殊字符输入器".to_owned(),
+            ],
+            ..Frame::default()
+        };
+        let mut data = RenderData::empty();
+        data.set(
+            &frame,
+            &[],
+            cloudime_platform::ItemNumberStyle::default(),
+            false,
+        );
+        assert!(data.footer.is_none(), "提示期间不画页码");
+        let view = data.candidate_view(None, 0.0);
+        let extra = view.extra.expect("额外内容");
+        assert_eq!(extra.len(), 1);
+        assert_eq!(
+            extra[0].text,
+            "按空格进入快速符号输入\n按Tab打开特殊字符输入器"
+        );
     }
 }

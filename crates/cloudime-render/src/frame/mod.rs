@@ -62,6 +62,10 @@ pub struct CandidateView {
     pub footer: Option<String>,
     pub tip: Option<Vec<TipSegment>>,
     pub online: Option<Vec<TipSegment>>,
+
+    /// 「额外内容」区的提示（u 模式的两行按键说明）：画在 Tip / 在线翻译下面，逐行左对齐。
+    pub extra: Option<Vec<TipSegment>>,
+
     pub status: Option<String>,
 
     /// 竖排时反向排列（候选窗在光标上方）：从下到上依次拼音串、候选项、Tip（含页码）、额外内容。
@@ -85,6 +89,7 @@ impl From<&Frame> for CandidateView {
             footer: frame.footer.clone(),
             tip: frame.tip.clone(),
             online: frame.online.clone(),
+            extra: None,
             status: frame.status.clone(),
             reverse_vertical: false,
             compact_horizontal: false,

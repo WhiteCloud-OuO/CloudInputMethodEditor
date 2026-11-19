@@ -27,6 +27,8 @@ struct Recorded {
     auxiliary_modes: Mutex<Vec<KeyMapReference>>,
     /// 模拟候选窗当前是不是反向竖排。
     reversed: Mutex<bool>,
+    /// u 模式按 Tab 拉起特殊字符输入器的次数（`CandidateSink::open_special_symbols`）。
+    special_symbols_opened: Mutex<u32>,
 }
 
 struct RecordingSink(Arc<Recorded>);
@@ -50,6 +52,10 @@ impl CandidateSink for RecordingSink {
 
     fn reversed_vertical(&self) -> bool {
         *self.0.reversed.lock().unwrap()
+    }
+
+    fn open_special_symbols(&self) {
+        *self.0.special_symbols_opened.lock().unwrap() += 1;
     }
 }
 
@@ -2349,16 +2355,24 @@ fn full_pinyin_u_starts_in_letter_mode_and_space_toggles_symbols() {
     assert_eq!(outcome, KeyOutcome::Consumed);
     assert_eq!(commit, None);
     assert!(!r.u_mode.expect("进了 u 模式").symbol_ui, "默认字母输入");
-    let tip = r.self_drawn_frame().tip.expect("混输提示");
-    assert_eq!(tip.joined(), "按空格进入符号输入");
+    let frame = r.self_drawn_frame();
+    assert!(frame.tip.is_none(), "裸 u 不显示翻译 Tip");
+    assert!(frame.hide_page, "裸 u 不显示页码");
+    assert_eq!(
+        frame.hints,
+        vec!["按空格进入快速符号输入", "按Tab打开特殊字符输入器"]
+    );
 
     // Space：切到符号输入，六类候选且不带序号。
     let (_, _, frame) = key(&mut r, 0x20, Some(' '), normal);
     assert_eq!(frame.candidates.items.len(), 6);
     assert_eq!(frame.candidates.items[0].text, "常用符号");
     assert!(r.u_mode.expect("还在 u 模式").symbol_ui);
-    let tip = r.self_drawn_frame().tip.expect("符号输入提示");
+    let frame = r.self_drawn_frame();
+    let tip = frame.tip.expect("符号输入提示");
     assert_eq!(tip.joined(), "按空格退出符号输入");
+    assert!(frame.hints.is_empty());
+    assert!(!frame.hide_page);
     let (_, commit, _) = key(&mut r, 0x51, Some('q'), normal);
     assert_eq!(commit.as_deref(), Some("◰"), "符号输入里字母按符号表上屏");
 
@@ -2369,6 +2383,30 @@ fn full_pinyin_u_starts_in_letter_mode_and_space_toggles_symbols() {
     let (_, _, frame) = key(&mut r, 0x4E, Some('n'), normal);
     assert_eq!(frame.preedit[0].text, "un");
     assert!(r.u_mode.is_some(), "字母输入仍留在 u 模式");
+    let frame = r.self_drawn_frame();
+    assert!(frame.hints.is_empty(), "多出字母后不再显示按键提示");
+    assert!(!frame.hide_page, "多出字母后恢复页码");
+}
+
+/// u 模式裸 `u` 时按 Tab 打开特殊字符输入器；多出字母后 Tab 回到普通行为。
+#[test]
+fn tab_in_bare_u_opens_the_special_symbols_inserter() {
+    let normal = KeyModifiers::default();
+    let mut r = router(9);
+    let recorded = Arc::new(Recorded::default());
+    r.set_candidate_sink(Box::new(RecordingSink(recorded.clone())));
+
+    key(&mut r, 0x55, Some('u'), normal);
+    let (outcome, commit, _) = key(&mut r, 0x09, None, normal);
+    assert_eq!(outcome, KeyOutcome::Consumed);
+    assert_eq!(commit, None);
+    assert_eq!(*recorded.special_symbols_opened.lock().unwrap(), 1);
+    assert!(r.u_mode.is_some(), "u 模式还在");
+
+    // 已经打出别的字母：Tab 不再拉起输入器。
+    key(&mut r, 0x4E, Some('n'), normal);
+    key(&mut r, 0x09, None, normal);
+    assert_eq!(*recorded.special_symbols_opened.lock().unwrap(), 1);
 }
 
 /// u 模式符号窗口里按退格：消费这一键并让 DLL 删光标前字符，不能把组句里的 `u` 删掉，

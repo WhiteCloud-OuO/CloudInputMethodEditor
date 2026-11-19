@@ -423,11 +423,14 @@ impl Renderer {
     /// 横排底部信息区的高度：紧凑时只剩额外内容，Tip / 页码已经挪到上面两行。
     fn horizontal_info_height(&self, view: &CandidateView, m: &Metrics) -> f32 {
         if view.compact_horizontal {
+            let mut height = 0.0;
             if view.online.is_some() {
-                self.candidate_online_height(view, m) + m.row_padding()
-            } else {
-                0.0
+                height += self.candidate_online_height(view, m) + m.row_padding();
             }
+            if view.extra.is_some() {
+                height += self.candidate_extra_height(view, m) + m.row_padding();
+            }
+            height
         } else {
             self.candidate_info_height(view, m)
         }
@@ -446,6 +449,9 @@ impl Renderer {
         if view.online.is_some() {
             height += self.candidate_online_height(view, m) + m.row_padding();
         }
+        if view.extra.is_some() {
+            height += self.candidate_extra_height(view, m) + m.row_padding();
+        }
         height
     }
 
@@ -453,6 +459,13 @@ impl Renderer {
     fn candidate_online_height(&self, view: &CandidateView, m: &Metrics) -> f32 {
         view.online.as_deref().map_or(0.0, |online| {
             m.px(m.theme.translate_font.line_height) * online_lines(online).len() as f32
+        })
+    }
+
+    /// 「额外内容」提示块的高度（不含与上一块之间的留白）。
+    fn candidate_extra_height(&self, view: &CandidateView, m: &Metrics) -> f32 {
+        view.extra.as_deref().map_or(0.0, |extra| {
+            m.px(m.theme.translate_font.line_height) * online_lines(extra).len() as f32
         })
     }
 
@@ -585,6 +598,13 @@ impl Renderer {
         self.draw_candidate_bottom_line(render, view, m, left, y, content_width);
         let bottom = self.candidate_bottom_height(view, m);
         self.draw_candidate_online(render, view, m, left, y + bottom, content_width);
+        let online = self.candidate_online_height(view, m);
+        let extra_y = if online > 0.0 {
+            y + bottom + online + m.row_padding()
+        } else {
+            y + bottom
+        };
+        self.draw_candidate_extra(render, view, m, left, extra_y, content_width);
     }
 
     /// 竖排反向时：额外内容在上、Tip（含页码）在下，其余不变。
@@ -597,12 +617,19 @@ impl Renderer {
         y: f32,
         content_width: f32,
     ) {
-        let online_height = self.candidate_online_height(view, m);
-        self.draw_candidate_online(render, view, m, left, y, content_width);
-        let tip_y = if online_height > 0.0 {
-            y + online_height + m.row_padding()
+        let extra_height = self.candidate_extra_height(view, m);
+        self.draw_candidate_extra(render, view, m, left, y, content_width);
+        let online_y = if extra_height > 0.0 {
+            y + extra_height + m.row_padding()
         } else {
             y
+        };
+        let online_height = self.candidate_online_height(view, m);
+        self.draw_candidate_online(render, view, m, left, online_y, content_width);
+        let tip_y = if online_height > 0.0 {
+            online_y + online_height + m.row_padding()
+        } else {
+            online_y
         };
         self.draw_candidate_bottom_line(render, view, m, left, tip_y, content_width);
     }
@@ -643,9 +670,37 @@ impl Renderer {
         let Some(online) = view.online.as_deref() else {
             return;
         };
+        self.draw_candidate_hint_lines(render, online, m, left, y, content_width);
+    }
+
+    /// 「额外内容」区的按键提示（u 模式），逐行左对齐。
+    fn draw_candidate_extra(
+        &self,
+        render: &mut DrawRecorder,
+        view: &CandidateView,
+        m: &Metrics,
+        left: f32,
+        y: f32,
+        content_width: f32,
+    ) {
+        let Some(extra) = view.extra.as_deref() else {
+            return;
+        };
+        self.draw_candidate_hint_lines(render, extra, m, left, y, content_width);
+    }
+
+    fn draw_candidate_hint_lines(
+        &self,
+        render: &mut DrawRecorder,
+        segments: &[TipSegment],
+        m: &Metrics,
+        left: f32,
+        y: f32,
+        content_width: f32,
+    ) {
         let line_height = m.px(m.theme.translate_font.line_height);
         let budget = content_width - m.padding() * 2.0;
-        for (index, line) in online_lines(online).into_iter().enumerate() {
+        for (index, line) in online_lines(segments).into_iter().enumerate() {
             self.draw_candidate_segments(
                 render,
                 &line,

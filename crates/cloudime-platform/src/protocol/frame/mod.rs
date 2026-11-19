@@ -71,6 +71,16 @@ pub struct Frame {
     /// 不参与 [`is_empty`](Self::is_empty)：单有提示不算在组句，否则空组句也会撑开候选窗口。
     #[serde(default)]
     pub notice: Option<String>,
+
+    /// 自绘候选窗「额外内容」区的提示行（翻译 Tip / 页码下面那一块），逐行画。
+    /// u 模式拼音串只有裸 `u` 时放「按空格进入快速符号输入」「按Tab打开特殊字符输入器」。
+    /// 与 [`tip`](Self::tip) 同理，只给自绘窗口用，DLL 忽略，不单独升协议版本。
+    #[serde(default)]
+    pub hints: Vec<String>,
+
+    /// 不画页码：u 模式正在显示按键提示时用。同样只给自绘窗口用。
+    #[serde(default)]
+    pub hide_page: bool,
 }
 
 impl Frame {

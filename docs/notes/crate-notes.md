@@ -1981,7 +1981,12 @@ u 模式复用同一件资产，但走 `CandidateSink::set_symbol_aux(Option<Key
 用户配置的键位映射参考；`symbol_assets_on` 与 `assets_on` 取或，两套开关互不影响。支持中英混输时进入 u 模式
 先是字母输入（`UMode::symbol_ui = false`，不显示资产），`Space` 切符号输入；没有混输时直接符号输入。
 `Space` 在符号输入里切回字母输入；字母输入里只有拼音串还停在单个 `u` 时 Space 才切符号，出现别的字母后 Space
-恢复普通选词 / 上屏。支持混输时 Tip 显示「按空格进入/退出符号输入」，没有混输不显示。符号格子左下角始终留一行
+恢复普通选词 / 上屏。裸 `u` 时自绘候选窗**不画页码、不画翻译 Tip**，改在「额外内容」区（`CandidateView.extra`，
+协议帧的 `hints` + `hide_page`，都是 `#[serde(default)]`、DLL 忽略）显示两行提示：
+「按空格进入快速符号输入」「按Tab打开特殊字符输入器」；此时 `Tab` 走 `CandidateSink::open_special_symbols`
+让 UI 线程起 `SpecialSymbolsInserter.exe`（`UiCommand::OpenSpecialSymbols`）。出现别的字母后提示与 `hide_page`
+一起撤掉，恢复普通 Tip + 页码。符号输入状态仍显示「按空格退出符号输入」（支持混输时）。
+符号格子左下角始终留一行
 `KeyMapLayout::footer`（假名 / 西里尔提示或空行），正常符号画在格子下方、Shift 符号画在上方；键帽与符号表在
 `server/src/dispatch/u_mode/mapping.rs`。`KeyMapLayout::fallback_family` 由 `Router::update_u_aux` 按分类填：假名用
 `[candidate] japanese_font`，其余用 `symbol_font`；假名同时置 `fallback_first`（固定优先日文字体）。
