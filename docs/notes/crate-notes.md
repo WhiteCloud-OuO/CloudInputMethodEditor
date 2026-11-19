@@ -2298,6 +2298,14 @@ cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
   运行时按统一比例缩放、居中；6 页共 546 个字符（56/111/76/100/110/93）。
   `styles.tsv` 是 14 种花体样式的 52 个码位（A–Z + a–z，十六进制）。
   改字符只需改 TSV；数据由旧 `.frm`（UTF-8，`Caption` 里就是真字符）一次性导出。
+- 网格与面板：网格缩到面板内圈 `GRID_PADDING = 12` 再等比缩放，按钮不贴面板边缘
+  （以前按钮右边缘正好落在面板圆角上，看起来像溢出）；窗口默认 620×700，最小 540×580。
+- 日文假名页：右侧「无 / 浊゛ / 半゜」是变体开关（`kana.rs`），不是字符按钮 ——
+  选中后用假名按钮左键输入 / 右键复制的是变体后的字（か→が、は→ぱ、カ→ガ、ハ→パ…）；
+  没有对应变体的假名原样返回。开关按 `kana:plain|voiced|semi` 的区域名处理，选中项用强调色。
+- 制表符页的框线字符（U+2500..U+257F）走 `FontSlot::ItemNumber`，这一槽在 `main.rs` 配成
+  「宋体-PUA」（旧版逐按钮指定的字体）；启动时用 DirectWrite `FindFamilyName` 探测，
+  本机没装就退回 Microsoft YaHei UI。其余符号仍用 Segoe UI Symbol。
 - 窗口：`WindowOptions { top_most: true, no_activate: true, decorations: None }`。
   `no_activate` 是这一轮给 `cloud-ui` 加的：创建时 `WS_EX_NOACTIVATE`、显示用 `SW_SHOWNOACTIVATE`，
   `WM_MOUSEACTIVATE` 返回 `MA_NOACTIVATE`；`Context::set_no_activate` 可在运行时开关。

@@ -139,6 +139,7 @@ pub fn tile(
     rect: Rect,
     name: &str,
     glyph: &Glyph,
+    slot: FontSlot,
     theme: &Theme,
     pointer: Option<(f32, f32)>,
     measure: &mut dyn FnMut(&str, FontSlot, f32) -> (f32, f32),
@@ -183,15 +184,7 @@ pub fn tile(
     } else {
         (rect.width * 0.58).clamp(10.0, 30.0)
     };
-    centered(
-        elements,
-        rect,
-        &glyph.text,
-        size,
-        FontSlot::Candidate,
-        theme.text,
-        measure,
-    );
+    centered(elements, rect, &glyph.text, size, slot, theme.text, measure);
     regions.push(Region::new(
         name,
         HitShape::RoundRect {

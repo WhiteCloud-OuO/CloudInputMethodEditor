@@ -13,6 +13,7 @@ use cloudime_render::{Document, Element, FontSlot, Region};
 use crate::data::{self, GridBox, Page};
 use crate::fancy;
 use crate::inject;
+use crate::kana::{self, Variant};
 use crate::ui;
 
 /// 窗口内边距。
@@ -23,8 +24,14 @@ const TAB_HEIGHT: f32 = 30.0;
 const TAB_GAP: f32 = 4.0;
 /// 底部状态行高度。
 const STATUS_HEIGHT: f32 = 22.0;
+/// 符号网格与面板边缘之间至少留这么多，免得按钮压到面板圆角。
+const GRID_PADDING: f32 = 12.0;
 /// 第 7 页（英文花体）的页号。
 const FANCY: usize = 6;
+/// 第 5 页（日文假名）的页号。
+const KANA_PAGE: usize = 4;
+/// 第 6 页（制表符 / 箭头）的页号。
+const BOX_PAGE: usize = 5;
 
 pub struct SsiApp {
     pages: Vec<Page>,
@@ -35,6 +42,8 @@ pub struct SsiApp {
     style: usize,
     input: String,
     result: String,
+    /// 日文假名页的变体模式（无 / 浊゛ / 半゜）。
+    kana: Variant,
     /// 状态行里的提示 / 错误；`None` 时按悬停显示码位。
     message: Option<String>,
     pointer: Option<(f32, f32)>,
@@ -64,6 +73,7 @@ impl SsiApp {
             style: 0,
             input: String::new(),
             result: String::new(),
+            kana: Variant::Plain,
             message: None,
             pointer: None,
             hovered: None,
@@ -158,10 +168,19 @@ impl SsiApp {
                     .get(self.page)
                     .and_then(|page| page.glyphs.get(index))
             {
-                let text = glyph.text.clone();
+                let text = self.output_text(&glyph.text);
                 self.message = None;
                 self.insert(&text);
             }
+            return;
+        }
+        if let Some(mode) = name.strip_prefix("kana:") {
+            self.kana = match mode {
+                "voiced" => Variant::Voiced,
+                "semi" => Variant::SemiVoiced,
+                _ => Variant::Plain,
+            };
+            self.message = None;
             return;
         }
         if let Some(index) = name.strip_prefix("style:") {
@@ -187,9 +206,18 @@ impl SsiApp {
             .glyph_rects
             .iter()
             .find(|(rect, _)| ui::inside(*rect, x, y))
-            .map(|(_, text)| text.clone())
+            .map(|(_, text)| self.output_text(text))
         {
             self.copy(&text);
+        }
+    }
+
+    /// 真正要输入 / 复制的文本：日文页按当前变体模式转换，其余页原样。
+    fn output_text(&self, text: &str) -> String {
+        if self.page == KANA_PAGE {
+            kana::apply(text, self.kana)
+        } else {
+            text.to_owned()
         }
     }
 }
@@ -377,15 +405,22 @@ impl SsiApp {
     ) {
         let theme = self.theme;
         ui::panel(elements, content, theme.surface, theme.radius);
+        // 网格缩到面板内圈：按钮不贴面板边缘，圆角处不会看起来「溢出」。
+        let area = Rect {
+            x: content.x + GRID_PADDING,
+            y: content.y + GRID_PADDING,
+            width: (content.width - GRID_PADDING * 2.0).max(1.0),
+            height: (content.height - GRID_PADDING * 2.0).max(1.0),
+        };
         let grid = self.grid;
-        let scale = (content.width / grid.width)
-            .min(content.height / grid.height)
+        let scale = (area.width / grid.width)
+            .min(area.height / grid.height)
             .max(0.1);
         let width = grid.width * scale;
         let height = grid.height * scale;
         let origin = (
-            content.x + (content.width - width) / 2.0,
-            content.y + (content.height - height) / 2.0,
+            area.x + (area.width - width) / 2.0,
+            area.y + (area.height - height) / 2.0,
         );
         let page = &self.pages[self.page];
         for (index, glyph) in page.glyphs.iter().enumerate() {
@@ -395,15 +430,44 @@ impl SsiApp {
                 width: data::BUTTON * scale,
                 height: data::BUTTON * scale,
             };
+            // 日文页右侧三个「无 / 浊゛ / 半゜」是变体开关，不注入。
+            if self.page == KANA_PAGE
+                && let Some((name, variant)) = kana_control(&glyph.text)
+            {
+                let mut look = if self.kana == variant {
+                    ui::ButtonLook::primary(&theme)
+                } else {
+                    ui::ButtonLook::normal(&theme)
+                };
+                look.size = (rect.width * 0.34).clamp(9.0, 14.0);
+                ui::button(
+                    elements,
+                    regions,
+                    rect,
+                    name,
+                    &glyph.text,
+                    &look,
+                    self.pointer,
+                    measure,
+                );
+                continue;
+            }
             if self.pointer.is_some_and(|(x, y)| ui::inside(rect, x, y)) {
                 self.hovered = Some(index);
             }
+            // 制表符页的框线字符优先用宋体-PUA（旧版逐个按钮指定的字体）。
+            let slot = if self.page == BOX_PAGE && is_box_drawing(&glyph.text) {
+                FontSlot::ItemNumber
+            } else {
+                FontSlot::Candidate
+            };
             ui::tile(
                 elements,
                 regions,
                 rect,
                 &format!("glyph:{index}"),
                 glyph,
+                slot,
                 &theme,
                 self.pointer,
                 measure,
@@ -557,6 +621,70 @@ impl SsiApp {
                 glyph.text, character as u32
             );
         }
+        if self.page == KANA_PAGE {
+            let mode = match self.kana {
+                Variant::Plain => "无",
+                Variant::Voiced => "浊゛",
+                Variant::SemiVoiced => "半゜",
+            };
+            return format!("假名变体：{mode}    点右侧 无 / 浊゛ / 半゜ 切换");
+        }
         "左键输入 · 右键复制".to_owned()
+    }
+}
+
+/// 日文页右侧的三个变体开关：区域名 + 模式。
+fn kana_control(text: &str) -> Option<(&'static str, Variant)> {
+    match text {
+        "无" => Some(("kana:plain", Variant::Plain)),
+        "浊゛" => Some(("kana:voiced", Variant::Voiced)),
+        "半゜" => Some(("kana:semi", Variant::SemiVoiced)),
+        _ => None,
+    }
+}
+
+/// 制表符页的框线字符（U+2500..U+257F）。
+fn is_box_drawing(text: &str) -> bool {
+    let mut chars = text.chars();
+    matches!(
+        (chars.next(), chars.next()),
+        (Some(character), None) if ('\u{2500}'..='\u{257F}').contains(&character)
+    )
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn kana_controls_are_recognized() {
+        assert_eq!(kana_control("无"), Some(("kana:plain", Variant::Plain)));
+        assert_eq!(kana_control("浊゛"), Some(("kana:voiced", Variant::Voiced)));
+        assert_eq!(
+            kana_control("半゜"),
+            Some(("kana:semi", Variant::SemiVoiced))
+        );
+        assert_eq!(kana_control("あ"), None);
+    }
+
+    #[test]
+    fn box_drawing_characters_are_recognized() {
+        assert!(is_box_drawing("┌"));
+        assert!(is_box_drawing("╔"));
+        assert!(is_box_drawing("┉"));
+        assert!(!is_box_drawing("→"));
+        assert!(!is_box_drawing("あ"));
+        assert!(!is_box_drawing(""));
+    }
+
+    #[test]
+    fn output_text_applies_the_kana_variant() {
+        let mut app = SsiApp::new(cloud_ui::Theme::dark(), None);
+        app.page = KANA_PAGE;
+        assert_eq!(app.output_text("か"), "か");
+        app.kana = Variant::Voiced;
+        assert_eq!(app.output_text("か"), "が");
+        app.kana = Variant::SemiVoiced;
+        assert_eq!(app.output_text("は"), "ぱ");
     }
 }
