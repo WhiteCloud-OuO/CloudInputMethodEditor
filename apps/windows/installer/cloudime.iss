@@ -119,9 +119,9 @@ Source: "{#Repo}\target\release\cloudime-ids.exe"; DestDir: "{app}"; Flags: igno
 ; 文件由 build.ps1 按 settings-runtime.txt 从 target\release 挑进 target\installer\settings-runtime，必须与 exe 同级。
 Source: "{#Repo}\target\installer\settings-runtime\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
 Source: "{#Repo}\apps\windows\tsf\resources\cloudime.ico"; DestDir: "{app}"; Flags: ignoreversion
-; 特殊字符输入器：随仓库带的 VFB 成品（apps\windows\ssi\release64\，构建时只拷不编），装在 {app} 根目录。
+; 特殊字符输入器：Rust 程序（apps\windows\ssi），装在 {app} 根目录。
 ; Server 按自己 exe 旁的固定名起它（悬浮状态条「特殊字符」按钮，ui/mod.rs 的 open_spec_chars）。
-Source: "{#Repo}\apps\windows\ssi\release64\SpecialSymbolsInserter.exe"; DestDir: "{app}"; Flags: ignoreversion
+Source: "{#Repo}\target\release\SpecialSymbolsInserter.exe"; DestDir: "{app}"; Flags: ignoreversion
 ; —— 本地词典（翻译 Tip 用）：只随包英文词典；西 / 日后续接入下载，仓库里仍保留文件 ——
 ; 文件随仓库带（与 cwt-gui、SpecialSymbolsInserter 一样，构建时只拷不编）；Server 与设置程序都从这儿读，
 ; 设置页「翻译 → 本地词典」的选项就是清单里的显示名。

@@ -1,0 +1,38 @@
+[package]
+name = "cloudime-windows-symbols"
+description = "特殊字符输入器：置顶、不抢焦点的特殊符号面板（cloud-ui）"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+[[bin]]
+name = "SpecialSymbolsInserter"
+path = "src/main.rs"
+
+[dependencies]
+cloud-ui.workspace = true
+cloudime-platform.workspace = true
+cloudime-render.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+
+[target."cfg(windows)".dependencies]
+windows = { workspace = true, features = [
+    "Win32_Foundation",
+    "Win32_System_DataExchange",
+    "Win32_System_Memory",
+    "Win32_System_Ole",
+    "Win32_System_Threading",
+    "Win32_UI_Input_KeyboardAndMouse",
+    "Win32_UI_WindowsAndMessaging",
+] }
+
+[build-dependencies]
+embed-manifest.workspace = true
+
+[target."cfg(windows)".build-dependencies]
+winresource.workspace = true
+
+[lints]
+workspace = true

@@ -1,5 +1,9 @@
 # 特殊字符输入器（SpecialSymbolsInserter）
 
+> **这是旧版 VFB 工程，仅作参考，不参与构建。** 现在产品里跑的是 Rust 版
+> （`apps/windows/ssi` 的 `cloudime-windows-symbols` crate）；6 页字符与 14 种花体样式
+> 已导出到 `apps/windows/ssi/assets/*.tsv`。下面文档描述的是旧实现。
+
 一个用 **勇芳 VisualFreeBasic（VFB）** 编写的特殊字符输入小工具，用于向任意程序快速输入键盘上难以打出的特殊符号（序号、角标、希腊字母、西里尔字母、日文假名、制表符、箭头等），并附带一个英文花体转换页。
 
 - 点 **左键**：把按钮上的字符以「模拟键盘输入」的方式直接打到你当前正在打字的程序里；

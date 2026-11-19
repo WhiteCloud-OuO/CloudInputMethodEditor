@@ -47,16 +47,17 @@ use windows::Win32::UI::Input::KeyboardAndMouse::{
 };
 use windows::Win32::UI::WindowsAndMessaging::{
     AdjustWindowRectEx, CS_DBLCLKS, CreateWindowExW, DefWindowProcW, DestroyWindow,
-    DispatchMessageW, GetClientRect, GetMessageW, GetWindowRect, HTCAPTION, HTCLIENT,
-    HTTRANSPARENT, IDC_ARROW, IsIconic, IsWindowVisible, IsZoomed, LoadCursorW, MINMAXINFO, MSG,
-    PostMessageW, PostQuitMessage, RegisterWindowMessageW, SIZE_MINIMIZED, SW_HIDE, SW_MAXIMIZE,
-    SW_MINIMIZE, SW_RESTORE, SW_SHOW, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow,
+    DispatchMessageW, GWL_EXSTYLE, GetClientRect, GetMessageW, GetWindowLongPtrW, GetWindowRect,
+    HTCAPTION, HTCLIENT, HTTRANSPARENT, IDC_ARROW, IsIconic, IsWindowVisible, IsZoomed,
+    LoadCursorW, MA_NOACTIVATE, MINMAXINFO, MSG, PostMessageW, PostQuitMessage,
+    RegisterWindowMessageW, SIZE_MINIMIZED, SW_HIDE, SW_MAXIMIZE, SW_MINIMIZE, SW_RESTORE, SW_SHOW,
+    SW_SHOWNOACTIVATE, SWP_NOACTIVATE, SWP_NOZORDER, SetForegroundWindow, SetWindowLongPtrW,
     SetWindowPos, ShowWindow, TranslateMessage, WM_CAPTURECHANGED, WM_CHAR, WM_CLOSE, WM_DESTROY,
     WM_DPICHANGED, WM_ERASEBKGND, WM_GETMINMAXINFO, WM_KEYDOWN, WM_KEYUP, WM_KILLFOCUS,
-    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEMOVE, WM_MOUSEWHEEL, WM_MOVE,
-    WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_PAINT, WM_RBUTTONDOWN, WM_RBUTTONUP,
-    WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED,
-    WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP,
+    WM_LBUTTONDBLCLK, WM_LBUTTONDOWN, WM_LBUTTONUP, WM_MOUSEACTIVATE, WM_MOUSEMOVE, WM_MOUSEWHEEL,
+    WM_MOVE, WM_NCDESTROY, WM_NCHITTEST, WM_NCLBUTTONDBLCLK, WM_PAINT, WM_RBUTTONDOWN,
+    WM_RBUTTONUP, WM_SETFOCUS, WM_SHOWWINDOW, WM_SIZE, WNDCLASSEXW, WS_EX_APPWINDOW, WS_EX_LAYERED,
+    WS_EX_NOACTIVATE, WS_EX_TOPMOST, WS_MAXIMIZEBOX, WS_MINIMIZEBOX, WS_OVERLAPPEDWINDOW, WS_POPUP,
 };
 use windows::core::{HSTRING, PCWSTR, Result, w};
 
@@ -119,6 +120,12 @@ pub struct WindowOptions {
     /// 是否置顶；缺省 false。
     pub top_most: bool,
 
+    /// 创建后默认不抢焦点（`WS_EX_NOACTIVATE` + 点击不激活）；缺省 false。
+    ///
+    /// 工具面板用：点击按钮时键盘焦点留在目标程序里。需要输入时用
+    /// [`Context::set_no_activate`] 临时关掉，再自己 `SetForegroundWindow`。
+    pub no_activate: bool,
+
     /// 无边框时是否在窗口外画一圈阴影；缺省 true。
     pub shadow: bool,
 
@@ -149,6 +156,7 @@ impl Default for WindowOptions {
             min_size: Some((320.0, 240.0)),
             decorations: Decorations::System,
             top_most: false,
+            no_activate: false,
             shadow: true,
             corner_radius: 12.0,
             caption_height: None,
@@ -232,6 +240,7 @@ enum WindowCommand {
     Show,
     Hide,
     Close,
+    SetNoActivate(bool),
 }
 
 /// 独立窗口应用。
@@ -296,6 +305,20 @@ impl Context {
     /// 把焦点交给某个文本编辑框（`region_name`）；这一帧同步宿主之后执行。
     pub fn focus_text(&self, name: &'static str) {
         self.focus_text.set(Some(name));
+    }
+
+    /// 窗口句柄（`SetForegroundWindow` 这类调用自己用）。
+    pub fn hwnd(&self) -> HWND {
+        self.hwnd
+    }
+
+    /// 打开 / 关闭「不抢焦点」：`true` 时窗口加回 `WS_EX_NOACTIVATE`，点击不再激活它。
+    ///
+    /// 默认值来自 [`WindowOptions::no_activate`]；工具面板切到需要键盘输入的页时临时关掉，
+    /// 离开时再打开。
+    pub fn set_no_activate(&self, no_activate: bool) {
+        self.command
+            .set(Some(WindowCommand::SetNoActivate(no_activate)));
     }
 
     /// 窗口是否最大化 / 还原态。
@@ -409,8 +432,21 @@ where
 
     let (hwnd, window) = create_window(options, Box::new(app), None)?;
     WINDOWS.with(|windows| windows.borrow_mut().insert(hwnd.0 as isize, window));
+    let no_activate = with_window_value(hwnd, |window| window.no_activate).unwrap_or(false);
     unsafe {
-        let _ = ShowWindow(hwnd, SW_SHOW);
+        let _ = ShowWindow(
+            hwnd,
+            if no_activate {
+                SW_SHOWNOACTIVATE
+            } else {
+                SW_SHOW
+            },
+        );
+        if no_activate {
+            // `SW_SHOWNOACTIVATE` 不会给分层窗口留下更新区，`UpdateWindow` 就什么都不画；
+            // 手动标脏一次，首帧才会走 `WM_PAINT`。
+            let _ = InvalidateRect(Some(hwnd), None, false);
+        }
         let _ = UpdateWindow(hwnd);
     }
 
@@ -489,6 +525,9 @@ fn create_window(
     if options.top_most {
         ex_style |= WS_EX_TOPMOST;
     }
+    if options.no_activate {
+        ex_style |= WS_EX_NOACTIVATE;
+    }
 
     let mut rect = RECT {
         left: 0,
@@ -560,6 +599,7 @@ fn create_window(
         shadow,
         shadow_margin,
         top_most: options.top_most,
+        no_activate: options.no_activate,
         caption_height: options.caption_height,
         pending_command: None,
         edits: Vec::new(),
@@ -588,6 +628,8 @@ struct AppWindow {
     shadow: bool,
     shadow_margin: i32,
     top_most: bool,
+    /// 当前是否 `WS_EX_NOACTIVATE`（工具面板默认不抢焦点）。
+    no_activate: bool,
     caption_height: Option<f32>,
     pending_command: Option<WindowCommand>,
     edits: Vec<EditHost>,
@@ -1850,6 +1892,15 @@ unsafe extern "system" fn wndproc(
             }
             LRESULT(0)
         }
+        WM_MOUSEACTIVATE => {
+            // 工具面板（特殊字符输入器）点按钮时不能把焦点抢走，否则 SendInput 会打进自己这里。
+            let no_activate = with_window_value(hwnd, |window| window.no_activate).unwrap_or(false);
+            if no_activate {
+                LRESULT(MA_NOACTIVATE as isize)
+            } else {
+                unsafe { DefWindowProcW(hwnd, message, wparam, lparam) }
+            }
+        }
         WM_CLOSE => {
             unsafe {
                 let _ = DestroyWindow(hwnd);
@@ -1993,6 +2044,18 @@ fn apply_window_command(hwnd: HWND, command: WindowCommand) {
         WindowCommand::Close => unsafe {
             let _ = DestroyWindow(hwnd);
         },
+        WindowCommand::SetNoActivate(no_activate) => {
+            with_window(hwnd, |window| window.no_activate = no_activate);
+            unsafe {
+                let mut style = GetWindowLongPtrW(hwnd, GWL_EXSTYLE) as u32;
+                if no_activate {
+                    style |= WS_EX_NOACTIVATE.0;
+                } else {
+                    style &= !WS_EX_NOACTIVATE.0;
+                }
+                SetWindowLongPtrW(hwnd, GWL_EXSTYLE, style as isize);
+            }
+        }
     }
 }
 

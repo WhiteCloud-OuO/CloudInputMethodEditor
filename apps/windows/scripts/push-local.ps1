@@ -67,8 +67,8 @@ if (-not $SkipBuild) {
     try {
         # `cmd /c "… 2>&1"`：cargo 把进度写 stderr，PS 5.1 会把它当错误记录（红字）甚至终止脚本；
         # 经 cmd 合并到 stdout 后就只是普通输出，退出码仍是 cargo 的。
-        & cmd /c "cargo build --release -p cloudime-windows-server -p cloudime-windows-tsf -p cloudime-windows-ids 2>&1"
-        if ($LASTEXITCODE -ne 0) { throw 'cargo build 失败（Server + TSF DLL + 组字查字）' }
+        & cmd /c "cargo build --release -p cloudime-windows-server -p cloudime-windows-tsf -p cloudime-windows-ids -p cloudime-windows-symbols 2>&1"
+        if ($LASTEXITCODE -ne 0) { throw 'cargo build 失败（Server + TSF DLL + 组字查字 + 特殊字符）' }
         & cmd /c "cargo build --release -p cloudime-windows-tsf --target i686-pc-windows-msvc 2>&1"
         if ($LASTEXITCODE -ne 0) { throw 'cargo build 失败（32 位 TSF DLL）' }
         if (-not $SkipSettings) {

@@ -125,9 +125,11 @@ if (-not (Test-Path $idsData)) {
     throw "缺组字数据：$idsData（先跑 cargo run --release -p cloudime-ids-build -- --ids assets/ids/IDS.TXT --components assets/ids/components.tsv --out data/generated/ids.qj）"
 }
 
-# 特殊字符输入器是随仓库带的成品（VFB 编，不参与 cargo 构建）：缺了 Inno 编到 [Files] 那行才报错，这里先说清楚。
-$ssiExe = Join-Path $Repo 'apps\windows\ssi\release64\SpecialSymbolsInserter.exe'
-if (-not (Test-Path $ssiExe)) { throw "缺特殊字符输入器：$ssiExe（随仓库带的 VFB 成品，构建时只拷不编）" }
+# 特殊字符输入器现在是 Rust 程序（apps/windows/ssi，cloudime-windows-symbols）：缺了先编。
+$ssiExe = Join-Path $Repo 'target\release\SpecialSymbolsInserter.exe'
+if (-not (Test-Path $ssiExe)) {
+    throw "缺特殊字符输入器：$ssiExe（先跑 cargo-build.ps1 或 cargo build --release -p cloudime-windows-symbols）"
+}
 
 # 知意（增强档）模型随包：缺了安装包会不完整。
 $zhiyiModel = Join-Path $Repo 'Models\laya-zhen-long-l12-int8g\laya.int8g.onnx'

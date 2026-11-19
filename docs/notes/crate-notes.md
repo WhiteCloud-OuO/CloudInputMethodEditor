@@ -1584,7 +1584,7 @@ Caps Lock 不在 Server 手上（DLL 根本没送键过来），状态条自己�
 「工具」按钮弹的是 exe 旁 `tools\tools.list` 登记的工具菜单（`status/tools.rs`：一行 `短路径=名称`，短路径相对 `tools\`，文件不在的项跳过；用 `TrackPopupMenu` 在中键位置弹），
 菜单底部固定追加分隔线与「查看帮助手册」：用 `bundled_root()` 找安装目录的 `tutorial.md`，有 `.md` 默认打开方式就 `ShellExecuteW`，没有就退回记事本。
 启动时工作目录设成 `tools\`：**控制台程序**（PE 子系统 3 的 exe、`.bat` / `.cmd`）用 `cmd /k` 起——程序跑完控制台留着，看得见输出、还能接着敲命令（`cwt.exe` 不给参数只打用法，直接起会一闪而过）；窗口程序直接起。
-「特殊字符」按钮起 exe 旁的 `SpecialSymbolsInserter.exe`（`ui/mod.rs::open_spec_chars`）：随安装包带的 VFB 成品、装在 `{app}` 根目录，自己画成置顶窗口；默认前 6 页不抢焦点（`WS_EX_NOACTIVATE`），点字符用 `SendInput` + `KEYEVENTF_UNICODE` 注入当前输入框，右键复制到剪贴板；第 7 页「英文花体」要输入文字，切到该页时临时去掉 `WS_EX_NOACTIVATE` 并聚焦输入框。
+「特殊字符」按钮起 exe 旁的 `SpecialSymbolsInserter.exe`（`ui/mod.rs::open_spec_chars`）：Rust 程序 `apps/windows/ssi`（`cloudime-windows-symbols`，`cloud-ui` 自绘窗口），装在 `{app}` 根目录；默认前 6 页不抢焦点（`WindowOptions.no_activate`），点字符用 `SendInput` + `KEYEVENTF_UNICODE` 注入当前输入框，右键复制到剪贴板；第 7 页「英文花体」要输入文字，切到该页时临时去掉 `WS_EX_NOACTIVATE` 并聚焦输入框。
 
 **状态切换提示**（`server/src/ui/status_tip/`，`[input] show_status_change_tip` 缺省 `"off"`）：中 / 英、Caps Lock、
 全 / 半角、简 / 繁、中文 / 西文标点任一变了，就在输入光标附近弹一个停留 1 秒的小条 —— 样式与悬浮状态条同一套图标，
@@ -2287,6 +2287,34 @@ cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
 - 发布验证（2026-11-17）：release 编出 `cloudime-ids.exe`（8.6 MB）；`push-local.ps1` 覆盖安装后
   Server 正常启动；安装包 ISCC 编译通过（184.7 MB），stage 里确认有 `cloudime-ids.exe` 与 `ids.qj`；
   安装目录的 exe 直接启动并读取 `data\generated\ids.qj`。
+
+## apps/windows/ssi
+
+特殊字符输入器 `SpecialSymbolsInserter.exe`（`cloudime-windows-symbols`）：从悬浮状态条「特殊字符」
+启动，纯 `cloud-ui` 自绘窗口，不碰 Server / TSF / 协议。旧 VFB 工程留在 `legacy/`（只作参考，不参与构建）。
+
+- 数据：`assets/{pages,glyphs,styles}.tsv`，`include_str!` 编进 exe。`glyphs.tsv` 每行
+  `页<TAB>x<TAB>y<TAB>字符`，坐标沿用旧工程（28×28 按钮、步长 31，分组靠坐标空开），
+  运行时按统一比例缩放、居中；6 页共 546 个字符（56/111/76/100/110/93）。
+  `styles.tsv` 是 14 种花体样式的 52 个码位（A–Z + a–z，十六进制）。
+  改字符只需改 TSV；数据由旧 `.frm`（UTF-8，`Caption` 里就是真字符）一次性导出。
+- 窗口：`WindowOptions { top_most: true, no_activate: true, decorations: None }`。
+  `no_activate` 是这一轮给 `cloud-ui` 加的：创建时 `WS_EX_NOACTIVATE`、显示用 `SW_SHOWNOACTIVATE`，
+  `WM_MOUSEACTIVATE` 返回 `MA_NOACTIVATE`；`Context::set_no_activate` 可在运行时开关。
+  **坑**：`SW_SHOWNOACTIVATE` 不会给分层窗口留下更新区，启动时 `UpdateWindow` 什么都不画，
+  必须补一次 `InvalidateRect`（`run_native` 里已处理），否则窗口是透明的。
+- 输入：左键 `SendInput` + `KEYEVENTF_UNICODE`（代理对按两个 UTF-16 单元发），右键写
+  `CF_UNICODETEXT` 剪贴板。点击不激活窗口，前台仍是目标程序；万一焦点在自己身上
+  （从第 7 页切回来）就先 `AttachThreadInput` + `SetForegroundWindow` 把前台还给上一个目标窗口，
+  再注入（目标窗口在启动时记一次、每次注入前用 `GetForegroundWindow` 刷新）。
+- 第 7 页：切过去时 `set_no_activate(false)`，下一帧 `SetForegroundWindow` + `focus_text("ssi.input")`
+  （窗口命令在画完这一帧才执行，所以激活要推迟一帧）；离开时恢复 `no_activate`。
+  输入变化与样式点击都重算结果，`复制结果` 写剪贴板。
+- 字体：`candidate_font` 用「Segoe UI Symbol」——符号在它是单色字形，落到 Segoe UI Emoji 会变成
+  彩色（☑ 变蓝框）；缺字由 cosmic-text 回退到中文 / 假名字体（`symbol_font` / `japanese_font` 只是
+  补充字体）。花体样式的 🅐 / 𝔄 这类字符也能靠回退画出来。
+- 构建：`cargo-build.ps1` 带上 `-p cloudime-windows-symbols`，产物 `target\release\SpecialSymbolsInserter.exe`；
+  `installer/build.ps1`、`cloudime.iss`、`reconfigure.ps1` 都改成从 `target\release` 取，不再用旧 VFB 成品。
 
 ## apps/windows/tools/cloudime-wordbank-transformer
 
