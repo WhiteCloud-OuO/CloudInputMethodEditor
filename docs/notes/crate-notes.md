@@ -1987,6 +1987,8 @@ u 模式复用同一件资产，但走 `CandidateSink::set_symbol_aux(Option<Key
 和在线翻译那一块一致）；此时 `Tab` 走 `CandidateSink::open_special_symbols`
 让 UI 线程起 `SpecialSymbolsInserter.exe`（`UiCommand::OpenSpecialSymbols`）。出现别的字母后提示与 `hide_page`
 一起撤掉，恢复普通 Tip + 页码。符号输入状态仍显示「按空格退出符号输入」（支持混输时）。
+反向竖排（候选窗在光标上方 + 自动反向）时，u 模式的 UP / DOWN 也跟着列表方向翻过来
+（`candidates.reversed_vertical()`，和普通候选导航同一套判断）。
 符号格子左下角始终留一行
 `KeyMapLayout::footer`（假名 / 西里尔提示或空行），正常符号画在格子下方、Shift 符号画在上方；键帽与符号表在
 `server/src/dispatch/u_mode/mapping.rs`。`KeyMapLayout::fallback_family` 由 `Router::update_u_aux` 按分类填：假名用

@@ -2409,6 +2409,31 @@ fn tab_in_bare_u_opens_the_special_symbols_inserter() {
     assert_eq!(*recorded.special_symbols_opened.lock().unwrap(), 1);
 }
 
+/// u 模式反向竖排：候选从下往上排，上下键要跟着翻过来。
+#[test]
+fn u_mode_arrows_follow_reversed_vertical_candidates() {
+    let normal = KeyModifiers::default();
+    for (reversed, up, down) in [(false, 0, 1), (true, 1, 0)] {
+        let mut r = router(9);
+        r.config.layout = LayoutMode::Vertical;
+        let recorded = Arc::new(Recorded::default());
+        *recorded.reversed.lock().unwrap() = reversed;
+        r.set_candidate_sink(Box::new(RecordingSink(recorded)));
+
+        key(&mut r, 0x55, Some('u'), normal);
+        key(&mut r, 0x20, Some(' '), normal);
+        key(&mut r, 0x26, None, normal);
+        let category = r.u_mode.expect("u 模式").category_index();
+        assert_eq!(category, up, "reversed={reversed} 时 UP 应到第 {up} 类");
+        key(&mut r, 0x28, None, normal);
+        let category = r.u_mode.expect("u 模式").category_index();
+        assert_eq!(
+            category, down,
+            "reversed={reversed} 时 DOWN 应回第 {down} 类"
+        );
+    }
+}
+
 /// u 模式符号窗口里按退格：消费这一键并让 DLL 删光标前字符，不能把组句里的 `u` 删掉，
 /// 否则 TSF 结束组句、候选窗口提前关闭。
 #[test]

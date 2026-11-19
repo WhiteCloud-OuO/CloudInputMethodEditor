@@ -293,9 +293,11 @@ impl Router {
             return Effect::Navigated;
         }
         let vertical = self.config.layout == LayoutMode::Vertical;
+        // 反向竖排时候选从下往上排，UP / DOWN 跟着翻一下（和普通候选导航同一套判断）。
+        let reversed = vertical && self.candidates.reversed_vertical();
         let direction = match event.virtual_key {
-            0x26 if vertical => Some(-1),
-            0x28 if vertical => Some(1),
+            0x26 if vertical => Some(if reversed { 1 } else { -1 }),
+            0x28 if vertical => Some(if reversed { -1 } else { 1 }),
             0x25 if !vertical => Some(-1),
             0x27 if !vertical => Some(1),
             _ => None,
