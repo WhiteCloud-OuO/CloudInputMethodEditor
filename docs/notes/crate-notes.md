@@ -1983,7 +1983,8 @@ u 模式复用同一件资产，但走 `CandidateSink::set_symbol_aux(Option<Key
 `Space` 在符号输入里切回字母输入；字母输入里只有拼音串还停在单个 `u` 时 Space 才切符号，出现别的字母后 Space
 恢复普通选词 / 上屏。裸 `u` 时自绘候选窗**不画页码、不画翻译 Tip**，改在「额外内容」区（`CandidateView.extra`，
 协议帧的 `hints` + `hide_page`，都是 `#[serde(default)]`、DLL 忽略）显示两行提示：
-「按空格进入快速符号输入」「按Tab打开特殊字符输入器」；此时 `Tab` 走 `CandidateSink::open_special_symbols`
+「按空格进入快速符号输入」「按Tab打开特殊字符输入器」（颜色用 `Tone::Online`，即候选窗主题的 `extra`，
+和在线翻译那一块一致）；此时 `Tab` 走 `CandidateSink::open_special_symbols`
 让 UI 线程起 `SpecialSymbolsInserter.exe`（`UiCommand::OpenSpecialSymbols`）。出现别的字母后提示与 `hide_page`
 一起撤掉，恢复普通 Tip + 页码。符号输入状态仍显示「按空格退出符号输入」（支持混输时）。
 符号格子左下角始终留一行

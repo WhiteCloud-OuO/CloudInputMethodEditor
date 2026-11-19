@@ -243,11 +243,8 @@ fn hint_segments(frame: &Frame) -> Vec<TipSegment> {
     if frame.hints.is_empty() {
         return Vec::new();
     }
-    vec![TipSegment::new(
-        frame.hints.join("\n"),
-        Tone::TranslateMeta,
-        false,
-    )]
+    // 和在线翻译那一行同一个颜色（候选窗主题的 `extra`），不用 Tip 的浅色。
+    vec![TipSegment::new(frame.hints.join("\n"), Tone::Online, false)]
 }
 
 /// 窗口顶部要画的拼音行：`[general] preedit` 配成「只在行内」时为空（拼音已经在应用里）；
@@ -315,6 +312,11 @@ mod tests {
         assert_eq!(
             extra[0].text,
             "按空格进入快速符号输入\n按Tab打开特殊字符输入器"
+        );
+        assert_eq!(
+            extra[0].tone,
+            cloudime_render::Tone::Online,
+            "提示用额外内容的颜色"
         );
     }
 }
