@@ -5,7 +5,7 @@ use std::collections::HashMap;
 use cloud_ui::{Rect, TextEditStyle, Theme};
 use cloudime_ids::{Component, ComponentRole, IdsDatabase, IdsNode, parse};
 use cloudime_render::{
-    Element, FontSlot, HitShape, Region, ScrollAxis, ScrollHandle, ScrollTarget,
+    Element, FontSlot, HitShape, Region, ScrollAxis, ScrollHandle, ScrollTarget, SelfDrawingPanel,
 };
 
 use crate::config::Config;
@@ -380,15 +380,24 @@ impl Drawer {
         self.hovered = None;
         let first_row = (offset / stride).floor() as usize;
         let visible_rows = (grid.height / stride).ceil() as usize + 1;
+        // 瓦片画进一块裁剪面板：滚到一半的行只显示落在网格里的部分，不会压到
+        // 上方的分类 chip 或下方的预览行 / 底部按钮（面板坐标相对网格左上角）。
+        let mut tiles: Vec<Element> = Vec::new();
         for row in first_row..(first_row + visible_rows).min(rows) {
             for column in 0..COLUMNS {
                 let index = row * COLUMNS + column;
                 let Some(&character) = self.items.get(index) else {
                     break;
                 };
+                let local = Rect {
+                    x: (TILE + GAP) * column as f32,
+                    y: (TILE + GAP) * row as f32 - offset,
+                    width: TILE,
+                    height: TILE,
+                };
                 let tile = Rect {
-                    x: grid.x + (TILE + GAP) * column as f32,
-                    y: grid.y + (TILE + GAP) * row as f32 - offset,
+                    x: grid.x + local.x,
+                    y: grid.y + local.y,
                     width: TILE,
                     height: TILE,
                 };
@@ -401,8 +410,8 @@ impl Drawer {
                     self.preview = Some(character);
                 }
                 ui::panel(
-                    elements,
-                    tile,
+                    &mut tiles,
+                    local,
                     if hovered {
                         theme.surface_alt
                     } else {
@@ -411,48 +420,61 @@ impl Drawer {
                     8.0,
                 );
                 if hovered {
-                    elements.push(Element::Rect {
-                        x: tile.x,
-                        y: tile.y,
-                        width: tile.width,
-                        height: tile.height,
+                    tiles.push(Element::Rect {
+                        x: local.x,
+                        y: local.y,
+                        width: local.width,
+                        height: local.height,
                         radius: 8.0,
                         color: theme.accent,
                     });
                     ui::panel(
-                        elements,
+                        &mut tiles,
                         Rect {
-                            x: tile.x + 1.0,
-                            y: tile.y + 1.0,
-                            width: tile.width - 2.0,
-                            height: tile.height - 2.0,
+                            x: local.x + 1.0,
+                            y: local.y + 1.0,
+                            width: local.width - 2.0,
+                            height: local.height - 2.0,
                         },
                         theme.surface_alt,
                         7.0,
                     );
                 }
                 paint_glyph(
-                    elements,
-                    tile,
+                    &mut tiles,
+                    local,
                     character,
                     theme,
                     measure,
                     component_svgs,
                     glyphs,
                 );
-                regions.push(Region::new(
-                    format!("comp:{}:{index}", self.tab.index()),
-                    HitShape::RoundRect {
-                        x: tile.x,
-                        y: tile.y,
-                        width: tile.width,
-                        height: tile.height,
-                        radius: 8.0,
-                    },
-                    false,
-                ));
+                // 命中区裁到网格里：滚到一半的瓦片不能把点击带到预览行 / 底部按钮上。
+                if let Some(visible) = intersect(tile, grid) {
+                    regions.push(Region::new(
+                        format!("comp:{}:{index}", self.tab.index()),
+                        HitShape::RoundRect {
+                            x: visible.x,
+                            y: visible.y,
+                            width: visible.width,
+                            height: visible.height,
+                            radius: 8.0,
+                        },
+                        false,
+                    ));
+                }
             }
         }
+        elements.push(Element::SelfDrawingPanel(SelfDrawingPanel {
+            x: grid.x,
+            y: grid.y,
+            width: grid.width,
+            height: grid.height,
+            clip: true,
+            draw: tiles,
+            children: Vec::new(),
+            regions: Vec::new(),
+        }));
 
         if max > 0.0 {
             let track_height = grid.height;
@@ -672,6 +694,20 @@ fn push_character(items: &mut Vec<char>, component: &Component) {
     }
 }
 
+/// 两个矩形的交集；没有重叠返回 `None`。
+fn intersect(left: Rect, right: Rect) -> Option<Rect> {
+    let x = left.x.max(right.x);
+    let y = left.y.max(right.y);
+    let right_edge = (left.x + left.width).min(right.x + right.width);
+    let bottom_edge = (left.y + left.height).min(right.y + right.height);
+    (right_edge > x && bottom_edge > y).then_some(Rect {
+        x,
+        y,
+        width: right_edge - x,
+        height: bottom_edge - y,
+    })
+}
+
 fn paint_glyph(
     elements: &mut Vec<Element>,
     tile: Rect,
@@ -774,5 +810,36 @@ mod tests {
         assert!(matches_search('𠂇', ids.get(&'𠂇'), "20087"));
         assert!(matches_search('𠂇', ids.get(&'𠂇'), "RD"));
         assert!(!matches_search('𠂇', ids.get(&'𠂇'), "木"));
+    }
+
+    #[test]
+    fn intersect_clips_tiles_to_the_grid() {
+        let grid = Rect {
+            x: 10.0,
+            y: 100.0,
+            width: 200.0,
+            height: 300.0,
+        };
+        let partial = Rect {
+            x: 20.0,
+            y: 90.0,
+            width: 56.0,
+            height: 56.0,
+        };
+        let visible = intersect(partial, grid).unwrap();
+        assert_eq!(visible.y, 100.0);
+        assert_eq!(visible.height, 46.0);
+        assert!(
+            intersect(
+                Rect {
+                    x: 20.0,
+                    y: 60.0,
+                    width: 56.0,
+                    height: 30.0,
+                },
+                grid
+            )
+            .is_none()
+        );
     }
 }

@@ -2270,6 +2270,9 @@ cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
   十六进制（`2008E`）或 IDS 片段 / 运算符缩写（`LR`、`RD`）过滤；网格 4 列 56 点，
   支持滚轮与拖动右侧滚动条。抽屉顶端与组字画布外框顶端对齐，结构按钮行不随抽屉缩窄。
   点击 tile 走 `Composer::insert` 并自动跳槽，同时记进「最近」（去重、最多 12）。
+  网格画在一层 `Element::SelfDrawingPanel { clip: true }` 里（坐标相对网格左上角）：
+  滚到一半的行只显示落在网格内的部分，不会压住上方的分类 chip 或下方的预览行 / 底部按钮；
+  tile 命中区也按网格矩形裁过，半行瓦片点不到预览行上。
 - 部件字形：`assets/ids/component-glyphs.tsv` 存字统网 186 个难输入部件的 SVG path；
   `ids-build` 把它们写成 `ids.qj` 的 `CTEXT` 分节，`Component.svg_off/svg_len` 指过去。
   抽屉与画布优先画 `Element::Svg`，其次系统字体，最后只显示码位 `U+XXXX`；
