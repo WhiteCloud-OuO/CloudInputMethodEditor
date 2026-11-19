@@ -124,6 +124,7 @@ impl Router {
         zhiyi_threads: usize,
         prefer_gpu: bool,
     ) {
+        let mode = self.allowed_model_mode(mode);
         self.model_path = model_path;
         self.zhiyi_model = zhiyi;
         self.applied_model = mode;
@@ -138,6 +139,20 @@ impl Router {
         }
     }
 
+    /// 临时规则：本地模型只给全键拼音 / 双键拼音用；形码等其它方案先按关闭处理。
+    ///
+    /// 后续测试完形码后会撤掉这条规则（到时删掉 `RouterConfig::model_allowed` 的判断即可）。
+    fn allowed_model_mode(&self, mode: LocalModelMode) -> LocalModelMode {
+        if mode == LocalModelMode::Off || self.config.model_allowed {
+            return mode;
+        }
+        tracing::warn!(
+            requested = ?mode,
+            "当前输入方案暂不支持本地模型，按关闭处理（临时规则）"
+        );
+        LocalModelMode::Off
+    }
+
     /// 热加载：模式、知意线程数或 GPU 偏好变了才重载 / 卸载。
     pub(super) fn apply_model_config(
         &mut self,
@@ -145,6 +160,7 @@ impl Router {
         zhiyi_threads: usize,
         prefer_gpu: bool,
     ) {
+        let mode = self.allowed_model_mode(mode);
         if mode == self.applied_model
             && zhiyi_threads == self.zhiyi_threads
             && prefer_gpu == self.prefer_gpu_model
@@ -530,6 +546,29 @@ impl Router {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// 临时规则：输入方案不是全键 / 双键拼音时，本地模型按关闭处理，连加载线程都不起。
+    #[test]
+    fn non_pinyin_scheme_forces_the_model_off() {
+        use cloudime_core::Engine;
+        use cloudime_dictionary::Dictionary;
+
+        let config = crate::dispatch::RouterConfig {
+            model_allowed: false,
+            ..crate::dispatch::RouterConfig::default()
+        };
+        let mut router = crate::dispatch::Router::new(Engine::new(Dictionary::default()), config);
+        router.configure_local_model(
+            Some(PathBuf::from("model.qjm")),
+            None,
+            LocalModelMode::Basic,
+            4,
+            false,
+        );
+        assert_eq!(router.applied_model, LocalModelMode::Off);
+        assert_eq!(router.effective_model, LocalModelMode::Off);
+        assert!(router.model_loader.is_none());
+    }
 
     /// 没有模型文件时：任何档位都退到关闭，不赌「加载了但其实是空的」。
     #[test]
