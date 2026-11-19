@@ -2318,6 +2318,8 @@ cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
 - 第 7 页：切过去时 `set_no_activate(false)`，下一帧 `SetForegroundWindow` + `focus_text("ssi.input")`
   （窗口命令在画完这一帧才执行，所以激活要推迟一帧）；离开时恢复 `no_activate`。
   输入变化与样式点击都重算结果，`复制结果` 写剪贴板。
+  样式按钮的样例是 `convert("Abc", style)`（大写 A + 小写 b、c，与旧版 `Tag` 里的三个码位一致）：
+  大写 / 小写共用一个字形的样式显示成 ⒜⒝⒞ / 🅐🅑🅒 这样，有区分的显示成 Ⓐⓑⓒ / 𝐀𝐛𝐜。
   结果用**自绘 label**（`fit_text` 放不下时截断加「…」）而不是 RichEdit：RichEdit 只认配置的那一个
   字族，选「ᴀʙᴄ」小号大写字母时整行变方块；自绘走 cosmic-text 的逐字回退，和样式按钮同一套字体。
   结果只读，复制走按钮（不做选中 / 手动复制）。

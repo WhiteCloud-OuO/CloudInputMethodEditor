@@ -17,22 +17,14 @@ pub fn convert(text: &str, style: &[char]) -> String {
     out
 }
 
-/// 样式按钮上的样例：每种样式的前三个字母（A、B、C）。
+/// 样式按钮上的样例：大写 A + 小写 b、c（旧版界面就是这三种字母的映射结果）。
 pub fn label(style: &[char]) -> String {
-    style.iter().take(3).collect()
+    convert("Abc", style)
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn style(prefix: &str) -> Vec<char> {
-        let mut chars: Vec<char> = prefix.chars().take(52).collect();
-        while chars.len() < 52 {
-            chars.push('?');
-        }
-        chars
-    }
 
     #[test]
     fn maps_ascii_letters_and_keeps_everything_else() {
@@ -49,8 +41,13 @@ mod tests {
     }
 
     #[test]
-    fn labels_show_the_first_three_letters() {
-        let chars = style("𝐀𝐁𝐂𝐃");
-        assert_eq!(label(&chars), "𝐀𝐁𝐂");
+    fn labels_mix_uppercase_a_with_lowercase_bc() {
+        let chars: Vec<char> = ('\u{1D400}'..='\u{1D433}').collect();
+        assert_eq!(label(&chars), "𝐀𝐛𝐜");
+        // 大写 / 小写共用一个字形的样式：Abc 与 ABC 显示相同。
+        let mut chars: Vec<char> = "⒜⒝⒞".chars().collect();
+        chars.resize(26, '?');
+        chars.extend("⒜⒝⒞".chars().chain(std::iter::repeat('?')).take(26));
+        assert_eq!(label(&chars), "⒜⒝⒞");
     }
 }
