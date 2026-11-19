@@ -5,9 +5,7 @@
 
 pub(crate) mod chrome;
 
-use cloud_ui::{
-    AppEvent, Application, CLOSE_ACTION, Context, MouseButton, Rect, TextEditStyle, Theme,
-};
+use cloud_ui::{AppEvent, Application, CLOSE_ACTION, Context, MouseButton, Rect, Theme};
 use cloudime_render::{Document, Element, FontSlot, Region};
 
 use crate::data::{self, GridBox, Page};
@@ -576,15 +574,47 @@ impl SsiApp {
             measure,
         );
         let copy_width = 96.0;
-        let mut result_style: TextEditStyle = edit;
-        result_style.read_only = true;
         let result = Rect {
             x: inner.x,
             y: result_top + 22.0,
             width: (inner.width - copy_width - gap).max(1.0),
             height: 34.0,
         };
-        ui::text_edit(elements, result, "ssi.result", &self.result, &result_style);
+        // 结果用自绘 label：RichEdit 只认配置的那一个字族，小号大写字母（ᴀʙᴄ）会变方块；
+        // 自绘走 cosmic-text 的逐字回退，和上面的样式按钮同一套字体。结果只读，复制走右边按钮。
+        ui::panel(elements, result, theme.border, 6.0);
+        ui::panel(
+            elements,
+            Rect {
+                x: result.x + 1.0,
+                y: result.y + 1.0,
+                width: (result.width - 2.0).max(1.0),
+                height: (result.height - 2.0).max(1.0),
+            },
+            theme.background,
+            5.0,
+        );
+        let mut result_style = theme.label();
+        result_style.size = 14.0;
+        let result_text = fit_text(
+            &self.result,
+            (result.width - 16.0).max(1.0),
+            result_style.slot,
+            result_style.size,
+            measure,
+        );
+        ui::label(
+            elements,
+            Rect {
+                x: result.x + 8.0,
+                y: result.y,
+                width: (result.width - 16.0).max(1.0),
+                height: result.height,
+            },
+            &result_text,
+            &result_style,
+            measure,
+        );
         ui::button(
             elements,
             regions,
@@ -652,6 +682,31 @@ fn is_box_drawing(text: &str) -> bool {
     )
 }
 
+/// 结果行放不下时截断加「…」；复制按钮仍然复制完整结果。
+fn fit_text(
+    text: &str,
+    max_width: f32,
+    slot: FontSlot,
+    size: f32,
+    measure: &mut dyn FnMut(&str, FontSlot, f32) -> (f32, f32),
+) -> String {
+    if text.is_empty() || measure(text, slot, size).0 <= max_width {
+        return text.to_owned();
+    }
+    let characters: Vec<char> = text.chars().collect();
+    for count in (0..characters.len()).rev() {
+        let candidate: String = characters[..count]
+            .iter()
+            .copied()
+            .chain(std::iter::once('…'))
+            .collect();
+        if measure(&candidate, slot, size).0 <= max_width {
+            return candidate;
+        }
+    }
+    "…".to_owned()
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -686,5 +741,24 @@ mod tests {
         assert_eq!(app.output_text("か"), "が");
         app.kana = Variant::SemiVoiced;
         assert_eq!(app.output_text("は"), "ぱ");
+    }
+
+    #[test]
+    fn fit_text_truncates_with_an_ellipsis() {
+        // 每个字符按 10 点宽算。
+        let mut measure =
+            |text: &str, _slot: FontSlot, _size: f32| (text.chars().count() as f32 * 10.0, 16.0);
+        assert_eq!(
+            fit_text("abc", 100.0, FontSlot::Candidate, 14.0, &mut measure),
+            "abc"
+        );
+        assert_eq!(
+            fit_text("abcdef", 55.0, FontSlot::Candidate, 14.0, &mut measure),
+            "abcd…"
+        );
+        assert_eq!(
+            fit_text("ab", 5.0, FontSlot::Candidate, 14.0, &mut measure),
+            "…"
+        );
     }
 }

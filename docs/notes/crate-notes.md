@@ -2318,6 +2318,9 @@ cargo run --release -p cloudime-ids-build -- --derive --ids assets/ids/IDS.TXT `
 - 第 7 页：切过去时 `set_no_activate(false)`，下一帧 `SetForegroundWindow` + `focus_text("ssi.input")`
   （窗口命令在画完这一帧才执行，所以激活要推迟一帧）；离开时恢复 `no_activate`。
   输入变化与样式点击都重算结果，`复制结果` 写剪贴板。
+  结果用**自绘 label**（`fit_text` 放不下时截断加「…」）而不是 RichEdit：RichEdit 只认配置的那一个
+  字族，选「ᴀʙᴄ」小号大写字母时整行变方块；自绘走 cosmic-text 的逐字回退，和样式按钮同一套字体。
+  结果只读，复制走按钮（不做选中 / 手动复制）。
 - 字体：`candidate_font` 用「Segoe UI Symbol」——符号在它是单色字形，落到 Segoe UI Emoji 会变成
   彩色（☑ 变蓝框）；缺字由 cosmic-text 回退到中文 / 假名字体（`symbol_font` / `japanese_font` 只是
   补充字体）。花体样式的 🅐 / 𝔄 这类字符也能靠回退画出来。
