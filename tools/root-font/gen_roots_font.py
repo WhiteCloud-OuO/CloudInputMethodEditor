@@ -35,6 +35,7 @@ import pathops
 from fontTools.fontBuilder import FontBuilder
 from fontTools.pens.boundsPen import BoundsPen
 from fontTools.pens.recordingPen import RecordingPen
+from fontTools.pens.transformPen import TransformPen
 from fontTools.pens.ttGlyphPen import TTGlyphPen
 from fontTools.ttLib import TTFont
 
@@ -60,14 +61,18 @@ SHAPES = {
     "豕": {"erase": [((-40, 753), (980, 753), 36)]},
     # 羊字底：羊 去掉上面两点（一条横贯的胶囊，两头的圆在字外，切口是直的）
     "羊": {"erase": [((-100, 760), (1100, 760), 95)]},
-    # 舟字底：舟 去掉顶上那一撇
-    "舟": {"erase": [((500, 880), (455, 745), 48)]},
+    # 舟字底：舟 去掉顶上那一撇（大胶囊擦掉，再用一条横贯的薄胶囊把撇根削平，顶横不会缺）
+    "舟": {
+        "erase": [((500, 880), (455, 745), 48), ((-60, 748), (1060, 748), 26)]
+    },
     # 丘 去掉底下一横
     "丘": {"erase": [((20, 13), (980, 13), 42)]},
     # 牛 去掉中间那一竖（上下各擦一段，别把两条横擦断）
     "牛": {"erase": [((511, 560), (511, 360), 40), ((511, 250), (511, -90), 40)]},
     # 兰 去掉下面两横（它们是独立的两段轮廓）
     "兰": {"drop": lambda b: b[3] - b[1] < 120 and b[2] - b[0] > 500},
+    # 流 的右下角（川字底，右竖带钩）：从整字里裁下来，放大到字根大小并居中
+    "流": {"keep": (355, -120, 1000, 385), "fit": (640, 500, 340)},
     # 氏无七：切掉中间一横（左侧接在竖画上，用矩形切），斜钩用圆头擦
     "氏": {
         "cut": [(248, 375, 1010, 455)],
@@ -204,7 +209,43 @@ def carve(path, rule, bounds_pen_factory):
         path = pathops.op(path, eraser, pathops.PathOp.DIFFERENCE, fix_winding=True)
     for box in rule.get("cut", []):
         path = pathops.op(path, rectangle(*box), pathops.PathOp.DIFFERENCE, fix_winding=True)
-    return drop_specks(path, bounds_pen_factory)
+    if "keep" in rule:
+        path = pathops.op(path, rectangle(*rule["keep"]), pathops.PathOp.INTERSECTION, fix_winding=True)
+    path = drop_specks(path, bounds_pen_factory)
+    if rule.get("center_x"):
+        path = center_horizontally(path, bounds_pen_factory)
+    if "fit" in rule:
+        path = fit_to(path, *rule["fit"], bounds_pen_factory)
+    return path
+
+
+def fit_to(path, target_height, cx, cy, bounds_pen_factory):
+    """把字形缩放到指定高度、并把中心挪到 (cx, cy)（从整字里裁出来的部件用）。"""
+    pen = bounds_pen_factory()
+    path.draw(pen)
+    if not pen.bounds:
+        return path
+    x0, y0, x1, y1 = pen.bounds
+    scale = target_height / (y1 - y0)
+    tx = cx - scale * (x0 + x1) / 2
+    ty = cy - scale * (y0 + y1) / 2
+    moved = pathops.Path()
+    transform = TransformPen(moved.getPen(), (scale, 0, 0, scale, tx, ty))
+    path.draw(transform)
+    return moved
+
+
+def center_horizontally(path, bounds_pen_factory):
+    """把字形横向挪到 em 框中间（从整字里裁出来的部件要用）。"""
+    pen = bounds_pen_factory()
+    path.draw(pen)
+    if not pen.bounds:
+        return path
+    shift = 500 - (pen.bounds[0] + pen.bounds[2]) / 2
+    moved = pathops.Path()
+    transform = TransformPen(moved.getPen(), (1, 0, 0, 1, shift, 0))
+    path.draw(transform)
+    return moved
 
 
 def drop_specks(path, bounds_pen_factory):
