@@ -169,8 +169,9 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
 `[Shape] RootsPua`（缺省 `roots_pua.tsv`，一行「键<TAB>码位…」，只认 `E000`–`F8FF`）读不出来、或没有字体
 就退回 `roots.tsv` 的普通汉字。仓库 / 安装包里的 `wubi/zigen.ttf` 是**霞鹜文楷**（OFL 1.1）的子集派生字体
 （25 键代表性字根、字族「云朵字根」、`OFL.txt` 同行分发），生成器 `tools/root-font/gen_roots_font.py`
-还会用布尔差集把 `礻` `衤`（去点）、`鱼`（去尾横）、`豕`（去顶横）、`母`（去两点与中间横）削成理论字形
-（脚本里那张 `SHAPES` 表）；`--preview` 出对照图。来源 / 许可不明的第三方字根字体（`HeiTiZiGen.ttf`）
+还会用布尔差集把 `礻` `衤`（去点）、`鱼`（去尾横）、`豕`（去顶横）、`羊`（去两点）、`氏`（无七）、
+`母`（只留外框带钩）削成理论字形（脚本里那张 `SHAPES` 表，改哪一刀都在那儿）；`--preview` 出对照图。
+`コ`（左框）与 `Ⅱ`（两竖）直接用字符，不需要削。来源 / 许可不明的第三方字根字体（`HeiTiZiGen.ttf`）
 仍然不入库，由用户自己放进方案目录。Server 的 `key_map_layout_for(input_schemes)` 按方案选版面，
 `RouterConfig` 也按方案目录读 `key_map_reference` / `key_map_hotkey`（形码要先声明 `KeyMap`）。
 `Engine::set_shape_mixture_input` 开着时 `query_shape` 在
