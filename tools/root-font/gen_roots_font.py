@@ -27,6 +27,7 @@
 
 import argparse
 import io
+import math
 import os
 import sys
 
@@ -41,31 +42,45 @@ PUA_BASE = 0xE000
 PUA_LAST = 0xF8FF
 LICENSE_NOTE = "This Font Software is licensed under the SIL Open Font License, Version 1.1."
 
-# 五笔字根里有几个「不是整字」的字形，得在源字体字形上削两刀（坐标是字体单位，y 向上、原点在基线）：
-#   drop：去掉与判断函数匹配的独立笔画（点之类单独成段的笔画）
-#   cut： 切掉一块矩形（横画之类跟主体连在一起的）
-# 坐标是按**更纱黑体 SC Regular**（sarasa-gothic-sc-regular.ttf）量的；换源字体要重新量一遍。
+# 五笔字根里有几个「不是整字」的字形，得在源字体字形上擦掉多余的笔画（坐标是字体单位，y 向上、原点在基线）：
+#   drop： 去掉与判断函数匹配的独立笔画（点之类单独成段的笔画）
+#   erase：圆头擦除，`(起点, 终点, 半径)` 是一条「胶囊」：沿线段擦一条两头半圆的槽，
+#          切口是圆的，斜笔、弯笔不会像矩形那样留下直角和细碎残条；弯曲的笔画用几段折线接起来擦。
+#   cut：  矩形切，只在「整块区域夹在两条竖画之间」这种地方用（圆头反而会啃出尖角），比如 母 的中间横。
+# 坐标是按**更纱黑体 SC Regular**（sarasa-gothic-sc-regular.ttf）量的，换源字体要重新量一遍。
 # 见 docs/design/shape-code.md §3.3，口诀里的「勺缺点 / 无尾鱼 / 家衣底 / 摘礻衤 / 慈母无心 / 羊字底 / 氏无七」。
 SHAPES = {
-    # 礻 上面那个点（更纱的礻 是一整段轮廓，只能切）
-    "礻": {"cut": [(180, 690, 420, 900)]},
+    # 礻 上面那个点（更纱的礻 是一整段轮廓，只能擦）
+    "礻": {"erase": [((375, 712), (258, 820), 44)]},
     # 衤 上面那个点（独立的点）
     "衤": {"drop": lambda b: b[3] > 600 and b[2] - b[0] < 300},
     # 无尾鱼：最下面那条横
     "鱼": {"drop": lambda b: b[3] - b[1] < 130 and b[2] - b[0] > 600},
     # 家衣底：豕 顶上那一横
-    "豕": {"cut": [(-120, 715, 1120, 900)]},
-    # 羊字底：羊 去掉上面两点
-    "羊": {"cut": [(-120, 668, 1120, 900)]},
-    # 氏无七：去掉中间一横和右下斜钩，只留撇 + 竖提
+    "豕": {"erase": [((-40, 753), (980, 753), 36)]},
+    # 羊字底：羊 去掉上面两点（一条横贯的胶囊，两头的圆在字外，切口是直的）
+    "羊": {"erase": [((-100, 760), (1100, 760), 95)]},
+    # 氏无七：切掉中间一横（左侧接在竖画上，用矩形切），斜钩用圆头擦
     "氏": {
-        "cut": [
-            (248, 375, 1010, 455),
-            (532, -120, 1010, 380),
-            (520, 455, 640, 680),
+        "cut": [(248, 375, 1010, 455)],
+        "erase": [
+            ((565, 500), (565, 680), 38),
+            ((576, 490), (594, 350), 45),
+            ((594, 350), (617, 250), 45),
+            ((617, 250), (640, 190), 45),
+            ((640, 190), (660, 140), 45),
+            ((660, 140), (680, 100), 45),
+            ((680, 100), (700, 60), 45),
+            ((700, 60), (725, 25), 45),
+            ((725, 25), (760, -5), 45),
+            ((760, -5), (800, -32), 45),
+            ((800, -32), (850, -45), 45),
+            ((850, -45), (890, -20), 45),
+            ((890, -20), (920, 40), 45),
+            ((920, 40), (935, 190), 45),
         ]
     },
-    # 慈母无心：去掉两个点，再切掉中间那一横（三段避开左右两竖）
+    # 慈母无心：去掉两个点，再切掉中间那一横（竖画的接缝用矩形切，圆头在这种地方反而会啃出星形）
     "母": {
         "drop": lambda b: b[2] - b[0] < 300 and b[3] - b[1] < 250,
         "cut": [
@@ -141,6 +156,29 @@ def rectangle(x0, y0, x1, y1):
     return path
 
 
+def capsule(start, end, radius, steps=12):
+    """圆头擦除用的「胶囊」：沿 start→end 的一条线段，两头各一个半圆。
+
+    用折线逼近半圆（12 段，1000 单位的 em 里误差 0.5 单位以内），布尔运算里够用。
+    """
+    (x0, y0), (x1, y1) = start, end
+    angle = math.atan2(y1 - y0, x1 - x0)
+    points = []
+    for index in range(steps + 1):
+        theta = angle - math.pi / 2 + math.pi * index / steps
+        points.append((x1 + radius * math.cos(theta), y1 + radius * math.sin(theta)))
+    for index in range(steps + 1):
+        theta = angle + math.pi / 2 + math.pi * index / steps
+        points.append((x0 + radius * math.cos(theta), y0 + radius * math.sin(theta)))
+    path = pathops.Path()
+    pen = path.getPen()
+    pen.moveTo(points[0])
+    for point in points[1:]:
+        pen.lineTo(point)
+    pen.closePath()
+    return path
+
+
 def carve(path, rule, bounds_pen_factory):
     if "drop" in rule:
         for part in path_parts(path):
@@ -153,6 +191,9 @@ def carve(path, rule, bounds_pen_factory):
                 for op, args in part:
                     getattr(part_pen, op)(*args)
                 path = pathops.op(path, part_path, pathops.PathOp.DIFFERENCE, fix_winding=True)
+    for start, end, radius in rule.get("erase", []):
+        eraser = capsule(start, end, radius)
+        path = pathops.op(path, eraser, pathops.PathOp.DIFFERENCE, fix_winding=True)
     for box in rule.get("cut", []):
         path = pathops.op(path, rectangle(*box), pathops.PathOp.DIFFERENCE, fix_winding=True)
     return path
