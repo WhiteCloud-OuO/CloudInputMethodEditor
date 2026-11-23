@@ -403,10 +403,10 @@ fn load_roots(source: &str, roots: &mut BTreeMap<char, Vec<String>>) -> Vec<Stri
     problems
 }
 
-/// 五笔的键位映射参考：三排键盘，每格是这个键上的代表性字根（`z` 标成「通配」）。
+/// 五笔的键位映射参考：三排键盘，每格是这个键上的字根（`z` 标成「通配」）。
 ///
 /// 字根默认用**普通汉字**表示；方案自带字根字体时传 `pua = true`，渲染器换成字根字族。
-/// 每格最多 2 行 × 4 个字根（格子宽度有限，渲染器只在换行处切）。
+/// 每格最多 3 行 × 4 个字根（格子宽度有限，渲染器只在换行处切）。
 fn shape_key_map_layout(roots: &BTreeMap<char, Vec<String>>, pua: bool) -> KeyMapLayout {
     let rows = KEYBOARD_ROWS
         .iter()
@@ -427,7 +427,7 @@ fn shape_key_map_layout(roots: &BTreeMap<char, Vec<String>>, pua: bool) -> KeyMa
                             .map(|roots| {
                                 roots
                                     .chunks(4)
-                                    .take(2)
+                                    .take(3)
                                     .map(|chunk| chunk.concat())
                                     .collect::<Vec<_>>()
                                     .join("\n")
@@ -998,6 +998,20 @@ mod tests {
         // z 是通配键
         assert_eq!(layout.rows[2][0].key, "Z");
         assert_eq!(layout.rows[2][0].mapping, "通配");
+
+        // 一个字根超过 8 个时排成 3 行（每行 4 个）
+        let mut many = BTreeMap::new();
+        many.insert(
+            'g',
+            "王 龶 一 五 戋 丰 土 士 二"
+                .split(' ')
+                .map(str::to_owned)
+                .collect(),
+        );
+        let layout = shape_key_map_layout(&many, false);
+        let mapping = &layout.rows[1][4].mapping;
+        assert_eq!(mapping.lines().count(), 3, "{mapping:?}");
+        assert_eq!(mapping.lines().last(), Some("二"));
         let _ = std::fs::remove_dir_all(&root);
     }
 
