@@ -1035,6 +1035,7 @@ fn to_render_layout(layout: &input_schemes::KeyMapLayout) -> cloudime_render::Ke
         fallback_family: layout.fallback_family.clone(),
         fallback_first: layout.fallback_first,
         roots: layout.roots,
+        roots_pua: layout.roots_pua,
     }
 }
 

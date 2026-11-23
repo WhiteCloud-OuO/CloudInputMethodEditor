@@ -23,6 +23,9 @@ pub struct RenderSettings {
     /// u 模式日文假名的补充字体（主字体缺字时用）。
     pub japanese_font: String,
 
+    /// 五笔字根字体（字族名 + TTF 路径）：文件在才填；`None` = 没有字根字体，字根用普通汉字。
+    pub root_font: Option<(String, std::path::PathBuf)>,
+
     /// 候选窗口的最小宽度（物理像素）：竖排、横排都生效。
     pub min_width_pixels: f32,
 
@@ -60,6 +63,7 @@ impl Default for RenderSettings {
             translate_font: (String::new(), 11.0),
             symbol_font: String::new(),
             japanese_font: String::new(),
+            root_font: None,
             min_width_pixels: 0.0,
             item_number_style: ItemNumberStyle::default(),
             scale: None,

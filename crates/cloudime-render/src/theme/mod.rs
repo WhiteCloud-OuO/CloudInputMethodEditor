@@ -33,6 +33,9 @@ pub struct Theme {
     /// 翻译 Tip 的字族名；`None` 用系统界面字体。
     pub translate_family: Option<String>,
 
+    /// 五笔字根（PUA）用的字族名；没有字根字体时为 `None`，字根退回普通汉字字族。
+    pub root_family: Option<String>,
+
     /// 配色。
     pub colors: Palette,
 
@@ -78,6 +81,7 @@ impl Theme {
             text_family: None,
             index_family: None,
             translate_family: None,
+            root_family: None,
             colors: Palette::new(),
             padding: 8.0,
             row_padding: 4.0,

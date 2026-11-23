@@ -93,6 +93,7 @@ impl UMode {
             fallback_family: None,
             fallback_first: self.category() == SymbolCategory::Kana,
             roots: false,
+            roots_pua: false,
         }
     }
 

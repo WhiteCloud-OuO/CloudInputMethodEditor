@@ -66,6 +66,9 @@ KeyMap = true
 | `[Shape] Table` | 否 | 字符串 | 码表文件，相对方案目录；缺省 `table.tsv` |
 | `[Shape] LevelOne` | 否 | 字符串 | 一级简码表，相对方案目录；缺省 `level1.tsv` |
 | `[Shape] Roots` | 否 | 字符串 | 字根表（键位映射参考用），相对方案目录；缺省 `roots.tsv` |
+| `[Shape] RootsPua` | 否 | 字符串 | PUA 字根表（配字根字体用），相对方案目录；缺省 `roots_pua.tsv` |
+| `[Shape] RootFont` | 否 | 字符串 | 可选的字根字体文件，相对方案目录；不写 / 文件不在 = 没有字根字体 |
+| `[Shape] RootFontFamily` | 否 | 字符串 | 字根字体的字族名；缺省 `云朵字根`。只在该字体里找，不装系统字体 |
 | `[Shape] MaxCodeLength` | 否 | 整数 | 最长编码长度，1–8；缺省 4（五笔 4 键） |
 | `[Options] MixtureInput` | 否 | bool | 支持「英文混输」这一项（五笔特有；没写 = 不支持） |
 | `[Options] UniqueCommit` | 否 | bool | 支持「四码唯一时自动上屏」 |
@@ -125,10 +128,34 @@ g	王 一 五 戋 丰
 f	土 士 二 干 十 寸 雨
 ```
 
-- 用普通汉字表示，不需要 `HeiTiZiGen.ttf` 那套 PUA 字根字体；
+- 用普通汉字表示，**不需要**字根字体；想让字根换一套专用字形时见 §3.4；
 - 键位映射参考的三排键盘里，每格左上角是键、下面**最多 2 行、每行最多 4 个字根**（字根之间不空格）；
 - `z` 固定显示「通配」；
 - 文件可由用户直接改；改完在设置页点「应用方案」或重启输入法服务。
+
+### 3.4 可选字根字体（PUA）
+
+字根用普通汉字画时，字形受界面字体影响，也装不下超过一个字的各种连写笔画。想固定字形时，
+方案可以自带一份**只给字根用**的字体：
+
+```toml
+[Shape]
+Roots = "roots.tsv"
+RootsPua = "roots_pua.tsv"
+RootFont = "zigen.otf"
+RootFontFamily = "云朵字根"
+```
+
+- `roots_pua.tsv` 一行 `键<TAB>码位 码位…`（十六进制，`E001` 或 `U+E001`，只认 BMP 私用区 `E000`–`F8FF`），
+  顺序与 `roots.tsv` 对应；
+- 字体按文件**私有加载**（`FontLibrary::with_fonts_and_extras`），不装进系统、不改注册表；只给字根那一层换字族，
+  键、拼音、候选词都不受影响；
+- 回退规则：没写 `RootFont`、文件不在、字体解析失败（字族名对不上）、或 `roots_pua.tsv` 一个能用的键都没有
+  → 退回 `roots.tsv` 的普通汉字，不会出现空白格；
+- **仓库与安装包不分发第三方字根字体**：`HeiTiZiGen.ttf` 这类来源 / 许可不明的字体由用户自己放进方案目录
+  （`InputSchemes/ShapeCode/<方案>/`）。自带字体时必须自己带许可证，并确认允许随方案分发；
+- 想用开源字体（思源黑体 / 思源宋体，SIL OFL 1.1）现做一份，见 `tools/root-font/gen_roots_font.py`：
+  它按 `roots.tsv` 的顺序把字形整到 PUA 码位、重写 `cmap` / `name` 表、同时写出 `roots_pua.tsv`。
 
 ## 4. 查询
 

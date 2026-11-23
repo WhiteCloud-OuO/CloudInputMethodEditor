@@ -83,6 +83,18 @@ impl Painter {
             }
             push_font(&mut extras, family);
         }
+        // 五笔字根字体：按文件私有加载（不装系统字体），只给 PUA 字根用。
+        let root_family = settings.root_font.as_ref().and_then(|(family, path)| {
+            if path.is_file() {
+                extras.push(UiFont {
+                    family: family.clone(),
+                    files: vec![path.clone()],
+                });
+                Some(family.clone())
+            } else {
+                None
+            }
+        });
         let library = if fonts.is_empty() && extras.is_empty() {
             FontLibrary::system(LOCALE)
         } else {
@@ -95,6 +107,13 @@ impl Painter {
                 return None;
             }
         };
+        // 字体文件在、但 fontdb 没读到这个字族（解析失败 / 名字对不上）时不要用它，字根继续走普通汉字。
+        let root_family = root_family.filter(|family| {
+            library
+                .families()
+                .iter()
+                .any(|name| name.eq_ignore_ascii_case(family))
+        });
         tracing::info!(
             elapsed = ?started.elapsed(),
             font = library.ui_family(),
@@ -118,6 +137,7 @@ impl Painter {
         );
         theme.min_width_pixels = settings.min_width_pixels;
         theme.max_cell_width = settings.max_cell_width;
+        theme.root_family = root_family;
         apply_theme_colors(&mut theme, &settings.theme);
         let panel = Shadow::panel();
         Some(Self {
@@ -501,6 +521,7 @@ mod tests {
             translate_font: (String::new(), 11.0),
             symbol_font: String::new(),
             japanese_font: String::new(),
+            root_font: None,
             min_width_pixels: 0.0,
             item_number_style: ItemNumberStyle::default(),
             scale: None,

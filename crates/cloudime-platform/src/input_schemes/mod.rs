@@ -17,12 +17,12 @@ pub use key_map::{
     KeyCap, KeyMapHotkey, KeyMapKey, KeyMapLayout, KeyMapModifiers, KeyMapReference,
 };
 pub use shape_code::{
-    DEFAULT_LEVEL_ONE, DEFAULT_MAX_CODE_LENGTH, DEFAULT_ROOTS, DEFAULT_TABLE, SCHEME_FILE,
-    ShapeCapabilities, ShapeEntry, ShapeOptions, ShapeScheme, ShapeSchemeError,
-    current_capabilities as current_shape_capabilities,
+    DEFAULT_LEVEL_ONE, DEFAULT_MAX_CODE_LENGTH, DEFAULT_ROOT_FONT_FAMILY, DEFAULT_ROOTS,
+    DEFAULT_ROOTS_PUA, DEFAULT_TABLE, SCHEME_FILE, ShapeCapabilities, ShapeEntry, ShapeOptions,
+    ShapeScheme, ShapeSchemeError, current_capabilities as current_shape_capabilities,
     current_key_map_layout as current_shape_key_map_layout,
-    current_options as current_shape_options, current_table as current_shape_table,
-    list as list_shapes, read_options as read_shape_options,
+    current_options as current_shape_options, current_root_font as current_shape_root_font,
+    current_table as current_shape_table, list as list_shapes, read_options as read_shape_options,
     resolve_current as resolve_shape_current, set_current as set_shape_current,
     set_key_map_hotkey as set_shape_key_map_hotkey,
     set_key_map_reference as set_shape_key_map_reference, set_option as set_shape_option,

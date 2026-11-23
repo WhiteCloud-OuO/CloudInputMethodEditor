@@ -136,6 +136,7 @@ impl DoubleKeysScheme {
             fallback_family: None,
             fallback_first: false,
             roots: false,
+            roots_pua: false,
         }
     }
 

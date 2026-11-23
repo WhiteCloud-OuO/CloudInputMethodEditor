@@ -48,6 +48,9 @@ pub struct KeyMapLayout {
 
     /// 画的是**字根**（五笔键位映射参考）：字号小一点、从键位下面开始排，不按韵母首字母上色。
     pub roots: bool,
+
+    /// 字根是 PUA 码位、要用字根字体渲染（没有字根字体时用普通汉字字根，这个为 `false`）。
+    pub roots_pua: bool,
 }
 
 /// 什么时候显示「键位映射参考」（`use_input_scheme.cfg` 的 `key_map_reference`）。

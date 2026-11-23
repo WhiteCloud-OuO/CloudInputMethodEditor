@@ -34,6 +34,12 @@ pub const DEFAULT_LEVEL_ONE: &str = "level1.tsv";
 /// 方案文件里没写 `Roots` 时用的字根表文件名（键位映射参考用）。
 pub const DEFAULT_ROOTS: &str = "roots.tsv";
 
+/// 方案文件里没写 `RootsPua` 时用的 PUA 字根表文件名（有字根字体时用）。
+pub const DEFAULT_ROOTS_PUA: &str = "roots_pua.tsv";
+
+/// 方案文件里没写 `RootFontFamily` 时的字族名（`tools/root-font/gen_roots_font.py` 生成的字根字体用它）。
+pub const DEFAULT_ROOT_FONT_FAMILY: &str = "云朵字根";
+
 /// 方案文件里没写 `MaxCodeLength` 时的最长编码长度（五笔 4 键）。
 pub const DEFAULT_MAX_CODE_LENGTH: usize = 4;
 
@@ -399,8 +405,9 @@ fn load_roots(source: &str, roots: &mut BTreeMap<char, Vec<String>>) -> Vec<Stri
 
 /// 五笔的键位映射参考：三排键盘，每格是这个键上的代表性字根（`z` 标成「通配」）。
 ///
-/// 字根用**普通汉字**表示，不需要字根字体；每行最多 3 个字根（格子宽度有限，渲染器只在换行处切）。
-fn shape_key_map_layout(roots: &BTreeMap<char, Vec<String>>) -> KeyMapLayout {
+/// 字根默认用**普通汉字**表示；方案自带字根字体时传 `pua = true`，渲染器换成字根字族。
+/// 每格最多 2 行 × 4 个字根（格子宽度有限，渲染器只在换行处切）。
+fn shape_key_map_layout(roots: &BTreeMap<char, Vec<String>>, pua: bool) -> KeyMapLayout {
     let rows = KEYBOARD_ROWS
         .iter()
         .enumerate()
@@ -440,10 +447,87 @@ fn shape_key_map_layout(roots: &BTreeMap<char, Vec<String>>) -> KeyMapLayout {
         fallback_family: None,
         fallback_first: false,
         roots: true,
+        roots_pua: pua,
     }
 }
 
+/// 读 PUA 字根表：一行 `键<TAB>码位 码位…`（`E001` 或 `U+E001`），转成字符。
+fn load_pua_roots(source: &str, roots: &mut BTreeMap<char, Vec<String>>) -> Vec<String> {
+    let mut problems = Vec::new();
+    for (index, raw) in source.lines().enumerate() {
+        let line = raw.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, rest)) = line.split_once('\t') else {
+            problems.push(format!("第 {} 行：缺少制表符，已跳过", index + 1));
+            continue;
+        };
+        let mut chars = key.trim().chars();
+        let (Some(key), None) = (chars.next(), chars.next()) else {
+            problems.push(format!("第 {} 行：键要正好一个字符，已跳过", index + 1));
+            continue;
+        };
+        if !key.is_ascii_lowercase() {
+            problems.push(format!(
+                "第 {} 行：键 `{key}` 只认小写 a–z，已跳过",
+                index + 1
+            ));
+            continue;
+        }
+        let mut at_key = Vec::new();
+        for token in rest.split_whitespace() {
+            let code = token.trim_start_matches("U+").trim_start_matches("u+");
+            match u32::from_str_radix(code, 16).ok().and_then(char::from_u32) {
+                Some(root) if (0xE000..=0xF8FF).contains(&(root as u32)) => {
+                    at_key.push(root.to_string());
+                }
+                _ => problems.push(format!(
+                    "第 {} 行：`{token}` 不是 BMP 私用区码位，已跳过",
+                    index + 1
+                )),
+            }
+        }
+        if at_key.is_empty() {
+            problems.push(format!("第 {} 行：没有可用字根，已跳过", index + 1));
+            continue;
+        }
+        roots.insert(key, at_key);
+    }
+    problems
+}
+
+/// 方案目录里的字根字体（`[Shape] RootFont` + `RootFontFamily`）：文件存在才返回。
+///
+/// 字族名必须和字体 `name` 表里的字族一致（字体是以「我们给的名字」注册进字体库的），
+/// 对不上时 `FontLibrary` 会在日志里报「指定字族没有找到字体」，字根退回普通汉字。
+fn root_font_in(scheme_dir: &Path, root: &toml::Value) -> Option<(String, PathBuf)> {
+    if !capabilities(root).key_map {
+        return None;
+    }
+    let shape = section(root, "Shape").ok()?;
+    let font_name = optional(shape, "RootFont").filter(|value| !value.trim().is_empty())?;
+    let family = optional(shape, "RootFontFamily")
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_ROOT_FONT_FAMILY.to_owned());
+    let path = scheme_dir.join(font_name.trim());
+    path.is_file().then_some((family, path))
+}
+
+/// 当前方案的字根字体（见 [`root_font_in`]）。
+pub fn current_root_font() -> Option<(String, PathBuf)> {
+    let dir = shape_code_dir()?;
+    let id = current_scheme_id(&dir)?;
+    let scheme_dir = dir.join(id);
+    let text = std::fs::read_to_string(scheme_dir.join(SCHEME_FILE)).ok()?;
+    let root: toml::Value = toml::from_str(&text).ok()?;
+    root_font_in(&scheme_dir, &root)
+}
+
 /// 当前形码方案的键位映射参考（字根）。方案没声明 `KeyMap` 或没字根表就是 `None`。
+///
+/// 有 `[Shape] RootFont` 且字体文件在、`RootsPua` 也读得出来时用 PUA 字根（配合字根字体）；
+/// 否则退回普通汉字的 `Roots`。
 pub fn current_key_map_layout() -> Option<KeyMapLayout> {
     let dir = shape_code_dir()?;
     let id = current_scheme_id(&dir)?;
@@ -454,6 +538,27 @@ pub fn current_key_map_layout() -> Option<KeyMapLayout> {
         return None;
     }
     let shape = section(&root, "Shape").ok();
+    if root_font_in(&scheme_dir, &root).is_some() {
+        let pua_name = shape
+            .and_then(|shape| optional(shape, "RootsPua"))
+            .filter(|value| !value.trim().is_empty())
+            .unwrap_or_else(|| DEFAULT_ROOTS_PUA.to_owned());
+        if let Ok(source) = std::fs::read_to_string(scheme_dir.join(pua_name.trim())) {
+            let mut roots = BTreeMap::new();
+            let problems = load_pua_roots(&source, &mut roots);
+            if !problems.is_empty() {
+                tracing::warn!(
+                    path = %scheme_dir.join(pua_name.trim()).display(),
+                    skipped = problems.len(),
+                    first = %problems[0],
+                    "PUA 字根表有格式不对的行，已跳过"
+                );
+            }
+            if !roots.is_empty() {
+                return Some(shape_key_map_layout(&roots, true));
+            }
+        }
+    }
     let roots_name = shape
         .and_then(|shape| optional(shape, "Roots"))
         .filter(|value| !value.trim().is_empty())
@@ -464,7 +569,7 @@ pub fn current_key_map_layout() -> Option<KeyMapLayout> {
     if roots.is_empty() {
         return None;
     }
-    Some(shape_key_map_layout(&roots))
+    Some(shape_key_map_layout(&roots, false))
 }
 
 /// 当前方案 id：`.cfg` 指得到就用它，否则目录名升序第一个。
@@ -884,7 +989,7 @@ mod tests {
             Some("王 一 五 戋")
         );
 
-        let layout = shape_key_map_layout(&scheme.roots);
+        let layout = shape_key_map_layout(&scheme.roots, false);
         assert_eq!(layout.rows.len(), 3);
         assert!(layout.zero_initials.is_empty(), "五笔没有零声母表");
         // 第二排 asdfghjkl：g 在第五格
@@ -894,6 +999,27 @@ mod tests {
         assert_eq!(layout.rows[2][0].key, "Z");
         assert_eq!(layout.rows[2][0].mapping, "通配");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn pua_roots_are_read_as_code_points_and_drawn_with_the_root_font() {
+        let mut roots = BTreeMap::new();
+        let problems = load_pua_roots("g\tE001 E000 U+E005\nf\toops\n", &mut roots);
+        assert_eq!(
+            roots.get(&'g'),
+            Some(&vec![
+                '\u{e001}'.to_string(),
+                '\u{e000}'.to_string(),
+                '\u{e005}'.to_string()
+            ])
+        );
+        // `f` 那行没有可用码位，整行跳过并报出来
+        assert!(!problems.is_empty(), "{problems:?}");
+        assert!(!roots.contains_key(&'f'));
+
+        let layout = shape_key_map_layout(&roots, true);
+        assert!(layout.roots_pua, "有字根字体时渲染器要换字族");
+        assert_eq!(layout.rows[1][4].mapping, "\u{e001}\u{e000}\u{e005}");
     }
 
     #[test]

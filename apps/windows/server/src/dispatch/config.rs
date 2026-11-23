@@ -236,6 +236,11 @@ impl RouterConfig {
             translate_font: self.translate_font.clone(),
             symbol_font: self.symbol_font.clone(),
             japanese_font: self.japanese_font.clone(),
+            root_font: if self.input_scheme == cloudime_platform::InputScheme::ShapeCode {
+                cloudime_platform::input_schemes::current_shape_root_font()
+            } else {
+                None
+            },
             min_width_pixels: self.script_min_width.unwrap_or(self.min_width_pixels),
             item_number_style: self.item_number_style,
             scale: self.script_scale,

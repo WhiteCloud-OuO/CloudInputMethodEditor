@@ -122,6 +122,9 @@ pub struct KeyMapLayout {
 
     /// 画的是**字根**（五笔键位映射参考）：字号小一点、从键位下面开始排，不按韵母首字母上色。
     pub roots: bool,
+
+    /// 字根是 PUA 码位、要用字根字体渲染；`false` 时用普通汉字字根。
+    pub roots_pua: bool,
 }
 
 impl KeyMapLayout {
@@ -256,6 +259,7 @@ pub fn draw_key_map<T: RectElement + TextElement>(
         layout.fallback_family.as_deref(),
         layout.fallback_first,
         layout.roots,
+        layout.roots_pua,
     );
     let cell = metrics.px(cell).round().max(1.0);
     // 相邻两格共用一条线：步距 = 边长 − 线宽
@@ -484,9 +488,19 @@ impl KeyMapStyles {
         fallback_family: Option<&str>,
         fallback_first: bool,
         roots: bool,
+        roots_pua: bool,
     ) -> Self {
         let colors = metrics.theme.colors;
         let family = metrics.theme.text_family.as_ref();
+        let mapping_family = if roots {
+            if roots_pua {
+                metrics.theme.root_family.as_ref().or(family)
+            } else {
+                family
+            }
+        } else {
+            metrics.theme.pinyin_family.as_ref()
+        };
         let mapping = metrics
             .style(
                 FontSpec::with_size(
@@ -498,11 +512,7 @@ impl KeyMapStyles {
                 ),
                 colors.text,
             )
-            .with_family(if roots {
-                family
-            } else {
-                metrics.theme.pinyin_family.as_ref()
-            });
+            .with_family(mapping_family);
         let fallback = fallback_family
             .map(str::trim)
             .filter(|family| !family.is_empty())
@@ -594,6 +604,7 @@ mod tests {
             fallback_family: None,
             fallback_first: false,
             roots: false,
+            roots_pua: false,
         }
     }
 
@@ -630,8 +641,8 @@ mod tests {
             theme: &theme,
             scale: 1.0,
         };
-        let small = KeyMapStyles::new(&metrics, CELL, None, false, false);
-        let large = KeyMapStyles::new(&metrics, CELL * 2.0, None, false, false);
+        let small = KeyMapStyles::new(&metrics, CELL, None, false, false, false);
+        let large = KeyMapStyles::new(&metrics, CELL * 2.0, None, false, false, false);
         let close = |value: f32, wanted: f32| (value - wanted).abs() < 0.01;
         assert!(close(small.key.size, 7.0), "46 点的格子里是 7 点");
         assert!(close(small.mapping.size, 11.0), "46 点的格子里是 11 点");
@@ -710,6 +721,7 @@ mod tests {
             fallback_family: None,
             fallback_first: false,
             roots: false,
+            roots_pua: false,
         };
         assert_eq!(
             layout.table_rows(),

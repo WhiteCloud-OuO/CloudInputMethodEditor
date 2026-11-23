@@ -103,6 +103,8 @@ InputSchemes\ShapeCode\
   码表是 UTF-8 的「编码 + 制表符 + 文字 + 制表符 + 权重」，一行一条；`#` 开头是注释。
 - 一级简码：`level1.tsv`，一行「键 + 制表符 + 字」。
 - 字根参考：`roots.tsv`，一行「键 + 制表符 + 字根（空格分隔）」；`[Shape] Roots` 指向它。
+  想让字根用专门的字体画，再放一份字体文件和 `roots_pua.tsv`、在 `scheme.toml` 里填 `RootFont` /
+  `RootFontFamily` / `RootsPua`（默认不用，字根就用普通汉字画）。
 - 方案支持哪些设置项由 `scheme.toml` 的 `[Options]` 声明（五笔是 `MixtureInput` / `UniqueCommit` /
   `FifthKeyCommit`）；没声明的方案不显示这些开关。
 - 改完点「应用方案」（或重启输入法服务）生效。

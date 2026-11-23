@@ -162,7 +162,13 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
 一行「键<TAB>字根 字根…」），`current_key_map_layout()` **只读 scheme.toml + roots.tsv、不加载码表**，
 生成三排键盘、`asdfghjkl` 没有 `;`、无零声母表的 `KeyMapLayout`（`roots = true`）；渲染器按这个标志把字根
 字号降到 `ROOTS_FONT_RATIO`、从键位下面开始排、不按韵母首字母上色；`key_map_cell_for_layout` 按实际行数 /
-有没有零声母表算格子，五笔在同样高度下格子更大。Server 的 `key_map_layout_for(input_schemes)` 按方案选版面，
+有没有零声母表算格子，五笔在同样高度下格子更大。可选字根字体：`[Shape] RootFont`（文件在才认）+
+`RootFontFamily`（缺省「云朵字根」）→ `current_root_font()` → `RouterConfig::render_settings()` 的 `root_font`
+（只有形码方案才填）→ `RenderSettings.root_font`，`Painter` 用 `FontLibrary::with_fonts_and_extras` 按文件私有加载
+（不装系统字体）、字体库读不到这个字族就丢掉，`Theme.root_family` 只给字根那一层换字族；PUA 字根表
+`[Shape] RootsPua`（缺省 `roots_pua.tsv`，一行「键<TAB>码位…」，只认 `E000`–`F8FF`）读不出来、或没有字体
+就退回 `roots.tsv` 的普通汉字。仓库 / 安装包**不带**字根字体（`HeiTiZiGen.ttf` 来源与许可不明），
+要用 `uv run tools/root-font/gen_roots_font.py --source <OFL 字体>` 从 `roots.tsv` 现场生成字体 + `roots_pua.tsv`。Server 的 `key_map_layout_for(input_schemes)` 按方案选版面，
 `RouterConfig` 也按方案目录读 `key_map_reference` / `key_map_hotkey`（形码要先声明 `KeyMap`）。
 `Engine::set_shape_mixture_input` 开着时 `query_shape` 在
 五笔候选后追加英文词（`WordList::complete_entries` 二分取补全 + 精确词，不纠错、不进五笔排序，通配码不掺英文）；
