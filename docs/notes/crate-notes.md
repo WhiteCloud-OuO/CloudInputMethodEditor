@@ -167,8 +167,11 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
 （只有形码方案才填）→ `RenderSettings.root_font`，`Painter` 用 `FontLibrary::with_fonts_and_extras` 按文件私有加载
 （不装系统字体）、字体库读不到这个字族就丢掉，`Theme.root_family` 只给字根那一层换字族；PUA 字根表
 `[Shape] RootsPua`（缺省 `roots_pua.tsv`，一行「键<TAB>码位…」，只认 `E000`–`F8FF`）读不出来、或没有字体
-就退回 `roots.tsv` 的普通汉字。仓库 / 安装包**不带**字根字体（`HeiTiZiGen.ttf` 来源与许可不明），
-要用 `uv run tools/root-font/gen_roots_font.py --source <OFL 字体>` 从 `roots.tsv` 现场生成字体 + `roots_pua.tsv`。Server 的 `key_map_layout_for(input_schemes)` 按方案选版面，
+就退回 `roots.tsv` 的普通汉字。仓库 / 安装包里的 `wubi/zigen.ttf` 是**霞鹜文楷**（OFL 1.1）的子集派生字体
+（25 键代表性字根、字族「云朵字根」、`OFL.txt` 同行分发），生成器 `tools/root-font/gen_roots_font.py`
+还会用布尔差集把 `礻` `衤`（去点）、`鱼`（去尾横）、`豕`（去顶横）、`母`（去两点与中间横）削成理论字形
+（脚本里那张 `SHAPES` 表）；`--preview` 出对照图。来源 / 许可不明的第三方字根字体（`HeiTiZiGen.ttf`）
+仍然不入库，由用户自己放进方案目录。Server 的 `key_map_layout_for(input_schemes)` 按方案选版面，
 `RouterConfig` 也按方案目录读 `key_map_reference` / `key_map_hotkey`（形码要先声明 `KeyMap`）。
 `Engine::set_shape_mixture_input` 开着时 `query_shape` 在
 五笔候选后追加英文词（`WordList::complete_entries` 二分取补全 + 精确词，不纠错、不进五笔排序，通配码不掺英文）；
