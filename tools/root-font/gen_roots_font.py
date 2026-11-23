@@ -61,7 +61,7 @@ SHAPES = {
     # 羊字底：羊 去掉上面两点（一条横贯的胶囊，两头的圆在字外，切口是直的）
     "羊": {"erase": [((-100, 760), (1100, 760), 95)]},
     # 舟字底：舟 去掉顶上那一撇
-    "舟": {"erase": [((505, 845), (450, 715), 40)]},
+    "舟": {"erase": [((500, 880), (455, 745), 48)]},
     # 丘 去掉底下一横
     "丘": {"erase": [((20, 13), (980, 13), 42)]},
     # 牛 去掉中间那一竖（上下各擦一段，别把两条横擦断）
@@ -204,7 +204,27 @@ def carve(path, rule, bounds_pen_factory):
         path = pathops.op(path, eraser, pathops.PathOp.DIFFERENCE, fix_winding=True)
     for box in rule.get("cut", []):
         path = pathops.op(path, rectangle(*box), pathops.PathOp.DIFFERENCE, fix_winding=True)
-    return path
+    return drop_specks(path, bounds_pen_factory)
+
+
+def drop_specks(path, bounds_pen_factory):
+    """擦完可能留下亚像素级的碎渣（断开的一小段轮廓），按面积清掉。"""
+    kept = []
+    for part in path_parts(path):
+        pen = bounds_pen_factory()
+        for op, args in part:
+            getattr(pen, op)(*args)
+        if pen.bounds and (pen.bounds[2] - pen.bounds[0]) * (pen.bounds[3] - pen.bounds[1]) < 4000:
+            continue
+        kept.append(part)
+    if len(kept) == len(path_parts(path)):
+        return path
+    rebuilt = pathops.Path()
+    pen = rebuilt.getPen()
+    for part in kept:
+        for op, args in part:
+            getattr(pen, op)(*args)
+    return rebuilt
 
 
 def load_source(path):
