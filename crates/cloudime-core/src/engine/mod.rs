@@ -130,6 +130,10 @@ pub struct Engine {
     /// 与上面那份各管各的 —— 这一项在方案目录的 `.cfg` 里，不进 `config.toml`。
     shuangpin_mixture_input: bool,
 
+    /// 形码的「英文混输」（形码方案目录 `use_input_scheme.cfg` 的 `mixture_input`，缺省关）：
+    /// 开着时五笔候选后面再追加按敲的键匹配的英文词（整段英文词 + 前缀补全，不做纠错）。
+    shape_mixture_input: bool,
+
     /// 英文候选的大小写档位（反引号轮换）：每次开一段新拼音回到原样。
     english_case: EnglishCase,
 
@@ -390,6 +394,7 @@ impl Engine {
             show_raw_input: true,
             mixture_input: true,
             shuangpin_mixture_input: true,
+            shape_mixture_input: false,
             english_case: EnglishCase::Lower,
             sentence_delay: Duration::ZERO,
             last_key: Instant::now(),

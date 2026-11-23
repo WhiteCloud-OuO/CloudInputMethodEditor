@@ -204,6 +204,10 @@ fn build_engine(args: &Args) -> Result<Engine, CliError> {
             .then(cloudime_platform::input_schemes::current_shape_table)
             .flatten(),
     );
+    engine.set_shape_mixture_input(
+        config.input.input_schemes == cloudime_platform::InputScheme::ShapeCode
+            && cloudime_platform::input_schemes::current_shape_options().mixture_input,
+    );
     engine.set_mixture_input(config.input.mixture_input);
     engine.set_punctuation_mapping(config.input.punctuation_mapping());
     engine.set_half_wide_after_digit(config.input.use_half_wide_punctuation_marks_after_digital);

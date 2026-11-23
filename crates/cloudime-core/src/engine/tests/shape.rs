@@ -13,12 +13,17 @@ w\t人\t20
 ww\t从\t10
 wqvb\t你好\t20
 wqvb\t您好\t10
+fcms\t云朵\t10
 ";
 
-/// 挂上形码码表的引擎（拼音词库留空，形码不查它）。
+/// 挂上形码码表的引擎（拼音词库只给 z 模式用）。
 fn shape_engine() -> Engine {
-    let mut engine = Engine::new(Dictionary::parse("\n").unwrap());
-    engine.set_shape(Some(crate::shape::Table::parse(SHAPE_TABLE, 4).0));
+    let mut engine =
+        Engine::new(Dictionary::parse("云朵\tyun duo\t9000\n你好\tni hao\t8000\n").unwrap());
+    let mut table = crate::shape::Table::parse(SHAPE_TABLE, 4).0;
+    let problems = table.load_level_one("a\t工\ng\t一\nw\t人\n");
+    assert!(problems.is_empty(), "{problems:?}");
+    engine.set_shape(Some(table));
     engine
 }
 
@@ -128,5 +133,98 @@ fn unmounting_the_table_returns_to_full_pinyin() {
             .query()
             .map(|query| query.candidates.items.is_empty())
             .unwrap_or(true)
+    );
+}
+
+#[test]
+fn a_single_key_puts_the_level_one_shortcut_first() {
+    let mut engine = shape_engine();
+    engine.set_input("g");
+    let query = engine.query().unwrap();
+    let first = &query.candidates.items[0];
+    assert_eq!(first.text, "一");
+    assert_eq!(first.auxiliary.as_deref(), Some("①"), "一级简码带 [①] 角标");
+    assert_eq!(first.kind, CandidateKind::Chinese);
+    assert_eq!(
+        engine.commit(first).as_deref(),
+        Some("一"),
+        "一级简码只吃一个键"
+    );
+    assert!(engine.composition().is_empty());
+}
+
+#[test]
+fn a_wildcard_z_shows_as_a_star_and_matches_one_letter() {
+    let mut engine = shape_engine();
+    engine.set_input("wqzb");
+    let query = engine.query().unwrap();
+    assert_eq!(query.marked_text(), "wq*b", "z 通配在拼音行显示成 *");
+    assert_eq!(query.candidates.items[0].text, "你好");
+}
+
+#[test]
+fn z_mode_runs_pinyin_and_annotates_the_wubi_code() {
+    let mut engine = shape_engine();
+    engine.set_input("znihao");
+    assert!(engine.shape_z_mode());
+    assert_eq!(engine.shape_code_len(), None, "z 模式不算纯五笔");
+    let query = engine.query().unwrap();
+    assert_eq!(query.marked_text(), "znihao", "z 模式不插拼音分隔符");
+    let candidate = query
+        .candidates
+        .items
+        .iter()
+        .find(|candidate| candidate.text == "你好")
+        .expect("拼音引擎出 你好");
+    assert_eq!(
+        candidate.auxiliary.as_deref(),
+        Some("wqvb"),
+        "右侧标五笔完整码"
+    );
+    assert_eq!(engine.commit(candidate).as_deref(), Some("你好"));
+    assert!(engine.composition().is_empty(), "选完整段（含前导 z）");
+}
+
+#[test]
+fn english_mixed_input_appends_english_candidates_after_chinese() {
+    let mut engine = shape_engine();
+    engine = engine.with_english(
+        cloudime_dictionary::WordList::parse("hello\thello\t1000\nhelp\thelp\t500\n").unwrap(),
+    );
+    engine.set_shape_mixture_input(true);
+
+    engine.set_input("hel");
+    let items = engine.query().unwrap().candidates.items;
+    let english: Vec<&str> = items
+        .iter()
+        .filter(|candidate| candidate.kind == CandidateKind::English)
+        .map(|candidate| candidate.text.as_str())
+        .collect();
+    assert_eq!(english, ["hello", "help"]);
+
+    // 有中文候选时英文排在中文后面
+    engine.set_input("w");
+    let items = engine.query().unwrap().candidates.items;
+    let last_chinese = items
+        .iter()
+        .rposition(|candidate| candidate.kind == CandidateKind::Chinese)
+        .unwrap();
+    assert!(
+        items[last_chinese + 1..]
+            .iter()
+            .all(|candidate| candidate.kind == CandidateKind::English),
+        "英文只追加在中文候选之后"
+    );
+
+    // 关掉英文混输就没有英文候选
+    engine.set_shape_mixture_input(false);
+    assert!(
+        engine
+            .query()
+            .unwrap()
+            .candidates
+            .items
+            .iter()
+            .all(|candidate| candidate.kind != CandidateKind::English)
     );
 }

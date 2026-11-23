@@ -3,7 +3,7 @@
 //! 其余各项与方案无关，直接排在后面。
 
 use cloudime_platform::input_schemes::{
-    KeyMapKey, KeyMapModifiers, KeyMapReference, MODES, SchemeEntry,
+    KeyMapKey, KeyMapModifiers, KeyMapReference, MODES, SchemeEntry, ShapeEntry,
 };
 use cloudime_platform::{
     FullHalfPunctuation, InputScheme, MO_HU_YIN_BITS, PAIRWISE_COMPLETION_BITS,
@@ -85,17 +85,6 @@ fn scheme_body(title: &str, rows: Vec<KeyedView>) -> View {
     )];
     children.extend(rows);
     StackPanel::new().spacing(12.0).keyed_children(children)
-}
-
-/// 还没实现的方案：面板里先放一句「待定」。
-fn scheme_placeholder(title: &str) -> View {
-    scheme_body(
-        title,
-        vec![KeyedView::new(
-            "scheme-todo",
-            note("这个方案的选项放在这里（待定）。"),
-        )],
-    )
 }
 
 /// 「双键拼音」面板：选哪一份方案（读 / 写 `use_input_scheme.cfg`）、读不出来的红字、以及这份方案的只读信息。
@@ -374,6 +363,108 @@ fn dual_key_panel(settings: &Settings, context: &mut ViewContext<Settings>) -> V
     scheme_body("双键拼音", rows)
 }
 
+/// 「形码输入」面板：选方案（读 / 写形码目录的 `use_input_scheme.cfg`）、三个开关与方案信息。
+fn shape_panel(settings: &Settings, context: &mut ViewContext<Settings>) -> View {
+    let entries = &settings.shape_entries;
+    let current = settings
+        .shape_current
+        .as_ref()
+        .and_then(|current| entries.iter().position(|entry| entry.id == *current));
+    let mut rows: Vec<KeyedView> = vec![KeyedView::new(
+        "shape-pick",
+        field(
+            "方案",
+            "形码方案放安装目录的 InputSchemes\\ShapeCode（一个方案一个子目录，里面要有 scheme.toml）。\n\
+             换方案后点「应用方案」让输入法服务重读。",
+            ComboBox::new()
+                .items_source(entries.iter().map(ShapeEntry::label))
+                .selected_index(current)
+                .on_selection_changed(context.callback(Message::ShapeScheme)),
+        ),
+    )];
+    if entries.is_empty() {
+        rows.push(KeyedView::new(
+            "shape-empty",
+            error_note(
+                "形码方案目录里还没有方案 —— 放一个含 scheme.toml 的目录进去再点「刷新方案」。",
+            ),
+        ));
+    }
+    if let Some(entry) = current.and_then(|index| entries.get(index))
+        && !entry.problems().is_empty()
+    {
+        rows.push(KeyedView::new(
+            "shape-broken",
+            error_note(&format!("「{}」读不出来：{}", entry.id, entry.problems())),
+        ));
+    }
+    if let Some(scheme) = current
+        .and_then(|index| entries.get(index))
+        .and_then(|entry| entry.scheme.as_ref().ok())
+    {
+        rows.push(KeyedView::new(
+            "shape-info",
+            note(&format!(
+                "版本 {} · 作者 {} · 码表 {} 条",
+                scheme.version,
+                scheme.author,
+                scheme.table.len(),
+            )),
+        ));
+    }
+    rows.push(KeyedView::new(
+        "shape-mixture-input",
+        field(
+            "英文混输",
+            "开着时五笔候选后面追加英文词（按敲的键匹配，整段英文词 + 前缀补全，不做拼错纠正）；\
+             第五码顶字会因此跳过（第五个字母可能还是英文词的一部分）。这一项记在形码目录的 use_input_scheme.cfg。",
+            ToggleSwitch::new()
+                .is_on(settings.shape_options.mixture_input)
+                .on_toggled(context.callback(Message::ShapeMixtureInput)),
+        ),
+    ));
+    rows.push(KeyedView::new(
+        "shape-unique-commit",
+        field(
+            "四码唯一时自动上屏",
+            "四码打满、候选只剩一个时直接上屏，不用再按空格。",
+            ToggleSwitch::new()
+                .is_on(settings.shape_options.unique_commit)
+                .on_toggled(context.callback(Message::ShapeUniqueCommit)),
+        ),
+    ));
+    rows.push(KeyedView::new(
+        "shape-fifth-key-commit",
+        field(
+            "第五码顶字上屏",
+            "四码打满后再按一个字母：先把当前首选上屏，再把这一个字母当新一段编码。\
+             英文混输开着时这一项不生效。",
+            ToggleSwitch::new()
+                .is_on(settings.shape_options.fifth_key_commit)
+                .is_enabled(!settings.shape_options.mixture_input)
+                .on_toggled(context.callback(Message::ShapeFifthKeyCommit)),
+        ),
+    ));
+    rows.push(KeyedView::new(
+        "shape-buttons",
+        StackPanel::new()
+            .orientation(Orientation::Horizontal)
+            .spacing(12.0)
+            .children((
+                Button::new()
+                    .on_click(context.message(Message::RefreshShapeSchemes))
+                    .content("刷新方案"),
+                Button::new()
+                    .on_click(context.message(Message::ApplyShapeScheme))
+                    .content("应用方案"),
+                Button::new()
+                    .on_click(context.message(Message::OpenShapeSchemeDir))
+                    .content("打开方案目录"),
+            )),
+    ));
+    scheme_body("形码输入", rows)
+}
+
 pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> View {
     let input = &settings.config.input;
     let fuzzy: Vec<KeyedView> = MO_HU_YIN_BITS
@@ -456,7 +547,7 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
             ],
         )),
         InputScheme::DualKeyPinyin => scheme_card(dual_key_panel(settings, context)),
-        InputScheme::ShapeCode => scheme_card(scheme_placeholder("形码输入")),
+        InputScheme::ShapeCode => scheme_card(shape_panel(settings, context)),
     };
     // 每一项都带 key：面板出现 / 消失会改变子项的个数，而 `children` 是**按位置认身份**的
     // （框架文档：动态集合用 `keyed_children`）—— 按位置的话，面板一插进来，后面每一项都换了

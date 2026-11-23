@@ -120,6 +120,15 @@ pub(crate) struct Settings {
     /// 「输入」页：双键拼音的「在候选项显示辅助码」（`use_input_scheme.cfg` 的 `candidate_auxiliary`，缺省关）。
     candidate_auxiliary: bool,
 
+    /// 「输入」页：形码方案目录里扫到的方案（含 `scheme.toml` 的子目录，按目录名升序）。
+    shape_entries: Vec<cloudime_platform::input_schemes::ShapeEntry>,
+
+    /// 「输入」页：当前用的形码方案 id（形码目录的 `use_input_scheme.cfg`）。
+    shape_current: Option<String>,
+
+    /// 「输入」页：形码的几个用户级开关（同目录 `.cfg`）。
+    shape_options: cloudime_platform::input_schemes::ShapeOptions,
+
     /// 「输入」页：什么时候显示键位映射参考（`use_input_scheme.cfg` 的 `key_map_reference`）。
     key_map_reference: cloudime_platform::input_schemes::KeyMapReference,
 
@@ -249,6 +258,77 @@ impl Settings {
         self.candidate_auxiliary = cloudime_platform::input_schemes::read_candidate_auxiliary(&dir);
         self.key_map_reference = cloudime_platform::input_schemes::read_key_map_reference(&dir);
         self.key_map_hotkey = cloudime_platform::input_schemes::read_key_map_hotkey(&dir);
+    }
+
+    /// 扫一遍形码方案目录，定下当前方案并读几个开关。
+    fn refresh_shape_schemes(&mut self) {
+        let Some(dir) = cloudime_platform::input_schemes::shape_code_dir() else {
+            self.shape_entries.clear();
+            self.shape_current = None;
+            self.shape_options = cloudime_platform::input_schemes::ShapeOptions::default();
+            return;
+        };
+        self.shape_entries = cloudime_platform::input_schemes::list_shapes(&dir);
+        self.shape_current =
+            cloudime_platform::input_schemes::resolve_shape_current(&dir, &self.shape_entries);
+        self.shape_options = cloudime_platform::input_schemes::read_shape_options(&dir);
+    }
+
+    /// 换当前形码方案：写形码目录 `use_input_scheme.cfg` 的 `scheme` 行。
+    fn pick_shape_scheme(&mut self, index: usize) {
+        let Some(entry) = self.shape_entries.get(index) else {
+            return;
+        };
+        let (id, label) = (entry.id.clone(), entry.label());
+        let Some(dir) = cloudime_platform::input_schemes::shape_code_dir() else {
+            self.notice.error = Some("找不到安装目录，换不了形码方案。".to_owned());
+            return;
+        };
+        match cloudime_platform::input_schemes::set_shape_current(&dir, &id) {
+            Ok(()) => {
+                self.shape_current = Some(id);
+                self.notice.note = Some(format!("形码方案已记下「{label}」；点「应用方案」生效。"));
+            }
+            Err(error) => {
+                self.notice.error = Some(format!("写 use_input_scheme.cfg 失败：{error}"));
+            }
+        }
+    }
+
+    /// 形码的某个开关：写 `use_input_scheme.cfg` 的一行，再让 Server 重读。
+    fn set_shape_option(&mut self, key: &str, on: bool, label: &str) {
+        let Some(dir) = cloudime_platform::input_schemes::shape_code_dir() else {
+            self.notice.error = Some("找不到安装目录，改不了。".to_owned());
+            return;
+        };
+        match cloudime_platform::input_schemes::set_shape_option(&dir, key, on) {
+            Ok(()) => {
+                self.shape_options = cloudime_platform::input_schemes::read_shape_options(&dir);
+                let state = if on { "打开" } else { "关闭" };
+                self.reload_scheme_for_server(&format!("已{state}「{label}」；"));
+            }
+            Err(error) => {
+                self.notice.error = Some(format!("写 use_input_scheme.cfg 失败：{error}"));
+            }
+        }
+    }
+
+    /// 「应用形码方案」：重新扫一遍，再把 `input_schemes` 原样写一遍让 Server 重读。
+    fn apply_shape_scheme(&mut self) {
+        self.refresh_shape_schemes();
+        self.reload_scheme_for_server("已应用形码方案；");
+    }
+
+    /// 打开形码方案目录。
+    fn open_shape_scheme_dir(&mut self) {
+        let Some(dir) = cloudime_platform::input_schemes::shape_code_dir() else {
+            self.notice.error = Some("找不到安装目录。".to_owned());
+            return;
+        };
+        if let Err(error) = std::fs::create_dir_all(&dir) {
+            crate::log::warn(format!("建形码方案目录失败: {error}"));
+        }
+        crate::panel::controls::open_with_explorer(&dir.to_string_lossy());
     }
 
     /// 方案 / 辅助码方案一改：把 `input_schemes` **原样再写一遍**，Server 才会顺着配置热加载重读方案文件。

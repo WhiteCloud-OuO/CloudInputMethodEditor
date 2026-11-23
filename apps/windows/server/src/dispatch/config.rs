@@ -166,6 +166,15 @@ pub struct RouterConfig {
     /// 形码等方案的右 Alt 原样交给应用，不吞键。
     pub special_input: bool,
 
+    /// 形码「四码唯一时自动上屏」（方案目录 `use_input_scheme.cfg` 的 `unique_commit`，缺省开）。
+    pub shape_unique_commit: bool,
+
+    /// 形码「第五码顶字上屏」（`.cfg` 的 `fifth_key_commit`，缺省开；英文混输开着时不用它）。
+    pub shape_fifth_key_commit: bool,
+
+    /// 形码「英文混输」（`.cfg` 的 `mixture_input`，缺省关）：第五码顶字在它开着时跳过。
+    pub shape_mixture_input: bool,
+
     /// 脚本在本组句里要的候选窗**最小宽度**（`cloudime.candidate.set_min_width`，物理像素）：
     /// `None` = 用配置里的 `min_width_pixels`。**只在本次组句内有效**，组句结束清掉。
     pub script_min_width: Option<f32>,
@@ -302,6 +311,11 @@ impl From<&Config> for RouterConfig {
         let input = &config.input;
         let candidate = &config.candidate;
         let punctuation = input.full_half_punctuation_marks_toggle;
+        let shape_options = if input.input_schemes == cloudime_platform::InputScheme::ShapeCode {
+            cloudime_platform::input_schemes::current_shape_options()
+        } else {
+            cloudime_platform::input_schemes::ShapeOptions::default()
+        };
         Self {
             page_size: candidate.candidate_count(),
             layout: candidate.candidate_arrangement_direction,
@@ -331,10 +345,15 @@ impl From<&Config> for RouterConfig {
             preedit: candidate.preedit,
             show_more_candidate_items: candidate.show_more_candidate_items,
             mouse_word_selection: candidate.mouse_word_selection,
-            // 值在方案目录的 `.cfg` 里（与辅助码方案同一处），不走 `config.toml`；只有双键拼音才认它
-            candidate_auxiliary: input.input_schemes
-                == cloudime_platform::InputScheme::DualKeyPinyin
-                && cloudime_platform::input_schemes::candidate_auxiliary(),
+            // 值在方案目录的 `.cfg` 里（与辅助码方案同一处），不走 `config.toml`；只有双键拼音才认它。
+            // 形码恒开：z 模式的五笔反查与一级简码的 [①] 都靠候选右侧的辅助码那一段画。
+            candidate_auxiliary: match input.input_schemes {
+                cloudime_platform::InputScheme::DualKeyPinyin => {
+                    cloudime_platform::input_schemes::candidate_auxiliary()
+                }
+                cloudime_platform::InputScheme::ShapeCode => true,
+                cloudime_platform::InputScheme::FullPinyin => false,
+            },
             curr_theme: config.theme.curr_theme.clone(),
             translate_enabled: config.translate.enabled,
             translate_dictionary: config.translate.dictionary.clone(),
@@ -380,6 +399,9 @@ impl From<&Config> for RouterConfig {
                 cloudime_platform::InputScheme::FullPinyin
                     | cloudime_platform::InputScheme::DualKeyPinyin
             ),
+            shape_unique_commit: shape_options.unique_commit,
+            shape_fifth_key_commit: shape_options.fifth_key_commit,
+            shape_mixture_input: shape_options.mixture_input,
             // 脚本设的候选窗尺寸：会话内状态，配置（热）加载时保留，只有 `Router::reset_composition` 清
             script_min_width: None,
             script_page_size: None,

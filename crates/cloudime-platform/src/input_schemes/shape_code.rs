@@ -24,8 +24,39 @@ pub const SCHEME_FILE: &str = "scheme.toml";
 /// 方案文件里没写 `Table` 时用的码表文件名。
 pub const DEFAULT_TABLE: &str = "table.tsv";
 
+/// 方案文件里没写 `LevelOne` 时用的一级简码文件名。
+pub const DEFAULT_LEVEL_ONE: &str = "level1.tsv";
+
 /// 方案文件里没写 `MaxCodeLength` 时的最长编码长度（五笔 4 键）。
 pub const DEFAULT_MAX_CODE_LENGTH: usize = 4;
+
+/// `use_input_scheme.cfg` 里形码自己的几个开关（用户级，不进 `config.toml`）。
+const KEY_MIXTURE_INPUT: &str = "mixture_input";
+const KEY_UNIQUE_COMMIT: &str = "unique_commit";
+const KEY_FIFTH_KEY_COMMIT: &str = "fifth_key_commit";
+
+/// 形码的用户级开关。
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ShapeOptions {
+    /// 英文混输：五笔候选后面追加英文词（缺省**关**）。
+    pub mixture_input: bool,
+
+    /// 四码唯一时自动上屏（缺省**开**）。
+    pub unique_commit: bool,
+
+    /// 第五码顶字上屏（缺省**开**；英文混输开着时由壳跳过这一项）。
+    pub fifth_key_commit: bool,
+}
+
+impl Default for ShapeOptions {
+    fn default() -> Self {
+        Self {
+            mixture_input: false,
+            unique_commit: true,
+            fifth_key_commit: true,
+        }
+    }
+}
 
 /// 形码方案目录：**安装目录**下的 `InputSchemes\ShapeCode`（`bundled_root()` 下，不负责创建）。
 ///
@@ -175,7 +206,7 @@ pub fn load(dir: &Path) -> Result<ShapeScheme, ShapeSchemeError> {
         path: table_path.clone(),
         source,
     })?;
-    let (table, problems) = Table::parse(&source, max_code_length);
+    let (mut table, problems) = Table::parse(&source, max_code_length);
     if !problems.is_empty() {
         tracing::warn!(
             path = %table_path.display(),
@@ -189,6 +220,34 @@ pub fn load(dir: &Path) -> Result<ShapeScheme, ShapeSchemeError> {
             "码表 {} 里一条能用的条目都没有",
             table_path.display()
         )));
+    }
+    // 一级简码表可选：没写 `LevelOne` 就用 `level1.tsv`，文件不在就是没有一级简码。
+    let level_one_name = shape
+        .and_then(|shape| optional(shape, "LevelOne"))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_LEVEL_ONE.to_owned());
+    let level_one_path = dir.join(level_one_name.trim());
+    match std::fs::read_to_string(&level_one_path) {
+        Ok(source) => {
+            let problems = table.load_level_one(&source);
+            if !problems.is_empty() {
+                tracing::warn!(
+                    path = %level_one_path.display(),
+                    skipped = problems.len(),
+                    first = %problems[0],
+                    "一级简码表有格式不对的行，已跳过"
+                );
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tracing::debug!(path = %level_one_path.display(), "没有一级简码表");
+        }
+        Err(error) => {
+            return Err(ShapeSchemeError::Read {
+                path: level_one_path,
+                source: error,
+            });
+        }
     }
     Ok(ShapeScheme {
         name,
@@ -233,6 +292,36 @@ pub fn current_table() -> Option<Table> {
     Some(scheme.table)
 }
 
+/// 读方案目录 `use_input_scheme.cfg` 里的形码开关；没写就是 [`ShapeOptions::default`]。
+pub fn read_options(dir: &Path) -> ShapeOptions {
+    let config = super::read_config(dir);
+    let flag = |key: &str, default: bool| {
+        config
+            .get(key)
+            .map_or(default, |value| super::flag_of(value))
+    };
+    ShapeOptions {
+        mixture_input: flag(KEY_MIXTURE_INPUT, false),
+        unique_commit: flag(KEY_UNIQUE_COMMIT, true),
+        fifth_key_commit: flag(KEY_FIFTH_KEY_COMMIT, true),
+    }
+}
+
+/// 当前形码方案目录的开关（没有安装目录 / 没有方案目录就是缺省值）。
+pub fn current_options() -> ShapeOptions {
+    shape_code_dir().map_or_else(ShapeOptions::default, |dir| read_options(&dir))
+}
+
+/// 改一项开关（`mixture_input` / `unique_commit` / `fifth_key_commit`），别的行原样保留。
+pub fn set_option(dir: &Path, key: &str, on: bool) -> std::io::Result<()> {
+    set_config_line(dir, key, super::flag_key(on))
+}
+
+/// 换当前方案：只改 `scheme` 那一行（另外几行原样留着）。
+pub fn set_current(dir: &Path, id: &str) -> std::io::Result<()> {
+    write_current(dir, id)
+}
+
 /// 定下当前方案：`.cfg` 里指得到的就用它；否则取**第一个读得出来的**方案并**重建** `.cfg`。
 /// 一个方案都没有 → `None`。
 pub fn resolve_current(dir: &Path, entries: &[ShapeEntry]) -> Option<String> {
@@ -275,6 +364,35 @@ fn write_current(dir: &Path, id: &str) -> std::io::Result<()> {
         "# 当前使用的形码方案：scheme = 方案目录名（wubi / cangjie / shengbi），改这一行即可换方案。\n",
     );
     body.push_str(&lines.join("\n"));
+    body.push('\n');
+    cloudime_core::storage::write_atomic_str(&path, &body)
+}
+
+/// 改 `use_input_scheme.cfg` 里的一行（同名行只留一行），别的行原样留着。
+fn set_config_line(dir: &Path, key: &str, value: &str) -> std::io::Result<()> {
+    std::fs::create_dir_all(dir)?;
+    let path = dir.join(super::CURRENT_FILE);
+    let existing = std::fs::read_to_string(&path).unwrap_or_default();
+    let mut lines: Vec<String> = Vec::new();
+    let mut replaced = false;
+    for line in existing.lines() {
+        let is_key = line
+            .trim()
+            .split_once('=')
+            .is_some_and(|(name, _)| name.trim().eq_ignore_ascii_case(key));
+        if is_key {
+            if !replaced {
+                lines.push(format!("{key} = {value}"));
+                replaced = true;
+            }
+        } else {
+            lines.push(line.to_owned());
+        }
+    }
+    if !replaced {
+        lines.push(format!("{key} = {value}"));
+    }
+    let mut body = lines.join("\n");
     body.push('\n');
     cloudime_core::storage::write_atomic_str(&path, &body)
 }
@@ -451,5 +569,53 @@ mod tests {
         assert_eq!(scheme.max_code_length, 3);
         assert_eq!(scheme.table.len(), 1, "超过 3 位的编码被跳过");
         let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn level_one_is_loaded_with_the_scheme() {
+        let root = temp_dir("level-one");
+        let dir = root.join("wubi");
+        write_scheme(&dir, "五笔86");
+        std::fs::write(
+            dir.join(SCHEME_FILE),
+            "[Info]\nName = \"五笔86\"\nVersion = \"1.0\"\n\n[Shape]\nTable = \"table.tsv\"\nLevelOne = \"level1.tsv\"\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("level1.tsv"), "g\t一\nf\t地\n").unwrap();
+        let scheme = load(&dir).unwrap();
+        assert_eq!(scheme.table.level_one('g'), Some("一"));
+        assert_eq!(scheme.table.level_one('f'), Some("地"));
+        assert_eq!(scheme.table.level_one('a'), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn the_shape_options_round_trip_and_keep_other_lines() {
+        let dir = temp_dir("shape-options");
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(
+            dir.join(super::super::CURRENT_FILE),
+            "# 注释\nscheme = wubi\nother = 1\n",
+        )
+        .unwrap();
+
+        let options = read_options(&dir);
+        assert!(!options.mixture_input, "英文混输缺省关");
+        assert!(options.unique_commit, "四码唯一缺省开");
+        assert!(options.fifth_key_commit, "第五码顶字缺省开");
+
+        set_option(&dir, "mixture_input", true).unwrap();
+        set_option(&dir, "fifth_key_commit", false).unwrap();
+        let options = read_options(&dir);
+        assert!(options.mixture_input);
+        assert!(options.unique_commit);
+        assert!(!options.fifth_key_commit);
+
+        let text = std::fs::read_to_string(dir.join(super::super::CURRENT_FILE)).unwrap();
+        assert!(text.contains("other = 1"), "{text}");
+        assert!(text.contains("scheme = wubi"), "{text}");
+        assert!(text.contains("mixture_input = on"), "{text}");
+        assert!(text.contains("fifth_key_commit = off"), "{text}");
+        let _ = std::fs::remove_dir_all(&dir);
     }
 }

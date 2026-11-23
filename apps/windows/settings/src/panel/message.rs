@@ -27,6 +27,20 @@ pub(crate) enum Message {
     DualKeyMixtureInput(bool),
     /// 双键拼音的「在候选项显示辅助码」（写 `use_input_scheme.cfg` 的 `candidate_auxiliary`）。
     CandidateAuxiliary(bool),
+    /// 形码用哪一份方案（`Settings::shape_entries` 的下标；写形码目录的 `use_input_scheme.cfg`）。
+    ShapeScheme(Option<usize>),
+    /// 重新扫一遍形码方案目录。
+    RefreshShapeSchemes,
+    /// 让输入法服务重新读形码方案（写一遍 `input_schemes`，走配置热加载那条路）。
+    ApplyShapeScheme,
+    /// 打开形码方案目录（不存在就建）。
+    OpenShapeSchemeDir,
+    /// 形码的「英文混输」（写 `use_input_scheme.cfg` 的 `mixture_input`）。
+    ShapeMixtureInput(bool),
+    /// 形码的「四码唯一时自动上屏」（写 `use_input_scheme.cfg` 的 `unique_commit`）。
+    ShapeUniqueCommit(bool),
+    /// 形码的「第五码顶字上屏」（写 `use_input_scheme.cfg` 的 `fifth_key_commit`）。
+    ShapeFifthKeyCommit(bool),
     /// 什么时候显示键位映射参考（写 `use_input_scheme.cfg` 的 `key_map_reference`）。
     KeyMapReference(cloudime_platform::input_schemes::KeyMapReference),
     /// 键位映射参考的修饰键（写 `use_input_scheme.cfg` 的 `key_map_hotkey`）。

@@ -47,6 +47,47 @@ impl Engine {
         self.shape.as_ref()
     }
 
+    /// 形码的「英文混输」（方案目录 `use_input_scheme.cfg` 的 `mixture_input`，缺省关）：
+    /// 开着时五笔候选后面追加英文词（按敲的键匹配，不纠错）。
+    pub fn set_shape_mixture_input(&mut self, on: bool) {
+        if self.shape_mixture_input != on {
+            self.forget_span_cache();
+        }
+        self.shape_mixture_input = on;
+    }
+
+    pub fn shape_mixture_input(&self) -> bool {
+        self.shape_mixture_input
+    }
+
+    /// 形码当前是不是 z 模式：挂着形码表、且作用域以 `z` 开头（临时拼音 + 五笔反查）。
+    pub fn shape_z_mode(&self) -> bool {
+        self.shape.is_some() && !self.forced_expression && self.composition.scope().starts_with('z')
+    }
+
+    /// 纯五笔已经敲了几位编码（不含 z 模式）；不是纯五笔就是 `None`。
+    ///
+    /// 壳用它判断四码是否敲满（四码唯一自动上屏 / 第五码顶字上屏）。光标停在中间时只看光标前。
+    pub fn shape_code_len(&self) -> Option<usize> {
+        if self.shape.is_none() || self.shape_z_mode() {
+            return None;
+        }
+        Some(
+            self.composition
+                .scope()
+                .chars()
+                .filter(char::is_ascii_alphabetic)
+                .count(),
+        )
+    }
+
+    /// 当前形码方案的最长编码长度（五笔 4）；不是形码输入就是 `None`。
+    pub fn shape_max_code_length(&self) -> Option<usize> {
+        self.shape
+            .as_ref()
+            .map(crate::shape::Table::max_code_length)
+    }
+
     /// 辅助码表：只筛选候选（不排序）。`None` = 不筛。
     pub fn set_auxiliary_codes(
         &mut self,

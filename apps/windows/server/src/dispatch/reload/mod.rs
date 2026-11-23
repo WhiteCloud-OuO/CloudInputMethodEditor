@@ -174,6 +174,11 @@ impl Router {
                 .then(cloudime_platform::input_schemes::current_shape_table)
                 .flatten(),
         );
+        // 形码的英文混输（方案目录 `.cfg` 的 `mixture_input`）
+        self.engine.set_shape_mixture_input(
+            config.input.input_schemes == cloudime_platform::InputScheme::ShapeCode
+                && cloudime_platform::input_schemes::current_shape_options().mixture_input,
+        );
         // 方案换了：「辅助窗口」的键位映射参考也跟着换一份（内容）
         self.candidates
             .set_auxiliary(cloudime_platform::input_schemes::key_map_layout());

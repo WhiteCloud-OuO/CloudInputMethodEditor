@@ -92,6 +92,9 @@ impl Component for Settings {
             auxiliary_mode: cloudime_core::auxiliary::AuxiliaryMode::PerChar,
             scheme_mixture_input: true,
             candidate_auxiliary: false,
+            shape_entries: Vec::new(),
+            shape_current: None,
+            shape_options: cloudime_platform::input_schemes::ShapeOptions::default(),
             key_map_reference: cloudime_platform::input_schemes::KeyMapReference::Off,
             key_map_hotkey: cloudime_platform::input_schemes::KeyMapHotkey::default(),
             theme_draft: ThemeFile::default(),
@@ -104,6 +107,8 @@ impl Component for Settings {
         settings.refresh_theme_names();
         // 双键拼音：扫一遍方案目录（目录不在 / 一个方案都没有就写出内置样例），并定下当前方案。
         settings.refresh_schemes();
+        // 形码：扫一遍形码方案目录，读当前方案与几个开关（目录不在就是空）。
+        settings.refresh_shape_schemes();
         let current = settings.config.theme.curr_theme.clone();
         let stem = current.trim().trim_end_matches(".json").to_owned();
         settings.select_theme(&stem);
@@ -136,6 +141,22 @@ impl Component for Settings {
             Message::AuxiliaryMode(Some(index)) => self.pick_auxiliary_mode(index),
             Message::DualKeyMixtureInput(on) => self.set_scheme_mixture_input(on),
             Message::CandidateAuxiliary(on) => self.set_candidate_auxiliary(on),
+            Message::ShapeScheme(Some(index)) => self.pick_shape_scheme(index),
+            Message::RefreshShapeSchemes => {
+                self.refresh_shape_schemes();
+                self.notice.note = Some("已重新扫描形码方案目录。".to_owned());
+            }
+            Message::ApplyShapeScheme => self.apply_shape_scheme(),
+            Message::OpenShapeSchemeDir => self.open_shape_scheme_dir(),
+            Message::ShapeMixtureInput(on) => {
+                self.set_shape_option("mixture_input", on, "英文混输")
+            }
+            Message::ShapeUniqueCommit(on) => {
+                self.set_shape_option("unique_commit", on, "四码唯一时自动上屏")
+            }
+            Message::ShapeFifthKeyCommit(on) => {
+                self.set_shape_option("fifth_key_commit", on, "第五码顶字上屏")
+            }
             Message::KeyMapReference(mode) => self.set_key_map_reference(mode),
             Message::KeyMapHotkeyModifiers(modifiers) => {
                 let mut hotkey = self.key_map_hotkey;

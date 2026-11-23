@@ -17,8 +17,11 @@ pub use key_map::{
     KeyCap, KeyMapHotkey, KeyMapKey, KeyMapLayout, KeyMapModifiers, KeyMapReference,
 };
 pub use shape_code::{
-    DEFAULT_MAX_CODE_LENGTH, DEFAULT_TABLE, SCHEME_FILE, ShapeEntry, ShapeScheme, ShapeSchemeError,
-    current_table as current_shape_table, shape_code_dir,
+    DEFAULT_LEVEL_ONE, DEFAULT_MAX_CODE_LENGTH, DEFAULT_TABLE, SCHEME_FILE, ShapeEntry,
+    ShapeOptions, ShapeScheme, ShapeSchemeError, current_options as current_shape_options,
+    current_table as current_shape_table, list as list_shapes, read_options as read_shape_options,
+    resolve_current as resolve_shape_current, set_current as set_shape_current,
+    set_option as set_shape_option, shape_code_dir,
 };
 
 use std::collections::BTreeMap;
@@ -149,7 +152,7 @@ pub fn list(dir: &Path) -> Vec<SchemeEntry> {
 ///
 /// **只认 `键 = 值`**：老那种「只写一行方案 id」的文件读出来就是空表 —— 按规范不再支持，
 /// 交给 [`resolve_current`] 重建。不是键值行的行直接跳过。
-fn read_config(dir: &Path) -> BTreeMap<String, String> {
+pub(super) fn read_config(dir: &Path) -> BTreeMap<String, String> {
     let Ok(text) = std::fs::read_to_string(dir.join(CURRENT_FILE)) else {
         return BTreeMap::new();
     };
@@ -208,7 +211,7 @@ fn candidate_auxiliary_of(config: &BTreeMap<String, String>) -> bool {
 }
 
 /// `use_input_scheme.cfg` 里的开关写法：写的是 `on` / `off`，读的时候也认 `1` / `0` / `true` / `false`。
-fn flag_of(value: &str) -> bool {
+pub(super) fn flag_of(value: &str) -> bool {
     matches!(
         value.trim().to_ascii_lowercase().as_str(),
         "1" | "on" | "true" | "yes"
@@ -216,7 +219,7 @@ fn flag_of(value: &str) -> bool {
 }
 
 /// 开关的写法。
-fn flag_key(value: bool) -> &'static str {
+pub(super) fn flag_key(value: bool) -> &'static str {
     if value { "on" } else { "off" }
 }
 

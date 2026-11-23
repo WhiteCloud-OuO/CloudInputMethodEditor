@@ -329,8 +329,9 @@ impl Engine {
 
     /// 这个候选上屏算接受了哪些音节级敲错：纠错读法按那处编辑换算，普通读法靠对齐时对上的敲错变体。
     pub(super) fn accepted_typos(&self, candidate: &Candidate) -> Vec<(String, String)> {
-        // 双键拼音下敲的不是拼音本身（`vhgo` 对 `zhong'guo`），「敲错」这套对不上，不记
-        if self.shuangpin.is_some() {
+        // 双键拼音下敲的不是拼音本身（`vhgo` 对 `zhong'guo`），「敲错」这套对不上，不记；
+        // 形码（含 z 模式）的编码 / 带前导 z 的拼音串也不是敲错样本，同样不记。
+        if self.shuangpin.is_some() || self.shape.is_some() {
             return Vec::new();
         }
         let keys = self.composition.scope();
@@ -388,6 +389,10 @@ impl Engine {
     /// 纠错读法按纠正后的拼音算，再按那处编辑换算回原串。
     pub(super) fn consumed_by(&self, candidate: &Candidate) -> (usize, String) {
         let keys = self.composition.scope();
+        // z 模式是临时拼音：候选的读音对不上带着前导 `z` 的按键串，整段吃掉（`zyunduo` 选 云朵）。
+        if self.shape_z_mode() {
+            return self.whole_scope();
+        }
         // 双键拼音：敲的不是拼音本身（`vhgo` → `zhong'guo`），按「两键一个音节（+ 辅助码）」
         // 把候选的音节数换算回按键字节数 —— 否则选完候选，拼音串里原来那些按键还留着。
         // 候选**末音节只按了第一个键**时（`yzd` 的「云朵」：`d` 是「朵」的声母）按键也还没按全，

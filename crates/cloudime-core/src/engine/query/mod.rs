@@ -13,6 +13,9 @@ mod spelling;
 /// 每个音节键只取词频最高的前几条，足够排出前 500 条候选。
 const SHORT_PREFIX_PER_KEY: usize = 128;
 
+/// 形码「英文混输」最多追加几条英文候选（精确词 + 前缀补全）。
+const SHAPE_ENGLISH_CANDIDATES: usize = 9;
+
 pub(crate) use english_tail::EnglishTail;
 pub use result::Query;
 pub(super) use result::join_marked;
@@ -205,6 +208,10 @@ impl Engine {
         let mut query = match self.query_inner() {
             Ok(query) => query,
             Err(error) => {
+                // 纯五笔只认方案目录的码表：用户短语不进候选，切不出来就是切不出来
+                if self.shape.is_some() && !self.shape_z_mode() {
+                    return Err(error);
+                }
                 if !self
                     .custom_phrases
                     .iter()
@@ -222,7 +229,10 @@ impl Engine {
         };
         // 已选文本显示在未选拼音之前；候选与光标只对未选拼音算。
         query.selected = self.composition.selected_text();
-        self.insert_custom_phrases(&mut query.candidates.items);
+        // 纯五笔不加用户短语（会把一级简码挤掉）；z 模式是临时拼音，照旧能用短语。
+        if self.shape.is_none() || self.shape_z_mode() {
+            self.insert_custom_phrases(&mut query.candidates.items);
+        }
         // 特殊输入模式：只留当前（第一个）音节的单字候选，选完一个字后剩余的拼音留给下一次查询。
         if self.special_input {
             let first = query
@@ -322,44 +332,98 @@ impl Engine {
         self.query_phonetic(keys, rest, start, true)
     }
 
-    /// 形码查询：把已经敲的整串当前缀，命中码表里所有以它开头的编码。
+    /// 形码查询。两种分支：
     ///
-    /// - **不去重成整句**：形码没有读音，候选就是码表里那些单字 / 词组；
-    /// - 拼音行显示敲的编码原文（Shift 敲的大写按原样显示），`tail` 给它当显示串；
-    /// - 一个候选都没有时返回 [`ParseError::NoSegmentation`]，壳按「切不动的串」原样画预编辑。
+    /// - **z 模式**（作用域以 `z` 开头）：`z` 后面的字母交给拼音引擎（软件默认词库 / 用户词库 /
+    ///   第三方词库），再给每条中文候选标上它的五笔完整码（`云朵 [fcms]`）；
+    /// - **纯五笔**：已经敲的整串当编码（`z` 是通配一位，显示成 `*`），命中码表里符合的条目。
+    ///   单键先放一级简码（`一 [①]`），英文混输开着时再在中文候选后面追加英文词。
+    ///
+    /// 拼音行里的 `z` 通配显示成 `*`（`fc*s`）；一个候选都没有时返回
+    /// [`ParseError::NoSegmentation`]，壳按「切不动的串」原样画预编辑。
     fn query_shape(
         &self,
         table: &crate::shape::Table,
         keys: &str,
         typed: &str,
     ) -> Result<Query, ParseError> {
-        let started = Instant::now();
-        let entries = table.candidates(&keys.to_ascii_lowercase(), crate::shape::MAX_CANDIDATES);
-        if entries.is_empty() {
-            return Err(ParseError::NoSegmentation);
+        if let Some(rest_keys) = keys.strip_prefix('z') {
+            return self.query_shape_z(table, rest_keys, typed);
         }
+        let pattern: String = keys
+            .chars()
+            .map(|key| if key == 'z' { '*' } else { key })
+            .collect();
+        let started = Instant::now();
+        let entries = table.candidates(&pattern, crate::shape::MAX_CANDIDATES);
+        let mut items: Vec<Candidate> =
+            Vec::with_capacity(entries.len() + SHAPE_ENGLISH_CANDIDATES);
         let mut weights = HashMap::with_capacity(entries.len());
-        let items: Vec<Candidate> = entries
-            .iter()
-            .map(|entry| {
-                weights
-                    .entry(entry.text.to_string())
-                    .or_insert(f64::from(entry.weight));
-                Candidate {
-                    text: entry.text.to_string(),
+        // 一级简码：单键（不是通配）一定排第一，右侧画 `[①]`
+        if keys.len() == 1
+            && !keys.contains('z')
+            && let Some(text) = keys.chars().next().and_then(|key| table.level_one(key))
+        {
+            items.push(Candidate {
+                text: text.to_owned(),
+                display: None,
+                kind: CandidateKind::Chinese,
+                // 一级简码就是这一键：上屏时把敲的那一个键吃掉
+                syllables: vec![keys.to_owned()],
+                reading: None,
+                auxiliary: Some("①".to_owned()),
+                auxiliary_typed: None,
+            });
+        }
+        for entry in &entries {
+            // 一级简码已经放过的字不再重复出
+            if items.iter().any(|candidate| *candidate.text == *entry.text) {
+                continue;
+            }
+            weights
+                .entry(entry.text.to_string())
+                .or_insert(f64::from(entry.weight));
+            items.push(Candidate {
+                text: entry.text.to_string(),
+                display: None,
+                kind: CandidateKind::Chinese,
+                // 候选只对应一条完整编码：上屏时按它消耗敲的键（前缀也算），与双键拼音同一条路
+                syllables: vec![entry.code.to_string()],
+                reading: None,
+                auxiliary: None,
+                auxiliary_typed: None,
+            });
+        }
+        // 英文混输：按敲的键给英文词，追加在五笔候选后面（不参与五笔的排序）。通配码不掺英文。
+        // 单键的英文补全没有意义、还要扫几千个词，所以两键起才出。
+        if self.shape_mixture_input && !keys.contains('z') && keys.len() >= 2 {
+            for word in self.shape_english_candidates(keys) {
+                if items
+                    .iter()
+                    .any(|candidate| candidate.text.eq_ignore_ascii_case(&word))
+                {
+                    continue;
+                }
+                items.push(Candidate {
+                    text: word,
                     display: None,
-                    kind: CandidateKind::Chinese,
-                    // 候选只对应一条完整编码：上屏时按它消耗敲的键（前缀也算），与双键拼音同一条路
-                    syllables: vec![entry.code.to_string()],
+                    kind: CandidateKind::English,
+                    syllables: Vec::new(),
                     reading: None,
                     auxiliary: None,
                     auxiliary_typed: None,
-                }
-            })
+                });
+            }
+        }
+        if items.is_empty() {
+            return Err(ParseError::NoSegmentation);
+        }
+        let display: String = self
+            .composition
+            .display_text()
+            .chars()
+            .map(|c| if c == 'z' { '*' } else { c })
             .collect();
-        // 预编辑整段都是编码原文（光标停在中间时也照原样显示，不插 `'` 分音节）：交给 `typed_display`，
-        // `rest` 留空，光标由 `segments_cursor` 按敲的字母数落位。
-        let display = self.composition.display_text();
         Ok(Query {
             segmentations: Vec::new(),
             candidates: CandidateList { items },
@@ -379,6 +443,64 @@ impl Engine {
             expanded_pinyin: false,
             selected: String::new(),
         })
+    }
+
+    /// z 模式：`z` 后面是一段临时拼音，候选由普通拼音引擎出，再标上五笔反查码。
+    ///
+    /// 反查码只在这里填（`Candidate::auxiliary`）：纯五笔与拼音输入都不会显示它。
+    fn query_shape_z(
+        &self,
+        table: &crate::shape::Table,
+        rest_keys: &str,
+        typed: &str,
+    ) -> Result<Query, ParseError> {
+        if rest_keys.is_empty() {
+            return Err(ParseError::NoSegmentation);
+        }
+        let mut query = self.query_phonetic(rest_keys, String::new(), Instant::now(), true)?;
+        for candidate in &mut query.candidates.items {
+            if let Some(code) = table.code_of(&candidate.text) {
+                candidate.auxiliary = Some(code.to_owned());
+                candidate.auxiliary_typed = None;
+            }
+        }
+        // 预编辑整段显示敲的原文（`zyunduo`），不插拼音分隔符；z 是模式键不是通配位，不换成 `*`
+        let display = self.composition.display_text();
+        query.segmentations.clear();
+        query.text = display.clone();
+        query.cursor = self.composition.display_cursor();
+        query.rest = String::new();
+        query.tail = typed.to_owned();
+        query.typed_display = Some(display);
+        query.expanded_pinyin = false;
+        Ok(query)
+    }
+
+    /// 形码英文混输的英文候选：整段精确词在前，再按词频补全（不做拼错纠正）。
+    ///
+    /// 只用词表按前缀二分（`WordList::complete_entries`），不去扫整张表：一两个字母的补全也要便宜。
+    fn shape_english_candidates(&self, keys: &str) -> Vec<String> {
+        let lists = self.english_lists();
+        let mut words: Vec<String> = Vec::new();
+        if let Some(word) = lists.iter().find_map(|list| list.get(keys)) {
+            words.push(word.to_owned());
+        }
+        let mut ranked: Vec<(u32, &str)> = lists
+            .iter()
+            .flat_map(|list| list.complete_entries(keys, SHAPE_ENGLISH_CANDIDATES))
+            .map(|(_, word, frequency)| (frequency, word))
+            .collect();
+        ranked.sort_by(|left, right| right.0.cmp(&left.0).then_with(|| left.1.cmp(right.1)));
+        for (_, word) in ranked {
+            if words.len() >= SHAPE_ENGLISH_CANDIDATES {
+                break;
+            }
+            if !words.iter().any(|seen| seen.eq_ignore_ascii_case(word)) {
+                words.push(word.to_owned());
+            }
+        }
+        words.truncate(SHAPE_ENGLISH_CANDIDATES);
+        words
     }
 
     /// 双键拼音的查询：每种解法都按方案的切分跑一遍拼音侧的候选生成。

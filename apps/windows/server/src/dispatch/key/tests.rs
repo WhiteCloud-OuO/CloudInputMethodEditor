@@ -3034,3 +3034,79 @@ fn backtick_cycles_the_case_of_a_mixed_sentence() {
         "反引号应把整句里的 cpu 切成大写，实际 {texts:?}"
     );
 }
+
+/// 形码测试路由器：码表里 `abcd` 唯一、`wqvb` 有两个候选。
+fn shape_router(unique: bool, fifth: bool, mixture: bool) -> Router {
+    let table = cloudime_core::shape::Table::parse(
+        "a\t工\t20\nabcd\t字\t20\nwqvb\t你好\t20\nwqvb\t您好\t10\n",
+        4,
+    )
+    .0;
+    let mut engine = Engine::new(Dictionary::parse("你好\tni hao\t100\n").unwrap());
+    engine.set_shape(Some(table));
+    engine.set_shape_mixture_input(mixture);
+    let mut r = Router::new(
+        engine,
+        RouterConfig {
+            page_size: 9,
+            shape_unique_commit: unique,
+            shape_fifth_key_commit: fifth,
+            shape_mixture_input: mixture,
+            ..Default::default()
+        },
+    );
+    r.handle(ClientMessage::OpenSession {
+        session: SessionId(1),
+        app: None,
+        protocol: PROTOCOL_VERSION,
+    });
+    r
+}
+
+#[test]
+fn shape_four_code_unique_commits_automatically() {
+    let mut r = shape_router(true, false, false);
+    let normal = KeyModifiers::default();
+    key(&mut r, 0x41, Some('a'), normal);
+    key(&mut r, 0x42, Some('b'), normal);
+    key(&mut r, 0x43, Some('c'), normal);
+    let (_, commit, _) = key(&mut r, 0x44, Some('d'), normal);
+    assert_eq!(commit.as_deref(), Some("字"));
+    assert!(!r.composing(), "自动上屏后组句清空");
+
+    // 两个候选时不自动上屏
+    let mut r = shape_router(true, false, false);
+    for (key_code, c) in [(0x57, 'w'), (0x51, 'q'), (0x56, 'v'), (0x42, 'b')] {
+        key(&mut r, key_code, Some(c), normal);
+    }
+    assert_eq!(r.engine.composition().text(), "wqvb");
+}
+
+#[test]
+fn shape_fifth_key_tops_the_previous_code() {
+    let mut r = shape_router(true, true, false);
+    let normal = KeyModifiers::default();
+    for (key_code, c) in [(0x57, 'w'), (0x51, 'q'), (0x56, 'v'), (0x42, 'b')] {
+        key(&mut r, key_code, Some(c), normal);
+    }
+    let (_, commit, frame) = key(&mut r, 0x41, Some('a'), normal);
+    assert_eq!(commit.as_deref(), Some("你好"), "第五码顶掉四码首选");
+    assert_eq!(r.engine.composition().text(), "a", "第五码变成新一段编码");
+    assert_eq!(
+        frame.candidates.items.first().map(|c| c.text.as_str()),
+        Some("工"),
+        "新一段编码立刻出候选"
+    );
+}
+
+#[test]
+fn shape_fifth_key_is_skipped_with_english_mixed_input() {
+    let mut r = shape_router(true, true, true);
+    let normal = KeyModifiers::default();
+    for (key_code, c) in [(0x57, 'w'), (0x51, 'q'), (0x56, 'v'), (0x42, 'b')] {
+        key(&mut r, key_code, Some(c), normal);
+    }
+    let (_, commit, _) = key(&mut r, 0x41, Some('a'), normal);
+    assert_eq!(commit, None, "英文混输开着时不顶字");
+    assert_eq!(r.engine.composition().text(), "wqvba");
+}

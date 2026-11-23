@@ -493,7 +493,15 @@ impl Router {
         }
         if c.is_ascii_alphabetic() {
             if !event.modifiers.caps {
+                // 形码：四码敲满再按第五个字母 → 先顶掉当前首选，再把这一个字母当新一段编码
+                if let Some(commit) = self.shape_fifth_key(c) {
+                    return Effect::Changed(commit);
+                }
                 self.engine.push(c);
+                // 形码：四码敲满且只有一个候选 → 自动上屏
+                if let Some(text) = self.shape_unique_commit() {
+                    return Effect::Changed(Some(text));
+                }
                 return Effect::Changed(None);
             }
             // Caps 亮着：组句里的拼音先原样上屏，字母按「全角字符」设置交给应用或由我们插全角形
@@ -734,6 +742,54 @@ impl Router {
                     _ => false,
                 })
         })
+    }
+
+    /// 形码第五码顶字：四码已经敲满时再按一个字母，先把当前首选上屏，再把这一个字母当新一段编码。
+    ///
+    /// 英文混输开着时**不顶**（第五个字母可能还是英文词的一部分，见 `docs/design/shape-code.md`）。
+    /// 返回 `Some(commit)` 表示这一键已经处理（`commit` 是要交给应用的文本，可能为空：
+    /// 四码没有任何候选时把这四个键丢掉、第五键起一段新的）。不是纯五笔 / 没敲满就返回 `None`。
+    fn shape_fifth_key(&mut self, c: char) -> Option<Option<String>> {
+        if !self.config.shape_fifth_key_commit || self.config.shape_mixture_input {
+            return None;
+        }
+        let max = self.engine.shape_max_code_length()?;
+        if self.engine.shape_code_len()? != max {
+            return None;
+        }
+        let commit = self
+            .engine
+            .query()
+            .ok()
+            .and_then(|query| query.candidates.items.first().cloned())
+            .and_then(|candidate| self.engine.commit(&candidate));
+        if commit.is_none() {
+            // 四码没有候选（也切不出东西）：这四个键作废，第五键重新起一段
+            self.engine.clear();
+        }
+        self.engine.push(c);
+        Some(commit)
+    }
+
+    /// 形码四码唯一时自动上屏：敲满最长编码后候选只有一条就上屏。
+    fn shape_unique_commit(&mut self) -> Option<String> {
+        if !self.config.shape_unique_commit {
+            return None;
+        }
+        let max = self.engine.shape_max_code_length()?;
+        if self.engine.shape_code_len()? != max {
+            return None;
+        }
+        let query = self.engine.query().ok()?;
+        if query.candidates.items.len() != 1 {
+            return None;
+        }
+        let candidate = &query.candidates.items[0];
+        // 英文混输开着时列表末尾可能只有英文词：那不是五笔码，不自动上屏
+        if candidate.kind != CandidateKind::Chinese {
+            return None;
+        }
+        self.engine.commit(candidate)
     }
 
     /// 把当前组句整段交给应用：先选上高亮候选（可能并进组句），再把剩下的未选拼音原样补完一起上屏。
