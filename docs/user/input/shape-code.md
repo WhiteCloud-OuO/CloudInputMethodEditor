@@ -97,7 +97,7 @@ InputSchemes\ShapeCode\
     level1.tsv
     roots.tsv
     roots_pua.tsv           字根的 PUA 码位（配下面的字体）
-    zigen.ttf               字根字体（霞鹜文楷子集，OFL.txt 同一目录）
+    zigen.ttf               字根字体（更纱黑体子集，OFL.txt 同一目录）
 ```
 
 - 换方案：设置页的「形码输入」面板里选，或改 `use_input_scheme.cfg` 的 `scheme = wubi`。
@@ -105,7 +105,7 @@ InputSchemes\ShapeCode\
   码表是 UTF-8 的「编码 + 制表符 + 文字 + 制表符 + 权重」，一行一条；`#` 开头是注释。
 - 一级简码：`level1.tsv`，一行「键 + 制表符 + 字」。
 - 字根参考：`roots.tsv`，一行「键 + 制表符 + 字根（空格分隔）」；`[Shape] Roots` 指向它。
-  五笔还带一份字根字体 `zigen.ttf`（霞鹜文楷子集，许可证见 `OFL.txt`），字根按理论字形画：
+  五笔还带一份字根字体 `zigen.ttf`（更纱黑体子集，许可证见 `OFL.txt`），字根按理论字形画：
   `礻` `衤` 不带上面的点、`鱼` 不带尾横、`豕` 不带顶横、`羊` 不带上面两点、`氏` 不带右下的「七」、
   `母` 只留外框带钩；字体不在就自动退回普通汉字，不影响功能。
 - 方案支持哪些设置项由 `scheme.toml` 的 `[Options]` 声明（五笔是 `MixtureInput` / `UniqueCommit` /

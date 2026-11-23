@@ -1,7 +1,9 @@
-Copyright 2021-2026 LXGW (https://github.com/lxgw/LxgwWenKai), with Reserved Font Name '霞鹜', '霞鶩', '落霞孤鹜', '落霞孤鶩' and 'LXGW'. [ADDITIONAL PERMISSION] The Reserved Font Names '霞鹜', '霞鶩', '落霞孤鹜', '落霞孤鶩' and 'LXGW' may continue to be used in Modified Versions recompiled from the Original Version, without modifications to the font source code; or in Modified Versions subsetted or converted to other formats (e.g., WOFF/WOFF2) solely for web font delivery, provided such Modified Versions are not made available as installable desktop fonts (e.g., on mainstream platforms like Google Fonts, or third-party non-commercial platforms recognized by the author @lxgw; other web font platforms please contact the author @lxgw for confirmation).
-Copyright 2020 The Klee Project Authors (https://github.com/fontworks-fonts/Klee)
+Copyright (c) 2015-2025, Renzhi Li (aka. Belleve Invis, belleve@typeof.net).
+Portions Copyright (c) 2016 The Inter Project Authors.
+Portions Copyright (c) 2014-2021 Adobe Systems Incorporated (http://www.adobe.com/), with Reserved Font Name 'Source'.
+Portions Copyright (c) 2012 Google Inc.
 
-同目录下的 zigen.ttf 是霞鹜文楷（LXGW WenKai Regular）的子集派生版本：只保留五笔 25 个键上的
+同目录下的 zigen.ttf 是更纱黑体（Sarasa Gothic SC Regular）的子集派生版本：只保留五笔 25 个键上的
 代表性字根，其中几个字根按理论字形削掉了多余笔画（见 docs/design/shape-code.md §3.3）。它由
 tools/root-font/gen_roots_font.py 生成，字族改名为「云朵字根」，没有使用上面的保留字体名。
 分发这个字体时请把本文件和字体放在一起。

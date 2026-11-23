@@ -1,5 +1,5 @@
 # 形码 PUA 字根（配合字根字体使用）：键<TAB>码位（十六进制，空格分隔）
-# 由 tools/root-font/gen_roots_font.py 依 roots.tsv 的顺序从 LXGWWenKai-Regular.ttf 生成。
+# 由 tools/root-font/gen_roots_font.py 依 roots.tsv 的顺序从 sarasa-gothic-sc-regular.ttf 生成。
 # 改了 roots.tsv 要重跑生成脚本，字体和这份表一起换。
 g	E000 E001 E002 E003 E004 E005
 f	E006 E007 E008 E009 E00A E00B E00C

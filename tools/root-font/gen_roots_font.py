@@ -6,10 +6,10 @@
 
 用法（在仓库根目录跑）：
 
-    uv run tools/root-font/gen_roots_font.py --source C:/Windows/Fonts/LXGWWenKai-Regular.ttf
+    uv run tools/root-font/gen_roots_font.py --source C:/Windows/Fonts/sarasa-gothic-sc-regular.ttf
 
     uv run tools/root-font/gen_roots_font.py \
-        --source C:/Windows/Fonts/LXGWWenKai-Regular.ttf \
+        --source C:/Windows/Fonts/sarasa-gothic-sc-regular.ttf \
         --roots InputSchemes/ShapeCode/wubi/roots.tsv \
         --out-font InputSchemes/ShapeCode/wubi/zigen.ttf \
         --out-table InputSchemes/ShapeCode/wubi/roots_pua.tsv \
@@ -19,9 +19,10 @@
 `SHAPES` 削掉笔画），`cmap` 指向 PUA 码位、字宽统一成一格，写出字体与配套的 `roots_pua.tsv`；
 方案的 `scheme.toml` 里填 `RootFont` / `RootFontFamily` 就能用上（见 `docs/design/shape-code.md` §3.4）。
 
-源字体必须是允许改作与再分发的（霞鹜文楷、更纱黑体、思源黑体都是 SIL OFL 1.1）。生成的字是
-**源字体的派生作品**：随方案分发时要带上源字体的许可证与版权声明；`--family` 换个名字也顺手避开
-OFL 的保留字体名（Reserved Font Name）。
+源字体必须是允许改作与再分发的（更纱黑体、思源黑体、霞鹜文楷都是 SIL OFL 1.1）。仓库里的字根字体
+用**更纱黑体 SC Regular**：黑体在 7.5px 这种小字号下比楷体清楚；`SHAPES` 里的坐标也是按它量的。
+生成的字是**源字体的派生作品**：随方案分发时要带上源字体的许可证与版权声明；`--family` 换个名字
+也顺手避开 OFL 的保留字体名（Reserved Font Name）。
 """
 
 import argparse
@@ -43,33 +44,34 @@ LICENSE_NOTE = "This Font Software is licensed under the SIL Open Font License, 
 # 五笔字根里有几个「不是整字」的字形，得在源字体字形上削两刀（坐标是字体单位，y 向上、原点在基线）：
 #   drop：去掉与判断函数匹配的独立笔画（点之类单独成段的笔画）
 #   cut： 切掉一块矩形（横画之类跟主体连在一起的）
-# 见 docs/design/shape-code.md §3.3，口诀里的「勺缺点 / 无尾鱼 / 家衣底 / 摘礻衤 / 慈母无心」。
+# 坐标是按**更纱黑体 SC Regular**（sarasa-gothic-sc-regular.ttf）量的；换源字体要重新量一遍。
+# 见 docs/design/shape-code.md §3.3，口诀里的「勺缺点 / 无尾鱼 / 家衣底 / 摘礻衤 / 慈母无心 / 羊字底 / 氏无七」。
 SHAPES = {
-    # 礻 衤 上面那个点
-    "礻": {"drop": lambda b: b[3] > 560 and b[2] - b[0] < 300},
-    "衤": {"drop": lambda b: b[3] > 560 and b[2] - b[0] < 300},
+    # 礻 上面那个点（更纱的礻 是一整段轮廓，只能切）
+    "礻": {"cut": [(180, 690, 420, 900)]},
+    # 衤 上面那个点（独立的点）
+    "衤": {"drop": lambda b: b[3] > 600 and b[2] - b[0] < 300},
     # 无尾鱼：最下面那条横
     "鱼": {"drop": lambda b: b[3] - b[1] < 130 and b[2] - b[0] > 600},
     # 家衣底：豕 顶上那一横
-    "豕": {"cut": [(-120, 660, 1120, 900)]},
+    "豕": {"cut": [(-120, 715, 1120, 900)]},
     # 羊字底：羊 去掉上面两点
-    "羊": {"cut": [(-120, 610, 1120, 900)]},
-    # 氏无七：去掉里面那一横和右下那一笔（只留撇 + 竖提）
+    "羊": {"cut": [(-120, 668, 1120, 900)]},
+    # 氏无七：去掉中间一横和右下斜钩，只留撇 + 竖提
     "氏": {
         "cut": [
-            (285, 335, 1010, 475),
-            (520, 475, 1010, 700),
-            (520, 150, 1010, 335),
-            (600, -170, 1010, 150),
+            (248, 375, 1010, 455),
+            (532, -120, 1010, 380),
+            (520, 455, 640, 680),
         ]
     },
     # 慈母无心：去掉两个点，再切掉中间那一横（三段避开左右两竖）
     "母": {
-        "drop": lambda b: b[2] - b[0] < 300 and b[3] - b[1] < 300,
+        "drop": lambda b: b[2] - b[0] < 300 and b[3] - b[1] < 250,
         "cut": [
-            (-120, 375, 244, 495),
-            (306, 375, 716, 495),
-            (780, 375, 1120, 495),
+            (-120, 398, 176, 482),
+            (268, 398, 752, 482),
+            (835, 398, 1120, 482),
         ],
     },
 }
