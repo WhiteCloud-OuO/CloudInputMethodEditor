@@ -35,6 +35,24 @@ const KEY_MIXTURE_INPUT: &str = "mixture_input";
 const KEY_UNIQUE_COMMIT: &str = "unique_commit";
 const KEY_FIFTH_KEY_COMMIT: &str = "fifth_key_commit";
 
+/// 形码方案**支持**哪些用户级开关（`scheme.toml` 的 `[Options]`）。
+///
+/// 这些是五笔特有的（英文混输 / 四码唯一自动上屏 / 第五码顶字），别的形码方案没写就不显示、也不生效；
+/// 以后仓颉 / 声笔有自己的一套选项时，往里加自己的能力位。
+#[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
+pub struct ShapeCapabilities {
+    pub mixture_input: bool,
+    pub unique_commit: bool,
+    pub fifth_key_commit: bool,
+}
+
+impl ShapeCapabilities {
+    /// 一个可选设置都没有（设置页那块面板只显示方案信息与按钮）。
+    pub fn is_empty(self) -> bool {
+        !self.mixture_input && !self.unique_commit && !self.fifth_key_commit
+    }
+}
+
 /// 形码的用户级开关。
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ShapeOptions {
@@ -111,6 +129,9 @@ pub struct ShapeScheme {
     /// `[Shape] MaxCodeLength`：最长编码长度。
     pub max_code_length: usize,
 
+    /// 这个方案支持哪些用户级开关（`[Options]`，五笔特有的三项）。
+    pub capabilities: ShapeCapabilities,
+
     /// 码表文件（`[Shape] Table` 相对方案目录）。
     pub table_path: PathBuf,
 
@@ -186,6 +207,7 @@ pub fn load(dir: &Path) -> Result<ShapeScheme, ShapeSchemeError> {
     let version = required(info, "Version")?;
     let author = optional(info, "Author").unwrap_or_default();
     let shape = section(&root, "Shape").ok();
+    let capabilities = capabilities(&root);
     let table_name = shape
         .and_then(|shape| optional(shape, "Table"))
         .filter(|value| !value.trim().is_empty())
@@ -254,9 +276,48 @@ pub fn load(dir: &Path) -> Result<ShapeScheme, ShapeSchemeError> {
         version,
         author,
         max_code_length,
+        capabilities,
         table_path,
         table,
     })
+}
+
+/// 读 `[Options]` 里这个方案支持的用户级开关；节不在 / 没写就是全不支持。
+fn capabilities(root: &toml::Value) -> ShapeCapabilities {
+    let Some(options) = section(root, "Options").ok() else {
+        return ShapeCapabilities::default();
+    };
+    let flag = |key: &str| optional(options, key).is_some_and(|value| super::flag_of(&value));
+    ShapeCapabilities {
+        mixture_input: flag("MixtureInput"),
+        unique_commit: flag("UniqueCommit"),
+        fifth_key_commit: flag("FifthKeyCommit"),
+    }
+}
+
+/// 方案目录里有哪些方案 id（含 `scheme.toml` 的子目录，按目录名升序）；只扫目录名，不读码表。
+fn scheme_ids(dir: &Path) -> Vec<String> {
+    let Ok(files) = std::fs::read_dir(dir) else {
+        return Vec::new();
+    };
+    let mut ids: Vec<String> = files
+        .flatten()
+        .filter(|file| file.path().is_dir() && file.path().join(SCHEME_FILE).is_file())
+        .filter_map(|file| file.file_name().to_str().map(str::to_owned))
+        .collect();
+    ids.sort_by_key(|id| id.to_ascii_lowercase());
+    ids
+}
+
+/// 只读一个方案目录的 `scheme.toml` 能力位（不加载码表；读不出来就是全不支持）。
+fn read_capabilities(dir: &Path) -> ShapeCapabilities {
+    let Ok(text) = std::fs::read_to_string(dir.join(SCHEME_FILE)) else {
+        return ShapeCapabilities::default();
+    };
+    match toml::from_str::<toml::Value>(&text) {
+        Ok(root) => capabilities(&root),
+        Err(_) => ShapeCapabilities::default(),
+    }
 }
 
 /// **当前方案**：`use_input_scheme.cfg` 的 `scheme` 指哪份用哪份；指不到（没写 / 指错了）
@@ -308,8 +369,31 @@ pub fn read_options(dir: &Path) -> ShapeOptions {
 }
 
 /// 当前形码方案目录的开关（没有安装目录 / 没有方案目录就是缺省值）。
+///
+/// **只返回当前方案支持的那几项**：方案没有声明 `[Options]` 里的能力时一律按关处理，
+/// 切到仓颉 / 声笔时五笔特有的三项不会偷偷生效。
 pub fn current_options() -> ShapeOptions {
-    shape_code_dir().map_or_else(ShapeOptions::default, |dir| read_options(&dir))
+    let Some(dir) = shape_code_dir() else {
+        return ShapeOptions::default();
+    };
+    let mut options = read_options(&dir);
+    let capabilities = current_capabilities();
+    options.mixture_input &= capabilities.mixture_input;
+    options.unique_commit &= capabilities.unique_commit;
+    options.fifth_key_commit &= capabilities.fifth_key_commit;
+    options
+}
+
+/// 当前方案声明支持哪些用户级开关（只读 `scheme.toml`，不加载码表）。
+pub fn current_capabilities() -> ShapeCapabilities {
+    let Some(dir) = shape_code_dir() else {
+        return ShapeCapabilities::default();
+    };
+    let id = super::read_current(&dir)
+        .filter(|id| dir.join(id).join(SCHEME_FILE).is_file())
+        .or_else(|| scheme_ids(&dir).into_iter().next());
+    id.map(|id| read_capabilities(&dir.join(id)))
+        .unwrap_or_default()
 }
 
 /// 改一项开关（`mixture_input` / `unique_commit` / `fifth_key_commit`），别的行原样保留。
@@ -422,6 +506,7 @@ fn optional(table: &toml::Table, key: &str) -> Option<String> {
         .find(|(name, _)| name.eq_ignore_ascii_case(key))
         .and_then(|(_, value)| match value {
             toml::Value::String(text) => Some(text.clone()),
+            toml::Value::Boolean(flag) => Some(flag.to_string()),
             toml::Value::Integer(number) => Some(number.to_string()),
             _ => None,
         })
@@ -586,6 +671,32 @@ mod tests {
         assert_eq!(scheme.table.level_one('g'), Some("一"));
         assert_eq!(scheme.table.level_one('f'), Some("地"));
         assert_eq!(scheme.table.level_one('a'), None);
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn capabilities_come_from_the_scheme_options_section() {
+        let root = temp_dir("capabilities");
+        let dir = root.join("wubi");
+        write_scheme(&dir, "五笔86");
+        std::fs::write(
+            dir.join(SCHEME_FILE),
+            "[Info]\nName = \"五笔86\"\nVersion = \"1.0\"\n\n[Shape]\nTable = \"table.tsv\"\n\n[options]\nMixtureInput = true\nUniqueCommit = false\n",
+        )
+        .unwrap();
+        let scheme = load(&dir).unwrap();
+        assert!(scheme.capabilities.mixture_input);
+        assert!(!scheme.capabilities.unique_commit);
+        assert!(!scheme.capabilities.fifth_key_commit, "没写就是不支持");
+
+        // 没有 [Options] 的方案：三项都不支持（设置页不显示这些五笔专属开关）
+        std::fs::write(
+            dir.join(SCHEME_FILE),
+            "[Info]\nName = \"五笔86\"\nVersion = \"1.0\"\n\n[Shape]\nTable = \"table.tsv\"\n",
+        )
+        .unwrap();
+        let scheme = load(&dir).unwrap();
+        assert!(scheme.capabilities.is_empty());
         let _ = std::fs::remove_dir_all(&root);
     }
 

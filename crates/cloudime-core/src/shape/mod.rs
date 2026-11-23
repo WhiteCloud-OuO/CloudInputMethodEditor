@@ -3,6 +3,7 @@
 //! 码表一行 `编码<TAB>文字<TAB>权重`，编码只认小写 `a`–`z`、最长 [`Table::max_code_length`] 位
 //! （方案文件里写）。查询是**前缀匹配**：敲 1–4 键都拿已经敲的整串当前缀，命中所有以它开头的编码；
 //! 同一个文字会出现在好几个编码下（五笔的一级到三级简码与全码），同一页里只留权重最高的那一条。
+//! 候选**单字优先**（单字全排在多字词前），组内再按静态权重排。
 //!
 //! 形码没有拼音切分、没有整句转换，候选只按静态权重排；码表由平台层从方案目录读出来，
 //! Core 不碰文件（与双键拼音的键位表同一条分工）。
@@ -26,6 +27,13 @@ pub struct Entry {
 
     /// 源文件里的行序：权重相同的条目按上游词库的顺序排。
     order: u32,
+}
+
+impl Entry {
+    /// 多字词（`true`）还是单字（`false`）。候选排序里单字优先。
+    fn is_word(&self) -> bool {
+        self.text.chars().nth(1).is_some()
+    }
 }
 
 /// 一张形码码表。条目按编码升序、同一编码内按权重降序排好，前缀查询靠二分定位。
@@ -219,9 +227,10 @@ impl Table {
         chosen.sort_by(|&left, &right| {
             let left = &self.entries[left];
             let right = &self.entries[right];
-            right
-                .weight
-                .cmp(&left.weight)
+            // 五笔单字优先：单字排在多字词前，组内再按权重 / 编码长度 / 源文件顺序
+            left.is_word()
+                .cmp(&right.is_word())
+                .then_with(|| right.weight.cmp(&left.weight))
                 .then_with(|| left.code.len().cmp(&right.code.len()))
                 .then_with(|| left.order.cmp(&right.order))
         });
@@ -344,6 +353,13 @@ rqyy\t换句话说\t20
         assert!(table.candidates("zzzz", 10).is_empty());
         assert!(table.candidates("", 10).is_empty(), "空前缀不查");
         assert!(table.candidates("a", 0).is_empty());
+    }
+
+    #[test]
+    fn single_characters_come_before_phrases_even_with_lower_weight() {
+        let (table, _) = Table::parse("aa\t工\t10\naa\t词语\t99\na\t一\t10\n", 4);
+        assert_eq!(texts(table.candidates("aa", 10)), ["工", "词语"]);
+        assert_eq!(texts(table.candidates("a", 10)), ["一", "工", "词语"]);
     }
 
     #[test]

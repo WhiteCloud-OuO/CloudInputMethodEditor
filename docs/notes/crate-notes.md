@@ -135,7 +135,7 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
 读「编码\t文字\t权重」三列（`#` 注释、空行忽略；编码只认小写 a–z、1–max 位；坏行跳过并在返回值里列原因），
 条目按编码升序、同码按权重降序存；`candidates(pattern, limit)` 用 `partition_point` 定位固定前缀范围，
 再按 `*`（一位通配）逐个对位，按**文字去重**（一个字在多个编码下命中只留权重最高的一条，同权重取源文件靠前的），
-再按「权重降序 → 编码短者优先 → 源文件顺序」排，最多 `MAX_CANDIDATES = 500` 条（`SHAPE_MAX_CANDIDATES`）。
+再按「**单字优先** → 权重降序 → 编码短者优先 → 源文件顺序」排，最多 `MAX_CANDIDATES = 500` 条（`SHAPE_MAX_CANDIDATES`）。
 `Engine::set_shape` / `shape` 挂表；`query_inner` 的顺序是英文模式 → 双键拼音 → 形码 → 表达式 / 英文直输 / 全拼，
 `query_shape` 直接把敲的整串当前缀查（`segmentations` 为空、`tail` = 敲的原文，拼音行原样显示编码），
 一个候选都没有就是 `ParseError::NoSegmentation`。候选是 `CandidateKind::Chinese`，`syllables` 只有一项
@@ -155,7 +155,10 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
 `consumed_by` 在 z 模式下**整段消费**，`accepted_typos` 对形码一律不记；纯五笔不加用户短语、不自动造词。
 形码目录 `.cfg` 的用户级开关由 `ShapeOptions`（`read_options` / `set_option` / `current_options`）读写：
 `mixture_input`（英文混输，缺省关）、`unique_commit`（四码唯一自动上屏，缺省开）、
-`fifth_key_commit`（第五码顶字，缺省开）。`Engine::set_shape_mixture_input` 开着时 `query_shape` 在
+`fifth_key_commit`（第五码顶字，缺省开）。`ShapeCapabilities` 读 `scheme.toml` 的 `[Options]`
+（`MixtureInput` / `UniqueCommit` / `FifthKeyCommit`，bool），`current_options()` 按当前方案的能力位把
+不支持的那几项清成 `false` —— 这三项是五笔特有，仓颉 / 声笔没声明就不显示、也不生效；设置页的形码面板
+按 `ShapeScheme::capabilities` 决定放哪几个开关。`Engine::set_shape_mixture_input` 开着时 `query_shape` 在
 五笔候选后追加英文词（`WordList::complete_entries` 二分取补全 + 精确词，不纠错、不进五笔排序，通配码不掺英文）；
 Server 的 `shape_unique_commit` / `shape_fifth_key`（`dispatch/key/input.rs`）在敲满 `MaxCodeLength` 后
 按 `RouterConfig` 的两个开关自动上屏 / 顶字，英文混输开着时第五码不顶。

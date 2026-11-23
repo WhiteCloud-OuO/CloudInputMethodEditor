@@ -398,10 +398,10 @@ fn shape_panel(settings: &Settings, context: &mut ViewContext<Settings>) -> View
             error_note(&format!("「{}」读不出来：{}", entry.id, entry.problems())),
         ));
     }
-    if let Some(scheme) = current
+    let scheme = current
         .and_then(|index| entries.get(index))
-        .and_then(|entry| entry.scheme.as_ref().ok())
-    {
+        .and_then(|entry| entry.scheme.as_ref().ok());
+    if let Some(scheme) = scheme {
         rows.push(KeyedView::new(
             "shape-info",
             note(&format!(
@@ -412,39 +412,52 @@ fn shape_panel(settings: &Settings, context: &mut ViewContext<Settings>) -> View
             )),
         ));
     }
-    rows.push(KeyedView::new(
-        "shape-mixture-input",
-        field(
-            "英文混输",
-            "开着时五笔候选后面追加英文词（按敲的键匹配，整段英文词 + 前缀补全，不做拼错纠正）；\
-             第五码顶字会因此跳过（第五个字母可能还是英文词的一部分）。这一项记在形码目录的 use_input_scheme.cfg。",
-            ToggleSwitch::new()
-                .is_on(settings.shape_options.mixture_input)
-                .on_toggled(context.callback(Message::ShapeMixtureInput)),
-        ),
-    ));
-    rows.push(KeyedView::new(
-        "shape-unique-commit",
-        field(
-            "四码唯一时自动上屏",
-            "四码打满、候选只剩一个时直接上屏，不用再按空格。",
-            ToggleSwitch::new()
-                .is_on(settings.shape_options.unique_commit)
-                .on_toggled(context.callback(Message::ShapeUniqueCommit)),
-        ),
-    ));
-    rows.push(KeyedView::new(
-        "shape-fifth-key-commit",
-        field(
-            "第五码顶字上屏",
-            "四码打满后再按一个字母：先把当前首选上屏，再把这一个字母当新一段编码。\
-             英文混输开着时这一项不生效。",
-            ToggleSwitch::new()
-                .is_on(settings.shape_options.fifth_key_commit)
-                .is_enabled(!settings.shape_options.mixture_input)
-                .on_toggled(context.callback(Message::ShapeFifthKeyCommit)),
-        ),
-    ));
+    let capabilities = scheme.map(|scheme| scheme.capabilities).unwrap_or_default();
+    if capabilities.mixture_input {
+        rows.push(KeyedView::new(
+            "shape-mixture-input",
+            field(
+                "英文混输",
+                "开着时五笔候选后面追加英文词（按敲的键匹配，整段英文词 + 前缀补全，不做拼错纠正）；\
+                 第五码顶字会因此跳过（第五个字母可能还是英文词的一部分）。这一项记在形码目录的 use_input_scheme.cfg。",
+                ToggleSwitch::new()
+                    .is_on(settings.shape_options.mixture_input)
+                    .on_toggled(context.callback(Message::ShapeMixtureInput)),
+            ),
+        ));
+    }
+    if capabilities.unique_commit {
+        rows.push(KeyedView::new(
+            "shape-unique-commit",
+            field(
+                "四码唯一时自动上屏",
+                "四码打满、候选只剩一个时直接上屏，不用再按空格。",
+                ToggleSwitch::new()
+                    .is_on(settings.shape_options.unique_commit)
+                    .on_toggled(context.callback(Message::ShapeUniqueCommit)),
+            ),
+        ));
+    }
+    if capabilities.fifth_key_commit {
+        rows.push(KeyedView::new(
+            "shape-fifth-key-commit",
+            field(
+                "第五码顶字上屏",
+                "四码打满后再按一个字母：先把当前首选上屏，再把这一个字母当新一段编码。\
+                 英文混输开着时这一项不生效。",
+                ToggleSwitch::new()
+                    .is_on(settings.shape_options.fifth_key_commit)
+                    .is_enabled(!settings.shape_options.mixture_input)
+                    .on_toggled(context.callback(Message::ShapeFifthKeyCommit)),
+            ),
+        ));
+    }
+    if capabilities.is_empty() && scheme.is_some() {
+        rows.push(KeyedView::new(
+            "shape-no-options",
+            note("这个形码方案没有专属设置项；换方案或改码表看上面几个按钮。"),
+        ));
+    }
     rows.push(KeyedView::new(
         "shape-buttons",
         StackPanel::new()
