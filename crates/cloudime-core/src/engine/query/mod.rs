@@ -307,6 +307,12 @@ impl Engine {
         {
             return self.query_shuangpin(table, &self.composition.typed_scope(), &rest, start);
         }
+        // 形码输入：按键就是编码本身，按前缀查码表；不进拼音切分，也没有 v / u / i 那三种面板。
+        if !self.forced_expression
+            && let Some(table) = &self.shape
+        {
+            return self.query_shape(table, keys, &self.composition.typed_scope());
+        }
         if keys.starts_with(EXPRESSION_PREFIX) {
             return Ok(self.query_expression(keys, rest, start));
         }
@@ -314,6 +320,65 @@ impl Engine {
             return Ok(self.query_raw(keys, rest, start));
         }
         self.query_phonetic(keys, rest, start, true)
+    }
+
+    /// 形码查询：把已经敲的整串当前缀，命中码表里所有以它开头的编码。
+    ///
+    /// - **不去重成整句**：形码没有读音，候选就是码表里那些单字 / 词组；
+    /// - 拼音行显示敲的编码原文（Shift 敲的大写按原样显示），`tail` 给它当显示串；
+    /// - 一个候选都没有时返回 [`ParseError::NoSegmentation`]，壳按「切不动的串」原样画预编辑。
+    fn query_shape(
+        &self,
+        table: &crate::shape::Table,
+        keys: &str,
+        typed: &str,
+    ) -> Result<Query, ParseError> {
+        let started = Instant::now();
+        let entries = table.candidates(&keys.to_ascii_lowercase(), crate::shape::MAX_CANDIDATES);
+        if entries.is_empty() {
+            return Err(ParseError::NoSegmentation);
+        }
+        let mut weights = HashMap::with_capacity(entries.len());
+        let items: Vec<Candidate> = entries
+            .iter()
+            .map(|entry| {
+                weights
+                    .entry(entry.text.to_string())
+                    .or_insert(f64::from(entry.weight));
+                Candidate {
+                    text: entry.text.to_string(),
+                    display: None,
+                    kind: CandidateKind::Chinese,
+                    // 候选只对应一条完整编码：上屏时按它消耗敲的键（前缀也算），与双键拼音同一条路
+                    syllables: vec![entry.code.to_string()],
+                    reading: None,
+                    auxiliary: None,
+                    auxiliary_typed: None,
+                }
+            })
+            .collect();
+        // 预编辑整段都是编码原文（光标停在中间时也照原样显示，不插 `'` 分音节）：交给 `typed_display`，
+        // `rest` 留空，光标由 `segments_cursor` 按敲的字母数落位。
+        let display = self.composition.display_text();
+        Ok(Query {
+            segmentations: Vec::new(),
+            candidates: CandidateList { items },
+            weights,
+            // 形码没有「切不动的尾巴」：作用域整段就是编码，日志里的 pinyin 也记敲的原文
+            tail: typed.to_owned(),
+            text: display.clone(),
+            cursor: self.composition.display_cursor(),
+            rest: String::new(),
+            timings: Timings {
+                parse: Duration::ZERO,
+                lookup: started.elapsed(),
+                rank: Duration::ZERO,
+            },
+            correction: None,
+            typed_display: Some(display),
+            expanded_pinyin: false,
+            selected: String::new(),
+        })
     }
 
     /// 双键拼音的查询：每种解法都按方案的切分跑一遍拼音侧的候选生成。

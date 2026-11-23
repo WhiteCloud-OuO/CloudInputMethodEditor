@@ -168,6 +168,12 @@ impl Router {
         // 双键拼音单独一份「中英混合输入」（`use_input_scheme.cfg`，不进 `config.toml`）
         self.engine
             .set_shuangpin_mixture_input(cloudime_platform::input_schemes::mixture_input());
+        // 形码输入：换配置时一并重挂码表（切走就把表清掉）
+        self.engine.set_shape(
+            (config.input.input_schemes == cloudime_platform::InputScheme::ShapeCode)
+                .then(cloudime_platform::input_schemes::current_shape_table)
+                .flatten(),
+        );
         // 方案换了：「辅助窗口」的键位映射参考也跟着换一份（内容）
         self.candidates
             .set_auxiliary(cloudime_platform::input_schemes::key_map_layout());

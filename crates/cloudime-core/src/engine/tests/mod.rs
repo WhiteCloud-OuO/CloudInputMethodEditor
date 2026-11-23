@@ -10,6 +10,7 @@ mod name;
 mod privacy;
 mod raw;
 mod segmented;
+mod shape;
 mod shuangpin;
 
 use std::collections::HashMap;

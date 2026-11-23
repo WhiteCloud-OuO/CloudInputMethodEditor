@@ -121,11 +121,13 @@ impl Engine {
         let buffer_left = !self.composition.text().is_empty();
         match candidate.kind {
             CandidateKind::Chinese => {
+                // 形码的「音节」是编码，不能拿它造用户词（自造词的读音会变成码）；
+                // 词转移照常记，拼音与形码共用同一套词汇上下文。
                 self.record_word(
                     &candidate.text,
                     &candidate.syllables,
                     EXPLICIT_TRANSITION_WEIGHT,
-                    true,
+                    self.shape.is_none(),
                     buffer_left,
                 );
             }

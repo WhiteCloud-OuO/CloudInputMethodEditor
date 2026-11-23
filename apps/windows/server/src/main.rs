@@ -236,6 +236,13 @@ fn main() {
     engine.set_show_raw_input(config.input.show_raw_input);
     // 双键拼音自己的「中英混合输入」（`use_input_scheme.cfg` 的 `mixture_input`，不进 `config.toml`）
     engine.set_shuangpin_mixture_input(cloudime_platform::input_schemes::mixture_input());
+    // 形码输入：配置里选了它就把当前方案（`use_input_scheme.cfg` 指的那份）的码表挂上；
+    // 方案目录空 / 码表读不出来 → `None`，这一轮退回全键拼音
+    engine.set_shape(
+        (config.input.input_schemes == cloudime_platform::InputScheme::ShapeCode)
+            .then(cloudime_platform::input_schemes::current_shape_table)
+            .flatten(),
+    );
     engine.set_mixture_input(config.input.mixture_input);
     engine.set_special_input_word(config.input.special_input_word);
     engine.set_punctuation_mapping(config.input.punctuation_mapping());

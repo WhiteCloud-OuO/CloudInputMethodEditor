@@ -205,10 +205,11 @@ impl Engine {
             self.special_selected = false;
         }
         // 全拼里大写字母只当英文：记成拼音串里的英文字面量，不参与拼音匹配；
-        // 双键拼音的大写仍是辅助码（按小写进缓冲区，原样上屏时还原）。
+        // 双键拼音的大写仍是辅助码（按小写进缓冲区，原样上屏时还原）；形码的大写只是 Caps Lock / Shift
+        // 卡着敲的编码键，同样按小写进缓冲区、原样还原。
         // 英文模式与英文直输段（`no-Way`）始终原样保留。
         if c.is_ascii_uppercase() && !self.english_mode && !self.raw_mode() {
-            if self.shuangpin.is_some() {
+            if self.shuangpin.is_some() || self.shape.is_some() {
                 self.composition.push_shifted(c);
             } else if self.composition.at_upper_tail() {
                 // 连续大写（`CPU`）当一段英文文字：上一枚字面量并回缓冲区，这一枚也进去，
@@ -282,13 +283,13 @@ impl Engine {
     }
 
     /// 删掉光标前的一个音节（Core 接口，壳里还没配键）：全拼按最优切分的最后一个音节连同它后面的 `'`，切不动的尾巴整个删；
-    /// 英文直输段 / 表达式里删最后一段字母或数字，标点一次删一个。
+    /// 英文直输段 / 表达式 / 形码里删最后一段字母或数字，标点一次删一个。
     /// 光标在开头时返回 `false`。
     pub fn delete_syllable_backward(&mut self) -> bool {
         self.note_edit();
         let cursor = self.composition.cursor();
         let before = &self.composition.text()[..cursor];
-        let plain = self.raw_mode() || self.expression_mode();
+        let plain = self.raw_mode() || self.expression_mode() || self.shape.is_some();
         let len = unit_len_before(before, plain, self.use_jian_pin);
         self.composition.delete_before_cursor(len)
     }
@@ -297,7 +298,7 @@ impl Engine {
     pub fn move_cursor_syllable_left(&mut self) -> bool {
         let cursor = self.composition.cursor();
         let before = &self.composition.text()[..cursor];
-        let plain = self.raw_mode() || self.expression_mode();
+        let plain = self.raw_mode() || self.expression_mode() || self.shape.is_some();
         let len = unit_len_before(before, plain, self.use_jian_pin);
         len > 0 && (0..len).all(|_| self.composition.move_left())
     }
@@ -306,7 +307,7 @@ impl Engine {
     pub fn move_cursor_syllable_right(&mut self) -> bool {
         let cursor = self.composition.cursor();
         let after = &self.composition.text()[cursor..];
-        let plain = self.raw_mode() || self.expression_mode();
+        let plain = self.raw_mode() || self.expression_mode() || self.shape.is_some();
         let len = unit_len_after(after, plain, self.use_jian_pin);
         len > 0 && (0..len).all(|_| self.composition.move_right())
     }
@@ -336,10 +337,10 @@ impl Engine {
 
     /// 是否处在表达式模式（缓冲区以固定前缀 `v` 开头）。此时壳应把数字和运算符也交给 [`Self::push`]，而不是当选词键。
     ///
-    /// **`v` / `u` / `i` 三种模式仅全键拼音可用**：挂着双键拼音表时 `v` 只是一个普通方案键，
-    /// 不当表达式（否则 `vhgo` 会被当成表达式、左下角还会冒出「输入数字或表达式」）。
+    /// **`v` / `u` / `i` 三种模式仅全键拼音可用**：挂着双键拼音表或形码码表时 `v` 只是一个普通编码键，
+    /// 不当表达式（否则 `vhgo` / `v` 会被当成表达式、左下角还会冒出「输入数字或表达式」）。
     pub fn expression_mode(&self) -> bool {
-        (self.shuangpin.is_none() || self.forced_expression)
+        (self.shuangpin.is_none() && self.shape.is_none() || self.forced_expression)
             && !self.has_custom_phrase()
             && self.composition.text().starts_with(EXPRESSION_PREFIX)
     }
@@ -454,7 +455,9 @@ impl Engine {
         // 已选段在选中时已各自记过一条上屏记录，这里只补未选拼音那一段，删应用文字时逐条对得上。
         self.log_commit(&keys, &keys, InputSource::Raw);
         // 原样上屏的是个英文词（`gist`）：记进个人英文词表，下次直接出候选。
-        let english_word = looks_like_english_word(&keys, self.english_mode);
+        // 形码的编码不是英文词，按回车原样上屏也不要收进英文词表。
+        let english_word =
+            self.shape.is_none() && looks_like_english_word(&keys, self.english_mode);
         if english_word {
             self.learner.learn_english(&keys);
         }

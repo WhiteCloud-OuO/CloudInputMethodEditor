@@ -6,6 +6,7 @@
 mod auxiliary;
 mod double_keys;
 mod key_map;
+mod shape_code;
 
 pub use auxiliary::{AuxiliaryCodes, MODES, mode_key, mode_label, mode_of};
 pub use double_keys::{
@@ -14,6 +15,10 @@ pub use double_keys::{
 };
 pub use key_map::{
     KeyCap, KeyMapHotkey, KeyMapKey, KeyMapLayout, KeyMapModifiers, KeyMapReference,
+};
+pub use shape_code::{
+    DEFAULT_MAX_CODE_LENGTH, DEFAULT_TABLE, SCHEME_FILE, ShapeEntry, ShapeScheme, ShapeSchemeError,
+    current_table as current_shape_table, shape_code_dir,
 };
 
 use std::collections::BTreeMap;

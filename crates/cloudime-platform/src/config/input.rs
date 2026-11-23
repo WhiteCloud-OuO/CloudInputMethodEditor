@@ -239,8 +239,8 @@ impl FullHalfPunctuation {
 
 /// 输入方案。
 ///
-/// **目前只落配置**：双键拼音与形码输入还没实现，选它们暂时与全拼一样（见
-/// `docs/notes/crate-notes.md` 的「输入方案」）。
+/// 全键拼音、双键拼音、形码输入（五笔 86）各一套；形码的方案文件与码表见
+/// `docs/design/shape-code.md`（`InputSchemes\ShapeCode\<方案>`），设置页那块面板还没做。
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum InputScheme {

@@ -34,6 +34,19 @@ impl Engine {
         self.shuangpin.as_ref()
     }
 
+    /// 形码输入：挂上当前方案的码表（`None` = 不是形码输入）。换表等于换一套编码，格子缓存一起作废。
+    pub fn set_shape(&mut self, table: Option<crate::shape::Table>) {
+        if self.shape.is_some() != table.is_some() {
+            self.forget_span_cache();
+        }
+        self.shape = table;
+    }
+
+    /// 当前挂着的形码码表（`None` = 不是形码输入）。
+    pub fn shape(&self) -> Option<&crate::shape::Table> {
+        self.shape.as_ref()
+    }
+
     /// 辅助码表：只筛选候选（不排序）。`None` = 不筛。
     pub fn set_auxiliary_codes(
         &mut self,

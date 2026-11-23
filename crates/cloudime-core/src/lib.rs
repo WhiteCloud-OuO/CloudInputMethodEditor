@@ -19,6 +19,7 @@ pub mod parser;
 pub mod punctuation;
 pub mod ranking;
 pub mod sentence;
+pub mod shape;
 pub mod shortcut;
 pub mod shuangpin;
 pub mod storage;
@@ -45,3 +46,4 @@ pub use parser::{ParseError, Segmentation};
 pub use punctuation::{
     MappedSymbol, Mapping, Punctuation, SmartSymbol, smart_space_double, smart_space_single,
 };
+pub use shape::{MAX_CANDIDATES as SHAPE_MAX_CANDIDATES, Table as ShapeTable};

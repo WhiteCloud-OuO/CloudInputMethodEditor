@@ -131,6 +131,23 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
 5 个键算不出 4 个音节 → `typed_covered` 返回 0）按**整段**吃掉（`whole_scope()`，与英文词 / 快捷候选同一档）——
 不然选完候选拼音串原样留着（`不受影响buesy`）。
 
+**形码输入**（`shape/mod.rs`，2026-11-23；设计见 `docs/design/shape-code.md`）：`Table::parse(source, max_code_length)`
+读「编码\t文字\t权重」三列（`#` 注释、空行忽略；编码只认小写 a–z、1–max 位；坏行跳过并在返回值里列原因），
+条目按编码升序、同码按权重降序存；`candidates(prefix, limit)` 用 `partition_point` 定位前缀范围，
+按**文字去重**（一个字在多个编码下命中只留权重最高的一条，同权重取源文件靠前的），
+再按「权重降序 → 编码短者优先 → 源文件顺序」排，最多 `MAX_CANDIDATES = 500` 条（`SHAPE_MAX_CANDIDATES`）。
+`Engine::set_shape` / `shape` 挂表；`query_inner` 的顺序是英文模式 → 双键拼音 → 形码 → 表达式 / 英文直输 / 全拼，
+`query_shape` 直接把敲的整串当前缀查（`segmentations` 为空、`tail` = 敲的原文，拼音行原样显示编码），
+一个候选都没有就是 `ParseError::NoSegmentation`。候选是 `CandidateKind::Chinese`，`syllables` 只有一项
+（命中的那条完整编码）—— 上屏走 `consumed_by` 的全拼对齐：编码是敲的键的前缀就把整段吃掉。
+`Engine::expression_mode` 见到形码表返回 `false`（`v` / `u` / `i` 只是编码键）；`push` 里 Shift 敲的大写
+和双键拼音一样按小写进缓冲区（`push_shifted`），拼音行按原样显示。形码候选目前只按静态权重排，
+`Learner` 的用户权重没接进排序。`shape_code.rs`（platform）读 `InputSchemes\ShapeCode\`：
+一个子目录一个方案（必须有 `scheme.toml`），`scheme.toml` 的 `[Info] Name / Version / Author` 与
+`[Shape] Table / MaxCodeLength`（节名 / 键名大小写不敏感，`Name` / `Version` 必填，`Table` 缺省 `table.tsv`、
+`MaxCodeLength` 1–8 缺省 4）；`use_input_scheme.cfg` 的 `scheme` 指子目录名，指不到就取目录名升序第一个可用方案并重建该行
+（`resolve_current` / `write_current`，别的行原样保留）。`current_table()` 把码表交给 Server / CLI 的 `Engine::set_shape`。
+
 `Engine` 是对外唯一门面，`Learner` trait 在 `engine` 模块；词库是「用户词 + 主词库 + 稀有词库（`with_rare` / `set_rare_enabled`，缺省关闭）+ 附加词库（`set_extra_dictionaries`，按添加顺序）」的列表，**按优先级从高到低**；同一个词在靠前词库里命中后，后面的词库不再重复产出（跨词库去重、靠前优先：词级在 `Engine::lookup_across_dictionaries`，整句词图在 `sentence::span_candidates`，都按 `text` 挡重），**同一本词库内部的重复不去重**，留给 `ranking::rank` / `dedup_by` 按名次保留最高的一条。繁体输出（`traditional` 开关与 `traditional_map` 映射）依赖 `ferrous-opencc`（`s2tw`）在出候选与上屏边界转换，内部保持简体。候选在 `Engine::simplify_candidates` 里先用 `t2s` 统一成简体并按文本去重（保留排名靠前的一条、合并 `weights`），所以词库里混入的「冊 / 侧」等繁体异体不会出现在简体候选里；繁体模式再在这份简体候选上走 `s2tw` 转回去，也不会出现简繁两条重复。
 - 候选排序分两级：先按**结构键**，同一结构下再按**权重**降序、`hit.text` 升序。结构键（`ranking::Scored`）依序：
   ① 覆盖的输入字母数降序（`kaif` 的 开发 先于只覆盖 `kai` 的 开）；② 非末尾的简拼音节数升序（`kai f a` 是 1、`kai fa` 是 0）；
@@ -450,7 +467,8 @@ Core 侧 `engine/choice/`：`ChoiceTier`（省电 5 条 / 32 字、均衡 9 / 64
 （它是「重置学习内容」的计数器，不是开关：改小 / 改大都会让 Server 把那本词典的学习记录清掉）。
 配置按「输入 / 候选 / 词库 / 短语」四节重排完成：`[input]`（原来散在 `[general] traditional`、整个 `[fuzzy]`
 与写死在 Core 里的标点规则）：`input_schemes`（`InputScheme`：`full_pinyin` 全拼（缺省）/ `dual_key_pinyin` 双键拼音 /
-`shape_code` 形码输入；**双键拼音已实现**（方案文件与解码器见 `docs/design/input-schemes.md`），形码输入还没实现、选了与全拼一样；选非全拼时设置页把简拼 / 模糊音 / 中英文混合输入三项置灰）、`show_raw_input`（双键拼音下显示原始输入按键，**缺省开**；见 `Engine::show_raw_input`）、`use_jian_pin`、`mo_hu_yin_list`（位图，**一位一条规则**共十二位：zh/z 1、ch/c 2、sh/s 4、r/l 8、n/l 16、
+`shape_code` 形码输入；**双键拼音与形码输入都已实现**（双键的方案文件与解码器见 `docs/design/input-schemes.md`，
+形码的方案目录与码表见 `docs/design/shape-code.md`；选非全拼时设置页把简拼 / 模糊音 / 中英文混合输入三项置灰）、`show_raw_input`（双键拼音下显示原始输入按键，**缺省开**；见 `Engine::show_raw_input`）、`use_jian_pin`、`mo_hu_yin_list`（位图，**一位一条规则**共十二位：zh/z 1、ch/c 2、sh/s 4、r/l 8、n/l 16、
 f/h 32、u/ü 64、uo/o 128、an/ang 256、en/eng 512、in/ing 1024、wang/huang 2048，`MO_HU_YIN_BITS`；0.0.3 起从「五组合并位」改成一位一条，
 老配置同一数值的含义会变，用户重勾一遍即可。Core 侧的规则见 `FuzzyRules`：`uo_o` 走 `luo`↔`lo` 这类合法音节对，
 `wang_huang` 是 `wang`↔`huang` 整音节成对互换，只对完整音节生效）、`simp_trad_chinese_chars_toggle`、`mixture_input`、`full_half_punctuation_marks_toggle`、
@@ -1204,6 +1222,8 @@ Lua 结果：`start` 回 `{ server, started, client_owned }`，`stop` 回 `{ ser
 **输入方案**（`[input] input_schemes`）：Server 启动与配置热加载时按当前双键拼音方案挂 `Engine::set_shuangpin` / `set_auxiliary_codes`
 （`input_schemes::current_table()` / `current_auxiliary_boxed()`），并挂 `.cfg` 里那份中英混合输入
 （`input_schemes::mixture_input()` → `Engine::set_shuangpin_mixture_input`；`config.toml` 里那份只管全键拼音）。
+形码方案同样在启动与热加载时挂 `Engine::set_shape`（`input_schemes::current_shape_table()`；
+`InputSchemes\ShapeCode\` 的当前码表，读不出来就是 `None`、退回全键拼音），与双键拼音互斥。
 「在候选项显示辅助码」也读 `.cfg`（`input_schemes::candidate_auxiliary()` → `RouterConfig::candidate_auxiliary`，
 只有双键拼音认它）→ `RenderSettings::candidate_auxiliary` → 候选窗口 `configure` 存进 `Cell` → 组行时
 （`ui/candidates/row.rs::from_candidate`）把 `Candidate::auxiliary` 套成 `[XH]` 填进 `Row::auxiliary`。
@@ -1489,7 +1509,7 @@ Chromium 把「物理键还按着时注入的同名键」当自动重复，宿�
 各进程都是同样那几个值，拿它当会话号会在 Server 那边撞号。四条切换入口都汇到
 `service/mode.rs::switch_mode` 一处拦住（内置英文模式下发为关时才拦英文，协议值现在恒开）；状态条点击在 Server 侧（`dispatch/status/mod.rs`）走同一条路，
 「输入」页在 `settings/src/panel/pages/input.rs`，
-对应 `[input]` 那九项（最前面是「输入方案」下拉 `ComboBox`（**全键拼音**（缺省；界面名，配置值仍是 `full_pinyin`）/ 双键拼音 / 形码输入，落 `input_schemes`；形码输入还没实现）；选中的方案会在下拉**紧跟后面**生成它自己的那块面板（`scheme_body`：粗体标题 + 若干行，套 `scheme_card` 的卡片外观 —— `Border` 的卡片底色 / 圆角 / 1 DIP 边框 / 内边距；没实现的方案用 `scheme_placeholder` 占位）—— 使用简拼、模糊音、中英文混合输入就放在「全键拼音」那一块里，双键拼音那块是方案下拉 + 「显示原始输入按键」开关（`show_raw_input`，配置项）+ 「中英文混合输入」开关（`set_scheme_mixture_input` 写 `use_input_scheme.cfg` 的 `mixture_input`，`[input] mixture_input` 那份只管全键拼音）+ 「使用辅助码」开关（`set_auxiliary_codes` 改写方案文件的 `[Auxiliary] UsingAuxiliaryCodes`）+「辅助码方案」下拉 + 「在候选项显示辅助码」开关（`set_candidate_auxiliary` 写 `candidate_auxiliary`，开了辅助码且表读得出来时才可点）（`pick_auxiliary_scheme` 写 `use_input_scheme.cfg` 的 `auxiliary` 行；第 0 项是「（不使用）」，选了就写文件名）**紧挨着右边再加一个下拉**选「辅助码怎么对」（`AuxiliaryMode` 四种，`panel::pick_auxiliary_mode` 写 `auxiliary_mode` 行；两个下拉都在「使用辅助码」开着、且表读得出来时可点）+「启用键位映射参考」下拉（`set_key_map_reference` 写 `key_map_reference`：关闭 / 按下组合键时 / 始终跟随候选窗口）+「键位映射参考组合键」两个下拉夹一个 `+` 的 `TextBlock`（`set_key_map_hotkey` 写 `key_map_hotkey`，`ctrl+f1` 这样；下面那行注说明组合键可能被系统 / 应用占用）+ `[刷新方案] [应用方案] [打开方案目录]`（`apply_dual_key_scheme` 写 `input_schemes` 并 `crate::server::restart`，让方案 `WordBank` 的词库重新装配；无效方案红字列原因），别的方案下**压根不生成**，所以不用 `is_enabled` 置灰（早先那版置灰的写法已删）；框架**没导出 `Visibility`**（整个 crate 搜 `visibility` 一处都没有，也没有 `Popup` / `Flyout` 元素、没有「拿到底层 XAML 对象」的公开口子；`LayoutControl` 只给 `opacity` / 对齐 / `margin` / `exit_transition`，`CanvasChildExt` 给 `canvas_left` / `canvas_top`），所以「隐藏」就是不把它放进 children（`controls::feedback` 同一条路）。面板会改变子项个数，而 `children` 是**按位置认身份**的，插进来会让后面每一项换身份被重建（丢焦点 / 选中态）—— 所以这一页改用 `keyed_children` 并给每项一个 key。模糊音、符号映射、符号成对补全三组勾选都用 `ListView`，每项是一份 `ListViewItem`、内容就是一个自带文本的 `CheckBox`（`CheckBox` 是 `ContentControl`，文本直接 `.content(label)`，不用再套 `TextBlock`）；列表共用 `controls::scroll_list`——`selection_mode(None)` 不要选中高亮，`max_height` 卡在 5 行（`LIST_ROW_HEIGHT × LIST_VISIBLE_ROWS`），超出的组（符号成对补全 10 项）由列表自己出滚动条；简繁单选与候选页的排布单选走 `controls::radio_row`——**独立 `RadioButton`** 横排（同一个 `group_name` 互斥），**不用框架的 `RadioButtons` 容器**：容器一行内容的「期望高度」比实际渲染矮（渲染 32、期望 25），渲染出来的选项比自己盒子低 3.5px，左边的标签按盒子居中后看着总差一点，从外面（`min_height` / 套一层面板）也调不动；独立控件和开关 / 下拉一样是单控件，居中对得上；标点全半角下拉等）；标签与控件默认**垂直居中**（`controls::labeled`，标签不设对齐会被拉伸到整行高、文字却画在自己顶部，40 高的开关行里就偏上约 10px）；一行很高的控件（`ListView`、单选）改用 `controls::labeled_top` / `field_top`，标签顶对齐、与第一行内容对齐；「候选」页在 `pages/candidates.rs`，
+对应 `[input]` 那九项（最前面是「输入方案」下拉 `ComboBox`（**全键拼音**（缺省；界面名，配置值仍是 `full_pinyin`）/ 双键拼音 / 形码输入，落 `input_schemes`；形码输入那块还是占位，换方案改 `InputSchemes\ShapeCode\use_input_scheme.cfg` 的 `scheme` 行）；选中的方案会在下拉**紧跟后面**生成它自己的那块面板（`scheme_body`：粗体标题 + 若干行，套 `scheme_card` 的卡片外观 —— `Border` 的卡片底色 / 圆角 / 1 DIP 边框 / 内边距；没实现的方案用 `scheme_placeholder` 占位）—— 使用简拼、模糊音、中英文混合输入就放在「全键拼音」那一块里，双键拼音那块是方案下拉 + 「显示原始输入按键」开关（`show_raw_input`，配置项）+ 「中英文混合输入」开关（`set_scheme_mixture_input` 写 `use_input_scheme.cfg` 的 `mixture_input`，`[input] mixture_input` 那份只管全键拼音）+ 「使用辅助码」开关（`set_auxiliary_codes` 改写方案文件的 `[Auxiliary] UsingAuxiliaryCodes`）+「辅助码方案」下拉 + 「在候选项显示辅助码」开关（`set_candidate_auxiliary` 写 `candidate_auxiliary`，开了辅助码且表读得出来时才可点）（`pick_auxiliary_scheme` 写 `use_input_scheme.cfg` 的 `auxiliary` 行；第 0 项是「（不使用）」，选了就写文件名）**紧挨着右边再加一个下拉**选「辅助码怎么对」（`AuxiliaryMode` 四种，`panel::pick_auxiliary_mode` 写 `auxiliary_mode` 行；两个下拉都在「使用辅助码」开着、且表读得出来时可点）+「启用键位映射参考」下拉（`set_key_map_reference` 写 `key_map_reference`：关闭 / 按下组合键时 / 始终跟随候选窗口）+「键位映射参考组合键」两个下拉夹一个 `+` 的 `TextBlock`（`set_key_map_hotkey` 写 `key_map_hotkey`，`ctrl+f1` 这样；下面那行注说明组合键可能被系统 / 应用占用）+ `[刷新方案] [应用方案] [打开方案目录]`（`apply_dual_key_scheme` 写 `input_schemes` 并 `crate::server::restart`，让方案 `WordBank` 的词库重新装配；无效方案红字列原因），别的方案下**压根不生成**，所以不用 `is_enabled` 置灰（早先那版置灰的写法已删）；框架**没导出 `Visibility`**（整个 crate 搜 `visibility` 一处都没有，也没有 `Popup` / `Flyout` 元素、没有「拿到底层 XAML 对象」的公开口子；`LayoutControl` 只给 `opacity` / 对齐 / `margin` / `exit_transition`，`CanvasChildExt` 给 `canvas_left` / `canvas_top`），所以「隐藏」就是不把它放进 children（`controls::feedback` 同一条路）。面板会改变子项个数，而 `children` 是**按位置认身份**的，插进来会让后面每一项换身份被重建（丢焦点 / 选中态）—— 所以这一页改用 `keyed_children` 并给每项一个 key。模糊音、符号映射、符号成对补全三组勾选都用 `ListView`，每项是一份 `ListViewItem`、内容就是一个自带文本的 `CheckBox`（`CheckBox` 是 `ContentControl`，文本直接 `.content(label)`，不用再套 `TextBlock`）；列表共用 `controls::scroll_list`——`selection_mode(None)` 不要选中高亮，`max_height` 卡在 5 行（`LIST_ROW_HEIGHT × LIST_VISIBLE_ROWS`），超出的组（符号成对补全 10 项）由列表自己出滚动条；简繁单选与候选页的排布单选走 `controls::radio_row`——**独立 `RadioButton`** 横排（同一个 `group_name` 互斥），**不用框架的 `RadioButtons` 容器**：容器一行内容的「期望高度」比实际渲染矮（渲染 32、期望 25），渲染出来的选项比自己盒子低 3.5px，左边的标签按盒子居中后看着总差一点，从外面（`min_height` / 套一层面板）也调不动；独立控件和开关 / 下拉一样是单控件，居中对得上；标点全半角下拉等）；标签与控件默认**垂直居中**（`controls::labeled`，标签不设对齐会被拉伸到整行高、文字却画在自己顶部，40 高的开关行里就偏上约 10px）；一行很高的控件（`ListView`、单选）改用 `controls::labeled_top` / `field_top`，标签顶对齐、与第一行内容对齐；「候选」页在 `pages/candidates.rs`，
 对应 `[candidate]`（本地模型下拉四档：关闭 / 基本（含章）/ 增强（知意）/ 混合（含章+知意），写 `local_model` 并同步旧布尔键、排布单选、个数滑轨（右侧跟一个当前值数字）、联想候选项目上限滑轨 0–4、四个「字体…」按钮弹系统字体对话框 `font_dialog.rs`、
 符号补充字体 / 日文补充字体两个按钮只取 `pick_family` 的字族名（落 `symbol_font` / `japanese_font`）、序号样式下拉、最小宽度、展示更多候选项（`ToggleSwitch`：**非全键拼音方案下置灰**，`is_enabled(false)` —— 它下面的「使用鼠标选词」下拉（`mode_combo` 返回的是 `ComboBox`，能直接接 `.is_enabled()`）与「展开后每个候选项的最大宽度」（`NumberBox`）跟着一起置灰；它的 U / I / V 三种模式也只在「全键拼音」下有效，写在说明里）、按程序隐藏的名单（下面每行一个 2 列 `Grid`——`Star` 列放程序名、「删除」按钮放第二列，外壳用 `controls::scroll_list` 卡 5 行，多了自己滚动））；「短语」页在 `pages/phrase.rs`（顶部「启用软件自带短语」开关；列表每行是一个 5 列 `Grid`——短语内容（`Star` 列，`Wrap` + `max_lines(3)` + 省略号）/ 候选内容 / 触发字母串 / 位置 / 编辑·删除两个按钮，列宽全部钉死（含操作列，否则表头那行没有按钮、`Star` 列会多占一截导致表头与数据行错位）；表单 + 列表读写安装目录 `Phrases\Phrase.db` 的 `user` 表）；
 「主题」页在 `pages/theme/`：`mod.rs` 是页面（`Slot` 是那 21 个颜色槽，`ALL` / `label()` / `get()` / `set()`，顺序与页面一致；高亮 / 普通候选序号各一项；「新建主题」按钮 + 名字 `TextBox` + 「确认保存」按钮、「选择主题」`ComboBox` + 「刷新主题」/「应用主题」两个按钮、21 行「名称 + 可点的 `#aarrggbb`」，末尾挂 `color_dialog::ColorDialog`）；

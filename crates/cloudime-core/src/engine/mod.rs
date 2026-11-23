@@ -102,6 +102,10 @@ pub struct Engine {
     /// [`crate::shuangpin::Table`] 交进来 —— Core 不读文件。
     shuangpin: Option<crate::shuangpin::Table>,
 
+    /// 形码码表（配置 `[input] input_schemes = "shape_code"` 时挂上）；`None` = 不是形码输入。
+    /// 表由 `cloudime-platform` 从方案目录（`InputSchemes\ShapeCode\<方案>`）读出来后交进来。
+    shape: Option<crate::shape::Table>,
+
     /// 非全拼用 `Ctrl+Alt+V` 显式进入 v 模式时置位：这时 `v` 按表达式前缀解释，
     /// 不受双键拼音的「v 是按键」规则影响；退出组句时清零。
     forced_expression: bool,
@@ -379,6 +383,7 @@ impl Engine {
             full_width_punctuation: true,
             use_jian_pin: true,
             shuangpin: None,
+            shape: None,
             forced_expression: false,
             auxiliary_codes: None,
             auxiliary_mode: crate::auxiliary::AuxiliaryMode::PerChar,

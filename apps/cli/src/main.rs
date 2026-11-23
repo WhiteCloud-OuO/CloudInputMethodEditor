@@ -198,6 +198,12 @@ fn build_engine(args: &Args) -> Result<Engine, CliError> {
     engine.set_show_raw_input(config.input.show_raw_input);
     // 双键拼音自己的「中英混合输入」（`use_input_scheme.cfg` 的 `mixture_input`，不进 `config.toml`）
     engine.set_shuangpin_mixture_input(cloudime_platform::input_schemes::mixture_input());
+    // 形码输入：同 Server，码表读不出来就退回全键拼音
+    engine.set_shape(
+        (config.input.input_schemes == cloudime_platform::InputScheme::ShapeCode)
+            .then(cloudime_platform::input_schemes::current_shape_table)
+            .flatten(),
+    );
     engine.set_mixture_input(config.input.mixture_input);
     engine.set_punctuation_mapping(config.input.punctuation_mapping());
     engine.set_half_wide_after_digit(config.input.use_half_wide_punctuation_marks_after_digital);
