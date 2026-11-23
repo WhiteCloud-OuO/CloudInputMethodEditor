@@ -1,0 +1,24 @@
+# 形码输入方案：五笔86
+#
+# 目录约定（与双键拼音的方案目录同级）：
+#   InputSchemes/ShapeCode/
+#     use_input_scheme.cfg   scheme = wubi
+#     wubi/
+#       scheme.toml          本文件
+#       table.tsv            编码<TAB>文字<TAB>权重
+#     cangjie/  shengbi/     以后的方案，一个方案一个目录
+
+[Info]
+Name = "五笔86"
+Version = "1.0"
+Author = "极点五笔社区数据 / 云朵输入法"
+
+[Shape]
+# 码表文件，相对本方案目录（`..` 表示上一层）。
+Table = "table.tsv"
+
+# 一级简码表：一行 `键<TAB>字`（`g → 一`）；单键输入时排第一，带 [①] 角标。留空 = 没有一级简码。
+LevelOne = "level1.tsv"
+
+# 最长编码长度：五笔 1–4 键，超过 4 位的编码按写错跳过。
+MaxCodeLength = 4
