@@ -512,7 +512,9 @@ impl Router {
     pub fn set_candidate_sink(&mut self, sink: Box<dyn CandidateSink>) {
         sink.configure(self.config.render_settings());
         // 「辅助窗口」的内容与显示方式（键位映射参考）：先送一份，方案换了在热加载里再送
-        sink.set_auxiliary(cloudime_platform::input_schemes::key_map_layout());
+        sink.set_auxiliary(cloudime_platform::input_schemes::key_map_layout_for(
+            self.config.input_scheme,
+        ));
         sink.set_auxiliary_mode(self.config.key_map_reference);
         sink.set_caps_lock_backspace(self.config.caps_lock_as_backspace);
         self.candidates = sink;

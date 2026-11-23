@@ -14,9 +14,13 @@
 //! 一个方案一个子目录，`use_input_scheme.cfg` 的 `scheme` 指目录名；换方案只改这一行。
 //! Core 不读文件：这里把 `table.tsv` 解析成 [`cloudime_core::shape::Table`] 再交给 Engine。
 
+use std::collections::BTreeMap;
 use std::path::{Path, PathBuf};
 
 use cloudime_core::shape::Table;
+
+use super::key_map::KEYBOARD_ROWS;
+use super::{KeyCap, KeyMapLayout};
 
 /// 方案文件（每个方案目录一份）。
 pub const SCHEME_FILE: &str = "scheme.toml";
@@ -26,6 +30,9 @@ pub const DEFAULT_TABLE: &str = "table.tsv";
 
 /// 方案文件里没写 `LevelOne` 时用的一级简码文件名。
 pub const DEFAULT_LEVEL_ONE: &str = "level1.tsv";
+
+/// 方案文件里没写 `Roots` 时用的字根表文件名（键位映射参考用）。
+pub const DEFAULT_ROOTS: &str = "roots.tsv";
 
 /// 方案文件里没写 `MaxCodeLength` 时的最长编码长度（五笔 4 键）。
 pub const DEFAULT_MAX_CODE_LENGTH: usize = 4;
@@ -44,12 +51,14 @@ pub struct ShapeCapabilities {
     pub mixture_input: bool,
     pub unique_commit: bool,
     pub fifth_key_commit: bool,
+    /// 支持「键位映射参考」（辅助窗口画字根）。
+    pub key_map: bool,
 }
 
 impl ShapeCapabilities {
     /// 一个可选设置都没有（设置页那块面板只显示方案信息与按钮）。
     pub fn is_empty(self) -> bool {
-        !self.mixture_input && !self.unique_commit && !self.fifth_key_commit
+        !self.mixture_input && !self.unique_commit && !self.fifth_key_commit && !self.key_map
     }
 }
 
@@ -129,8 +138,11 @@ pub struct ShapeScheme {
     /// `[Shape] MaxCodeLength`：最长编码长度。
     pub max_code_length: usize,
 
-    /// 这个方案支持哪些用户级开关（`[Options]`，五笔特有的三项）。
+    /// 这个方案支持哪些用户级开关（`[Options]`，五笔特有的三项 + 键位映射参考）。
     pub capabilities: ShapeCapabilities,
+
+    /// 键位映射参考用的字根：键 → 代表性字根（`[Shape] Roots` 指的表；没有就是空）。
+    pub roots: BTreeMap<char, Vec<String>>,
 
     /// 码表文件（`[Shape] Table` 相对方案目录）。
     pub table_path: PathBuf,
@@ -271,12 +283,42 @@ pub fn load(dir: &Path) -> Result<ShapeScheme, ShapeSchemeError> {
             });
         }
     }
+    // 字根表可选（键位映射参考用）：没写 `Roots` 就用 `roots.tsv`。
+    let roots_name = shape
+        .and_then(|shape| optional(shape, "Roots"))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_ROOTS.to_owned());
+    let roots_path = dir.join(roots_name.trim());
+    let mut roots = BTreeMap::new();
+    match std::fs::read_to_string(&roots_path) {
+        Ok(source) => {
+            let problems = load_roots(&source, &mut roots);
+            if !problems.is_empty() {
+                tracing::warn!(
+                    path = %roots_path.display(),
+                    skipped = problems.len(),
+                    first = %problems[0],
+                    "字根表有格式不对的行，已跳过"
+                );
+            }
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+            tracing::debug!(path = %roots_path.display(), "没有字根表");
+        }
+        Err(error) => {
+            return Err(ShapeSchemeError::Read {
+                path: roots_path,
+                source: error,
+            });
+        }
+    }
     Ok(ShapeScheme {
         name,
         version,
         author,
         max_code_length,
         capabilities,
+        roots,
         table_path,
         table,
     })
@@ -292,6 +334,7 @@ fn capabilities(root: &toml::Value) -> ShapeCapabilities {
         mixture_input: flag("MixtureInput"),
         unique_commit: flag("UniqueCommit"),
         fifth_key_commit: flag("FifthKeyCommit"),
+        key_map: flag("KeyMap"),
     }
 }
 
@@ -318,6 +361,117 @@ fn read_capabilities(dir: &Path) -> ShapeCapabilities {
         Ok(root) => capabilities(&root),
         Err(_) => ShapeCapabilities::default(),
     }
+}
+
+/// 读字根表：一行 `键<TAB>字根 字根 …`；返回格式不对的行。
+fn load_roots(source: &str, roots: &mut BTreeMap<char, Vec<String>>) -> Vec<String> {
+    let mut problems = Vec::new();
+    for (index, raw) in source.lines().enumerate() {
+        let line = raw.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, rest)) = line.split_once('\t') else {
+            problems.push(format!("第 {} 行：缺少制表符，已跳过", index + 1));
+            continue;
+        };
+        let mut chars = key.trim().chars();
+        let (Some(key), None) = (chars.next(), chars.next()) else {
+            problems.push(format!("第 {} 行：键要正好一个字符，已跳过", index + 1));
+            continue;
+        };
+        if !key.is_ascii_lowercase() {
+            problems.push(format!(
+                "第 {} 行：键 `{key}` 只认小写 a–z，已跳过",
+                index + 1
+            ));
+            continue;
+        }
+        let at_key: Vec<String> = rest.split_whitespace().map(str::to_owned).collect();
+        if at_key.is_empty() {
+            problems.push(format!("第 {} 行：没有字根，已跳过", index + 1));
+            continue;
+        }
+        roots.insert(key, at_key);
+    }
+    problems
+}
+
+/// 五笔的键位映射参考：三排键盘，每格是这个键上的代表性字根（`z` 标成「通配」）。
+///
+/// 字根用**普通汉字**表示，不需要字根字体；每行最多 3 个字根（格子宽度有限，渲染器只在换行处切）。
+fn shape_key_map_layout(roots: &BTreeMap<char, Vec<String>>) -> KeyMapLayout {
+    let rows = KEYBOARD_ROWS
+        .iter()
+        .enumerate()
+        .map(|(index, row)| {
+            // 五笔只用 a–y，第二排没有 `;`
+            let letters = if index == 1 { "asdfghjkl" } else { *row };
+            letters
+                .chars()
+                .map(|key| KeyCap {
+                    key: key.to_ascii_uppercase().to_string(),
+                    initial: String::new(),
+                    mapping: if key == 'z' {
+                        "通配".to_owned()
+                    } else {
+                        roots
+                            .get(&key)
+                            .map(|roots| {
+                                roots
+                                    .chunks(4)
+                                    .take(2)
+                                    .map(|chunk| chunk.concat())
+                                    .collect::<Vec<_>>()
+                                    .join("\n")
+                            })
+                            .unwrap_or_default()
+                    },
+                    shifted: String::new(),
+                })
+                .collect()
+        })
+        .collect();
+    KeyMapLayout {
+        rows,
+        zero_initials: Vec::new(),
+        footer: None,
+        symbol: false,
+        fallback_family: None,
+        fallback_first: false,
+        roots: true,
+    }
+}
+
+/// 当前形码方案的键位映射参考（字根）。方案没声明 `KeyMap` 或没字根表就是 `None`。
+pub fn current_key_map_layout() -> Option<KeyMapLayout> {
+    let dir = shape_code_dir()?;
+    let id = current_scheme_id(&dir)?;
+    let scheme_dir = dir.join(id);
+    let text = std::fs::read_to_string(scheme_dir.join(SCHEME_FILE)).ok()?;
+    let root: toml::Value = toml::from_str(&text).ok()?;
+    if !capabilities(&root).key_map {
+        return None;
+    }
+    let shape = section(&root, "Shape").ok();
+    let roots_name = shape
+        .and_then(|shape| optional(shape, "Roots"))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_ROOTS.to_owned());
+    let source = std::fs::read_to_string(scheme_dir.join(roots_name.trim())).ok()?;
+    let mut roots = BTreeMap::new();
+    load_roots(&source, &mut roots);
+    if roots.is_empty() {
+        return None;
+    }
+    Some(shape_key_map_layout(&roots))
+}
+
+/// 当前方案 id：`.cfg` 指得到就用它，否则目录名升序第一个。
+fn current_scheme_id(dir: &Path) -> Option<String> {
+    super::read_current(dir)
+        .filter(|id| dir.join(id).join(SCHEME_FILE).is_file())
+        .or_else(|| scheme_ids(dir).into_iter().next())
 }
 
 /// **当前方案**：`use_input_scheme.cfg` 的 `scheme` 指哪份用哪份；指不到（没写 / 指错了）
@@ -389,10 +543,8 @@ pub fn current_capabilities() -> ShapeCapabilities {
     let Some(dir) = shape_code_dir() else {
         return ShapeCapabilities::default();
     };
-    let id = super::read_current(&dir)
-        .filter(|id| dir.join(id).join(SCHEME_FILE).is_file())
-        .or_else(|| scheme_ids(&dir).into_iter().next());
-    id.map(|id| read_capabilities(&dir.join(id)))
+    current_scheme_id(&dir)
+        .map(|id| read_capabilities(&dir.join(id)))
         .unwrap_or_default()
 }
 
@@ -404,6 +556,16 @@ pub fn set_option(dir: &Path, key: &str, on: bool) -> std::io::Result<()> {
 /// 换当前方案：只改 `scheme` 那一行（另外几行原样留着）。
 pub fn set_current(dir: &Path, id: &str) -> std::io::Result<()> {
     write_current(dir, id)
+}
+
+/// 改形码方案的「键位映射参考」显示方式（只动这一行，保留 `unique_commit` 等形码选项）。
+pub fn set_key_map_reference(dir: &Path, mode: super::KeyMapReference) -> std::io::Result<()> {
+    set_config_line(dir, "key_map_reference", mode.key())
+}
+
+/// 改形码方案的「键位映射参考组合键」（只动这一行）。
+pub fn set_key_map_hotkey(dir: &Path, hotkey: super::KeyMapHotkey) -> std::io::Result<()> {
+    set_config_line(dir, "key_map_hotkey", &hotkey.value())
 }
 
 /// 定下当前方案：`.cfg` 里指得到的就用它；否则取**第一个读得出来的**方案并**重建** `.cfg`。
@@ -681,13 +843,14 @@ mod tests {
         write_scheme(&dir, "五笔86");
         std::fs::write(
             dir.join(SCHEME_FILE),
-            "[Info]\nName = \"五笔86\"\nVersion = \"1.0\"\n\n[Shape]\nTable = \"table.tsv\"\n\n[options]\nMixtureInput = true\nUniqueCommit = false\n",
+            "[Info]\nName = \"五笔86\"\nVersion = \"1.0\"\n\n[Shape]\nTable = \"table.tsv\"\n\n[options]\nMixtureInput = true\nUniqueCommit = false\nKeyMap = true\n",
         )
         .unwrap();
         let scheme = load(&dir).unwrap();
         assert!(scheme.capabilities.mixture_input);
         assert!(!scheme.capabilities.unique_commit);
         assert!(!scheme.capabilities.fifth_key_commit, "没写就是不支持");
+        assert!(scheme.capabilities.key_map);
 
         // 没有 [Options] 的方案：三项都不支持（设置页不显示这些五笔专属开关）
         std::fs::write(
@@ -697,6 +860,39 @@ mod tests {
         .unwrap();
         let scheme = load(&dir).unwrap();
         assert!(scheme.capabilities.is_empty());
+        let _ = std::fs::remove_dir_all(&root);
+    }
+
+    #[test]
+    fn roots_are_loaded_and_turned_into_a_key_map() {
+        let root = temp_dir("roots");
+        let dir = root.join("wubi");
+        write_scheme(&dir, "五笔86");
+        std::fs::write(
+            dir.join(SCHEME_FILE),
+            "[Info]\nName = \"五笔86\"\nVersion = \"1.0\"\n\n[Shape]\nTable = \"table.tsv\"\nRoots = \"roots.tsv\"\n\n[Options]\nKeyMap = true\n",
+        )
+        .unwrap();
+        std::fs::write(dir.join("roots.tsv"), "g\t王 一 五 戋\nf\t土 士\n").unwrap();
+        let scheme = load(&dir).unwrap();
+        assert_eq!(
+            scheme
+                .roots
+                .get(&'g')
+                .map(|roots| roots.join(" "))
+                .as_deref(),
+            Some("王 一 五 戋")
+        );
+
+        let layout = shape_key_map_layout(&scheme.roots);
+        assert_eq!(layout.rows.len(), 3);
+        assert!(layout.zero_initials.is_empty(), "五笔没有零声母表");
+        // 第二排 asdfghjkl：g 在第五格
+        assert_eq!(layout.rows[1][4].key, "G");
+        assert_eq!(layout.rows[1][4].mapping, "王一五戋");
+        // z 是通配键
+        assert_eq!(layout.rows[2][0].key, "Z");
+        assert_eq!(layout.rows[2][0].mapping, "通配");
         let _ = std::fs::remove_dir_all(&root);
     }
 

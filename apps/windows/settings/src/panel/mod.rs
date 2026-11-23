@@ -129,6 +129,10 @@ pub(crate) struct Settings {
     /// 「输入」页：形码的几个用户级开关（同目录 `.cfg`）。
     shape_options: cloudime_platform::input_schemes::ShapeOptions,
 
+    /// 「输入」页：形码的「键位映射参考」显示方式与组合键（同目录 `.cfg`）。
+    shape_key_map_reference: cloudime_platform::input_schemes::KeyMapReference,
+    shape_key_map_hotkey: cloudime_platform::input_schemes::KeyMapHotkey,
+
     /// 「输入」页：什么时候显示键位映射参考（`use_input_scheme.cfg` 的 `key_map_reference`）。
     key_map_reference: cloudime_platform::input_schemes::KeyMapReference,
 
@@ -266,12 +270,17 @@ impl Settings {
             self.shape_entries.clear();
             self.shape_current = None;
             self.shape_options = cloudime_platform::input_schemes::ShapeOptions::default();
+            self.shape_key_map_reference = cloudime_platform::input_schemes::KeyMapReference::Off;
+            self.shape_key_map_hotkey = cloudime_platform::input_schemes::KeyMapHotkey::default();
             return;
         };
         self.shape_entries = cloudime_platform::input_schemes::list_shapes(&dir);
         self.shape_current =
             cloudime_platform::input_schemes::resolve_shape_current(&dir, &self.shape_entries);
         self.shape_options = cloudime_platform::input_schemes::read_shape_options(&dir);
+        self.shape_key_map_reference =
+            cloudime_platform::input_schemes::read_key_map_reference(&dir);
+        self.shape_key_map_hotkey = cloudime_platform::input_schemes::read_key_map_hotkey(&dir);
     }
 
     /// 换当前形码方案：写形码目录 `use_input_scheme.cfg` 的 `scheme` 行。
@@ -306,6 +315,43 @@ impl Settings {
                 self.shape_options = cloudime_platform::input_schemes::read_shape_options(&dir);
                 let state = if on { "打开" } else { "关闭" };
                 self.reload_scheme_for_server(&format!("已{state}「{label}」；"));
+            }
+            Err(error) => {
+                self.notice.error = Some(format!("写 use_input_scheme.cfg 失败：{error}"));
+            }
+        }
+    }
+
+    /// 形码的「键位映射参考」显示方式：写 `use_input_scheme.cfg` 的 `key_map_reference` 行，再让 Server 重读。
+    fn set_shape_key_map_reference(
+        &mut self,
+        mode: cloudime_platform::input_schemes::KeyMapReference,
+    ) {
+        let Some(dir) = cloudime_platform::input_schemes::shape_code_dir() else {
+            self.notice.error = Some("找不到安装目录，改不了。".to_owned());
+            return;
+        };
+        match cloudime_platform::input_schemes::set_shape_key_map_reference(&dir, mode) {
+            Ok(()) => {
+                self.shape_key_map_reference = mode;
+                self.reload_scheme_for_server(&format!("键位映射参考：{}；", mode.label()));
+            }
+            Err(error) => {
+                self.notice.error = Some(format!("写 use_input_scheme.cfg 失败：{error}"));
+            }
+        }
+    }
+
+    /// 形码的「键位映射参考组合键」：同上，只写 `key_map_hotkey` 那一行。
+    fn set_shape_key_map_hotkey(&mut self, hotkey: cloudime_platform::input_schemes::KeyMapHotkey) {
+        let Some(dir) = cloudime_platform::input_schemes::shape_code_dir() else {
+            self.notice.error = Some("找不到安装目录，改不了。".to_owned());
+            return;
+        };
+        match cloudime_platform::input_schemes::set_shape_key_map_hotkey(&dir, hotkey) {
+            Ok(()) => {
+                self.shape_key_map_hotkey = hotkey;
+                self.reload_scheme_for_server(&format!("键位映射参考组合键：{}；", hotkey.value()));
             }
             Err(error) => {
                 self.notice.error = Some(format!("写 use_input_scheme.cfg 失败：{error}"));

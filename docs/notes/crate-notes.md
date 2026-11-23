@@ -156,9 +156,15 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
 形码目录 `.cfg` 的用户级开关由 `ShapeOptions`（`read_options` / `set_option` / `current_options`）读写：
 `mixture_input`（英文混输，缺省关）、`unique_commit`（四码唯一自动上屏，缺省开）、
 `fifth_key_commit`（第五码顶字，缺省开）。`ShapeCapabilities` 读 `scheme.toml` 的 `[Options]`
-（`MixtureInput` / `UniqueCommit` / `FifthKeyCommit`，bool），`current_options()` 按当前方案的能力位把
+（`MixtureInput` / `UniqueCommit` / `FifthKeyCommit` / `KeyMap`，bool），`current_options()` 按当前方案的能力位把
 不支持的那几项清成 `false` —— 这三项是五笔特有，仓颉 / 声笔没声明就不显示、也不生效；设置页的形码面板
-按 `ShapeScheme::capabilities` 决定放哪几个开关。`Engine::set_shape_mixture_input` 开着时 `query_shape` 在
+按 `ShapeScheme::capabilities` 决定放哪几个开关。键位映射参考的字根读 `[Shape] Roots`（缺省 `roots.tsv`，
+一行「键<TAB>字根 字根…」），`current_key_map_layout()` **只读 scheme.toml + roots.tsv、不加载码表**，
+生成三排键盘、`asdfghjkl` 没有 `;`、无零声母表的 `KeyMapLayout`（`roots = true`）；渲染器按这个标志把字根
+字号降到 `ROOTS_FONT_RATIO`、从键位下面开始排、不按韵母首字母上色；`key_map_cell_for_layout` 按实际行数 /
+有没有零声母表算格子，五笔在同样高度下格子更大。Server 的 `key_map_layout_for(input_schemes)` 按方案选版面，
+`RouterConfig` 也按方案目录读 `key_map_reference` / `key_map_hotkey`（形码要先声明 `KeyMap`）。
+`Engine::set_shape_mixture_input` 开着时 `query_shape` 在
 五笔候选后追加英文词（`WordList::complete_entries` 二分取补全 + 精确词，不纠错、不进五笔排序，通配码不掺英文）；
 Server 的 `shape_unique_commit` / `shape_fifth_key`（`dispatch/key/input.rs`）在敲满 `MaxCodeLength` 后
 按 `RouterConfig` 的两个开关自动上屏 / 顶字，英文混输开着时第五码不顶。

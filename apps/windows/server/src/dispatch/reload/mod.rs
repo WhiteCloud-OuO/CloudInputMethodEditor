@@ -181,7 +181,9 @@ impl Router {
         );
         // 方案换了：「辅助窗口」的键位映射参考也跟着换一份（内容）
         self.candidates
-            .set_auxiliary(cloudime_platform::input_schemes::key_map_layout());
+            .set_auxiliary(cloudime_platform::input_schemes::key_map_layout_for(
+                config.input.input_schemes,
+            ));
         self.engine.set_mixture_input(config.input.mixture_input);
         self.engine
             .set_special_input_word(config.input.special_input_word);

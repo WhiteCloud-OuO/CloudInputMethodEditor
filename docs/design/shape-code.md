@@ -48,12 +48,14 @@ Author = "极点五笔社区数据 / 云朵输入法"
 [Shape]
 Table = "table.tsv"
 LevelOne = "level1.tsv"
+Roots = "roots.tsv"
 MaxCodeLength = 4
 
 [Options]
 MixtureInput = true
 UniqueCommit = true
 FifthKeyCommit = true
+KeyMap = true
 ```
 
 | 节 / 键 | 必填 | 类型 | 说明 |
@@ -63,10 +65,12 @@ FifthKeyCommit = true
 | `[Info] Author` | 否 | 字符串 | 作者 |
 | `[Shape] Table` | 否 | 字符串 | 码表文件，相对方案目录；缺省 `table.tsv` |
 | `[Shape] LevelOne` | 否 | 字符串 | 一级简码表，相对方案目录；缺省 `level1.tsv` |
+| `[Shape] Roots` | 否 | 字符串 | 字根表（键位映射参考用），相对方案目录；缺省 `roots.tsv` |
 | `[Shape] MaxCodeLength` | 否 | 整数 | 最长编码长度，1–8；缺省 4（五笔 4 键） |
 | `[Options] MixtureInput` | 否 | bool | 支持「英文混输」这一项（五笔特有；没写 = 不支持） |
 | `[Options] UniqueCommit` | 否 | bool | 支持「四码唯一时自动上屏」 |
 | `[Options] FifthKeyCommit` | 否 | bool | 支持「第五码顶字上屏」 |
+| `[Options] KeyMap` | 否 | bool | 支持「键位映射参考」（辅助窗口画字根） |
 
 - 节名、键名**大小写不敏感**（`[info]` / `name` 也认）。
 - `Name` / `Version` 缺失、`MaxCodeLength` 不是 1–8 的整数、码表读不出来或一条能用的条目都没有 → 该方案读不出来
@@ -111,6 +115,20 @@ w	人
 - 一级简码的字如果也在码表里命中，去重时只留第一条（一级简码）。
 - 选了它只消耗这一个键（`syllables = [键]`）。
 - 格式不对的行跳过并记 `warn`；重复写同一个键时后写的顶上。
+
+### 3.3 `roots.tsv`（键位映射参考的字根）
+
+一行 `键<TAB>字根 字根 …`，只收**每个键最常用的代表性字根**，不是完整字根表：
+
+```text
+g	王 一 五 戋 丰
+f	土 士 二 干 十 寸 雨
+```
+
+- 用普通汉字表示，不需要 `HeiTiZiGen.ttf` 那套 PUA 字根字体；
+- 键位映射参考的三排键盘里，每格左上角是键、下面**最多 2 行、每行最多 4 个字根**（字根之间不空格）；
+- `z` 固定显示「通配」；
+- 文件可由用户直接改；改完在设置页点「应用方案」或重启输入法服务。
 
 ## 4. 查询
 
@@ -200,7 +218,10 @@ w	人
   选中写 `.cfg` 的 `scheme` 行；下面有 `[刷新方案] [应用方案] [打开方案目录]`。
 - **方案自己的设置项**按 `scheme.toml` 的 `[Options]` 生成：五笔显示**英文混输**（`mixture_input`）、
   **四码唯一时自动上屏**（`unique_commit`）、**第五码顶字上屏**（`fifth_key_commit`）三个开关，
-  英文混输开着时第三项置灰；没声明任何 `[Options]` 的方案只显示方案信息与按钮（换方案时不会把五笔的开关带过去）。
+  英文混输开着时第三项置灰；另外还有 **启用键位映射参考**（`key_map_reference`）与**组合键**
+  （`key_map_hotkey`）两项 —— 辅助窗口画每个键的代表性字根。没声明 `[Options]` 的方案只显示方案信息与按钮。
+- 字根窗口复用双键拼音的辅助窗口：三排键盘、`asdfghjkl` 第二排没有 `;`、没有零声母表；
+  格子里字根从键位下面开始排，字号比韵母小一档；`Z` 格写「通配」。
 - 改完点「应用方案」，设置页把 `input_schemes` 原样再写一遍，Server 顺着配置热加载重读码表与开关。
 
 ## 9. 还没做

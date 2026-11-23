@@ -41,6 +41,12 @@ pub(crate) enum Message {
     ShapeUniqueCommit(bool),
     /// 形码的「第五码顶字上屏」（写 `use_input_scheme.cfg` 的 `fifth_key_commit`）。
     ShapeFifthKeyCommit(bool),
+    /// 形码的「键位映射参考」显示方式（写 `use_input_scheme.cfg` 的 `key_map_reference`）。
+    ShapeKeyMapReference(cloudime_platform::input_schemes::KeyMapReference),
+    /// 形码「键位映射参考」组合键的修饰键。
+    ShapeKeyMapHotkeyModifiers(cloudime_platform::input_schemes::KeyMapModifiers),
+    /// 形码「键位映射参考」组合键的功能键。
+    ShapeKeyMapHotkeyKey(cloudime_platform::input_schemes::KeyMapKey),
     /// 什么时候显示键位映射参考（写 `use_input_scheme.cfg` 的 `key_map_reference`）。
     KeyMapReference(cloudime_platform::input_schemes::KeyMapReference),
     /// 键位映射参考的修饰键（写 `use_input_scheme.cfg` 的 `key_map_hotkey`）。

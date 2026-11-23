@@ -45,6 +45,9 @@ pub struct KeyMapLayout {
 
     /// 优先用补充字体：日文假名固定用日文字体，不再先试主字体。
     pub fallback_first: bool,
+
+    /// 画的是**字根**（五笔键位映射参考）：字号小一点、从键位下面开始排，不按韵母首字母上色。
+    pub roots: bool,
 }
 
 /// 什么时候显示「键位映射参考」（`use_input_scheme.cfg` 的 `key_map_reference`）。

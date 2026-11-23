@@ -95,6 +95,8 @@ impl Component for Settings {
             shape_entries: Vec::new(),
             shape_current: None,
             shape_options: cloudime_platform::input_schemes::ShapeOptions::default(),
+            shape_key_map_reference: cloudime_platform::input_schemes::KeyMapReference::Off,
+            shape_key_map_hotkey: cloudime_platform::input_schemes::KeyMapHotkey::default(),
             key_map_reference: cloudime_platform::input_schemes::KeyMapReference::Off,
             key_map_hotkey: cloudime_platform::input_schemes::KeyMapHotkey::default(),
             theme_draft: ThemeFile::default(),
@@ -156,6 +158,17 @@ impl Component for Settings {
             }
             Message::ShapeFifthKeyCommit(on) => {
                 self.set_shape_option("fifth_key_commit", on, "第五码顶字上屏")
+            }
+            Message::ShapeKeyMapReference(mode) => self.set_shape_key_map_reference(mode),
+            Message::ShapeKeyMapHotkeyModifiers(modifiers) => {
+                let mut hotkey = self.shape_key_map_hotkey;
+                hotkey.modifiers = modifiers;
+                self.set_shape_key_map_hotkey(hotkey);
+            }
+            Message::ShapeKeyMapHotkeyKey(key) => {
+                let mut hotkey = self.shape_key_map_hotkey;
+                hotkey.key = key;
+                self.set_shape_key_map_hotkey(hotkey);
             }
             Message::KeyMapReference(mode) => self.set_key_map_reference(mode),
             Message::KeyMapHotkeyModifiers(modifiers) => {

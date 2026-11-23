@@ -452,6 +452,78 @@ fn shape_panel(settings: &Settings, context: &mut ViewContext<Settings>) -> View
             ),
         ));
     }
+    if capabilities.key_map {
+        let mode_items: Vec<&str> = KeyMapReference::ALL
+            .iter()
+            .map(|mode| mode.label())
+            .collect();
+        let mode_selected = KeyMapReference::ALL
+            .iter()
+            .position(|mode| *mode == settings.shape_key_map_reference)
+            .unwrap_or(0);
+        rows.push(KeyedView::new(
+            "shape-key-map",
+            field(
+                "启用键位映射参考",
+                "「按下组合键时」：打五笔的过程中按下面那套组合键弹出辅助窗口，\
+                 三排键盘上写着每个键的代表性字根，新手可以对着敲，再按一次收起；\
+                 「始终跟随候选窗口」：每回组句都跟候选窗一起出现，不用按键。",
+                ComboBox::new()
+                    .items_source(mode_items)
+                    .selected_index(Some(mode_selected))
+                    .on_selection_changed(context.callback(|index: Option<usize>| {
+                        Message::ShapeKeyMapReference(pick(&KeyMapReference::ALL, index))
+                    })),
+            ),
+        ));
+        let modifier_items: Vec<&str> = KeyMapModifiers::ALL
+            .iter()
+            .map(|modifiers| modifiers.label())
+            .collect();
+        let key_items: Vec<&str> = KeyMapKey::ALL.iter().map(|key| key.label()).collect();
+        rows.push(KeyedView::new(
+            "shape-key-map-hotkey",
+            field(
+                "键位映射参考组合键",
+                "注：部分组合键可能被应用程序或系统占用，导致无法生效。",
+                StackPanel::new()
+                    .orientation(Orientation::Horizontal)
+                    .spacing(8.0)
+                    .children((
+                        ComboBox::new()
+                            .items_source(modifier_items)
+                            .selected_index(Some(
+                                KeyMapModifiers::ALL
+                                    .iter()
+                                    .position(|modifiers| {
+                                        *modifiers == settings.shape_key_map_hotkey.modifiers
+                                    })
+                                    .unwrap_or(0),
+                            ))
+                            .on_selection_changed(context.callback(|index: Option<usize>| {
+                                Message::ShapeKeyMapHotkeyModifiers(pick(
+                                    &KeyMapModifiers::ALL,
+                                    index,
+                                ))
+                            })),
+                        TextBlock::new()
+                            .text("+")
+                            .vertical_alignment(VerticalAlignment::Center),
+                        ComboBox::new()
+                            .items_source(key_items)
+                            .selected_index(Some(
+                                KeyMapKey::ALL
+                                    .iter()
+                                    .position(|key| *key == settings.shape_key_map_hotkey.key)
+                                    .unwrap_or(0),
+                            ))
+                            .on_selection_changed(context.callback(|index: Option<usize>| {
+                                Message::ShapeKeyMapHotkeyKey(pick(&KeyMapKey::ALL, index))
+                            })),
+                    )),
+            ),
+        ));
+    }
     if capabilities.is_empty() && scheme.is_some() {
         rows.push(KeyedView::new(
             "shape-no-options",

@@ -159,6 +159,9 @@ pub struct RouterConfig {
     /// 当前输入方案是不是全拼：全拼直接按 `u` 进 u 模式，别的方案用 `Ctrl+Alt+U`。
     pub full_pinyin: bool,
 
+    /// 当前输入方案（全键拼音 / 双键拼音 / 形码输入）：键位映射参考的版面按它选。
+    pub input_scheme: cloudime_platform::InputScheme,
+
     /// 临时规则：本地模型只给全键拼音 / 双键拼音用；形码方案暂不接模型（后续测试后再放开）。
     pub model_allowed: bool,
 
@@ -316,6 +319,26 @@ impl From<&Config> for RouterConfig {
         } else {
             cloudime_platform::input_schemes::ShapeOptions::default()
         };
+        // 键位映射参考的显示方式 / 组合键：双键拼音读它自己的方案目录；形码只在方案声明 `KeyMap` 时读。
+        let key_map_dir = match input.input_schemes {
+            cloudime_platform::InputScheme::DualKeyPinyin => {
+                cloudime_platform::input_schemes::double_keys_dir()
+            }
+            cloudime_platform::InputScheme::ShapeCode
+                if cloudime_platform::input_schemes::current_shape_capabilities().key_map =>
+            {
+                cloudime_platform::input_schemes::shape_code_dir()
+            }
+            _ => None,
+        };
+        let key_map_reference = key_map_dir.as_deref().map_or(
+            cloudime_platform::input_schemes::KeyMapReference::Off,
+            cloudime_platform::input_schemes::read_key_map_reference,
+        );
+        let key_map_hotkey = key_map_dir.as_deref().map_or_else(
+            cloudime_platform::input_schemes::KeyMapHotkey::default,
+            cloudime_platform::input_schemes::read_key_map_hotkey,
+        );
         Self {
             page_size: candidate.candidate_count(),
             layout: candidate.candidate_arrangement_direction,
@@ -375,19 +398,14 @@ impl From<&Config> for RouterConfig {
             auto_disable_without_text_input: config.debugging.auto_disable_without_text_input,
             show_status_change_tip: input.show_status_change_tip,
             caps_lock_as_backspace: input.caps_lock_as_backspace,
-            // 值在方案目录的 `.cfg` 里（与辅助码方案同一处），不走 `config.toml`；只有双键拼音才认它
-            key_map_reference: if input.input_schemes
-                == cloudime_platform::InputScheme::DualKeyPinyin
-            {
-                cloudime_platform::input_schemes::key_map_reference()
-            } else {
-                cloudime_platform::input_schemes::KeyMapReference::Off
-            },
-            key_map_hotkey: cloudime_platform::input_schemes::key_map_hotkey(),
+            // 值在方案目录的 `.cfg` 里（与辅助码方案同一处），不走 `config.toml`；双键拼音 / 形码各读各的
+            key_map_reference,
+            key_map_hotkey,
             scripts_dir: None,
             script_disabled: config.script.disabled.clone(),
             script_global_hotkeys: config.script.global_hotkeys,
             full_pinyin: input.input_schemes == cloudime_platform::InputScheme::FullPinyin,
+            input_scheme: input.input_schemes,
             // 临时规则：形码方案先不许用本地模型（全键 / 双键拼音才放行）。
             model_allowed: matches!(
                 input.input_schemes,

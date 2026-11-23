@@ -17,12 +17,16 @@ pub use key_map::{
     KeyCap, KeyMapHotkey, KeyMapKey, KeyMapLayout, KeyMapModifiers, KeyMapReference,
 };
 pub use shape_code::{
-    DEFAULT_LEVEL_ONE, DEFAULT_MAX_CODE_LENGTH, DEFAULT_TABLE, SCHEME_FILE, ShapeCapabilities,
-    ShapeEntry, ShapeOptions, ShapeScheme, ShapeSchemeError,
+    DEFAULT_LEVEL_ONE, DEFAULT_MAX_CODE_LENGTH, DEFAULT_ROOTS, DEFAULT_TABLE, SCHEME_FILE,
+    ShapeCapabilities, ShapeEntry, ShapeOptions, ShapeScheme, ShapeSchemeError,
+    current_capabilities as current_shape_capabilities,
+    current_key_map_layout as current_shape_key_map_layout,
     current_options as current_shape_options, current_table as current_shape_table,
     list as list_shapes, read_options as read_shape_options,
     resolve_current as resolve_shape_current, set_current as set_shape_current,
-    set_option as set_shape_option, shape_code_dir,
+    set_key_map_hotkey as set_shape_key_map_hotkey,
+    set_key_map_reference as set_shape_key_map_reference, set_option as set_shape_option,
+    shape_code_dir,
 };
 
 use std::collections::BTreeMap;
@@ -645,6 +649,16 @@ pub fn key_map_layout() -> KeyMapLayout {
         .and_then(|entry| entry.scheme.as_ref().ok())
         .map(DoubleKeysScheme::key_map_layout)
         .unwrap_or_default()
+}
+
+/// 按**输入方案**选键位映射参考的版面：双键拼音画声母 / 韵母 / 零声母，形码画字根，
+/// 全键拼音没有这套参考（空版面）。
+pub fn key_map_layout_for(scheme: crate::config::InputScheme) -> KeyMapLayout {
+    match scheme {
+        crate::config::InputScheme::DualKeyPinyin => key_map_layout(),
+        crate::config::InputScheme::ShapeCode => current_shape_key_map_layout().unwrap_or_default(),
+        crate::config::InputScheme::FullPinyin => KeyMapLayout::default(),
+    }
 }
 
 #[cfg(test)]

@@ -70,7 +70,7 @@ pub use layout::Layout;
 pub use render::Render;
 pub use renderer::{
     KeyCap, KeyMapLayout, Rendered, RenderedDocument, RenderedStatus, Renderer, StatusCell,
-    draw_key_map, key_map_cell, key_map_pixel_size, key_map_size,
+    draw_key_map, key_map_cell, key_map_cell_for_layout, key_map_pixel_size, key_map_size,
 };
 pub use shadow::Shadow;
 pub use svg::svg_size;

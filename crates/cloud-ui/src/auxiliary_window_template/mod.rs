@@ -53,7 +53,7 @@ use cloud_ui_types::LayoutMode;
 use cloudime_platform::input_schemes;
 use cloudime_render::{Color, ControlName, Layout, StaticTextContent};
 #[cfg(feature = "ime")]
-use cloudime_render::{key_map_cell, key_map_size};
+use cloudime_render::{key_map_cell_for_layout, key_map_size};
 
 #[cfg(feature = "ime")]
 use crate::WindowMask;
@@ -814,8 +814,12 @@ impl AuxiliaryWindowTemplate {
                 Content::KeyMap(layout_map, fixed_cell) if !layout_map.rows.is_empty() => {
                     let render_layout = to_render_layout(layout_map);
                     let nine_rows = painter.key_map_height_nine(dpi);
-                    let mut cell = fixed_cell
-                        .unwrap_or_else(|| key_map_cell(key_map_height(target, nine_rows, dpi)));
+                    let mut cell = fixed_cell.unwrap_or_else(|| {
+                        key_map_cell_for_layout(
+                            &render_layout,
+                            key_map_height(target, nine_rows, dpi),
+                        )
+                    });
                     // 符号窗口至少和键位映射参考一样高（316 物理像素）；固定格子不够高时放大。
                     if fixed_cell.is_some() {
                         let scale = dpi.max(96) as f32 / 96.0;
@@ -1030,6 +1034,7 @@ fn to_render_layout(layout: &input_schemes::KeyMapLayout) -> cloudime_render::Ke
         symbol: layout.symbol,
         fallback_family: layout.fallback_family.clone(),
         fallback_first: layout.fallback_first,
+        roots: layout.roots,
     }
 }
 

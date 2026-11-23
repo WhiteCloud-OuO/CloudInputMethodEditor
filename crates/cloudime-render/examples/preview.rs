@@ -265,6 +265,7 @@ fn key_map_layout() -> KeyMapLayout {
         symbol: false,
         fallback_family: None,
         fallback_first: false,
+        roots: false,
     }
 }
 

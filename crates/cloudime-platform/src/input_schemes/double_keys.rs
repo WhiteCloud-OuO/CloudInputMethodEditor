@@ -135,6 +135,7 @@ impl DoubleKeysScheme {
             symbol: false,
             fallback_family: None,
             fallback_first: false,
+            roots: false,
         }
     }
 

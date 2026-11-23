@@ -35,7 +35,8 @@ use crate::text::{TextPainter, TextSize, TextStyle};
 use crate::theme::{FontSpec, Theme};
 
 pub use key_map::{
-    KeyCap, KeyMapLayout, draw_key_map, key_map_cell, key_map_pixel_size, key_map_size,
+    KeyCap, KeyMapLayout, draw_key_map, key_map_cell, key_map_cell_for_layout, key_map_pixel_size,
+    key_map_size,
 };
 pub use rendered::{Rendered, RenderedDocument};
 pub use status::{RenderedStatus, StatusCell};

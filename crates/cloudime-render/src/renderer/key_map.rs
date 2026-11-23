@@ -58,6 +58,9 @@ const KEY_FONT_RATIO: f32 = 7.0 / 46.0;
 /// 格子中间韵母的字号占格子边长的比例（基准：46 点的格子里 11 点）。
 const MAPPING_FONT_RATIO: f32 = 11.0 / 46.0;
 
+/// 字根格子里文字的字号占格子边长的比例（字根通常每行 3 个，比韵母多、要留出键位那一行）。
+const ROOTS_FONT_RATIO: f32 = 7.5 / 46.0;
+
 /// 格子右上角声母（`zh` / `ch` / `sh`）的字号占格子边长的比例：**与中间那行韵母一样大**。
 const INITIAL_FONT_RATIO: f32 = MAPPING_FONT_RATIO;
 
@@ -116,6 +119,9 @@ pub struct KeyMapLayout {
 
     /// 优先用补充字体（日文假名固定用日文字体）。
     pub fallback_first: bool,
+
+    /// 画的是**字根**（五笔键位映射参考）：字号小一点、从键位下面开始排，不按韵母首字母上色。
+    pub roots: bool,
 }
 
 impl KeyMapLayout {
@@ -171,10 +177,20 @@ impl KeyMapLayout {
 /// 竖排时这个目标就是「候选窗口装 9 个候选项」的高度（之前定义好的那个缺省高度），
 /// 横排也用同一个尺寸 —— 两种排布下辅助窗口一样大。
 pub fn key_map_cell(target_height: f32) -> f32 {
-    let rows_height = 3.0 + TABLE_ROWS as f32 * ZERO_HEIGHT_RATIO;
-    // 相邻两排共用一条线：键盘里 2 条、零声母表里 1 条（两处之间隔着 TABLE_GAP，不是共用线）
-    let shared_lines = 3.0;
-    ((target_height - PADDING * 2.0 - TABLE_GAP + shared_lines * LINE) / rows_height).max(MIN_CELL)
+    key_map_cell_for(target_height, 3, TABLE_ROWS)
+}
+
+/// 按**实际版面**算格子边长：五笔没有零声母表，同样的目标高度能把格子放得更大。
+pub fn key_map_cell_for_layout(layout: &KeyMapLayout, target_height: f32) -> f32 {
+    key_map_cell_for(target_height, layout.rows.len().max(1), layout.table_rows())
+}
+
+fn key_map_cell_for(target_height: f32, keyboard_rows: usize, table_rows: usize) -> f32 {
+    let rows_height = keyboard_rows.max(1) as f32 + table_rows as f32 * ZERO_HEIGHT_RATIO;
+    // 相邻两排共用一条线：键盘内部 rows-1 条、零声母表内部 table_rows-1 条（两处之间隔着 TABLE_GAP，不共用）
+    let shared_lines = keyboard_rows.saturating_sub(1) as f32 + table_rows.saturating_sub(1) as f32;
+    let gap = if table_rows > 0 { TABLE_GAP } else { 0.0 };
+    ((target_height - PADDING * 2.0 - gap + shared_lines * LINE) / rows_height).max(MIN_CELL)
 }
 
 /// 「键位映射参考」的内容区尺寸（**点**）：**高度恒定**（三排键盘 + 零声母表两行 + 两边留白 + 表前间距），
@@ -239,6 +255,7 @@ pub fn draw_key_map<T: RectElement + TextElement>(
         cell,
         layout.fallback_family.as_deref(),
         layout.fallback_first,
+        layout.roots,
     );
     let cell = metrics.px(cell).round().max(1.0);
     // 相邻两格共用一条线：步距 = 边长 − 线宽
@@ -259,6 +276,7 @@ pub fn draw_key_map<T: RectElement + TextElement>(
                 &metrics,
                 (x, y, cell, cell),
                 layout.symbol,
+                layout.roots,
             );
         }
     }
@@ -341,6 +359,7 @@ fn draw_key_cap<T: RectElement + TextElement>(
     metrics: &Metrics,
     (x, y, width, height): (f32, f32, f32, f32),
     symbol: bool,
+    roots: bool,
 ) {
     let line = metrics.px(LINE).max(1.0);
     // 边框：先铺一层格线色，再把里面挖成背景色
@@ -389,7 +408,15 @@ fn draw_key_cap<T: RectElement + TextElement>(
     let lines = mapping_lines(target, &cap.mapping, &styles.mapping, budget);
     let line_height = styles.mapping.line_height;
     let block = lines.len() as f32 * line_height;
-    let mut text_y = y + (height - block) / 2.0;
+    // 字根格：键位在左上角占一行，字根从它下面开始排；韵母格仍整块垂直居中
+    let mut text_y = if roots {
+        let key_height = styles.key.line_height;
+        let top = y + inset + key_height + metrics.px(2.0);
+        let available = (y + height - inset - top).max(0.0);
+        top + ((available - block) / 2.0).max(0.0)
+    } else {
+        y + (height - block) / 2.0
+    };
     for text in &lines {
         // 第一颗字母换个颜色（a 红 / o 橙 / e 绿 / i 蓝 / u 紫 / ü 棕），其余字母黑色
         let mut chars = text.chars();
@@ -456,12 +483,26 @@ impl KeyMapStyles {
         cell: f32,
         fallback_family: Option<&str>,
         fallback_first: bool,
+        roots: bool,
     ) -> Self {
         let colors = metrics.theme.colors;
         let family = metrics.theme.text_family.as_ref();
         let mapping = metrics
-            .style(FontSpec::with_size(cell * MAPPING_FONT_RATIO), colors.text)
-            .with_family(metrics.theme.pinyin_family.as_ref());
+            .style(
+                FontSpec::with_size(
+                    cell * if roots {
+                        ROOTS_FONT_RATIO
+                    } else {
+                        MAPPING_FONT_RATIO
+                    },
+                ),
+                colors.text,
+            )
+            .with_family(if roots {
+                family
+            } else {
+                metrics.theme.pinyin_family.as_ref()
+            });
         let fallback = fallback_family
             .map(str::trim)
             .filter(|family| !family.is_empty())
@@ -485,7 +526,7 @@ impl KeyMapStyles {
             footer: metrics
                 .style(FontSpec::with_size(cell * FOOTER_FONT_RATIO), colors.badge)
                 .with_family(family),
-            head: Some(()),
+            head: (!roots).then_some(()),
         }
     }
 
@@ -552,7 +593,24 @@ mod tests {
             symbol: false,
             fallback_family: None,
             fallback_first: false,
+            roots: false,
         }
+    }
+
+    /// 没有零声母表的版面（五笔字根）在同样高度下能把格子放得更大。
+    #[test]
+    fn a_layout_without_the_zero_table_gets_larger_cells() {
+        let with_table = keyboard(12);
+        let without_table = keyboard(0);
+        assert!(
+            key_map_cell_for_layout(&without_table, 316.0)
+                > key_map_cell_for_layout(&with_table, 316.0)
+        );
+        assert_eq!(
+            key_map_cell_for_layout(&with_table, 316.0),
+            key_map_cell(316.0),
+            "双键拼音的版面仍走原来的公式"
+        );
     }
 
     /// 邻居之间只隔一条线（跨度 = 格子边长 × 个数 − 共用的那条线）。
@@ -572,8 +630,8 @@ mod tests {
             theme: &theme,
             scale: 1.0,
         };
-        let small = KeyMapStyles::new(&metrics, CELL, None, false);
-        let large = KeyMapStyles::new(&metrics, CELL * 2.0, None, false);
+        let small = KeyMapStyles::new(&metrics, CELL, None, false, false);
+        let large = KeyMapStyles::new(&metrics, CELL * 2.0, None, false, false);
         let close = |value: f32, wanted: f32| (value - wanted).abs() < 0.01;
         assert!(close(small.key.size, 7.0), "46 点的格子里是 7 点");
         assert!(close(small.mapping.size, 11.0), "46 点的格子里是 11 点");
@@ -651,6 +709,7 @@ mod tests {
             symbol: false,
             fallback_family: None,
             fallback_first: false,
+            roots: false,
         };
         assert_eq!(
             layout.table_rows(),
