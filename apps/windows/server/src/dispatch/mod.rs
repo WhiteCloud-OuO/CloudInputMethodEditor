@@ -75,6 +75,9 @@ pub struct Router {
     /// u 模式状态；`Some` 时候选窗口固定显示六类符号，旁边挂符号输入窗口。
     u_mode: Option<UMode>,
 
+    /// 键位映射参考当前是不是被 u / i / v 面板临时收起（退出面板后恢复用户配置）。
+    key_map_suppressed: bool,
+
     /// i 模式状态：缓冲区以 `i` 开头时，候选窗口列脚本 / 只匹配英文单词。
     i_mode: bool,
 
@@ -344,6 +347,7 @@ impl Router {
             focused: None,
             composed: None,
             u_mode: None,
+            key_map_suppressed: false,
             i_mode: false,
             notice: None,
             surrounding: String::new(),

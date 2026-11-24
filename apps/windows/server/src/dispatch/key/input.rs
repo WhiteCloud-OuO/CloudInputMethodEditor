@@ -72,6 +72,17 @@ impl Router {
         if self.u_mode.is_none() && !self.i_mode && self.engine.panel_mode() {
             self.engine.set_panel_mode(false);
         }
+        // u / i / v 面板里不显示「键位映射参考」（字根面板）：进入时收起，退出后恢复用户配置。
+        let panel = self.u_mode.is_some() || self.i_mode || self.engine.forced_expression();
+        if panel != self.key_map_suppressed {
+            self.key_map_suppressed = panel;
+            let mode = if panel {
+                cloudime_platform::input_schemes::KeyMapReference::Off
+            } else {
+                self.config.key_map_reference
+            };
+            self.candidates.set_auxiliary_mode(mode);
+        }
         // 多释义选择中（Ctrl + 反引号之后）：只有数字与 Esc 有效，别的键一律吃掉、拼音串不动
         if self.translate.choices().is_some() {
             return self.apply_choice_key(event);

@@ -208,8 +208,13 @@ impl Engine {
         let mut query = match self.query_inner() {
             Ok(query) => query,
             Err(error) => {
-                // 纯五笔只认方案目录的码表：用户短语不进候选，切不出来就是切不出来
-                if self.shape.is_some() && !self.shape_z_mode() {
+                // 纯五笔只认方案目录的码表：用户短语不进候选，切不出来就是切不出来。
+                // u / i 面板与 v 表达式是例外：它们本来就不走码表，按普通失败处理。
+                if self.shape.is_some()
+                    && !self.shape_z_mode()
+                    && !self.forced_expression
+                    && !self.panel_mode
+                {
                     return Err(error);
                 }
                 if !self
@@ -230,7 +235,8 @@ impl Engine {
         // 已选文本显示在未选拼音之前；候选与光标只对未选拼音算。
         query.selected = self.composition.selected_text();
         // 纯五笔不加用户短语（会把一级简码挤掉）；z 模式是临时拼音，照旧能用短语。
-        if self.shape.is_none() || self.shape_z_mode() {
+        if self.shape.is_none() || self.shape_z_mode() || self.forced_expression || self.panel_mode
+        {
             self.insert_custom_phrases(&mut query.candidates.items);
         }
         // 特殊输入模式：只留当前（第一个）音节的单字候选，选完一个字后剩余的拼音留给下一次查询。

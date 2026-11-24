@@ -60,6 +60,11 @@ impl Engine {
         self.panel_mode
     }
 
+    /// 当前是不是 v 表达式模式（`Ctrl+Alt+V` / 全拼 `v` 开头）。
+    pub fn forced_expression(&self) -> bool {
+        self.forced_expression
+    }
+
     /// 形码的「英文混输」（方案目录 `use_input_scheme.cfg` 的 `mixture_input`，缺省关）：
     /// 开着时五笔候选后面追加英文词（按敲的键匹配，不纠错）。
     pub fn set_shape_mixture_input(&mut self, on: bool) {
