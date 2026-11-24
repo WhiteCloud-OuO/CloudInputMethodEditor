@@ -21,6 +21,9 @@ pub enum CodecError {
     #[error("json: {0}")]
     Json(#[from] serde_json::Error),
 
+    #[error("json: {error}；报文：{payload}")]
+    JsonPayload { error: String, payload: String },
+
     #[error("frame too large: {0} bytes")]
     TooLarge(usize),
 }
@@ -51,7 +54,18 @@ pub fn read_message<R: Read, T: DeserializeOwned>(reader: &mut R) -> Result<Opti
     }
     let mut body = vec![0u8; len as usize];
     reader.read_exact(&mut body)?;
-    Ok(Some(serde_json::from_slice(&body)?))
+    match serde_json::from_slice(&body) {
+        Ok(value) => Ok(Some(value)),
+        Err(error) => {
+            // 报文本身带进错误里，出解码失败时能直接看出是哪个字段（截前 400 字符）
+            let text = String::from_utf8_lossy(&body);
+            let snippet: String = text.chars().take(400).collect();
+            Err(CodecError::JsonPayload {
+                error: error.to_string(),
+                payload: snippet,
+            })
+        }
+    }
 }
 
 /// 填满 `buf`。开头就 EOF（一个字节没读到）返回 `Ok(false)`（干净关闭）；
