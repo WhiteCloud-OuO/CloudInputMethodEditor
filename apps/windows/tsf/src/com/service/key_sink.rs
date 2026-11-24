@@ -317,6 +317,21 @@ impl TextService_Impl {
     /// 不吃的键绝不碰组句（否则光标一移，组句会把拼音重插到别处）。
     fn handle_key(&self, pic: Ref<ITfContext>, event: KeyEvent) -> bool {
         if !self.would_eat(&event) {
+            // 字母被放行时记一条，定位「某些程序里首键漏进应用」用
+            if is_letter(event.virtual_key) {
+                log(&format!(
+                    "放行字母 vk={} char={:?} composing={} raw={} disabled={} english={} caps={} shift={} settings={}",
+                    event.virtual_key,
+                    event.character,
+                    self.shared.composing(),
+                    self.raw_input(),
+                    self.mode_state.disabled(),
+                    event.modifiers.english_mode,
+                    event.modifiers.caps,
+                    event.modifiers.shift,
+                    self.input_settings.get().is_some(),
+                ));
+            }
             return false;
         }
         self.forward_key(pic, event)
