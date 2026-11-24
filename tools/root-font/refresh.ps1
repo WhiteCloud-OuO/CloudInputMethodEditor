@@ -70,7 +70,21 @@ if ($NoDeploy) {
     return
 }
 
-if (-not $InstallDir) { $InstallDir = Join-Path $env:ProgramFiles 'CloudIME' }
+if (-not $InstallDir) {
+    # 按常见安装位置找（安装目录不一定在系统盘）
+    $candidates = @()
+    if ($env:ProgramFiles) { $candidates += (Join-Path $env:ProgramFiles 'CloudIME') }
+    if (${env:ProgramFiles(x86)}) { $candidates += (Join-Path ${env:ProgramFiles(x86)} 'CloudIME') }
+    foreach ($drive in (Get-PSDrive -PSProvider FileSystem -ErrorAction SilentlyContinue)) {
+        $candidates += (Join-Path $drive.Root 'Program Files\CloudIME')
+    }
+    $InstallDir = $candidates |
+        Where-Object { $_ -and (Test-Path -LiteralPath (Join-Path $_ 'InputSchemes\ShapeCode\wubi')) } |
+        Select-Object -First 1
+}
+if (-not $InstallDir) {
+    throw "找不到安装目录里的 InputSchemes\ShapeCode\wubi；用 -InstallDir 指定，比如 -InstallDir 'D:\Program Files\CloudIME'"
+}
 $target = Join-Path $InstallDir 'InputSchemes\ShapeCode\wubi'
 if (-not (Test-Path -LiteralPath $target)) { throw "安装目录里没有 $target；用 -InstallDir 指定正确路径" }
 Write-Host "== 2/3 复制到安装目录：$target"
