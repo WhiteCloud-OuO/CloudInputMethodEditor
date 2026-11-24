@@ -236,6 +236,17 @@ impl TextService_Impl {
     /// 组句中功能键 / 方向键 / 可打印字符都吃；没在组句时数字 / 标点也先「测吃」送去转全角（中英各有一份开关），
     /// Server 不转的回 Passthrough 再放行。
     fn would_eat(&self, event: &KeyEvent) -> bool {
+        // 临时诊断：Ctrl+Alt 组合到没到 TSF、判定是什么（v 模式在某些环境里收不到键）
+        if event.modifiers.ctrl && event.modifiers.alt && !event.modifiers.win {
+            log(&format!(
+                "Ctrl+Alt 组合 vk={} composing={} raw={} disabled={} english={}",
+                event.virtual_key,
+                self.shared.composing(),
+                self.raw_input(),
+                self.mode_state.disabled(),
+                event.modifiers.english_mode,
+            ));
+        }
         // 刚由输入法自己重放回应用的那个键：不能再吃（否则应用还是拿不到）。
         // 别的键先到就把标记作废 —— 那次重放的键没回来（比如前台换了窗口），别误伤后面的同键按键。
         if is_replay(&self.replaying, event.virtual_key) {
