@@ -403,11 +403,15 @@ fn load_roots(source: &str, roots: &mut BTreeMap<char, Vec<String>>) -> Vec<Stri
     problems
 }
 
-/// 五笔的键位映射参考：三排键盘，每格是这个键上的字根（`z` 标成「通配」）。
+/// 五笔的键位映射参考：三排键盘，每格是这个键上的字根（`z` 标成「通配」），右上角是一级简码。
 ///
 /// 字根默认用**普通汉字**表示；方案自带字根字体时传 `pua = true`，渲染器换成字根字族。
 /// 每格最多 3 行 × 4 个字根（格子宽度有限，渲染器只在换行处切）。
-fn shape_key_map_layout(roots: &BTreeMap<char, Vec<String>>, pua: bool) -> KeyMapLayout {
+fn shape_key_map_layout(
+    roots: &BTreeMap<char, Vec<String>>,
+    level_one: &BTreeMap<char, String>,
+    pua: bool,
+) -> KeyMapLayout {
     let rows = KEYBOARD_ROWS
         .iter()
         .enumerate()
@@ -418,7 +422,11 @@ fn shape_key_map_layout(roots: &BTreeMap<char, Vec<String>>, pua: bool) -> KeyMa
                 .chars()
                 .map(|key| KeyCap {
                     key: key.to_ascii_uppercase().to_string(),
-                    initial: String::new(),
+                    initial: if key == 'z' {
+                        String::new()
+                    } else {
+                        level_one.get(&key).cloned().unwrap_or_default()
+                    },
                     mapping: if key == 'z' {
                         "通配".to_owned()
                     } else {
@@ -538,6 +546,14 @@ pub fn current_key_map_layout() -> Option<KeyMapLayout> {
         return None;
     }
     let shape = section(&root, "Shape").ok();
+    // 一级简码：右上角显示那个字（`[Shape] LevelOne`，缺省 level1.tsv；读不出来就是空）
+    let level_one_name = shape
+        .and_then(|shape| optional(shape, "LevelOne"))
+        .filter(|value| !value.trim().is_empty())
+        .unwrap_or_else(|| DEFAULT_LEVEL_ONE.to_owned());
+    let level_one = std::fs::read_to_string(scheme_dir.join(level_one_name.trim()))
+        .map(|source| load_level_one_map(&source))
+        .unwrap_or_default();
     if root_font_in(&scheme_dir, &root).is_some() {
         let pua_name = shape
             .and_then(|shape| optional(shape, "RootsPua"))
@@ -555,7 +571,7 @@ pub fn current_key_map_layout() -> Option<KeyMapLayout> {
                 );
             }
             if !roots.is_empty() {
-                return Some(shape_key_map_layout(&roots, true));
+                return Some(shape_key_map_layout(&roots, &level_one, true));
             }
         }
     }
@@ -569,7 +585,33 @@ pub fn current_key_map_layout() -> Option<KeyMapLayout> {
     if roots.is_empty() {
         return None;
     }
-    Some(shape_key_map_layout(&roots, false))
+    Some(shape_key_map_layout(&roots, &level_one, false))
+}
+
+/// 读一级简码表：一行 `键<TAB>字`（`z` 不占一级简码，跳过；格式不对的行忽略）。
+fn load_level_one_map(source: &str) -> BTreeMap<char, String> {
+    let mut map = BTreeMap::new();
+    for raw in source.lines() {
+        let line = raw.trim().trim_start_matches('\u{feff}');
+        if line.is_empty() || line.starts_with('#') {
+            continue;
+        }
+        let Some((key, text)) = line.split_once('\t') else {
+            continue;
+        };
+        let mut chars = key.trim().chars();
+        let (Some(key), None) = (chars.next(), chars.next()) else {
+            continue;
+        };
+        if !key.is_ascii_lowercase() || key == 'z' {
+            continue;
+        }
+        let text = text.trim();
+        if !text.is_empty() {
+            map.insert(key, text.to_owned());
+        }
+    }
+    map
 }
 
 /// 当前方案 id：`.cfg` 指得到就用它，否则目录名升序第一个。
@@ -989,10 +1031,15 @@ mod tests {
             Some("王 一 五 戋")
         );
 
-        let layout = shape_key_map_layout(&scheme.roots, false);
+        // 一级简码放在单元格右上角（`initial`），`z` 不占
+        let mut level_one = BTreeMap::new();
+        level_one.insert('g', "一".to_owned());
+        let layout = shape_key_map_layout(&scheme.roots, &level_one, false);
         assert_eq!(layout.rows.len(), 3);
         assert!(layout.zero_initials.is_empty(), "五笔没有零声母表");
         // 第二排 asdfghjkl：g 在第五格
+        assert_eq!(layout.rows[1][4].initial, "一");
+        assert!(layout.rows[2][0].initial.is_empty(), "z 没有一级简码");
         assert_eq!(layout.rows[1][4].key, "G");
         assert_eq!(layout.rows[1][4].mapping, "王一五戋");
         // z 是通配键
@@ -1008,7 +1055,7 @@ mod tests {
                 .map(str::to_owned)
                 .collect(),
         );
-        let layout = shape_key_map_layout(&many, false);
+        let layout = shape_key_map_layout(&many, &BTreeMap::new(), false);
         let mapping = &layout.rows[1][4].mapping;
         assert_eq!(mapping.lines().count(), 3, "{mapping:?}");
         assert_eq!(mapping.lines().last(), Some("二"));
@@ -1031,7 +1078,7 @@ mod tests {
         assert!(!problems.is_empty(), "{problems:?}");
         assert!(!roots.contains_key(&'f'));
 
-        let layout = shape_key_map_layout(&roots, true);
+        let layout = shape_key_map_layout(&roots, &BTreeMap::new(), true);
         assert!(layout.roots_pua, "有字根字体时渲染器要换字族");
         assert_eq!(layout.rows[1][4].mapping, "\u{e001}\u{e000}\u{e005}");
     }

@@ -99,6 +99,21 @@ fn head_color(head: char) -> Option<Color> {
     }
 }
 
+/// 五笔字根的键位分组配色：QWERT 用 a 的红、YUIOP 用 o 的橙、ASDFG 用 e 的绿、
+/// HJKLM 用 i 的蓝、XCVBN 用 u 的紫（`Z` 是通配键，不参与）。
+fn root_group_color(key: &str) -> Option<Color> {
+    let head = key.chars().next()?.to_ascii_lowercase();
+    let group = match head {
+        'q' | 'w' | 'e' | 'r' | 't' => 'a',
+        'y' | 'u' | 'i' | 'o' | 'p' => 'o',
+        'a' | 's' | 'd' | 'f' | 'g' => 'e',
+        'h' | 'j' | 'k' | 'l' | 'm' => 'i',
+        'x' | 'c' | 'v' | 'b' | 'n' => 'u',
+        _ => return None,
+    };
+    head_color(group)
+}
+
 /// 键位映射参考的版面。
 #[derive(Debug, Clone, Default, PartialEq, Eq)]
 pub struct KeyMapLayout {
@@ -380,12 +395,17 @@ fn draw_key_cap<T: RectElement + TextElement>(
     if !cap.key.is_empty() {
         target.text(&cap.key, &styles.key, x + inset, y + inset);
     }
-    // 右上角的声母（棕色，右对齐）
+    // 右上角的声母（棕色，右对齐）；字根格用更小一号，免得压住字根
     if !cap.initial.is_empty() {
-        let initial_width = target.measure(&cap.initial, &styles.initial).width;
+        let style = if roots {
+            &styles.roots_initial
+        } else {
+            &styles.initial
+        };
+        let initial_width = target.measure(&cap.initial, style).width;
         target.text(
             &cap.initial,
-            &styles.initial,
+            style,
             x + width - inset - initial_width,
             y + inset,
         );
@@ -409,7 +429,18 @@ fn draw_key_cap<T: RectElement + TextElement>(
     if cap.mapping.is_empty() || budget <= 0.0 {
         return;
     }
-    let lines = mapping_lines(target, &cap.mapping, &styles.mapping, budget);
+    // 字根按键盘分组上色（跟双拼韵母 a/o/e/i/u 的颜色一致）
+    let root_style = if roots {
+        root_group_color(&cap.key).map(|color| {
+            let mut style = styles.mapping.clone();
+            style.color = color;
+            style
+        })
+    } else {
+        None
+    };
+    let mapping_style = root_style.as_ref().unwrap_or(&styles.mapping);
+    let lines = mapping_lines(target, &cap.mapping, mapping_style, budget);
     let line_height = styles.mapping.line_height;
     let block = lines.len() as f32 * line_height;
     // 字根格：键位在左上角占一行，字根从它下面开始排；韵母格仍整块垂直居中
@@ -422,6 +453,13 @@ fn draw_key_cap<T: RectElement + TextElement>(
         y + (height - block) / 2.0
     };
     for text in &lines {
+        if roots {
+            // 字根整行一个颜色，不再按首字母分色
+            let text_width = target.measure(text, mapping_style).width;
+            target.text(text, mapping_style, x + (width - text_width) / 2.0, text_y);
+            text_y += line_height;
+            continue;
+        }
         // 第一颗字母换个颜色（a 红 / o 橙 / e 绿 / i 蓝 / u 紫 / ü 棕），其余字母黑色
         let mut chars = text.chars();
         let head = chars.next().unwrap_or_default();
@@ -468,6 +506,8 @@ struct KeyMapStyles {
     line: crate::color::Color,
     key: TextStyle,
     initial: TextStyle,
+    /// 字根格右上角的一级简码：比双拼的声母小一号，别压住字根。
+    roots_initial: TextStyle,
     mapping: TextStyle,
     /// 符号窗口的补充字体：主字体缺字时改用它；普通键位映射参考为空。
     fallback: Option<TextStyle>,
@@ -529,6 +569,9 @@ impl KeyMapStyles {
                     FontSpec::with_size(cell * INITIAL_FONT_RATIO),
                     INITIAL_COLOR,
                 )
+                .with_family(family),
+            roots_initial: metrics
+                .style(FontSpec::with_size(cell * ROOTS_FONT_RATIO), INITIAL_COLOR)
                 .with_family(family),
             mapping,
             fallback,
