@@ -486,7 +486,9 @@ impl Router {
                 preedit_mode: self.effective_preedit_mode(self.config.preedit),
                 cursor: *cursor,
                 candidates: CandidateList { items: Vec::new() },
-                highlight: usize::MAX,
+                // 没有候选时不给 `usize::MAX` 当哨兵：32 位 DLL 的 usize 是 32 位，
+                // u64::MAX 会解码失败（表现为按键被放行、组句丢掉），这里给 0 就行（没有候选，谁也不会去索引）
+                highlight: 0,
                 page: 0,
                 page_count: 1,
                 layout: self.config.layout,
