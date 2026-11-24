@@ -47,6 +47,19 @@ impl Engine {
         self.shape.as_ref()
     }
 
+    /// u / i 模式：形码 / 双拼里 `u`、`i` 也是正常按键，但这两模式下的串得按拼音 / 英文查，
+    /// 不能走形码表 / 双拼表。
+    pub fn set_panel_mode(&mut self, on: bool) {
+        if self.panel_mode != on {
+            self.forget_span_cache();
+        }
+        self.panel_mode = on;
+    }
+
+    pub fn panel_mode(&self) -> bool {
+        self.panel_mode
+    }
+
     /// 形码的「英文混输」（方案目录 `use_input_scheme.cfg` 的 `mixture_input`，缺省关）：
     /// 开着时五笔候选后面追加英文词（按敲的键匹配，不纠错）。
     pub fn set_shape_mixture_input(&mut self, on: bool) {
@@ -62,14 +75,17 @@ impl Engine {
 
     /// 形码当前是不是 z 模式：挂着形码表、且作用域以 `z` 开头（临时拼音 + 五笔反查）。
     pub fn shape_z_mode(&self) -> bool {
-        self.shape.is_some() && !self.forced_expression && self.composition.scope().starts_with('z')
+        self.shape.is_some()
+            && !self.forced_expression
+            && !self.panel_mode
+            && self.composition.scope().starts_with('z')
     }
 
     /// 纯五笔已经敲了几位编码（不含 z 模式）；不是纯五笔就是 `None`。
     ///
     /// 壳用它判断四码是否敲满（四码唯一自动上屏 / 第五码顶字上屏）。光标停在中间时只看光标前。
     pub fn shape_code_len(&self) -> Option<usize> {
-        if self.shape.is_none() || self.shape_z_mode() {
+        if self.shape.is_none() || self.shape_z_mode() || self.panel_mode {
             return None;
         }
         Some(

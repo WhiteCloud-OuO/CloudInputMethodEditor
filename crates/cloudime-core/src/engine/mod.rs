@@ -180,6 +180,10 @@ pub struct Engine {
     /// 特殊输入模式：逐音节只出单字候选，选完一个字再进入下一个音节。
     special_input: bool,
 
+    /// u / i 模式（`Ctrl+Alt+U` / `Ctrl+Alt+I` / 全拼裸 `u`）：形码 / 双拼里 `u`、`i` 也是正常按键，
+    /// 但这两模式下这一串得按拼音 / 英文查，不能走形码表。
+    panel_mode: bool,
+
     /// 特殊输入模式时造词（设置项，缺省关）。
     special_input_word: bool,
 
@@ -409,6 +413,7 @@ impl Engine {
             sentence_done: std::cell::Cell::new(0),
             neural_cache: std::cell::RefCell::new(rescoring::NeuralCache::default()),
             special_input: false,
+            panel_mode: false,
             special_input_word: false,
             special_selected: false,
             choice: None,

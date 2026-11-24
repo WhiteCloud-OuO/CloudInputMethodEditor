@@ -67,6 +67,11 @@ impl Router {
 
     /// 表达式模式里 Shift + 数字打的是 `^ * ( )`，进算式。
     pub(crate) fn apply_key(&mut self, event: &KeyEvent) -> Effect {
+        // u / i 模式都以「引擎按拼音或英文查」为前提：模式已经不在（Esc、上屏、换方案……）
+        // 却还留着这个标志时，五笔 / 双拼的按键会被错当成拼音，这里兜一下。
+        if self.u_mode.is_none() && !self.i_mode && self.engine.panel_mode() {
+            self.engine.set_panel_mode(false);
+        }
         // 多释义选择中（Ctrl + 反引号之后）：只有数字与 Esc 有效，别的键一律吃掉、拼音串不动
         if self.translate.choices().is_some() {
             return self.apply_choice_key(event);

@@ -35,6 +35,8 @@ impl Router {
             return;
         }
         self.i_mode = on;
+        // 形码 / 双拼里 `i` 也是正常按键：i 模式下这一串按英文 / 脚本查，别走形码表
+        self.engine.set_panel_mode(on);
         // 全拼没有双拼键位映射参考；只有双拼/形码这类方案才需要临时收起。
         if self.config.full_pinyin {
             return;

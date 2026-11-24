@@ -181,6 +181,9 @@ impl Router {
         if self.composing() {
             return;
         }
+        // 形码 / 双拼里 `u` 也是正常按键：告诉引擎「这一串按拼音查」，否则 `push('u')` 会被当成
+        // 五笔编码 `u`（候选出「水 / 氵」这类字根）或双拼音节。
+        self.engine.set_panel_mode(true);
         self.engine.push('u');
         self.u_mode = Some(UMode {
             // 支持混输时先进字母输入；不支持混输直接进符号输入。
@@ -226,6 +229,7 @@ impl Router {
         let u = self.u_mode?;
         if event.virtual_key == 0x1B {
             self.u_mode = None;
+            self.engine.set_panel_mode(false);
             self.candidates.set_symbol_aux(None);
             self.engine.clear();
             return Some(Effect::Changed(None));
@@ -258,6 +262,7 @@ impl Router {
         if event.virtual_key == 0x1B {
             // Esc：关符号窗口、关候选窗，整段 u 模式作废。
             self.u_mode = None;
+            self.engine.set_panel_mode(false);
             self.candidates.set_symbol_aux(None);
             self.engine.clear();
             return Effect::Changed(None);

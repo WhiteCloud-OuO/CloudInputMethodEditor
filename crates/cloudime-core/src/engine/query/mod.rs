@@ -313,12 +313,15 @@ impl Engine {
         // 喂给解码器的是**大小写原样**的那一份（`typed_scope`）：大写字母进缓冲区时被压成小写
         // 只记了 shifted 标记，辅助码全靠大小写区分。
         if !self.forced_expression
+            && !self.panel_mode
             && let Some(table) = &self.shuangpin
         {
             return self.query_shuangpin(table, &self.composition.typed_scope(), &rest, start);
         }
         // 形码输入：按键就是编码本身，按前缀查码表；不进拼音切分，也没有 v / u / i 那三种面板。
+        // u 模式例外：`u` 在形码里是字根键，这一串要按拼音查。
         if !self.forced_expression
+            && !self.panel_mode
             && let Some(table) = &self.shape
         {
             return self.query_shape(table, keys, &self.composition.typed_scope());
