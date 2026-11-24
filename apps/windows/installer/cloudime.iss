@@ -164,8 +164,13 @@ Source: "{#Repo}\assets\sample\dict.tsv";        DestDir: "{app}\assets\sample";
 ; 随包辅助码表（双键拼音）：程序首次运行会把它们**播种**到用户可写的
 ; {app}\InputSchemes\DoubleKeysPinyin\AuxiliaryCodes\（同名已有就不动），设置页的「辅助码方案」下拉里就能选到。
 Source: "{#Repo}\assets\auxiliary\*.tsv";        DestDir: "{app}\assets\auxiliary"; Flags: ignoreversion
-; 形码方案（五笔 86）：码表 / 一级简码随版本更新；use_input_scheme.cfg 只在没有时铺一份（保住用户选项）。
+; 形码方案（五笔 86）：码表 / 一级简码 / 字根字体随版本更新；use_input_scheme.cfg 只在没有时铺一份（保住用户选项）。
 Source: "{#Repo}\InputSchemes\ShapeCode\wubi\*"; DestDir: "{app}\InputSchemes\ShapeCode\wubi"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
+; 字根字体（键位映射参考用）：会装到 {app}\InputSchemes\ShapeCode\wubi\zigen.ttf，
+; 程序按文件私有加载，不装系统字体；漏了它别的机器上字根会退回普通汉字。OFL.txt 是字体的许可证，必须同目录。
+Source: "{#Repo}\InputSchemes\ShapeCode\wubi\zigen.ttf";   DestDir: "{app}\InputSchemes\ShapeCode\wubi"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#Repo}\InputSchemes\ShapeCode\wubi\roots_pua.tsv"; DestDir: "{app}\InputSchemes\ShapeCode\wubi"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#Repo}\InputSchemes\ShapeCode\wubi\OFL.txt";     DestDir: "{app}\InputSchemes\ShapeCode\wubi"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#Repo}\InputSchemes\ShapeCode\use_input_scheme.cfg"; DestDir: "{app}\InputSchemes\ShapeCode"; Flags: onlyifdoesntexist
 ; 悬浮状态条的图标按钮：排布表与 icons\ 装在 data\ 下，Server 按 exe 位置读 {app}\data\icons-arrangement.cfg
 Source: "{#Repo}\apps\windows\server\src\ui\status\icons-arrangement.cfg"; DestDir: "{app}\data"; Flags: ignoreversion

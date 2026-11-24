@@ -49,7 +49,9 @@ C:\Program Files\CloudIME\
     InputSchemes\             输入方案目录（本目录对普通用户可写）：
                               DoubleKeysPinyin\ 双键拼音（*.toml / .ini 与 AuxiliaryCodes\ 辅助码表；随包只建目录，
                               方案由程序首次运行写出；辅助码表由程序从 assets\auxiliary\ 播种，同名已有就不动）；
-                              ShapeCode\ 形码（wubi\ 里是 scheme.toml / table.tsv / level1.tsv，随包安装并随版本覆盖；
+                              ShapeCode\ 形码（wubi\ 里是 scheme.toml / table.tsv / level1.tsv / roots.tsv /
+                              roots_pua.tsv / zigen.ttf / OFL.txt，随包安装并随版本覆盖；
+                              zigen.ttf 是字根字体，漏了它别的机器上字根会退回普通汉字；
                               use_input_scheme.cfg 只在没有时铺一份，保住用户选项）
     assets\                   sample\（兜底样例词库）、auxiliary\（随包辅助码表，首次运行播种进 InputSchemes\）
 ```
