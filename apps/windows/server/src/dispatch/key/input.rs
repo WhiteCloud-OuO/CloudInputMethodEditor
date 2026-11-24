@@ -65,6 +65,21 @@ impl Router {
         Some(format!("{body}={result}"))
     }
 
+    /// u / i / v 面板开着时把「键位映射参考」收起，退出后恢复用户配置。
+    pub(crate) fn sync_panel_auxiliary(&mut self) {
+        let panel = self.u_mode.is_some() || self.i_mode || self.engine.forced_expression();
+        if panel == self.key_map_suppressed {
+            return;
+        }
+        self.key_map_suppressed = panel;
+        let mode = if panel {
+            cloudime_platform::input_schemes::KeyMapReference::Off
+        } else {
+            self.config.key_map_reference
+        };
+        self.candidates.set_auxiliary_mode(mode);
+    }
+
     /// 表达式模式里 Shift + 数字打的是 `^ * ( )`，进算式。
     pub(crate) fn apply_key(&mut self, event: &KeyEvent) -> Effect {
         // u / i 模式都以「引擎按拼音或英文查」为前提：模式已经不在（Esc、上屏、换方案……）
@@ -73,16 +88,7 @@ impl Router {
             self.engine.set_panel_mode(false);
         }
         // u / i / v 面板里不显示「键位映射参考」（字根面板）：进入时收起，退出后恢复用户配置。
-        let panel = self.u_mode.is_some() || self.i_mode || self.engine.forced_expression();
-        if panel != self.key_map_suppressed {
-            self.key_map_suppressed = panel;
-            let mode = if panel {
-                cloudime_platform::input_schemes::KeyMapReference::Off
-            } else {
-                self.config.key_map_reference
-            };
-            self.candidates.set_auxiliary_mode(mode);
-        }
+        self.sync_panel_auxiliary();
         // 多释义选择中（Ctrl + 反引号之后）：只有数字与 Esc 有效，别的键一律吃掉、拼音串不动
         if self.translate.choices().is_some() {
             return self.apply_choice_key(event);

@@ -192,6 +192,7 @@ impl Router {
         });
         self.highlight = 0;
         self.update_u_aux();
+        self.sync_panel_auxiliary();
     }
 
     /// `Ctrl+Alt+U`：全拼、非全拼都进 u 模式。
@@ -221,6 +222,7 @@ impl Router {
             return None;
         }
         self.engine.start_expression();
+        self.sync_panel_auxiliary();
         Some(Effect::Changed(None))
     }
 

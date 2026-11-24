@@ -606,6 +606,19 @@ fn eats_key(
         return false;
     }
     let modifiers = event.modifiers;
+    // u / i / v 面板的固定热键（Ctrl + Alt + U / I / V）：保留键在个别应用里到不了 TSF，
+    // 这里再兜一层，直接吃掉送给 Server（Server 端有对应处理）。
+    if modifiers.ctrl
+        && modifiers.alt
+        && !modifiers.win
+        && !modifiers.english_mode
+        && matches!(
+            event.virtual_key,
+            vk if vk == u32::from(b'U') || vk == u32::from(b'I') || vk == u32::from(b'V')
+        )
+    {
+        return true;
+    }
     // 「键位映射参考」那套组合键（`InputSettings::key_map_modifiers` / `key_map_key`，`(0, 0)` = 没配）：
     // **只在组句里**、且这一拍正是那一套修饰键（精确匹配）+ 那一个功能键时专程送上来问一趟 ——
     // Server 不吃就回 Passthrough、按键重放回应用。`Ctrl+Alt` / `Alt+Shift` 那两套不在下面
