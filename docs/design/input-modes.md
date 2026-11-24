@@ -16,6 +16,12 @@
 也不把缓冲区当拼音查询。全拼没有双拼键位映射参考，i 模式不额外处理它。
 中英混输的英文词仍然从模式前缀开始匹配：`v` 模式打 `very`、u 模式打 `undo`、i 模式打 `input`。
 
+**被别的程序占用时**：`Ctrl+Alt+U/I/V` 可能在到达 TSF 之前就被全局钩子吃掉（有道词典的取词就占过 `Ctrl+Alt+V`），
+`PreserveKey` 对此无能为力；DLL 在 `eats_key` 里对 `Ctrl+Alt(+Shift)` 的 U/I/V 兜了一层，所以
+`Ctrl+Alt+Shift+V` 这类变体照样能进（Server 的 `*_mode_hotkey` 只判 ctrl+alt，不判 shift）。
+**不要**用 `RegisterHotKey` 或键盘钩子去抢：全局热键会把组合键从别的程序手里彻底夺走、且不分输入法开关场景，
+LL 钩子则要 UI 线程消息循环、在提权窗口里收不到按键、还容易被安全软件判为风险行为。
+
 `v` 模式当前内置：算式 / 数字转换、`vrq` / `vsj` / `vxq` / `vxz` 的日期 / 时间 / 星期 / 现在候选、
 `v@` 车牌（`data/plates.qj`，`cloudime_plate::PlateTable`）、`v#` 取名（`data/姓氏大全.tsv`、
 `data/名字大全.tsv`，`cloudime_core::name::NameTables`），以及拼音串只有一个 `v` 时的 V 模式说明窗口
