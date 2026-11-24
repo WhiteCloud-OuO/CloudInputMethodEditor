@@ -67,6 +67,7 @@ impl Router {
         if !event.modifiers.ctrl
             || !event.modifiers.alt
             || event.modifiers.win
+            || event.modifiers.shift
             || event.virtual_key != u32::from(b'I')
         {
             return None;

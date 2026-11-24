@@ -606,11 +606,12 @@ fn eats_key(
         return false;
     }
     let modifiers = event.modifiers;
-    // u / i / v 面板的固定热键（Ctrl + Alt + U / I / V）：保留键在个别应用里到不了 TSF，
-    // 这里再兜一层，直接吃掉送给 Server（Server 端有对应处理）。
+    // u / i / v 面板的固定热键（Ctrl + Alt + U / I / V，**不带 Shift**）：保留键在个别应用里
+    // 到不了 TSF，这里再兜一层，直接吃掉送给 Server（Server 端有对应处理）。
     if modifiers.ctrl
         && modifiers.alt
         && !modifiers.win
+        && !modifiers.shift
         && !modifiers.english_mode
         && matches!(
             event.virtual_key,

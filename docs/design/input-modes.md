@@ -17,8 +17,8 @@
 中英混输的英文词仍然从模式前缀开始匹配：`v` 模式打 `very`、u 模式打 `undo`、i 模式打 `input`。
 
 **被别的程序占用时**：`Ctrl+Alt+U/I/V` 可能在到达 TSF 之前就被全局钩子吃掉（有道词典的取词就占过 `Ctrl+Alt+V`），
-`PreserveKey` 对此无能为力；DLL 在 `eats_key` 里对 `Ctrl+Alt(+Shift)` 的 U/I/V 兜了一层，所以
-`Ctrl+Alt+Shift+V` 这类变体照样能进（Server 的 `*_mode_hotkey` 只判 ctrl+alt，不判 shift）。
+`PreserveKey` 对此无能为力；DLL 在 `eats_key` 里对 `Ctrl+Alt` 的 U/I/V 兜了一层（**只认不带 Shift 的组合**），
+这样即使保留键没生效也能送到 Server。
 **不要**用 `RegisterHotKey` 或键盘钩子去抢：全局热键会把组合键从别的程序手里彻底夺走、且不分输入法开关场景，
 LL 钩子则要 UI 线程消息循环、在提权窗口里收不到按键、还容易被安全软件判为风险行为。
 

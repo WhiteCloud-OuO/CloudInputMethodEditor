@@ -202,6 +202,7 @@ impl Router {
             || !event.modifiers.ctrl
             || !event.modifiers.alt
             || event.modifiers.win
+            || event.modifiers.shift
             || event.virtual_key != u32::from(b'U')
         {
             return None;
@@ -217,6 +218,7 @@ impl Router {
             || !event.modifiers.ctrl
             || !event.modifiers.alt
             || event.modifiers.win
+            || event.modifiers.shift
             || event.virtual_key != u32::from(b'V')
         {
             return None;
