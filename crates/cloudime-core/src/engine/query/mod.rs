@@ -357,7 +357,13 @@ impl Engine {
         typed: &str,
     ) -> Result<Query, ParseError> {
         if let Some(rest_keys) = keys.strip_prefix('z') {
+            // 进 z 模式：记下会话，选中一个词后剩下的拼音没有 `z` 前缀了，也还按拼音查
+            self.z_session.set(true);
             return self.query_shape_z(table, rest_keys, typed);
+        }
+        if self.z_session.get() {
+            // z 模式的后续（选完第一个词、剩下的拼音继续匹配）：整串都当拼音
+            return self.query_shape_z(table, keys, typed);
         }
         let pattern: String = keys
             .chars()

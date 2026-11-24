@@ -184,6 +184,10 @@ pub struct Engine {
     /// 但这两模式下这一串得按拼音 / 英文查，不能走形码表。
     panel_mode: bool,
 
+    /// z 模式会话：`z` 开头进临时拼音，选中一个词后剩下的拼音（已经没有 `z` 前缀）继续按拼音查，
+    /// 直到组句结束。`query()` 是 `&self`，所以用 `Cell`。
+    z_session: std::cell::Cell<bool>,
+
     /// 特殊输入模式时造词（设置项，缺省关）。
     special_input_word: bool,
 
@@ -414,6 +418,7 @@ impl Engine {
             neural_cache: std::cell::RefCell::new(rescoring::NeuralCache::default()),
             special_input: false,
             panel_mode: false,
+            z_session: std::cell::Cell::new(false),
             special_input_word: false,
             special_selected: false,
             choice: None,

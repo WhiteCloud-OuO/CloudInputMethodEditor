@@ -118,6 +118,10 @@ impl Engine {
         }
         // 选中：拼音移出缓冲区、并进已选段；`buffer_left` 看的是还没转换的未选拼音。
         self.composition.select_prefix(text, consumed);
+        if self.composition.text().is_empty() {
+            // 组句结束：z 模式会话也结束（下一次按键重新判断）
+            self.z_session.set(false);
+        }
         let buffer_left = !self.composition.text().is_empty();
         match candidate.kind {
             CandidateKind::Chinese => {
@@ -389,9 +393,29 @@ impl Engine {
     /// 纠错读法按纠正后的拼音算，再按那处编辑换算回原串。
     pub(super) fn consumed_by(&self, candidate: &Candidate) -> (usize, String) {
         let keys = self.composition.scope();
-        // z 模式是临时拼音：候选的读音对不上带着前导 `z` 的按键串，整段吃掉（`zyunduo` 选 云朵）。
+        // z 模式是临时拼音：只把候选覆盖的那几个音节移出缓冲区，剩下的拼音接着匹配
+        // （`zyun'duo'shu'ru'fa` 选 云朵 只吃 `zyun'duo`，`shu'ru'fa` 留在缓冲区）。
+        // 第一次选中时作用域还带着前导 `z`，之后的续拼音没有；按有没有前缀分别算偏移。
         if self.shape_z_mode() {
-            return self.whole_scope();
+            let (pinyin, offset) = match keys.strip_prefix('z') {
+                Some(rest) => (rest, 1),
+                None => (keys, 0),
+            };
+            let consumed = match self.correction_reading_for(pinyin, &candidate.syllables) {
+                Some(correction) => correction
+                    .edit
+                    .to_original(
+                        self.align(&correction.corrected, &candidate.syllables)
+                            .consumed,
+                    )
+                    .min(pinyin.len()),
+                None => self.align(pinyin, &candidate.syllables).consumed,
+            };
+            if consumed == 0 {
+                return self.whole_scope();
+            }
+            // 学习用的键用拼音那段（不带 `z`），跟普通拼音一致
+            return (offset + consumed, choice_key(pinyin, consumed));
         }
         // 双键拼音：敲的不是拼音本身（`vhgo` → `zhong'guo`），按「两键一个音节（+ 辅助码）」
         // 把候选的音节数换算回按键字节数 —— 否则选完候选，拼音串里原来那些按键还留着。

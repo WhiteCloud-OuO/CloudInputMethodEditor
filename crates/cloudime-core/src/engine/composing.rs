@@ -273,6 +273,7 @@ impl Engine {
         self.composition_started = None;
         self.page_turns = 0;
         self.forced_expression = false;
+        self.z_session.set(false);
         self.special_selected = false;
         self.traditional_map.borrow_mut().clear();
     }

@@ -79,11 +79,12 @@ impl Engine {
     }
 
     /// 形码当前是不是 z 模式：挂着形码表、且作用域以 `z` 开头（临时拼音 + 五笔反查）。
+    /// 选中一个词后剩下的拼音已经没有 `z` 前缀，但 `z_session` 还开着，仍算 z 模式。
     pub fn shape_z_mode(&self) -> bool {
         self.shape.is_some()
             && !self.forced_expression
             && !self.panel_mode
-            && self.composition.scope().starts_with('z')
+            && (self.z_session.get() || self.composition.scope().starts_with('z'))
     }
 
     /// 纯五笔已经敲了几位编码（不含 z 模式）；不是纯五笔就是 `None`。
