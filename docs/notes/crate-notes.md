@@ -150,9 +150,12 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
 `candidates(pattern, limit)` 里的 `*` 是**一位通配**（纯五笔把敲的 `z` 换成 `*`，`fc*s` 命中 `fccs` / `fcis`；
 拼音行也按 `typed_display` 显示成 `*`）。`Table::load_level_one` 读 `[Shape] LevelOne`（缺省 `level1.tsv`，
 一行「键<TAB>字」，a–y，z 不占）；`query_shape` 单键时把它插到候选最前面、`auxiliary = "①"`。
-`shape_z_mode` 是作用域以 `z` 开头：`query_shape_z` 把 `z` 后面的字母交给 `query_phonetic`，再给每条候选
-用 `Table::code_of`（反向表按「最长码 → 权重 → 源文件顺序」挑）填 `auxiliary`（`云朵 [fcms]`）；
-`consumed_by` 在 z 模式下**整段消费**，`accepted_typos` 对形码一律不记；纯五笔不加用户短语、不自动造词。
+`shape_z_mode` 是「`z_session` 开着（或作用域以 `z` 开头）」：进 z 模式时置会话，选中一个词后剩下的拼音
+已经没有 `z` 前缀，但会话没关仍按拼音查；`clear()` 与组句上屏后为空时清会话。`query_shape_z` 把 `z` 后面的
+字母交给 `query_phonetic`，再给每条候选用 `Table::code_of`（反向表按「最长码 → 权重 → 源文件顺序」挑）填
+`auxiliary`（`云朵 [fcms]`）；`consumed_by` 在 z 模式下按候选的音节在拼音串上对齐、只吃覆盖到的字节
+（`zyun'duo'shu'ru'fa` 选「云朵」只吃 `zyun'duo`，剩下 `shu'ru'fa` 继续匹配）；`accepted_typos` 对形码一律不记；
+纯五笔不加用户短语、不自动造词。
 形码目录 `.cfg` 的用户级开关由 `ShapeOptions`（`read_options` / `set_option` / `current_options`）读写：
 `mixture_input`（英文混输，缺省关）、`unique_commit`（四码唯一自动上屏，缺省开）、
 `fifth_key_commit`（第五码顶字，缺省开）。`ShapeCapabilities` 读 `scheme.toml` 的 `[Options]`
