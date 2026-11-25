@@ -9,6 +9,7 @@
 //!   `model` 把本地整句模型的三件套目录打成一个 `model.qjm`
 //! - `plate`：车牌一览 xlsx → `data/generated/plates.qj`（省份简称拼音 + 字母 → 车牌 / 地名）
 //! - `word-bank`：合并中文 / 英文 / 品牌 / 中英混杂词源，写出 `WordBank\Dict.db`（引擎按 `language` 分流加载）
+//! - `wanxiang`：万象拼音 `rime-wanxiang-data` 的中文词库 → `data/generated/dict.tsv`
 //! - `phrase-db`：写出空的自定义短语库 `Phrases\Phrase.db`（`user` / `cloudime_default` 两张空表）
 //! - `glossary-db`：青简那套释义表 `.qj` → 翻译 Tip 用的 `.db`（总表 `words` + 副表 `contents`，拼音从词库填）
 //! - `rehead`：把改名前的 `.qj`（魔数 `QINGJIAN`）就地改成当前魔数 `CLOUDIME`，只改头 8 字节，见 `rehead.rs`
@@ -26,6 +27,7 @@ mod pack;
 mod phrases;
 mod plate;
 mod rehead;
+mod wanxiang;
 
 use clap::Parser;
 use tracing_subscriber::EnvFilter;
@@ -206,5 +208,6 @@ fn run() -> Result<(), ConvertError> {
             },
             &args.out_dir,
         ),
+        Command::Wanxiang { source, out, core } => wanxiang::convert(&source, &out, core),
     }
 }

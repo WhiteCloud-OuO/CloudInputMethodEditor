@@ -675,3 +675,30 @@ fn word_adjustments_boost_and_demote_within_the_tier() {
     engine.set_word_adjustments([]);
     assert_eq!(texts_of(&engine), plain);
 }
+
+/// 万象词库的生僻 / 叹词音节要能直接打到对应的字。
+#[test]
+fn rare_syllables_reach_dictionary_entries() {
+    let mut engine = Engine::new(
+        Dictionary::parse(
+            "哼\thng\t10\n嗯\tng\t10\n呣\tme\t10\n覅\tfiao\t10\n𰻝\tbiang\t10\n𤭢\tcei\t10\n忒\ttei\t10\n",
+        )
+        .unwrap(),
+    );
+    for (input, text) in [
+        ("hng", "哼"),
+        ("ng", "嗯"),
+        ("me", "呣"),
+        ("fiao", "覅"),
+        ("biang", "𰻝"),
+        ("cei", "𤭢"),
+        ("tei", "忒"),
+    ] {
+        engine.set_input(input);
+        let query = engine.query().unwrap();
+        assert!(
+            query.candidates.items.iter().any(|c| c.text == text),
+            "{input} 应能打到 {text}"
+        );
+    }
+}

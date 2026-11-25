@@ -101,6 +101,14 @@ fn candidates_from(input: &str, variants: Vec<(Edit, String)>) -> Vec<Correction
             } else {
                 return None;
             };
+            // 叹词音节不参与纠正：`zehg` 不该被凑成 `ze hng` / `ze hm`，那只是把错键拼成一个无意义组合。
+            if segmentation
+                .syllables
+                .iter()
+                .any(|syllable| parser::is_interjection_syllable(&syllable.text))
+            {
+                return None;
+            }
             Some(Correction {
                 original: input.to_owned(),
                 corrected,

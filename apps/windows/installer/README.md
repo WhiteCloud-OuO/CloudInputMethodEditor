@@ -35,7 +35,8 @@ C:\Program Files\CloudIME\
       laya-zhen-long-l12-int8g\  知意（增强/混合档）模型：laya.int8g.onnx、tokenizer.json、unified_vocab.json、许可证；
                                  随安装包提供，不需要用户下载（约 120 MB）
     onnxruntime.dll           知意使用的 ONNX Runtime（CPU，动态加载）
-    WordBank\                 Dict.db（7 张表：中文普通组 / 稀有组 + 英文）与用户导入的附加词库（本目录对普通用户可写，导入 / 删除词库走它）
+    WordBank\                 Dict.db（7 张表：中文普通组 / 稀有组 + 英文）与用户导入的附加词库（本目录对普通用户可写，导入 / 删除词库走它）；
+                              WANXIANG.md / LICENSE-CC-BY-4.0.txt 是中文词库（万象拼音 CC BY 4.0）的说明与许可证，跟 Dict.db 一起装
     Phrases\Phrase.db         自定义短语库（user 与 cloudime_default 两张表；本目录对普通用户可写，「设置 → 短语」页走它；
                               随仓库带一份成品，升级不覆盖用户短语）
     data\phrase-default.db    内置短语的同步源（与上面同一份文件换个名字，每次升级都覆盖；Server 启动时把它的

@@ -162,6 +162,9 @@ Source: "{#Repo}\tutorial.md"; DestDir: "{app}"; Flags: ignoreversion
 Source: "{#Repo}\lua.md"; DestDir: "{app}"; Flags: ignoreversion
 ; 鸣谢清单：装在安装目录根下，随版本覆盖；第三方数据 / 模型 / 字体与个人贡献的署名以它为准，发版前与仓库根目录的 thanks.md 同步。
 Source: "{#Repo}\thanks.md"; DestDir: "{app}"; Flags: ignoreversion
+; 中文词库许可：万象拼音 CC BY 4.0。说明与全文跟 WordBank\Dict.db 一起装，随版本覆盖。
+Source: "{#Repo}\assets\lexicon\WANXIANG.md"; DestDir: "{app}\WordBank"; Flags: ignoreversion skipifsourcedoesntexist
+Source: "{#Repo}\assets\lexicon\LICENSE-CC-BY-4.0.txt"; DestDir: "{app}\WordBank"; Flags: ignoreversion skipifsourcedoesntexist
 Source: "{#Repo}\assets\sample\dict.tsv";        DestDir: "{app}\assets\sample"; Flags: ignoreversion
 ; 随包辅助码表（双键拼音）：程序首次运行会把它们**播种**到用户可写的
 ; {app}\InputSchemes\DoubleKeysPinyin\AuxiliaryCodes\（同名已有就不动），设置页的「辅助码方案」下拉里就能选到。

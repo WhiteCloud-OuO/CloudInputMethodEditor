@@ -13,7 +13,7 @@
 
 - **极点五笔社区词库**（[KyleBing/rime-wubi86-jidian](https://github.com/KyleBing/rime-wubi86-jidian)，MIT，Copyright (c) Kyle Bing）：
   五笔 86 主码表 `table.tsv`；许可全文见 `InputSchemes/ShapeCode/wubi/LICENSE-wubi86-jidian.txt`。
-- **Rime / 小狼毫**（<https://rime.im/>）：输入法「Core + 薄壳」架构与方案数据的先行者。
+- **Rime / 小狼毫**（<https://rime.im/ >）：输入法「Core + 薄壳」架构与方案数据的先行者。
 - **《通用规范汉字表》**（教育部、国家语委）：汉字字表；iDvel 转录，shengdoushi 分级核对。
 - **《现代汉语常用词表（草案）》**（教育部 2008）：常用词与读音；liuxilu 校对版。
 - **THUOCL**（清华大学自然语言处理实验室，MIT）：领域词。
@@ -24,12 +24,12 @@
 - **CSpell software-terms**（[cspell-dicts](https://github.com/streetsidesoftware/cspell-dicts)，MIT）：英文技术词。
 - **typos**（[crate-ci/typos](https://github.com/crate-ci/typos)，MIT / Apache-2.0，本包采用 MIT）：误拼对照。
 - **wordfreq**（[rspeer/wordfreq](https://github.com/rspeer/wordfreq)，代码 MIT，词频数据按 CC BY-SA）：英文词频。
-- **AMZXYZ**（https://github.com/amzxyz）：**[万象拼音](https://amzxyz.github.io/rime-wanxiang/)** 作者。
+- **AMZXYZ**（ https://github.com/amzxyz ）：**[万象拼音](https://amzxyz.github.io/rime-wanxiang/)** 作者。内置中文词库来自 [`rime-wanxiang-data`](https://github.com/amzxyz/rime-wanxiang-data)（CC BY 4.0）；云朵去除了声调、合并了 14 个词库并清洗权重，修改说明见 `assets/lexicon/WANXIANG.md`，许可证见 `assets/lexicon/LICENSE-CC-BY-4.0.txt`。
 - **王永民**：五笔输入作者。
 - **朱邦复**：仓颉输入作者。
 - **周志农**、**何海峰**：自然码双拼、小鹤双拼作者。
-- **首道双拼** https://github.com/shoudaoshuangpin：首道双拼作者。
-- **戴石麟（顶功）** https://github.com/sbxlmdsl：声笔输入方案作者，授权了声笔输入。
+- **首道双拼** https://github.com/shoudaoshuangpin ：首道双拼作者。
+- **戴石麟（顶功）** https://github.com/sbxlmdsl ：声笔输入方案作者，授权了声笔输入。
 
 ## 字体
 
@@ -38,7 +38,7 @@
 
 ## 本地模型
 
-- **东南大学张厂军**：[知意输入法](https://github.com/dd1000001000/zhiyi_ime)的作者，提供知意 1.4V2-Long-L12 模型权重（Apache-2.0），用于增强 / 混合档的候选重排与按音节出字。
+- **东南大学张厂军**：[知意输入法](https://github.com/dd1000001000/zhiyi_ime) 的作者，提供知意 1.4V2-Long-L12 模型权重（Apache-2.0），用于增强 / 混合档的候选重排与按音节出字。
 - **ONNX Runtime**（[microsoft/onnxruntime](https://github.com/microsoft/onnxruntime)，MIT）：知意模型推理。
 - **Candle**（[huggingface/candle](https://github.com/huggingface/candle)，MIT / Apache-2.0）：含章·知微模型推理。
 
@@ -54,9 +54,9 @@
 
 ## 其他支持
 
-- **田纪草** https://github.com/RainyGrass：云朵输入法宣传和推广。
-- **陆凡（苏小凡Channel）** https://github.com/fanlusky：水杉输入法作者，提供了符号成对补全的思路。
-- **小莫（涼風羽月）** https://github.com/houko：水杉输入法作者，提供了状态切换提示的思路。
+- **田纪草** https://github.com/RainyGrass ：云朵输入法宣传和推广。
+- **陆凡（苏小凡Channel）** https://github.com/fanlusky ：水杉输入法作者，提供了符号成对补全的思路。
+- **小莫（涼風羽月）** https://github.com/houko ：水杉输入法作者，提供了状态切换提示的思路。
 
 维护约定：只用于理解思路、没有随包分发的内容不列入本清单；随包数据与许可策略以
 [`docs/design/landscape.md`](docs/design/landscape.md) 为准。

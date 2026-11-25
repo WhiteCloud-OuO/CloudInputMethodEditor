@@ -105,8 +105,9 @@ cargo 命令全 `--locked`（含 `build.ps1`）。普通 CI 只有 `contents: re
   仓库根的使用手册 `tutorial.md`、脚本文档 `lua.md`、致谢清单 `thanks.md` 也随包装进 `{app}` 根目录，改完后发版即同步。
   标签与两个哈希记进 `build-info.json`（`data_tag` / `data_sha256` / `model_sha256`）。
 
-数据重生成之后（重跑 lexicon / bigram）或模型重训之后跑一次 `data-bundle.sh`（三件套比 `.qjm` 新会自动重打），
+数据重生成之后（重跑 `wanxiang` / `bigram`）或模型重训之后跑一次 `data-bundle.sh`（三件套比 `.qjm` 新会自动重打），
 把锁文件的改动提交（`chore(data): 数据 data-vN`），否则 CI 打的包还是锁文件指的旧数据。模型文件缺失或哈希不符时 CI 会失败，不会静默地发出错数据的包。
+中文词库的源、许可与重建命令见 `assets/lexicon/WANXIANG.md`（万象拼音 CC BY 4.0）。
 
 拿**改名前**的数据重发新号（`data-v1` / `data-v2` 的 `.qj` 魔数还是 `QINGJIAN`，读端靠 `cloudime-format::MAGIC_LEGACY` 兼容读）
 要把头改成 `CLOUDIME`：`data-fetch.sh` → `cargo run --release -p cloudime-dict-convert -- rehead lm data/generated/lm.qj`

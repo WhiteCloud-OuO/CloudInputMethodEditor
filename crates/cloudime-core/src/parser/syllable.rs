@@ -2,7 +2,9 @@
 
 /// 无声调的普通话合法音节表（含 ü 写作 v / ue 两种写法）。
 ///
-/// 只放独立成字的音节，不含 `m` / `ng` / `hm` 这类叹词写法。按声母分组便于人工核对。
+/// 除普通话独立成字的音节外，还收万象词库用到的叹词 / 方言写法：`ng` / `hng` / `hm`
+/// 与 `tei` / `fiao` / `biang` / `cei`。j/q/x/y 后的 `u` 是 ü 的书写形式，**不**改成 v。
+/// 按声母分组便于人工核对。
 #[rustfmt::skip]
 pub const SYLLABLES: &[&str] = &[
     // 零声母
@@ -16,7 +18,7 @@ pub const SYLLABLES: &[&str] = &[
     "fa", "fo", "fei", "fou", "fan", "fen", "fang", "feng", "fu",
     // d t n l
     "da", "de", "dai", "dei", "dao", "dou", "dan", "den", "dang", "deng", "dong", "di", "dia", "die", "diao", "diu", "dian", "ding", "du", "duo", "dui", "duan", "dun",
-    "ta", "te", "tai", "tao", "tou", "tan", "tang", "teng", "tong", "ti", "tie", "tiao", "tian", "ting", "tu", "tuo", "tui", "tuan", "tun",
+    "ta", "te", "tai", "tei", "tao", "tou", "tan", "tang", "teng", "tong", "ti", "tie", "tiao", "tian", "ting", "tu", "tuo", "tui", "tuan", "tun",
     "na", "ne", "nai", "nei", "nao", "nou", "nan", "nen", "nang", "neng", "nong", "ni", "nie", "niao", "niu", "nian", "nin", "niang", "ning", "nu", "nuo", "nuan", "nun", "nv", "nve", "nue",
     "la", "le", "lai", "lei", "lao", "lou", "lan", "lang", "leng", "long", "li", "lia", "lie", "liao", "liu", "lian", "lin", "liang", "ling", "lu", "luo", "luan", "lun", "lv", "lve", "lue", "lo",
     // g k h
@@ -34,8 +36,10 @@ pub const SYLLABLES: &[&str] = &[
     "re", "ri", "rao", "rou", "ran", "ren", "rang", "reng", "rong", "ru", "rua", "ruo", "rui", "ruan", "run",
     // z c s
     "za", "ze", "zi", "zai", "zei", "zao", "zou", "zan", "zen", "zang", "zeng", "zong", "zu", "zuo", "zui", "zuan", "zun",
-    "ca", "ce", "ci", "cai", "cao", "cou", "can", "cen", "cang", "ceng", "cong", "cu", "cuo", "cui", "cuan", "cun",
+    "ca", "ce", "ci", "cai", "cei", "cao", "cou", "can", "cen", "cang", "ceng", "cong", "cu", "cuo", "cui", "cuan", "cun",
     "sa", "se", "si", "sai", "sao", "sou", "san", "sen", "sang", "seng", "song", "su", "suo", "sui", "suan", "sun",
+    // 叹词 / 方言（万象词库）
+    "ng", "hng", "hm", "fiao", "biang",
 ];
 
 /// 音节最长 6 个字母（zhuang / chuang / shuang）。
@@ -71,5 +75,16 @@ mod tests {
                 .iter()
                 .all(|s| s.bytes().all(|b| b.is_ascii_lowercase()))
         );
+    }
+
+    /// 万象词库用到的生僻 / 叹词音节，以及 `j/q/x/y + u` 的常规写法。
+    #[test]
+    fn keeps_rare_syllables_and_u_after_j_q_x_y() {
+        for syllable in ["tei", "fiao", "biang", "cei", "ng", "hng", "hm"] {
+            assert!(SYLLABLES.contains(&syllable), "{syllable}");
+        }
+        for syllable in ["ju", "qu", "xu", "yu", "jue", "que", "xue", "yue"] {
+            assert!(SYLLABLES.contains(&syllable), "{syllable}");
+        }
     }
 }

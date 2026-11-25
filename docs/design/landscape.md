@@ -28,7 +28,8 @@
 
 | 用途 | 来源 | 许可 | 备注 |
 |---|---|---|---|
-| 拼音词库（产品） | 自建，源数据在 `assets/lexicon/`：《通用规范汉字表》8105 字（政府公布的规范字表，iDvel 转录并与 shengdoushi 分级表核对）、《现代汉语常用词表（草案）》56k 词（教育部 2008，liuxilu 校对版，自带拼音）、THUOCL 11 类领域词 15.7 万（2026-09-06 起按语料次数拆开：常见的留基础词库，其余各成一本随包 `.qj`；清华 NLP，MIT） | 字表与常用词表是官方文件的转录，转录仓库未附许可证；THUOCL MIT；读音 Unihan（Unicode License v3） | `dict-convert lexicon` 生成 `dict.tsv`（20.5 万条，随仓库放 `assets/lexicon/dict.tsv`）：字与领域词读音来自 Unihan，5.6 万含多音字的领域词和 1.2 万含多音字的常用词由 LLM 标注再逐字对照 Unihan 校验（常用词表自带拼音对多音字错了 288 处：部长 chang、西藏 cang、成都 dou……，以标注为主读音、原读音降权保留），词频来自下面两份语料的统计（两遍：先按底值分词统计，再用真实词频重统计）。2026-09-05 起取代雾凇拼音（GPL-3.0 only，与本项目不兼容，已从数据目录与工具里移除） |
+| 拼音词库（产品） | **万象拼音**（[`amzxyz/rime-wanxiang-data`](https://github.com/amzxyz/rime-wanxiang-data)）的 14 个中文词库：`zi` / `jichu` / `cuoyin` / `duoyin` / `diming` / `mingren` / `yiren`，以及 `yixue` / `huaxue` / `yaopin` / `wuzhong` / `taifeng` / `fangyan` / `shici`；2026-11-24 快照 | **CC BY 4.0**（AMZXYZ / 万象拼音） | `dict-convert wanxiang` 去调、`ü → v`、`j/q/x/y` 后的 `u` 保持 `u`、`n/ng → en/ng`、`m → me`，按 `(词, 拼音)` 取最大权重合并；再 `word-bank` 生成 `WordBank\Dict.db`。修改说明见 `assets/lexicon/WANXIANG.md`，许可证全文见 `assets/lexicon/LICENSE-CC-BY-4.0.txt`。旧的自建字表 / 常用词 / THUOCL 链路已停用；英文与语言模型本次不动 |
+| 五笔词库（产品） | 极点五笔社区词库（[`KyleBing/rime-wubi86-jidian`](https://github.com/KyleBing/rime-wubi86-jidian)）的 `wubi86_jidian.dict.yaml` | **MIT**（Copyright (c) Kyle Bing） | 转成 `InputSchemes\ShapeCode\wubi\table.tsv`；许可全文与修改说明见 `InputSchemes/ShapeCode/wubi/LICENSE-wubi86-jidian.txt` / `NOTICE.md` |
 | 英文词表（产品） | 同一数据包 `05_english`：ESDB（en-wl/wordlist，MIT-like）、CSpell software-terms（MIT）、typos 误拼对照（MIT） | 均宽松，许可原文随包 | `dict-convert english` 取纯字母词 9.5 万，词频 wordfreq；误拼对照表以后可喂英文纠正。取代雾凇 en_dicts |
 | 语言模型语料 | 中文维基（HF `wikimedia/wikipedia` 20231101.zh） | CC BY-SA 4.0 | 百科体，第一人称、口语词几乎没有（去 / 累 这类词计数极低），单独用它整句会偏向地名术语；由它统计的 bigram 表按 CC BY-SA 对待 |
 | 语言模型语料 | LCCC（清华 `thu-coai/lccc`，微博对话） | MIT | 口语对话，补维基缺的日常用语；两份语料合并统计。`tools/corpus/parquet_to_text.py` 转文本，`dict-convert bigram` 统计 |
@@ -39,8 +40,8 @@
 
 - 代码：GPL-3.0-or-later（2026-09-07 定，此前测试阶段是「保留所有权利」）。选强 copyleft 是为了堵闭源抄走，与鼠须管 / 水杉一致；名字与 logo 不授权。
   `LICENSE` 与 README 保持一致（原先设置「关于」页还显示一份摘要，该页已删）。
-- 产品数据的源文件进 `assets/`（`assets/lexicon/` 词库源），带各自的许可证与署名文件；
-  语料、Unihan 这类体积大或可重新下载的中间输入放仓库根目录 `data/`（gitignore），生成物在 `data/generated/`。
+- 产品数据的源文件进 `assets/`（`assets/lexicon/` 英文词库源与万象的来源 / 许可说明），带各自的许可证与署名文件；
+  万象 77 MB 的 YAML 源不随仓库，快照、修改与重建命令记在 `assets/lexicon/WANXIANG.md`；语料、Unihan 这类体积大或可重新下载的中间输入放仓库根目录 `data/`（gitignore），生成物在 `data/generated/`。
   许可与本项目不兼容的数据（雾凇拼音）已不再使用，连开发测试也不用，免得产品数据被它污染。
 - 数据文件不并入代码许可：每个数据源在 `assets/` 下带自己的 LICENSE 和署名文件，README 里列出。
   CC BY 只需署名；CC BY-SA 的 share-alike 只约束数据本身及其修改版，不传染到代码。
@@ -55,8 +56,9 @@
 
 | 数据 | 来源与许可 |
 |---|---|
-| 词库 | 通用规范汉字表；现代汉语常用词表（liuxilu 校对版）；THUOCL 领域词（清华大学自然语言处理实验室，MIT）；读音取自 Unihan（Unicode License v3） |
+| 中文词库 | 万象拼音（AMZXYZ，CC BY 4.0），14 个中文词库合并；去除声调、`ü → v`、合并与权重清洗 |
+| 五笔词库 | 极点五笔社区词库（KyleBing/rime-wubi86-jidian，MIT，Copyright (c) Kyle Bing） |
 | 语言模型 | 中文维基百科（CC BY-SA 4.0）与 LCCC（清华大学 CoAI，MIT）语料统计 |
-| 英文词表 | ESDB / SCOWL（© Kevin Atkinson，按其许可保留版权声明）；CSpell 词典（MIT） |
+| 英文词表 | ESDB / SCOWL（© Kevin Atkinson，按其许可保留版权声明）；CSpell 词典（MIT）；typos（MIT）；词频来自 wordfreq（代码 MIT，数据 CC BY-SA） |
 
 各许可证原文在 `assets/` 对应目录下。雾凇拼音（GPL）已彻底移除，不要再引入。

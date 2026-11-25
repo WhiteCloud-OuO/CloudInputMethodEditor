@@ -22,6 +22,12 @@ pub fn is_syllable(s: &str) -> bool {
     SYLLABLE_TRIE.contains(s)
 }
 
+/// 叹词 / 方言音节（`嗯` 的 `ng`、`哼` 的 `hng`、`噷` 的 `hm`）：只用于直接输入，
+/// 不参与拼错纠正候选（否则 `zehg` 会被纠正成 `ze hng` 这类无意义组合）。
+pub fn is_interjection_syllable(s: &str) -> bool {
+    matches!(s, "ng" | "hng" | "hm")
+}
+
 /// `s` 是否为某个合法音节的**真**前缀（不包含它自己就是完整音节的情况）。
 pub fn is_syllable_prefix(s: &str) -> bool {
     SYLLABLE_TRIE.is_proper_prefix(s)
@@ -193,6 +199,14 @@ mod tests {
     fn greedy_segmentation_comes_first() {
         assert_eq!(joined("kaifa")[0], "kai fa");
         assert_eq!(joined("zhongwen")[0], "zhong wen");
+    }
+
+    /// 万象词库里的叹词 / 方言音节按完整音节切，不再拆成声母 + 非法韵母。
+    #[test]
+    fn rare_and_interjection_syllables_segment_whole() {
+        for syllable in ["tei", "fiao", "biang", "cei", "ng", "hng", "hm"] {
+            assert_eq!(joined(syllable)[0], syllable, "{syllable}");
+        }
     }
 
     #[test]

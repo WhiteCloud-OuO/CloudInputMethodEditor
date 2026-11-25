@@ -1,8 +1,9 @@
 # 云朵词库源数据
 
 > **注意（2026-10-03）**：本文件描述的**中文**词库生成链路所需的源数据（`01_characters` / `02_common` / `03_domains` / `04_internet_slang` / `00_meta`）
-> 和生成出的中文成品（`dict.tsv` / `dicts/` / `mined_words.tsv` / `phrases.tsv` / `domain_words.tsv`）已整体移除，等新的中文词库文件到位后再恢复；
-> 下面这些命令现在跑不通。**英文部分（第 5 步）仍有效**。
+> 和生成出的中文成品（`dict.tsv` / `dicts/` / `mined_words.tsv` / `phrases.tsv` / `domain_words.tsv`）已整体移除；
+> **2026-11-25 起内置中文词库改为万象拼音**，生成命令与许可见 [WANXIANG.md](WANXIANG.md) 与 `dict-convert wanxiang`，
+> 下面这些旧命令不再使用。**英文部分（第 5 步）仍有效**。
 
 这是云朵输入法自己的词库来源，从「输入法字词库_分类整理版」数据包拷入（2026-09-05），只去掉了与 TSV 内容相同的 TXT 副本；
 目录与文件名改成了 ASCII（GitHub 链接、shell 里都省事），对照：`00_说明与校验 → 00_meta`、`01_标准字库 → 01_characters`、

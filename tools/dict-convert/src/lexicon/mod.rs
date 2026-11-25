@@ -15,7 +15,7 @@ mod corpus;
 mod entry;
 pub(crate) mod pack;
 mod readings;
-mod tone;
+pub(crate) mod tone;
 
 use std::collections::{BTreeMap, HashMap, HashSet};
 use std::io::{BufWriter, Write};

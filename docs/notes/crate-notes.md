@@ -2238,10 +2238,15 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
 
 > **2026-10-03**：中文词库的源数据与成品（`assets/lexicon/{01_characters, 02_common, 03_domains, 04_internet_slang, 00_meta}`、
 > `dict.tsv`、`dicts/`、`mined_words.tsv`、`phrases.tsv`、`domain_words.tsv`）连同本地生成的
-> `data/generated/{dict.qj, dicts/, lm.qj}` 已整体移除，等新的中文词库文件到位后再恢复。
-> 也就是说 `lexicon` / `mine` / `phrases` 现在没有输入可跑；`english`、以及 `bigram` 的英文 / 品牌 / 混杂部分仍有效。
+> `data/generated/{dict.qj, dicts/, lm.qj}` 已整体移除。
+> **2026-11-25**：内置中文词库改用**万象拼音**（`rime-wanxiang-data` 的 14 个中文词库），由下面的 `wanxiang` 子命令生成
+> `data/generated/dict.tsv`；旧 `lexicon` / `mine` / `phrases` 链路没有输入可跑，只留作历史；`english`、`bigram` 的英文 / 品牌 / 混杂部分仍有效。
 
-- `lexicon`：从 `assets/lexicon/`（自建词库源：规范字 + 常用词 + THUOCL 领域词）加 Unihan 读音（`data/unihan/Unihan_Readings.txt`）、多音字词标注（`--pinyin` 读 JSONL）、语料词频（`lm-unigram.tsv`）建基础词库 `dict.tsv`（8.7 万条），并把 THUOCL 领域词按语料次数 < 50 拆成
+- `wanxiang`：读 `rime-wanxiang-data` 的 `dicts/`（14 个中文词库）→ `data/generated/dict.tsv`。去调规则见
+  `assets/lexicon/WANXIANG.md`：`ü/ǖǘǚǜ→v`，`j/q/x/y` 后的 `u` 保持 `u`，`ń/ň/ǹ→en`、`ńg/ňg/ǹg→ng`、`ḿ/m̀→me`；
+  权重取前导数字（`76N`→76）并抬到 ≥1；同一 `(文字, 拼音)` 取最大权重合并；补一条 `哼 hng`（上游只有 `heng`）。
+  词表过滤掉 `beta` 这类非拼音音节（当前只有 `西妥昔单抗β` 一条）。
+- `lexicon`（旧链路，停用）：从 `assets/lexicon/`（自建词库源：规范字 + 常用词 + THUOCL 领域词）加 Unihan 读音（`data/unihan/Unihan_Readings.txt`）、多音字词标注（`--pinyin` 读 JSONL）、语料词频（`lm-unigram.tsv`）建基础词库 `dict.tsv`（8.7 万条），并把 THUOCL 领域词按语料次数 < 50 拆成
   `dicts/<领域>.tsv` + `.db`（11 本、13 万条，`--domain-keep-min`），流程见 `assets/lexicon/CLOUDIME.md`；`--extra-words` 并入人工挑的领域词 `assets/lexicon/domain_words.tsv`。单字 `kHanyuPinlu` 没列出的次要读音只用独立的 `MINOR_READING_SHARE` 权重，不乘常见读音的 top 频次，避免少见读音借到常见读音的量级。
 - `english`：转 `assets/lexicon/05_english/00_all_words.tsv`；同编码优先保留含大写的专名写法（Windows ≠ windows），
   展示写法补充表 `07_display_forms.tsv` 后置读入。中英混杂词源在 `assets/lexicon/mixed_words.tsv`（`lexicon --extra-words`）。

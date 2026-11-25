@@ -207,6 +207,21 @@ pub enum Command {
         data_version: String,
     },
 
+    /// 万象拼音中文词库（`rime-wanxiang-data` 的 `dicts/`）→ `data/generated/dict.tsv`
+    Wanxiang {
+        /// 万象 `dicts/` 目录（含 `zi/jichu/... .dict.yaml`）
+        #[arg(long)]
+        source: PathBuf,
+
+        /// 输出 TSV；缺省 `data/generated/dict.tsv`
+        #[arg(long, default_value = "data/generated/dict.tsv")]
+        out: PathBuf,
+
+        /// 只取上游默认的核心 7 个词库（缺省全部 14 个中文库）
+        #[arg(long)]
+        core: bool,
+    },
+
     /// 合并中文 / 英文 / 品牌 / 中英混杂词源，写出 7 张表的 `WordBank\Dict.db`（引擎按语言与稀有度分流加载）；
     /// 同一 `(词, 拼音, 语言)` 重复的先去重（权重大的胜出）再按判据归表
     WordBank {
