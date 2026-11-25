@@ -228,3 +228,93 @@ fn english_mixed_input_appends_english_candidates_after_chinese() {
             .all(|candidate| candidate.kind != CandidateKind::English)
     );
 }
+
+/// 假选词模型：盖住整段的候选里偏爱给定的文本。
+struct PrefersChoice(&'static str);
+
+impl ChoiceModel for PrefersChoice {
+    fn align(&self, _keys: &str, _syllables: &[String]) -> Option<Vec<u32>> {
+        Some(vec![1])
+    }
+
+    fn letter_units(&self, _keys: &str) -> Vec<u32> {
+        vec![1]
+    }
+
+    fn score(&self, _context: &str, _typed: &[u32], texts: &[&str]) -> Vec<f32> {
+        texts
+            .iter()
+            .map(|text| if *text == self.0 { 100.0 } else { 0.0 })
+            .collect()
+    }
+}
+
+/// 假整句打分器：偏爱给定的文本。
+struct PrefersSentence(&'static str);
+
+impl SentenceScorer for PrefersSentence {
+    fn score(&self, _context: &str, texts: &[&str]) -> Vec<f64> {
+        texts
+            .iter()
+            .map(|text| if *text == self.0 { -1.0 } else { -20.0 })
+            .collect()
+    }
+}
+
+/// 等到选词模型的分回来并重画当前页。
+fn settle(engine: &mut Engine) {
+    let started = Instant::now();
+    while engine.rescoring_pending() {
+        assert!(engine.request_rescoring());
+        while !engine.poll_rescoring() {
+            assert!(started.elapsed() < Duration::from_secs(5), "后台没回结果");
+            std::thread::sleep(Duration::from_millis(5));
+        }
+        engine.query().unwrap();
+    }
+}
+
+/// 纯五笔不接本地模型：挂了选词模型也照旧按码表权重出，连打分请求都不排。
+#[test]
+fn pure_shape_candidates_ignore_the_local_model() {
+    let mut engine = shape_engine();
+    engine.set_choice_model(Some(Arc::new(PrefersChoice("式"))));
+    engine.set_input("a");
+    assert_eq!(candidates(&engine), ["工", "式", "戈", "恭恭敬敬"]);
+    assert!(!engine.rescoring_pending(), "纯五笔不该给模型排任务");
+}
+
+/// z 模式仍是拼音查询：选词模型在临时拼音里照常重排候选。
+#[test]
+fn z_mode_uses_the_choice_model() {
+    let mut engine =
+        Engine::new(Dictionary::parse("开发\tkai fa\t9000\n开罚\tkai fa\t10\n").unwrap());
+    engine.set_shape(Some(crate::shape::Table::parse(SHAPE_TABLE, 4).0));
+    engine.set_choice_model(Some(Arc::new(PrefersChoice("开罚"))));
+    engine.set_input("zkaifa");
+    assert_eq!(candidates(&engine), ["开发", "开罚"]);
+    assert!(engine.rescoring_pending());
+    settle(&mut engine);
+    assert_eq!(candidates(&engine), ["开罚", "开发"]);
+    assert!(!engine.rescoring_pending());
+}
+
+/// z 模式仍是拼音查询：本地整句模型照常给整句路径重排。
+#[test]
+fn z_mode_uses_the_sentence_model() {
+    let dictionary = "在\tzai\t9000\n再\tzai\t8500\n见\tjian\t9000\n剑\tjian\t8500\n";
+    let mut plain = Engine::new(Dictionary::parse(dictionary).unwrap());
+    plain.set_shape(Some(crate::shape::Table::parse(SHAPE_TABLE, 4).0));
+    plain.set_input("zzaijian");
+    assert_eq!(candidates(&plain)[0], "在见");
+
+    let mut engine = Engine::new(Dictionary::parse(dictionary).unwrap()).with_sentence_scorer(
+        Box::new(PrefersSentence("在剑")),
+        None,
+        None,
+        None,
+    );
+    engine.set_shape(Some(crate::shape::Table::parse(SHAPE_TABLE, 4).0));
+    engine.set_input("zzaijian");
+    assert_eq!(candidates(&engine)[0], "在剑");
+}

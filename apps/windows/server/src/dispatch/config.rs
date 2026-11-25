@@ -162,9 +162,6 @@ pub struct RouterConfig {
     /// 当前输入方案（全键拼音 / 双键拼音 / 形码输入）：键位映射参考的版面按它选。
     pub input_scheme: cloudime_platform::InputScheme,
 
-    /// 临时规则：本地模型只给全键拼音 / 双键拼音用；形码方案暂不接模型（后续测试后再放开）。
-    pub model_allowed: bool,
-
     /// 当前输入方案支持逐音节特殊输入模式（全拼 / 双拼）：右 Alt 在候选窗口显示时切换；
     /// 形码等方案的右 Alt 原样交给应用，不吞键。
     pub special_input: bool,
@@ -411,12 +408,6 @@ impl From<&Config> for RouterConfig {
             script_global_hotkeys: config.script.global_hotkeys,
             full_pinyin: input.input_schemes == cloudime_platform::InputScheme::FullPinyin,
             input_scheme: input.input_schemes,
-            // 临时规则：形码方案先不许用本地模型（全键 / 双键拼音才放行）。
-            model_allowed: matches!(
-                input.input_schemes,
-                cloudime_platform::InputScheme::FullPinyin
-                    | cloudime_platform::InputScheme::DualKeyPinyin
-            ),
             special_input: matches!(
                 input.input_schemes,
                 cloudime_platform::InputScheme::FullPinyin
@@ -443,7 +434,6 @@ impl Default for RouterConfig {
 #[cfg(test)]
 mod tests {
     use super::RouterConfig;
-    use cloudime_platform::{Config, InputScheme};
 
     #[test]
     fn host_drawn_candidates_matches_program_names_case_insensitively() {
@@ -455,17 +445,5 @@ mod tests {
         assert!(config.host_draws_candidates_for(" MapleStory.EXE "));
         assert!(!config.host_draws_candidates_for("notepad.exe"));
         assert!(!config.host_draws_candidates_for(""));
-    }
-
-    /// 临时规则：本地模型只放行全键 / 双键拼音，形码方案先禁用。
-    #[test]
-    fn only_pinyin_schemes_allow_the_local_model() {
-        let mut config = Config::default();
-        config.input.input_schemes = InputScheme::ShapeCode;
-        assert!(!RouterConfig::from(&config).model_allowed);
-        config.input.input_schemes = InputScheme::DualKeyPinyin;
-        assert!(RouterConfig::from(&config).model_allowed);
-        config.input.input_schemes = InputScheme::FullPinyin;
-        assert!(RouterConfig::from(&config).model_allowed);
     }
 }
