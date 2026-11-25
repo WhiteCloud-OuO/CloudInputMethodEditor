@@ -100,11 +100,15 @@ InputSchemes\ShapeCode\
     roots.tsv
     roots_pua.tsv           字根的 PUA 码位（配下面的字体）
     zigen.ttf               字根字体（更纱黑体子集，OFL.txt 同一目录）
+    NOTICE.md               码表来源与改动说明
+    LICENSE-wubi86-jidian.txt  码表的 MIT 许可证（极点五笔社区词库）
 ```
 
 - 换方案：设置页的「形码输入」面板里选，或改 `use_input_scheme.cfg` 的 `scheme = wubi`。
 - 换码表：改 `wubi\scheme.toml` 的 `[Shape] Table`，或直接替换 `table.tsv`。
   码表是 UTF-8 的「编码 + 制表符 + 文字 + 制表符 + 权重」，一行一条；`#` 开头是注释。
+  `table.tsv` 取自极点五笔社区词库（[KyleBing/rime-wubi86-jidian](https://github.com/KyleBing/rime-wubi86-jidian)，MIT）；
+  来源与改动写在 `NOTICE.md`，`LICENSE-wubi86-jidian.txt` 是许可证全文，随码表保留。
 - 一级简码：`level1.tsv`，一行「键 + 制表符 + 字」。
 - 字根参考：`roots.tsv`，一行「键 + 制表符 + 字根（空格分隔）」；`[Shape] Roots` 指向它。
   五笔还带一份字根字体 `zigen.ttf`（更纱黑体子集，许可证见 `OFL.txt`），字根按理论字形画：

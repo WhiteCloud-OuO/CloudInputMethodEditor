@@ -165,6 +165,7 @@ Source: "{#Repo}\assets\sample\dict.tsv";        DestDir: "{app}\assets\sample";
 ; {app}\InputSchemes\DoubleKeysPinyin\AuxiliaryCodes\（同名已有就不动），设置页的「辅助码方案」下拉里就能选到。
 Source: "{#Repo}\assets\auxiliary\*.tsv";        DestDir: "{app}\assets\auxiliary"; Flags: ignoreversion
 ; 形码方案（五笔 86）：码表 / 一级简码 / 字根字体随版本更新；use_input_scheme.cfg 只在没有时铺一份（保住用户选项）。
+; 码表取自极点五笔社区词库（KyleBing/rime-wubi86-jidian，MIT）：NOTICE.md 与 LICENSE-wubi86-jidian.txt 必须跟 table.tsv 同目录分发。
 Source: "{#Repo}\InputSchemes\ShapeCode\wubi\*"; DestDir: "{app}\InputSchemes\ShapeCode\wubi"; Flags: ignoreversion recursesubdirs createallsubdirs skipifsourcedoesntexist
 ; 字根字体（键位映射参考用）：会装到 {app}\InputSchemes\ShapeCode\wubi\zigen.ttf，
 ; 程序按文件私有加载，不装系统字体；漏了它别的机器上字根会退回普通汉字。OFL.txt 是字体的许可证，必须同目录。

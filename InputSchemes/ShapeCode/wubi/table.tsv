@@ -1,5 +1,5 @@
-# 五笔86 码表（样例）
-# 来源：KyleBing/rime-wubi86-jidian 的 wubi86_jidian.dict.yaml（极点五笔主词库）。
+# 五笔86 码表
+# 来源：KyleBing/rime-wubi86-jidian 的 wubi86_jidian.dict.yaml（极点五笔主词库，MIT，见 LICENSE-wubi86-jidian.txt）。
 # 列：编码<TAB>文字<TAB>权重；同一编码内按权重降序，权重取自原始词库。
 # 编码为小写 a-z、长度 1–4；单字（含一级到三级简码）与词组共用一张表。
 a	工	20

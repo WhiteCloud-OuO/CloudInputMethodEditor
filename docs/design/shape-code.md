@@ -8,8 +8,8 @@
   唯一例外是 **z 模式**：以 `z` 开头的输入临时交给拼音引擎（见 §4.3）。
 - **本地模型**只影响拼音查询：纯五笔不接选词 / 整句模型（码表顺序固定，便于盲打），
   但 z 模式走的是拼音引擎，启用了本地模型时临时拼音的候选与整句照常由模型排序，见 `docs/user/input/local-model.md`。
-- 形码数据与方案都是**本机开发数据**：仓库根 `InputSchemes/` 在 `.gitignore` 内，不进版本库；
-  `InputSchemes/ShapeCode/wubi/` 是样例，装机时由安装包或用户自己放。
+- 形码方案与五笔码表**随仓库提供**：`InputSchemes/ShapeCode/`（含 `use_input_scheme.cfg` 与 `wubi/` 全部文件）
+  进版本库，装机时由安装包铺到安装目录；`InputSchemes/DoubleKeysPinyin/` 才是本机配置，不进版本库。
 
 ## 1. 目录与文件
 
@@ -22,6 +22,7 @@
 | 一级简码 | 方案文件 `[Shape] LevelOne` 指的 TSV（缺省 `level1.tsv`），文件不在就是没有一级简码 |
 | 当前方案 | 方案目录下的 `use_input_scheme.cfg`，键值行 `scheme = wubi`（与双键拼音同一套文件格式与文件名） |
 | 缺省方案 | `.cfg` 没写 / 指不到时取**目录名升序第一个读得出来的方案**，并把 `scheme` 行重建过去 |
+| 数据许可 | `wubi\NOTICE.md` 记码表来源与改动，`wubi\LICENSE-wubi86-jidian.txt` 是上游 MIT 全文；两者随方案目录一起装进安装包 |
 
 ```text
 InputSchemes/ShapeCode/
@@ -101,7 +102,8 @@ ggll	一	20
 
 **当前样例**：`wubi/table.tsv`，89,250 行（单字 26,601 行、词组 62,649 行；不同编码 77,168 个；
 编码长度 1 位 50 / 2 位 656 / 3 位 5,426 / 4 位 83,118；权重 5–890）。
-来源 `KyleBing/rime-wubi86-jidian` 的 `wubi86_jidian.dict.yaml`（极点五笔主词库，数据许可已由维护者确认）。
+来源 `KyleBing/rime-wubi86-jidian` 的 `wubi86_jidian.dict.yaml`（极点五笔主词库）；上游以 MIT 发布
+（Copyright (c) Kyle Bing），版权与许可全文随方案目录分发，见 `wubi/NOTICE.md` 与 `wubi/LICENSE-wubi86-jidian.txt`。
 
 ### 3.2 `level1.tsv`
 
