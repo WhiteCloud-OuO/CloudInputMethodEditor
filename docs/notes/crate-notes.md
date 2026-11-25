@@ -155,7 +155,9 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
 字母交给 `query_phonetic`，再给每条候选用 `Table::code_of`（反向表按「最长码 → 权重 → 源文件顺序」挑）填
 `auxiliary`（`云朵 [fcms]`）；`consumed_by` 在 z 模式下按候选的音节在拼音串上对齐、只吃覆盖到的字节
 （`zyun'duo'shu'ru'fa` 选「云朵」只吃 `zyun'duo`，剩下 `shu'ru'fa` 继续匹配）；`accepted_typos` 对形码一律不记；
-纯五笔不加用户短语、不自动造词。
+纯五笔不加用户短语、不自动造词。z 模式因为走 `query_phonetic`，**本地模型照常生效**：`rerank_choices` 与
+`push_sentences` 会把作用域里前导的 `z` 去掉再对齐 / 算结构键，别让模式键算进拼音；纯五笔查询自己拼候选、
+不调模型，码表顺序固定。
 形码目录 `.cfg` 的用户级开关由 `ShapeOptions`（`read_options` / `set_option` / `current_options`）读写：
 `mixture_input`（英文混输，缺省关）、`unique_commit`（四码唯一自动上屏，缺省开）、
 `fifth_key_commit`（第五码顶字，缺省开）。`ShapeCapabilities` 读 `scheme.toml` 的 `[Options]`
