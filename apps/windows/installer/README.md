@@ -24,6 +24,7 @@ C:\Program Files\CloudIME\
     cloudime.ico              开始菜单 / 启动项快捷方式的图标（exe 里也嵌了一份）
     tutorial.md               使用手册（键盘、鼠标、候选窗的全部用法；随仓库根目录的 tutorial.md，发版前同步）
     lua.md                    脚本作者的技术文档（清单、事件与载荷、动作、cloudime 表、示例；随仓库根目录的 lua.md）
+    thanks.md                 致谢清单（第三方数据、模型、字体与个人 / 组织；随仓库根目录的 thanks.md，发版前同步）
     SpecialSymbolsInserter.exe 特殊字符输入器（随包带的独立小工具，悬浮状态条「特殊字符」按钮起它）
     LocalDictionary\          本地词典（翻译 Tip 用）：dictionaries.list（一行「显示名=文件名」）+ glossary-*.qj / *.db；
                               「设置 → 翻译 → 本地词典」的选项就是清单里的显示名，Server 与设置程序都从这儿读（约 50 MB，按需要留哪几份）

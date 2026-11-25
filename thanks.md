@@ -1,12 +1,13 @@
-# 鸣谢
+# 致谢
 
-云朵输入法站在很多人的劳动之上。下面按类别记录直接使用的项目、数据、模型与字体；
+云朵输入法是基于 [青简输入法](https://qingjian.app) 修改的输入法。下面按类别记录直接使用的项目、数据、模型与字体，并对为云朵输入法做出贡献的个人/组织做出致谢；
 新增随包数据或有特殊许可的依赖时，请同步更新本文件，并在对应目录保留许可证原文。
 
-## 特别鸣谢
+## 特别致谢
 
-- **青简输入法**（<https://qingjian.app>）：云朵输入法从青简输入法独立而来，界面与交互的许多基础来自它。
-- **[Panic~大佬](https://github.com/yenharvey)**：对云朵输入法的全力支持。
+## **[Panic~大佬](https://github.com/yenharvey)**
+
+云朵输入法从诞生到每一个细小的进步，都离不开Panic大佬的指导，在此特别致谢。
 
 ## 输入方案与词库
 
@@ -23,6 +24,12 @@
 - **CSpell software-terms**（[cspell-dicts](https://github.com/streetsidesoftware/cspell-dicts)，MIT）：英文技术词。
 - **typos**（[crate-ci/typos](https://github.com/crate-ci/typos)，MIT / Apache-2.0，本包采用 MIT）：误拼对照。
 - **wordfreq**（[rspeer/wordfreq](https://github.com/rspeer/wordfreq)，代码 MIT，词频数据按 CC BY-SA）：英文词频。
+- **AMZXYZ**（https://github.com/amzxyz）：**[万象拼音](https://amzxyz.github.io/rime-wanxiang/)** 作者。
+- **王永民**：五笔输入作者。
+- **朱邦复**：仓颉输入作者。
+- **周志农**、**何海峰**：自然码双拼、小鹤双拼作者。
+- **首道双拼** https://github.com/shoudaoshuangpin：首道双拼作者。
+- **戴石麟（顶功）** https://github.com/sbxlmdsl：声笔输入方案作者，授权了声笔输入。
 
 ## 字体
 
@@ -31,7 +38,7 @@
 
 ## 本地模型
 
-- **[知意输入法](https://github.com/dd1000001000/zhiyi_ime)的作者**：知意 1.4V2-Long-L12 模型权重（Apache-2.0），用于增强 / 混合档的候选重排与按音节出字。
+- **东南大学张厂军**：[知意输入法](https://github.com/dd1000001000/zhiyi_ime)的作者，提供知意 1.4V2-Long-L12 模型权重（Apache-2.0），用于增强 / 混合档的候选重排与按音节出字。
 - **ONNX Runtime**（[microsoft/onnxruntime](https://github.com/microsoft/onnxruntime)，MIT）：知意模型推理。
 - **Candle**（[huggingface/candle](https://github.com/huggingface/candle)，MIT / Apache-2.0）：含章·知微模型推理。
 
@@ -45,9 +52,11 @@
 - **LuaJIT** 与 **mlua**：用户脚本运行时。
 - **Windows API 绑定**（[microsoft/windows-rs](https://github.com/microsoft/windows-rs)）：Win32 / COM / TSF 调用。
 
-## 还有
+## 其他支持
 
-- 所有测试、反馈、提 issue、写脚本与帮助传播云朵输入法的朋友。
+- **田纪草** https://github.com/RainyGrass：云朵输入法宣传和推广。
+- **陆凡（苏小凡Channel）** https://github.com/fanlusky：水杉输入法作者，提供了符号成对补全的思路。
+- **小莫（涼風羽月）** https://github.com/houko：水杉输入法作者，提供了状态切换提示的思路。
 
 维护约定：只用于理解思路、没有随包分发的内容不列入本清单；随包数据与许可策略以
 [`docs/design/landscape.md`](docs/design/landscape.md) 为准。

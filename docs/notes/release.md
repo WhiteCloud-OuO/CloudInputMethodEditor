@@ -102,6 +102,7 @@ cargo 命令全 `--locked`（含 `build.ps1`）。普通 CI 只有 `contents: re
   两份包都解到**仓库根**（`WordBank/`、`data/generated/`、`data/local_models/` 各就各位）。`release.yml` 的打包 job 和离线自编译走同一个脚本；
   `cloudime.iss` 把 `WordBank\*.db`（主词库 `Dict.db`）装进 `{app}\WordBank`、`data\generated` 与 `assets` 里的文件按仓库相对路径装进 `{app}`，模型装进 `{app}\Models`：含章 `data\local_models\*.qjm` 与知意 `Models\laya-zhen-long-l12-int8g\`（没有就不装，Server 不重排）。
   知意（增强档）是例外：模型直接放在仓库 `Models\laya-zhen-long-l12-int8g\`，随 git 与安装包，不经过数据 Release。
+  仓库根的使用手册 `tutorial.md`、脚本文档 `lua.md`、致谢清单 `thanks.md` 也随包装进 `{app}` 根目录，改完后发版即同步。
   标签与两个哈希记进 `build-info.json`（`data_tag` / `data_sha256` / `model_sha256`）。
 
 数据重生成之后（重跑 lexicon / bigram）或模型重训之后跑一次 `data-bundle.sh`（三件套比 `.qjm` 新会自动重打），
