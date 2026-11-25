@@ -124,12 +124,16 @@ impl Engine {
         let Some(choice) = &self.choice else {
             return;
         };
-        let keys: String = self
-            .composition
-            .scope()
-            .chars()
-            .filter(|c| *c != '\'')
-            .collect();
+        // z 模式是临时拼音：模型只看 `z` 后面的那串拼音（作用域还带着模式键）
+        let scope = self.composition.scope();
+        let keys: String = if self.shape_z_mode() {
+            scope.strip_prefix('z').unwrap_or(scope)
+        } else {
+            scope
+        }
+        .chars()
+        .filter(|c| *c != '\'')
+        .collect();
         let english = self.english_mode;
         // 英文模式只比英文补全，和敲的一样的那个词留在原位；中文模式只比中文，夹在里面的英文词、快捷候选不动。
         let mut whole: Vec<(usize, Vec<u32>)> = Vec::new();

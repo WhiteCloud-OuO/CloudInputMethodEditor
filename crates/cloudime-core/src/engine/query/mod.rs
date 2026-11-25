@@ -1260,7 +1260,13 @@ impl Engine {
         if self.sentence_delay_pending() {
             return;
         }
-        let keys = self.composition.scope();
+        let scope = self.composition.scope();
+        // z 模式是临时拼音：`z` 后面的字母才是读法，结构键别把模式键算进去
+        let keys = if self.shape_z_mode() {
+            scope.strip_prefix('z').unwrap_or(scope)
+        } else {
+            scope
+        };
         let full = keys.chars().filter(|c| *c != '\'').count();
         // 整句按整段读法算，结构键给它最好的一档：覆盖满、无简拼、末音节完整、命中精确。
         // 最后一位是整句名次：整句之间的顺序就是词图 viterbi 按语言模型排出来的顺序，不再让权重重排。

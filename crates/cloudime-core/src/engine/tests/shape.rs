@@ -233,8 +233,13 @@ fn english_mixed_input_appends_english_candidates_after_chinese() {
 struct PrefersChoice(&'static str);
 
 impl ChoiceModel for PrefersChoice {
-    fn align(&self, _keys: &str, _syllables: &[String]) -> Option<Vec<u32>> {
-        Some(vec![1])
+    fn align(&self, keys: &str, syllables: &[String]) -> Option<Vec<u32>> {
+        // 跟真模型一样：音节必须正好把敲的字母用完（z 模式的前导 `z` 不能算进来）
+        let mut rest = keys;
+        for syllable in syllables {
+            rest = rest.strip_prefix(syllable.as_str())?;
+        }
+        rest.is_empty().then(|| vec![1; syllables.len()])
     }
 
     fn letter_units(&self, _keys: &str) -> Vec<u32> {
