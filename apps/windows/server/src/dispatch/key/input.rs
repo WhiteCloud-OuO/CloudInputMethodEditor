@@ -67,6 +67,10 @@ impl Router {
 
     /// u / i / v 面板开着时把「键位映射参考」收起，退出后恢复用户配置。
     pub(crate) fn sync_panel_auxiliary(&mut self) {
+        // 全拼没有键位映射参考（配置里恒为 `Off`），不用为面板动它。
+        if self.config.full_pinyin {
+            return;
+        }
         let panel = self.u_mode.is_some() || self.i_mode || self.engine.forced_expression();
         if panel == self.key_map_suppressed {
             return;
