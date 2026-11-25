@@ -6,6 +6,8 @@
 
 <h2 align="center"> 特别鸣谢： <a href = "https://github.com/yenharvey">Panic~大佬</a> 的全力支持</h2>
 
+<p align="center">完整的鸣谢清单见 <a href="thanks.md">thanks.md</a></p>
+
 <div>
   <p>本输入法基于 <a href="https://qingjian.app">青简输入法</a> 修改。</p>
   <p><strong>云朵输入法</strong>是从青简输入法独立出来的一个分支，该输入法侧重点在使用体验（<strong>模糊音、纠错、自定义短语、用户词库、脚本功能</strong>）上。</p>
