@@ -25,6 +25,7 @@ git-push.ps1
 clear-products.ps1
 .gitignore
 /WanXiang
+/tools/root-font
 
 # 双键拼音方案目录是开发 / 装机时的本机配置（样例由程序首次运行写出，随包辅助码表在 assets\auxiliary）；
 # 形码方案与五笔码表随仓库提供（码表来源与 MIT 许可见 wubi\NOTICE.md、wubi\LICENSE-wubi86-jidian.txt）
