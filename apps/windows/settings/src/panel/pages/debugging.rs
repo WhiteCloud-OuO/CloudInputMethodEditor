@@ -243,6 +243,9 @@ pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> 
                 Button::new()
                     .on_click(context.message(Message::OpenTutorial))
                     .content("帮助手册"),
+                Button::new()
+                    .on_click(context.message(Message::OpenThanks))
+                    .content("致谢清单"),
             )),
         field(
             "启用详细日志",

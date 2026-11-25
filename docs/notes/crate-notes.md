@@ -1566,9 +1566,9 @@ Chromium 把「物理键还按着时注入的同名键」当自动重复，宿�
 **`windows-reactor 0.100` 的 `Grid` 没有 `border_brush` / `border_thickness`**（只有 `rows` / `columns` / `row_spacing` / `column_spacing` / `background` / `children`；整个框架里带 `border_brush` 的只有 `Border` 与 `TextBox`），所以「表格的边」是外面套的那层 `Border`；
 行与行之间那条线由 `grid_row` 自己在 `Grid` 下面压一个 1 DIP 的 `Border`（`background(CardStroke)` + `opacity(0.5)` + `height(1.0)`）画出来。表头那行的底色**不带内边距**（`header_row` 只包一层），表头与数据行才都从 `table` 那 12 DIP 内边距起算、列不会错开；操作列宽 300 DIP，开关与两个按钮都放开最小宽度（`min_width(0)`，WinUI 的 `Button` 默认最小宽度是 120）、开关用 `ToggleSwitchSlot::OnContent` / `OffContent` 置空自带的「开 / 关」文字 —— 否则三个控件按默认宽度加起来顶出列外，最后那个按钮会被右边缘切掉一截。脚本目录 = 安装目录 `Scripts\`（与 `cloudime-script` 的 `DIRECTORY`、Server 读的同一处），列表按一级脚本文件夹列出、只显示根部正好一个 `.lua` 的文件夹（0 个的不显示，多个的标红说明），跳过 `template.lua`；第一列的名称与第二列的介绍都是从入口文件里**文本扫**出来的（`field_in` 认 `name = "…"` / `description = "…"` / `'…'`、跳过 `--` 注释）——设置程序里不执行脚本，Lua 运行时只在 Server；开关写 `[script] disabled`（文件夹名，`Config::set_array`，缺分节会补出来），删除先用 `rfd` 确认、再删整个文件夹并把它从名单里摘掉；「打开脚本目录」用 `open_with_explorer` 打开安装目录的 `Scripts\`（不存在先建）。这一页的改动（含开关）都要重启 Server 才生效 —— 「在线获取脚本」同一行的「重启输入法服务」按钮走 `crate::server::restart()`：连 `\\.\pipe\cloudime` 发一条 `ClientMessage::Indicator { RestartServer }`（设置程序不常驻连接，开一次用完即走），与托盘那条路完全一样（这条消息 Server 不回包，所以发完不等；连不上就把原因写在页面状态里）。
 「调试」页在 `pages/debugging.rs`：**原「统计」页整页搬来的输入统计面板**（末尾是「数据与组件」说明）与紧随其后的 `[debugging]` 自动隐藏开关、
-原来「高级」页的数据 / 日志入口（打开数据目录 / 打开日志目录 / 打包日志到桌面 / 清空输入日志四个按钮一行）与项目 GitHub 页面 / 帮助手册两个按钮一行、详细日志、学习输入习惯、记录输入日志。
-「帮助手册」（`Message::OpenTutorial`）用系统默认程序打开随包的 `tutorial.md`（`component.rs::tutorial_path` = `bundled_root()/tutorial.md`，走 `controls::open_document`；
-文件不在只记一条日志）。`open_document` 先用 `AssocQueryStringW` 问这个扩展名有没有默认打开方式（只问长度：`pszout` 给 null 时它把需要的大小写回 `size`，
+原来「高级」页的数据 / 日志入口（打开数据目录 / 打开日志目录 / 打包日志到桌面 / 清空输入日志四个按钮一行）与项目 GitHub 页面 / 帮助手册 / 致谢清单三个按钮一行、详细日志、学习输入习惯、记录输入日志。
+「帮助手册」（`Message::OpenTutorial`）与「致谢清单」（`Message::OpenThanks`）用系统默认程序打开随包的 `tutorial.md` / `thanks.md`
+（`component.rs::document_path(name)` = `bundled_root()/name`，走 `controls::open_document`；文件不在只记一条日志）。`open_document` 先用 `AssocQueryStringW` 问这个扩展名有没有默认打开方式（只问长度：`pszout` 给 null 时它把需要的大小写回 `size`，
 没关联为 0），**没有就用 `notepad.exe` 打开**——`.md` 在很多机器上没关联，不这样会先弹「你要如何打开这个文件？」。
 「通用」页已删（`Shift` + 字母固定进组句，见 `dispatch/key/input.rs::apply_chinese`：字母进缓冲区、`Caps Lock` 亮着的仍直通），
 「统计」与「高级」两页并进「调试」；「关于」页已整体删除（版本在「数据与组件」里仍有一份，检查更新只剩 Server 侧（查并写 `update.json`，界面上不再提示），许可与数据署名看 `LICENSE` 与 `docs/design/landscape.md`）。

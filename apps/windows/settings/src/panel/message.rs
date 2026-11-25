@@ -213,6 +213,8 @@ pub(crate) enum Message {
     OpenRepository,
     /// 用系统默认程序打开随包的使用手册（`tutorial.md`）。
     OpenTutorial,
+    /// 用系统默认程序打开随包的致谢清单（`thanks.md`）。
+    OpenThanks,
 
     // 调试页
     /// 在屏幕上显示悬浮工具栏（`[status_bar] show_status_bar`）。

@@ -39,10 +39,10 @@ fn window_icon() -> Option<&'static str> {
 
 // 窗口的位置 / 尺寸记忆（位置恢复、居中兜底、失焦 / 关闭时落盘）都在 `super::window`。
 
-/// 随包的使用手册：安装目录根的 `tutorial.md`（开发时就是仓库根那份，`bundled_root` 会退到那儿）。
-/// 文件不在（老版本装的包）返回 `None`，调用方只记一条日志。
-fn tutorial_path() -> Option<std::path::PathBuf> {
-    let path = cloudime_platform::resources::bundled_root()?.join("tutorial.md");
+/// 随包的文档：安装目录根的 `name`（`tutorial.md` / `thanks.md`；开发时就是仓库根那份，
+/// `bundled_root` 会退到那儿）。文件不在（老版本装的包）返回 `None`，调用方只记一条日志。
+fn document_path(name: &str) -> Option<PathBuf> {
+    let path = cloudime_platform::resources::bundled_root()?.join(name);
     path.is_file().then_some(path)
 }
 
@@ -534,10 +534,14 @@ impl Component for Settings {
             // 调试页：打开项目 GitHub 页面
             Message::OpenRepository => open_with_explorer(REPOSITORY_URL),
 
-            // 调试页：用系统默认程序打开随包的使用手册；没有默认打开方式时退回记事本
-            Message::OpenTutorial => match tutorial_path() {
+            // 调试页：用系统默认程序打开随包的文档；没有默认打开方式时退回记事本
+            Message::OpenTutorial => match document_path("tutorial.md") {
                 Some(path) => open_document(&path),
                 None => crate::log::warn("找不到使用手册 tutorial.md（老版本装的包可能没有）"),
+            },
+            Message::OpenThanks => match document_path("thanks.md") {
+                Some(path) => open_document(&path),
+                None => crate::log::warn("找不到致谢清单 thanks.md（老版本装的包可能没有）"),
             },
 
             // 调试页
