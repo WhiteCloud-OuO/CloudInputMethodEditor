@@ -22,7 +22,7 @@
 | 一级简码 | 方案文件 `[Shape] LevelOne` 指的 TSV（缺省 `level1.tsv`），文件不在就是没有一级简码 |
 | 当前方案 | 方案目录下的 `use_input_scheme.cfg`，键值行 `scheme = wubi`（与双键拼音同一套文件格式与文件名） |
 | 缺省方案 | `.cfg` 没写 / 指不到时取**目录名升序第一个读得出来的方案**，并把 `scheme` 行重建过去 |
-| 数据许可 | `wubi\NOTICE.md` 记码表来源与改动，`wubi\LICENSE-wubi86-jidian.txt` 是上游 MIT 全文；两者随方案目录一起装进安装包 |
+| 数据许可 | `wubi\NOTICE.md` 记码表来源与改动；`wubi\LICENSE-wubi86-jidian.txt`（单字 / 旧短语，MIT）与 `wubi\LICENSE-CC-BY-4.0.txt`（新增短语，CC BY 4.0）随方案目录一起装进安装包 |
 
 ```text
 InputSchemes/ShapeCode/
@@ -44,7 +44,7 @@ InputSchemes/ShapeCode/
 [Info]
 Name = "五笔86"
 Version = "1.0"
-Author = "极点五笔社区数据 / 云朵输入法"
+Author = "极点五笔社区数据 / 万象拼音 / 云朵输入法"
 
 [Shape]
 Table = "table.tsv"
@@ -100,10 +100,13 @@ ggll	一	20
 - 单字与词组共用一张表：五笔的一级 / 二级 / 三级简码与全码就是同一批字的多个编码。
 - **权重是固定的**：纯五笔的候选只按这张表的权重排，用户选择、学习、软件默认词库都不改变它。
 
-**当前样例**：`wubi/table.tsv`，89,250 行（单字 26,601 行、词组 62,649 行；不同编码 77,168 个；
-编码长度 1 位 50 / 2 位 656 / 3 位 5,426 / 4 位 83,118；权重 5–890）。
-来源 `KyleBing/rime-wubi86-jidian` 的 `wubi86_jidian.dict.yaml`（极点五笔主词库）；上游以 MIT 发布
-（Copyright (c) Kyle Bing），版权与许可全文随方案目录分发，见 `wubi/NOTICE.md` 与 `wubi/LICENSE-wubi86-jidian.txt`。
+**当前码表**：`wubi/table.tsv`，123,202 行（单字 26,601 行、旧短语 62,649 行、万象新增短语 33,952 行；
+不同编码 91,470 个；编码长度 1 位 50 / 2 位 656 / 3 位 5,426 / 4 位 117,070；权重 5–2,081,314）。
+单字与旧短语来自 `KyleBing/rime-wubi86-jidian` 的 `wubi86_jidian.dict.yaml`（极点五笔主词库，MIT，
+Copyright (c) Kyle Bing）；新增短语来自万象拼音的 2–4 字纯中文词条（CC BY 4.0），按单字全码规则生成：
+二字词取每字前两码，三字词前两字首码 + 第三字前两码，四字词前三字首码 + 末字首码；只取权重 ≥1350、
+每个编码最多新增 9 条。版权与许可全文见 `wubi/NOTICE.md`、`wubi/LICENSE-wubi86-jidian.txt` 与
+`wubi/LICENSE-CC-BY-4.0.txt`。
 
 ### 3.2 `level1.tsv`
 

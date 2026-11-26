@@ -222,6 +222,29 @@ pub enum Command {
         core: bool,
     },
 
+    /// 五笔短语码表：保留现有单字 / 旧短语，从万象 2–4 字纯中文词条按五笔规则生成新短语
+    WubiPhrases {
+        /// 现有五笔码表（单字 + 旧短语）
+        #[arg(long, default_value = "InputSchemes/ShapeCode/wubi/table.tsv")]
+        table: PathBuf,
+
+        /// 万象 `dicts/` 目录
+        #[arg(long)]
+        dicts: PathBuf,
+
+        /// 输出码表；缺省覆盖 `--table`
+        #[arg(long)]
+        out: Option<PathBuf>,
+
+        /// 万象词条最低权重（含）
+        #[arg(long, default_value_t = 1350)]
+        weight_min: u32,
+
+        /// 每个编码最多新增几条万象短语
+        #[arg(long, default_value_t = 9)]
+        per_code: usize,
+    },
+
     /// 合并中文 / 英文 / 品牌 / 中英混杂词源，写出 7 张表的 `WordBank\Dict.db`（引擎按语言与稀有度分流加载）；
     /// 同一 `(词, 拼音, 语言)` 重复的先去重（权重大的胜出）再按判据归表
     WordBank {

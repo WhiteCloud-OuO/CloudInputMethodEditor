@@ -24,7 +24,7 @@
 - **CSpell software-terms**（[cspell-dicts](https://github.com/streetsidesoftware/cspell-dicts)，MIT）：英文技术词。
 - **typos**（[crate-ci/typos](https://github.com/crate-ci/typos)，MIT / Apache-2.0，本包采用 MIT）：误拼对照。
 - **wordfreq**（[rspeer/wordfreq](https://github.com/rspeer/wordfreq)，代码 MIT，词频数据按 CC BY-SA）：英文词频。
-- **AMZXYZ**（ https://github.com/amzxyz ）：**[万象拼音](https://amzxyz.github.io/rime-wanxiang/)** 作者。内置中文词库来自 [`rime-wanxiang-data`](https://github.com/amzxyz/rime-wanxiang-data)（CC BY 4.0）；云朵去除了声调、合并了 14 个词库并清洗权重，修改说明见 `assets/lexicon/WANXIANG.md`，许可证见 `assets/lexicon/LICENSE-CC-BY-4.0.txt`。
+- **AMZXYZ**（ https://github.com/amzxyz ）：**[万象拼音](https://amzxyz.github.io/rime-wanxiang/)** 作者。内置中文词库来自 [`rime-wanxiang-data`](https://github.com/amzxyz/rime-wanxiang-data)（CC BY 4.0）；云朵去除了声调、合并了 14 个词库并清洗权重，其中的 2–4 字词条还用于生成五笔短语码表。修改说明见 `assets/lexicon/WANXIANG.md`，许可证见 `assets/lexicon/LICENSE-CC-BY-4.0.txt`。
 - **王永民**：五笔输入作者。
 - **朱邦复**：仓颉输入作者。
 - **周志农**、**何海峰**：自然码双拼、小鹤双拼作者。

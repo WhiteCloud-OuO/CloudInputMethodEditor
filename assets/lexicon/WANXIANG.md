@@ -8,6 +8,8 @@
   - 分类：`yixue` / `huaxue` / `yaopin` / `wuzhong` / `taifeng` / `fangyan` / `shici`
 - 不使用的文件：`en`（英文）、`mixed`（中英混合字面码）、`abbrev` / `t9_abbrev`（简码 / T9 码）。
   这三个的“编码”不是拼音，不能进中文词库；英文词表继续用 `05_english/`。
+- 五笔短语码表也使用其中 **2–4 字纯中文词条**，按单字全码规则重新生成（口语词如「看到了」也收）：
+  权重 ≥1350、每码最多新增 9 条，现有极点单字 / 旧短语全部保留。见 `InputSchemes/ShapeCode/wubi/NOTICE.md`。
 - 快照：2026-11-24 下载的 `dicts/`（所有文件头部 `version: "LTS"`）。上游分支在 2026-11-25 还有一次小更新，
   正式发版前应重新拉取并把 commit / 文件 SHA256 记进发布记录。
 

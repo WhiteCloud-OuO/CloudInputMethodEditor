@@ -29,7 +29,7 @@
 | 用途 | 来源 | 许可 | 备注 |
 |---|---|---|---|
 | 拼音词库（产品） | **万象拼音**（[`amzxyz/rime-wanxiang-data`](https://github.com/amzxyz/rime-wanxiang-data)）的 14 个中文词库：`zi` / `jichu` / `cuoyin` / `duoyin` / `diming` / `mingren` / `yiren`，以及 `yixue` / `huaxue` / `yaopin` / `wuzhong` / `taifeng` / `fangyan` / `shici`；2026-11-24 快照 | **CC BY 4.0**（AMZXYZ / 万象拼音） | `dict-convert wanxiang` 去调、`ü → v`、`j/q/x/y` 后的 `u` 是 ü，统一写 `v`、`n/ng → en/ng`、`m → me`，按 `(词, 拼音)` 取最大权重合并；再 `word-bank` 生成 `WordBank\Dict.db`。修改说明见 `assets/lexicon/WANXIANG.md`，许可证全文见 `assets/lexicon/LICENSE-CC-BY-4.0.txt`。旧的自建字表 / 常用词 / THUOCL 链路已停用；英文与语言模型本次不动 |
-| 五笔词库（产品） | 极点五笔社区词库（[`KyleBing/rime-wubi86-jidian`](https://github.com/KyleBing/rime-wubi86-jidian)）的 `wubi86_jidian.dict.yaml` | **MIT**（Copyright (c) Kyle Bing） | 转成 `InputSchemes\ShapeCode\wubi\table.tsv`；许可全文与修改说明见 `InputSchemes/ShapeCode/wubi/LICENSE-wubi86-jidian.txt` / `NOTICE.md` |
+| 五笔词库（产品） | 单字 / 旧短语：极点五笔社区词库（[`KyleBing/rime-wubi86-jidian`](https://github.com/KyleBing/rime-wubi86-jidian)）的 `wubi86_jidian.dict.yaml`；新增短语：万象 2–4 字纯中文词条按五笔规则生成 | 单字 / 旧短语 **MIT**（Copyright (c) Kyle Bing）；新增短语 **CC BY 4.0**（AMZXYZ / 万象拼音） | 转成 `InputSchemes\ShapeCode\wubi\table.tsv`（123,202 行；新增短语权重 ≥1350、每码最多 9 条）；许可与修改说明见 `InputSchemes/ShapeCode/wubi/{NOTICE.md,LICENSE-wubi86-jidian.txt,LICENSE-CC-BY-4.0.txt}` |
 | 英文词表（产品） | 同一数据包 `05_english`：ESDB（en-wl/wordlist，MIT-like）、CSpell software-terms（MIT）、typos 误拼对照（MIT） | 均宽松，许可原文随包 | `dict-convert english` 取纯字母词 9.5 万，词频 wordfreq；误拼对照表以后可喂英文纠正。取代雾凇 en_dicts |
 | 语言模型语料 | 中文维基（HF `wikimedia/wikipedia` 20231101.zh） | CC BY-SA 4.0 | 百科体，第一人称、口语词几乎没有（去 / 累 这类词计数极低），单独用它整句会偏向地名术语；由它统计的 bigram 表按 CC BY-SA 对待 |
 | 语言模型语料 | LCCC（清华 `thu-coai/lccc`，微博对话） | MIT | 口语对话，补维基缺的日常用语；两份语料合并统计。`tools/corpus/parquet_to_text.py` 转文本，`dict-convert bigram` 统计 |
@@ -57,7 +57,7 @@
 | 数据 | 来源与许可 |
 |---|---|
 | 中文词库 | 万象拼音（AMZXYZ，CC BY 4.0），14 个中文词库合并；去除声调、`ü → v`、合并与权重清洗 |
-| 五笔词库 | 极点五笔社区词库（KyleBing/rime-wubi86-jidian，MIT，Copyright (c) Kyle Bing） |
+| 五笔词库 | 单字 / 旧短语：极点五笔社区词库（KyleBing/rime-wubi86-jidian，MIT，Copyright (c) Kyle Bing）；新增 2–4 字短语：万象拼音（AMZXYZ，CC BY 4.0） |
 | 语言模型 | 中文维基百科（CC BY-SA 4.0）与 LCCC（清华大学 CoAI，MIT）语料统计 |
 | 英文词表 | ESDB / SCOWL（© Kevin Atkinson，按其许可保留版权声明）；CSpell 词典（MIT）；typos（MIT）；词频来自 wordfreq（代码 MIT，数据 CC BY-SA） |
 

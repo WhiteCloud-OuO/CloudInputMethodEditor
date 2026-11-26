@@ -10,7 +10,7 @@ description: 按字形编码打字：五笔 86 码表、一级简码、z 模式�
 不再走拼音切分与整句转换，`v` / `u` / `i` 也只是普通编码键（要那三种面板用 `Ctrl + Alt + V / U / I`）。
 唯一例外是 `z` 开头的 **z 模式**（临时拼音），见下面。
 
-当前内置的方案是**五笔 86**（极点五笔社区词库，单字 + 词组一张表）。打开输入法后照五笔的码打即可：
+当前内置的方案是**五笔 86**（单字与旧短语来自极点五笔社区词库，2–4 字新短语按五笔规则从万象拼音生成，单字 + 词组一张表）。打开输入法后照五笔的码打即可：
 
 | 输入 | 候选 |
 |---|---|
@@ -101,14 +101,16 @@ InputSchemes\ShapeCode\
     roots_pua.tsv           字根的 PUA 码位（配下面的字体）
     zigen.ttf               字根字体（更纱黑体子集，OFL.txt 同一目录）
     NOTICE.md               码表来源与改动说明
-    LICENSE-wubi86-jidian.txt  码表的 MIT 许可证（极点五笔社区词库）
+    LICENSE-wubi86-jidian.txt  单字 / 旧短语的 MIT 许可证（极点五笔社区词库）
+    LICENSE-CC-BY-4.0.txt      新增短语的 CC BY 4.0 许可证（万象拼音）
 ```
 
 - 换方案：设置页的「形码输入」面板里选，或改 `use_input_scheme.cfg` 的 `scheme = wubi`。
 - 换码表：改 `wubi\scheme.toml` 的 `[Shape] Table`，或直接替换 `table.tsv`。
   码表是 UTF-8 的「编码 + 制表符 + 文字 + 制表符 + 权重」，一行一条；`#` 开头是注释。
-  `table.tsv` 取自极点五笔社区词库（[KyleBing/rime-wubi86-jidian](https://github.com/KyleBing/rime-wubi86-jidian)，MIT）；
-  来源与改动写在 `NOTICE.md`，`LICENSE-wubi86-jidian.txt` 是许可证全文，随码表保留。
+  单字与旧短语取自极点五笔社区词库（[KyleBing/rime-wubi86-jidian](https://github.com/KyleBing/rime-wubi86-jidian)，MIT）；
+  新增的 2–4 字短语由万象拼音按五笔规则生成（[amzxyz/rime-wanxiang-data](https://github.com/amzxyz/rime-wanxiang-data)，CC BY 4.0）。
+  来源与改动写在 `NOTICE.md`，两份许可证全文随码表保留。
 - 一级简码：`level1.tsv`，一行「键 + 制表符 + 字」。
 - 字根参考：`roots.tsv`，一行「键 + 制表符 + 字根（空格分隔）」；`[Shape] Roots` 指向它。
   五笔还带一份字根字体 `zigen.ttf`（更纱黑体子集，许可证见 `OFL.txt`），字根按理论字形画：

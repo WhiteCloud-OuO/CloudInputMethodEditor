@@ -2249,6 +2249,11 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
   `ń/ň/ǹ→en`、`ńg/ňg/ǹg→ng`、`ḿ/m̀→me`；
   权重取前导数字（`76N`→76）并抬到 ≥1；同一 `(文字, 拼音)` 取最大权重合并；补一条 `哼 hng`（上游只有 `heng`）。
   词表过滤掉 `beta` 这类非拼音音节（当前只有 `西妥昔单抗β` 一条）。
+- `wubi-phrases`：读现有五笔 `table.tsv` 的单字全码，把万象 2–4 字纯中文词条按五笔规则生成短语：
+  二字词取每字前两码、三字词前两字首码 + 第三字前两码、四字词前三字首码 + 末字首码；权重取前导数字，
+  只取 ≥ `--weight-min`（缺省 1350），每码最多新增 `--per-code` 条（缺省 9），现有单字与旧短语全部保留。
+  当前 `table.tsv` 为 123,202 行（单字 26,601 + 旧短语 62,649 + 万象新增 33,952），单码最多 12 条。
+  来源：单字 / 旧短语极点 MIT，新增短语万象 CC BY 4.0；许可见 `wubi/NOTICE.md`。
 - `lexicon`（旧链路，停用）：从 `assets/lexicon/`（自建词库源：规范字 + 常用词 + THUOCL 领域词）加 Unihan 读音（`data/unihan/Unihan_Readings.txt`）、多音字词标注（`--pinyin` 读 JSONL）、语料词频（`lm-unigram.tsv`）建基础词库 `dict.tsv`（8.7 万条），并把 THUOCL 领域词按语料次数 < 50 拆成
   `dicts/<领域>.tsv` + `.db`（11 本、13 万条，`--domain-keep-min`），流程见 `assets/lexicon/CLOUDIME.md`；`--extra-words` 并入人工挑的领域词 `assets/lexicon/domain_words.tsv`。单字 `kHanyuPinlu` 没列出的次要读音只用独立的 `MINOR_READING_SHARE` 权重，不乘常见读音的 top 频次，避免少见读音借到常见读音的量级。
 - `english`：转 `assets/lexicon/05_english/00_all_words.tsv`；同编码优先保留含大写的专名写法（Windows ≠ windows），

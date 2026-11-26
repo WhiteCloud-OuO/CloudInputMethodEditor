@@ -22,7 +22,7 @@ use crate::error::ConvertError;
 use crate::lexicon::tone;
 
 /// 上游默认导入的核心词库（`wanxiang.dict.yaml` 的 `import_tables`）。
-const CORE_FILES: &[&str] = &[
+pub(crate) const CORE_FILES: &[&str] = &[
     "zi.dict.yaml",
     "jichu.dict.yaml",
     "cuoyin.dict.yaml",
@@ -33,7 +33,7 @@ const CORE_FILES: &[&str] = &[
 ];
 
 /// 上游注释掉、由各方案按需开启的分类词库；云朵内置词库沿用旧行为，全部合入。
-const OPTIONAL_FILES: &[&str] = &[
+pub(crate) const OPTIONAL_FILES: &[&str] = &[
     "yixue.dict.yaml",
     "huaxue.dict.yaml",
     "yaopin.dict.yaml",
