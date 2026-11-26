@@ -64,6 +64,8 @@ cargo run -p cloudime-cli -- <拼音>...          # Core 的主要验证方式�
 
 架构约束、代码组织、版本号、提交信息、文档同步、CloudUI 同步、提交前检查与发版都在 `docs/contributing.md`，随本文件一起载入：
 
+- **功能与使用体验优先于安装包体积**：不要为了省几 MB 去砍词库、语言模型、候选数量或交互能力；数据变大不是阻塞发版的理由。
+  只有用户能感知的启动、内存、输入延迟才需要取舍，并且要用实测或评测数字说明。
 - **改了 `cloud-ui` 界面库要同步 CloudUI 仓库**：`crates/cloud-ui`、`crates/cloud-ui-core`、`crates/cloud-ui-types` 在
   `D:\Programming\RUST\CloudUI` 里有独立副本；接口、行为、修复或对应文档的改动，同一个任务里必须把等价改动同步过去。
   渲染器两边包名不同（本仓库 `cloudime-render`、CloudUI 里 `cloud-ui-render`），不要整目录覆盖。详见
