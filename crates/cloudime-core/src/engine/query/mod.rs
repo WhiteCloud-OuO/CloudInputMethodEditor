@@ -541,6 +541,7 @@ impl Engine {
         if rest_keys.is_empty() {
             return Err(ParseError::NoSegmentation);
         }
+        // 和普通拼音同一条 `query_reading` 管线：模糊音（`fuzzy.expand`）与一处敲错的纠错读法照常生效。
         let mut query = self.query_phonetic(rest_keys, String::new(), Instant::now(), true)?;
         for candidate in &mut query.candidates.items {
             if let Some(code) = table.code_of(&candidate.text) {

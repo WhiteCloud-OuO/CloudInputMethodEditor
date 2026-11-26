@@ -186,6 +186,48 @@ fn z_mode_runs_pinyin_and_annotates_the_wubi_code() {
 }
 
 #[test]
+fn z_mode_uses_fuzzy_rules() {
+    let dictionary = Dictionary::parse("知识\tzhi shi\t500000\n资\tzi\t1000\n").unwrap();
+    let mut engine = Engine::new(dictionary);
+    engine.set_shape(Some(crate::shape::Table::parse(SHAPE_TABLE, 4).0));
+    engine.set_fuzzy(crate::FuzzyRules {
+        z_zh: true,
+        ..crate::FuzzyRules::default()
+    });
+    engine.set_input("zzishi");
+    let texts = candidates(&engine);
+    assert!(texts.iter().any(|text| text == "知识"), "{texts:?}");
+}
+
+#[test]
+fn z_mode_uses_correction_readings() {
+    let dictionary = Dictionary::parse(
+        "你好吗\tni hao ma\t5000\n你\tni\t90000\n好\thao\t80000\n吗\tma\t70000\n",
+    )
+    .unwrap();
+    let mut engine = Engine::new(dictionary);
+    engine.set_shape(Some(crate::shape::Table::parse(SHAPE_TABLE, 4).0));
+    engine.set_input("znihoama");
+    let query = engine.query().unwrap();
+    let candidate = query
+        .candidates
+        .items
+        .iter()
+        .find(|candidate| candidate.text == "你好吗")
+        .cloned()
+        .unwrap_or_else(|| {
+            let texts: Vec<&str> = query
+                .candidates
+                .items
+                .iter()
+                .map(|candidate| candidate.text.as_str())
+                .collect();
+            panic!("{texts:?}");
+        });
+    assert_eq!(engine.commit(&candidate).as_deref(), Some("你好吗"));
+}
+
+#[test]
 fn v_mode_is_not_counted_as_a_shape_code() {
     let mut engine = shape_engine();
     engine.start_expression();

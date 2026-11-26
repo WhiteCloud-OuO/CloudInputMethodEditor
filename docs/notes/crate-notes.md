@@ -157,7 +157,7 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
 字母交给 `query_phonetic`，再给每条候选用 `Table::code_of`（反向表按「最长码 → 权重 → 源文件顺序」挑）填
 `auxiliary`（`云朵 [fcms]`）；`consumed_by` 在 z 模式下按候选的音节在拼音串上对齐、只吃覆盖到的字节
 （`zyun'duo'shu'ru'fa` 选「云朵」只吃 `zyun'duo`，剩下 `shu'ru'fa` 继续匹配）；`accepted_typos` 对形码一律不记；
-纯五笔不加用户短语、不自动造词。z 模式因为走 `query_phonetic`，**本地模型照常生效**：`rerank_choices` 与
+纯五笔不加用户短语、不自动造词。z 模式因为走 `query_phonetic`，**模糊音与一处编辑的纠错读法照常生效**（与拼音同一条 `query_reading` 管线，`fuzzy.expand` + `correction_hits`）；`accepted_typos` 对形码（含 z 模式）仍不记敲错学习。z 模式**本地模型照常生效**：`rerank_choices` 与
 `push_sentences` 会把作用域里前导的 `z` 去掉再对齐 / 算结构键，别让模式键算进拼音；纯五笔查询自己拼候选、
 不调模型，码表顺序固定。
 形码目录 `.cfg` 的用户级开关由 `ShapeOptions`（`read_options` / `set_option` / `current_options`）读写：
@@ -523,7 +523,7 @@ Core 侧 `engine/choice/`：`ChoiceTier`（省电 5 条 / 32 字、均衡 9 / 64
 配置按「输入 / 候选 / 词库 / 短语」四节重排完成：`[input]`（原来散在 `[general] traditional`、整个 `[fuzzy]`
 与写死在 Core 里的标点规则）：`input_schemes`（`InputScheme`：`full_pinyin` 全拼（缺省）/ `dual_key_pinyin` 双键拼音 /
 `shape_code` 形码输入；**双键拼音与形码输入都已实现**（双键的方案文件与解码器见 `docs/design/input-schemes.md`，
-形码的方案目录与码表见 `docs/design/shape-code.md`；选非全拼时设置页把简拼 / 模糊音 / 中英文混合输入三项置灰）、`show_raw_input`（双键拼音下显示原始输入按键，**缺省开**；见 `Engine::show_raw_input`）、`use_jian_pin`、`mo_hu_yin_list`（位图，**一位一条规则**共十二位：zh/z 1、ch/c 2、sh/s 4、r/l 8、n/l 16、
+形码的方案目录与码表见 `docs/design/shape-code.md`；简拼 / 中英文混合输入只在全键拼音面板生成，模糊音在全键拼音与形码两块面板都生成——形码的 z 模式共用这套设置）、`show_raw_input`（双键拼音下显示原始输入按键，**缺省开**；见 `Engine::show_raw_input`）、`use_jian_pin`、`mo_hu_yin_list`（位图，**一位一条规则**共十二位：zh/z 1、ch/c 2、sh/s 4、r/l 8、n/l 16、
 f/h 32、u/ü 64、uo/o 128、an/ang 256、en/eng 512、in/ing 1024、wang/huang 2048，`MO_HU_YIN_BITS`；0.0.3 起从「五组合并位」改成一位一条，
 老配置同一数值的含义会变，用户重勾一遍即可。Core 侧的规则见 `FuzzyRules`：`uo_o` 走 `luo`↔`lo` 这类合法音节对，
 `wang_huang` 是 `wang`↔`huang` 整音节成对互换，只对完整音节生效）、`simp_trad_chinese_chars_toggle`、`mixture_input`、`full_half_punctuation_marks_toggle`、

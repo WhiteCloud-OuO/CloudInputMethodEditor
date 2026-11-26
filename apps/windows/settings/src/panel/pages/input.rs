@@ -1,5 +1,5 @@
 //! 「输入」页：`[input]` 分节。最上面是输入方案；**选中的方案会在下拉下面生成它自己的一块面板**，
-//! 使用简拼 / 模糊音 / 中英文混合输入都放在「全键拼音」那块面板里（别的方案下压根不生成，不用置灰）；
+//! 使用简拼 / 中英文混合输入放在「全键拼音」那块面板里；模糊音在两块面板里都出现（形码的 z 模式也要用），
 //! 其余各项与方案无关，直接排在后面。
 
 use cloudime_platform::input_schemes::{
@@ -29,6 +29,23 @@ fn pick<T: Copy + Default>(options: &[T], index: Option<usize>) -> T {
 /// windows-reactor 没有 XAML 那种 `DataTemplate` / `ItemsSource`，所谓「项目模板」就是在 Rust 里给
 /// 每一项建一份 `ListViewItem`；文本直接给 `CheckBox`（它是 `ContentControl`，自带内容区），
 /// 不用再套 `TextBlock`。子项带 key，勾选状态变化后重渲染靠 key 找回来原地改，不会丢焦点。
+/// 模糊音勾选项：全键拼音面板与形码面板（z 模式）共用同一份 `mo_hu_yin_list`。
+fn fuzzy_items(bits: u32, context: &mut ViewContext<Settings>) -> Vec<KeyedView> {
+    MO_HU_YIN_BITS
+        .iter()
+        .enumerate()
+        .map(|(index, (bit, label))| {
+            check_item(
+                format!("fuzzy-{index}"),
+                label,
+                bits & bit != 0,
+                move |value| Message::MoHuYin(index, value),
+                context,
+            )
+        })
+        .collect()
+}
+
 fn check_item(
     key: String,
     label: &str,
@@ -531,6 +548,15 @@ fn shape_panel(settings: &Settings, context: &mut ViewContext<Settings>) -> View
         ));
     }
     rows.push(KeyedView::new(
+        "shape-fuzzy",
+        field_top(
+            "模糊音（z 模式）",
+            "z 模式的临时拼音和全键拼音共用这套设置：勾选的两种读音互用，模糊音命中的候选排在完全匹配之后。\
+             打错一处字母时也会像拼音一样给纠错候选，不需要单独设置。",
+            scroll_list(fuzzy_items(settings.config.input.mo_hu_yin_list, context)),
+        ),
+    ));
+    rows.push(KeyedView::new(
         "shape-buttons",
         StackPanel::new()
             .orientation(Orientation::Horizontal)
@@ -552,19 +578,7 @@ fn shape_panel(settings: &Settings, context: &mut ViewContext<Settings>) -> View
 
 pub(crate) fn view(settings: &Settings, context: &mut ViewContext<Settings>) -> View {
     let input = &settings.config.input;
-    let fuzzy: Vec<KeyedView> = MO_HU_YIN_BITS
-        .iter()
-        .enumerate()
-        .map(|(index, (bit, label))| {
-            check_item(
-                format!("fuzzy-{index}"),
-                label,
-                input.mo_hu_yin_list & bit != 0,
-                move |value| Message::MoHuYin(index, value),
-                context,
-            )
-        })
-        .collect();
+    let fuzzy = fuzzy_items(input.mo_hu_yin_list, context);
     let pairwise: Vec<KeyedView> = PAIRWISE_COMPLETION_BITS
         .iter()
         .enumerate()
