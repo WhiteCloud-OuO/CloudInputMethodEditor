@@ -910,7 +910,7 @@ Windows 壳的公共层（2026-10-20 从 `apps/windows/server/src/ui/` 抽出）
   含内置 dialog）、`mask`（共享蒙版窗口，原先在 `app/mask.rs`；`app` 与脚本窗口共用）、
   `layered`（预乘 RGBA → BGRA → `UpdateLayeredWindow`）、`monitor` / `window_class` / `window`（工作区、窗口类、模块句柄与鼠标穿透）。
 - **资产模型**：`auxiliary` 的 `Asset` / `Assets` / `Bridge` / `Host` / `Focus` / `DesignatedAssetToGetFocus`。
-  候选窗口的键位映射参考 `KeyMapWindow` 仍是候选专属，留在 `apps/windows/server/src/ui/key_map/`；V 模式说明窗口 `VModeHelpWindow` 在 `ui/v_mode/`（静态 `Document`，标签用候选项色、正文用额外内容色）；脚本辅助窗口在 `script_window`。
+  候选窗口的键位映射参考 `KeyMapWindow` 仍是候选专属，留在 `apps/windows/server/src/ui/key_map/`；V 模式说明窗口 `VModeHelpWindow` 在 `ui/v_mode/`（静态 `Document`，标签用候选项色、正文用额外内容色；V 模式文案按当前输入方案选 `HELP_PINYIN` / `HELP_SHAPE`，形码里 `@` / `#` 写五笔编码示例）；脚本辅助窗口在 `script_window`。
   **模态**：`AssetKind`（`Auxiliary` / `Dialog`）+ `Asset::set_modal` + `Assets::set_modal(name, modal)`。
   普通模态同时只允许一件（已有模态时再设另一件返回 `false`）；`Assets::modal` 是 `Vec<ModalEntry>` 栈，
   dialog（`AssetKind::Dialog`）由 `Assets::add` 自动压栈，并先把原栈顶 `set_modal(false)` 挂起，dialog 销毁时

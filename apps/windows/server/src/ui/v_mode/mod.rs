@@ -19,13 +19,25 @@ const GAP: f32 = 8.0;
 const MAX_TEXT_WIDTH: f32 = 520.0;
 
 const TITLE: &str = "V模式";
-const HELP: [&str; 7] = [
+const HELP_PINYIN: [&str; 7] = [
     "输入数学表达式进行计算，支持数学函数（例如“sin(30)+lg(100)”）。只输入 v 时按Tab进入/退出高级数学计算界面。",
     "输入数字进行转换（例如“12.12”）。",
     "输入=>加0b/0o/0x/十进制数进行进制转换（例如“=>0x33ccff”）。",
     "输入sj/rq/xq/xz获得时间/日期/星期/现在（例如“xz”）。",
     "输入@加省份简称加英文字母（忽略大小写）获得车牌和所在地（例如“@sua”可以匹配到“苏A”/“江苏省南京市”/“江苏南京”）。",
     "输入#加姓名拼音字母获得取名结果（仅限汉族名字，例如“#zhangwei”可以匹配到“张伟”）。选中姓氏后它会留在组句里，接着输入名字。",
+    "",
+];
+
+/// 形码（五笔）：`@` / `#` 吃五笔编码，一个字一段、用 `'` 隔开。
+const HELP_SHAPE: [&str; 8] = [
+    "五笔方案里按 Ctrl+Alt+V 进入 V 模式；下面的 @ / # 都按五笔编码输入，每个字之间用 ' 分隔。",
+    "输入数学表达式进行计算，支持数学函数（例如“sin(30)+lg(100)”）。只输入 v 时按Tab进入/退出高级数学计算界面。",
+    "输入数字进行转换（例如“12.12”）。",
+    "输入=>加0b/0o/0x/十进制数进行进制转换（例如“=>0x33ccff”）。",
+    "输入sj/rq/xq/xz获得时间/日期/星期/现在（例如“xz”）。",
+    "输入@加省份字的五笔编码，再按'加车牌字母（忽略大小写）获得车牌和所在地（例如“@iynt'c”可以匹配到“沪C”/“上海市”/“上海”）。",
+    "输入#加姓名的五笔编码、每个字之间用'隔开获得取名结果（仅限汉族名字，例如“#xtay'wfnh”可以匹配到“张伟”）。选中姓氏后它会留在组句里，接着输入名字。",
     "",
 ];
 
@@ -52,8 +64,10 @@ pub(crate) struct VModeHelpWindow {
     template: Rc<AuxiliaryWindowTemplate>,
     painter: SharedPainter,
     v_mode: Rc<Cell<bool>>,
+    /// 当前输入方案是不是形码（五笔）：说明里的车牌 / 取名示例要换成五笔编码。
+    shape: Rc<Cell<bool>>,
     calculator: Rc<Cell<bool>>,
-    built: Cell<Option<(u64, HelpMode)>>,
+    built: Cell<Option<(u64, HelpMode, bool)>>,
 }
 
 impl VModeHelpWindow {
@@ -61,6 +75,7 @@ impl VModeHelpWindow {
         painter: SharedPainter,
         owner: HWND,
         v_mode: Rc<Cell<bool>>,
+        shape: Rc<Cell<bool>>,
         calculator: Rc<Cell<bool>>,
     ) -> Result<Self> {
         let template = Rc::new(AuxiliaryWindowTemplate::new(
@@ -74,6 +89,7 @@ impl VModeHelpWindow {
             template,
             painter,
             v_mode,
+            shape,
             calculator,
             built: Cell::new(None),
         })
@@ -102,6 +118,7 @@ impl Asset for VModeHelpWindow {
             self.hide();
             return;
         };
+        let shape = self.shape.get();
         let built = {
             let mut guard = self.painter.borrow_mut();
             let Some(painter) = guard.as_mut() else {
@@ -109,12 +126,12 @@ impl Asset for VModeHelpWindow {
                 return;
             };
             let generation = painter.generation();
-            (self.built.get() != Some((generation, mode)))
-                .then(|| (generation, build_document(painter, mode)))
+            (self.built.get() != Some((generation, mode, shape)))
+                .then(|| (generation, build_document(painter, mode, shape)))
         };
         if let Some((generation, document)) = built {
             self.template.set_document(document);
-            self.built.set(Some((generation, mode)));
+            self.built.set(Some((generation, mode, shape)));
         }
         self.template.show(rect, host.layout);
     }
@@ -128,13 +145,26 @@ impl Asset for VModeHelpWindow {
     }
 }
 
+/// 说明窗口的标题 / 正文 / 退出提示：V 模式按输入方案选文案，高级计算界面两套方案共用。
+fn help_content(
+    mode: HelpMode,
+    shape: bool,
+) -> (&'static str, &'static [&'static str], Option<&'static str>) {
+    match (mode, shape) {
+        (HelpMode::VMode, true) => (TITLE, &HELP_SHAPE, None),
+        (HelpMode::VMode, false) => (TITLE, &HELP_PINYIN, None),
+        (HelpMode::Calculator, _) => (CALC_TITLE, &CALC_HELP, Some(CALC_FOOTER)),
+    }
+}
+
 /// 标签用候选项颜色，正文用额外内容颜色，退出提示用角标颜色；正文按固定宽度折行。
-fn build_document(painter: &mut cloud_ui::painter::Painter, mode: HelpMode) -> Document {
+fn build_document(
+    painter: &mut cloud_ui::painter::Painter,
+    mode: HelpMode,
+    shape: bool,
+) -> Document {
     let palette = painter.palette();
-    let (title, paragraphs, footer) = match mode {
-        HelpMode::VMode => (TITLE, &HELP[..], None),
-        HelpMode::Calculator => (CALC_TITLE, &CALC_HELP[..], Some(CALC_FOOTER)),
-    };
+    let (title, paragraphs, footer) = help_content(mode, shape);
     let (_, title_size) = painter.text_font(FontSlot::Candidate);
     let (_, body_size) = painter.text_font(FontSlot::Translate);
     let title_width = painter
@@ -238,4 +268,24 @@ fn wrap(text: &str, max_width: f32, mut measure: impl FnMut(&str) -> f32) -> Vec
         lines.push(current);
     }
     lines
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{CALC_FOOTER, CALC_TITLE, HelpMode, help_content};
+
+    #[test]
+    fn v_mode_help_follows_the_input_scheme() {
+        let (_, pinyin, _) = help_content(HelpMode::VMode, false);
+        let (_, shape, _) = help_content(HelpMode::VMode, true);
+        assert!(pinyin.iter().any(|line| line.contains("@sua")));
+        assert!(pinyin.iter().any(|line| line.contains("#zhangwei")));
+        assert!(shape.iter().any(|line| line.contains("@iynt'c")));
+        assert!(shape.iter().any(|line| line.contains("#xtay'wfnh")));
+        assert!(!shape.iter().any(|line| line.contains("@sua")));
+
+        let (title, _, footer) = help_content(HelpMode::Calculator, true);
+        assert_eq!(title, CALC_TITLE);
+        assert_eq!(footer, Some(CALC_FOOTER));
+    }
 }

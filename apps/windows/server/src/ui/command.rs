@@ -15,8 +15,8 @@ pub(super) enum UiCommand {
     /// 收起候选窗口。
     Hide,
 
-    /// V 模式说明窗口开关（拼音串只有一个 `v`）。
-    VModeHelp(bool),
+    /// V 模式说明窗口开关（拼音串只有一个 `v`）；`shape` 决定文案用拼音还是形码。
+    VModeHelp { on: bool, shape: bool },
 
     /// 高级数学计算界面的说明窗口开关。
     CalculatorHelp(bool),

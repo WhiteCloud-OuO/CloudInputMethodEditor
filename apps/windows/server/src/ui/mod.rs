@@ -193,8 +193,8 @@ impl CandidateSink for UiHandle {
         self.reversed.load(Ordering::Relaxed)
     }
 
-    fn set_v_mode_help(&self, on: bool) {
-        self.post(UiCommand::VModeHelp(on));
+    fn set_v_mode_help(&self, on: bool, shape: bool) {
+        self.post(UiCommand::VModeHelp { on, shape });
     }
 
     fn set_calculator_help(&self, on: bool) {
@@ -483,7 +483,7 @@ fn apply(
             caps_lock::set_active(false);
             window.hide();
         }
-        UiCommand::VModeHelp(on) => window.set_v_mode_help(on),
+        UiCommand::VModeHelp { on, shape } => window.set_v_mode_help(on, shape),
         UiCommand::CalculatorHelp(on) => window.set_calculator_help(on),
         UiCommand::CapsLockBackspace(on) => caps_lock::set_enabled(on),
         UiCommand::AuxiliaryToggle => {

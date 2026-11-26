@@ -155,7 +155,8 @@ impl Router {
             let badges = self.candidate_badges(frame);
             let v_mode_help =
                 self.engine.expression_mode() && self.engine.composition().text() == "v";
-            self.candidates.set_v_mode_help(v_mode_help);
+            let shape_scheme = self.engine.shape_max_code_length().is_some();
+            self.candidates.set_v_mode_help(v_mode_help, shape_scheme);
             self.candidates
                 .set_calculator_help(self.engine.calculator());
             let unchanged = matches!(

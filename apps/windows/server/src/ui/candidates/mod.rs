@@ -260,6 +260,9 @@ pub(crate) struct CandidateWindow {
     /// V 模式说明窗口是否该显示（拼音串只有一个 `v` 时）。
     v_mode_help: Rc<Cell<bool>>,
 
+    /// V 模式说明窗口按哪种输入方案写文案（形码 / 拼音）。
+    v_mode_shape: Rc<Cell<bool>>,
+
     /// 高级数学计算界面的说明窗口是否该显示。
     calculator_help: Rc<Cell<bool>>,
 
@@ -311,11 +314,13 @@ impl CandidateWindow {
             Err(error) => tracing::error!(%error, "建键位映射参考窗口失败，将不显示它"),
         }
         let v_mode_help = Rc::new(Cell::new(false));
+        let v_mode_shape = Rc::new(Cell::new(false));
         let calculator_help = Rc::new(Cell::new(false));
         match VModeHelpWindow::new(
             painter.clone(),
             template.hwnd(),
             v_mode_help.clone(),
+            v_mode_shape.clone(),
             calculator_help.clone(),
         ) {
             Ok(asset) => template.assets_mut().add(Box::new(asset)),
@@ -348,6 +353,7 @@ impl CandidateWindow {
             viewport,
             reversed,
             v_mode_help,
+            v_mode_shape,
             calculator_help,
             content_rect: Cell::new(None),
             suppressed: Cell::new(false),
@@ -528,9 +534,10 @@ impl CandidateWindow {
         self.sync_assets();
     }
 
-    /// V 模式说明窗口：拼音串只有一个 `v` 时打开，其他时候收起。
-    pub(crate) fn set_v_mode_help(&self, on: bool) {
+    /// V 模式说明窗口：拼音串只有一个 `v` 时打开，其他时候收起；`shape` 决定文案用拼音还是形码示例。
+    pub(crate) fn set_v_mode_help(&self, on: bool, shape: bool) {
         self.v_mode_help.set(on);
+        self.v_mode_shape.set(shape);
         self.sync_assets();
     }
 
