@@ -122,6 +122,19 @@ fn name_query(scope: &str) -> Option<&str> {
         .strip_prefix('#')
 }
 
+/// 形码方案里时间类快捷候选：用「时间 / 日期 / 星期 / 现在」在码表里的全码映射，
+/// 不再认拼音的 `rq` / `sj` / `xq` / `xz`。
+fn shape_time_kind(table: &crate::shape::Table, body: &str) -> Option<shortcut::TimeShortcut> {
+    [
+        ("时间", shortcut::TimeShortcut::Time),
+        ("日期", shortcut::TimeShortcut::Date),
+        ("星期", shortcut::TimeShortcut::Weekday),
+        ("现在", shortcut::TimeShortcut::Now),
+    ]
+    .into_iter()
+    .find_map(|(word, kind)| (table.code_of(word) == Some(body)).then_some(kind))
+}
+
 impl Engine {
     /// 把候选统一成简体，并去掉转换后重复的条目：保留排名靠前的那条（候选已排好序），
     /// 同时把 `weights` 的键跟着改过去（多个异体合并时取较大的权重）。
@@ -1190,8 +1203,20 @@ impl Engine {
                 },
             };
         }
-        let mut items =
-            shortcut::v_mode_candidates(scope, &jiff::Zoned::now(), self.v_mode_time_seconds);
+        let body = scope
+            .strip_prefix(shortcut::EXPRESSION_PREFIX)
+            .unwrap_or(scope);
+        let time_kind = if let Some(table) = &self.shape {
+            shape_time_kind(table, body)
+        } else {
+            shortcut::TimeShortcut::from_pinyin(body)
+        };
+        let mut items = shortcut::v_mode_candidates_of(
+            scope,
+            time_kind,
+            &jiff::Zoned::now(),
+            self.v_mode_time_seconds,
+        );
         if let Some(body) = name_query(scope) {
             items.extend(self.name_candidates(body));
         } else if let Some(query) = plate_query(scope) {

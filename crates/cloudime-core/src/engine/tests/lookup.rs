@@ -418,6 +418,42 @@ fn v_mode_offers_plate_shortcuts() {
 }
 
 #[test]
+fn shape_v_mode_time_codes_use_wubi_words() {
+    fn type_v(engine: &mut Engine, input: &str) {
+        engine.start_expression();
+        for character in input.chars() {
+            engine.push(character);
+        }
+    }
+
+    let mut engine = Engine::new(Dictionary::parse(SAMPLE).unwrap());
+    engine.set_shape(Some(
+        crate::shape::Table::parse(
+            "jfuj\t时间\t10\njjad\t日期\t10\njtad\t星期\t10\ngmdh\t现在\t10\nrq\t白\t10\n",
+            4,
+        )
+        .0,
+    ));
+    for (input, count) in [("jfuj", 8), ("jjad", 12), ("jtad", 3), ("gmdh", 14)] {
+        type_v(&mut engine, input);
+        let query = engine.query().unwrap();
+        assert_eq!(query.candidates.items.len(), count, "{input}");
+        assert!(
+            query
+                .candidates
+                .items
+                .iter()
+                .all(|candidate| candidate.kind == CandidateKind::Shortcut),
+            "{input}"
+        );
+    }
+
+    // 五笔方案改认词的五笔全码，拼音的 rq 不再出日期
+    type_v(&mut engine, "rq");
+    assert!(engine.query().unwrap().candidates.items.is_empty());
+}
+
+#[test]
 fn shape_v_mode_plate_uses_wubi_code_and_separator() {
     let dir = std::env::temp_dir().join("cloudime-core-shape-plate-tests");
     std::fs::create_dir_all(&dir).unwrap();

@@ -40,16 +40,49 @@ pub fn is_expression_char(c: char) -> bool {
         )
 }
 
+/// V 模式里时间类快捷候选的种类；拼音方案按 `sj/rq/xq/xz` 选，形码方案按这些词的五笔全码选。
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub enum TimeShortcut {
+    Time,
+    Date,
+    Weekday,
+    Now,
+}
+
+impl TimeShortcut {
+    /// 拼音方案的固定码：`sj` / `rq` / `xq` / `xz`。
+    pub fn from_pinyin(body: &str) -> Option<Self> {
+        match body {
+            "sj" => Some(Self::Time),
+            "rq" => Some(Self::Date),
+            "xq" => Some(Self::Weekday),
+            "xz" => Some(Self::Now),
+            _ => None,
+        }
+    }
+}
+
 /// V 模式（`v` 开头）的快捷候选：日期 / 时间 / 星期 / 现在，或算式与数字。
 /// `input` 带前导 `v`；`seconds` 是设置里的「V 模式的时间显示秒数」。
 pub fn v_mode_candidates(input: &str, now: &Zoned, seconds: bool) -> Vec<Candidate> {
     let body = input.strip_prefix(EXPRESSION_PREFIX).unwrap_or(input);
-    let texts = match body {
-        "rq" => date_forms(now),
-        "sj" => time_forms(now, seconds),
-        "xq" => weekday_forms(now),
-        "xz" => now_forms(now, seconds),
-        _ => expression_forms(body),
+    v_mode_candidates_of(input, TimeShortcut::from_pinyin(body), now, seconds)
+}
+
+/// 指定时间类（或 `None` 按算式 / 中文数字）出 V 模式候选；形码方案用它把词的五笔全码映射进来。
+pub fn v_mode_candidates_of(
+    input: &str,
+    kind: Option<TimeShortcut>,
+    now: &Zoned,
+    seconds: bool,
+) -> Vec<Candidate> {
+    let body = input.strip_prefix(EXPRESSION_PREFIX).unwrap_or(input);
+    let texts = match kind {
+        Some(TimeShortcut::Time) => time_forms(now, seconds),
+        Some(TimeShortcut::Date) => date_forms(now),
+        Some(TimeShortcut::Weekday) => weekday_forms(now),
+        Some(TimeShortcut::Now) => now_forms(now, seconds),
+        None => expression_forms(body),
     };
     texts.into_iter().map(shortcut_candidate).collect()
 }

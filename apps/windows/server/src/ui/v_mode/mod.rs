@@ -35,7 +35,7 @@ const HELP_SHAPE: [&str; 8] = [
     "输入数学表达式进行计算，支持数学函数（例如“sin(30)+lg(100)”）。只输入 v 时按Tab进入/退出高级数学计算界面。",
     "输入数字进行转换（例如“12.12”）。",
     "输入=>加0b/0o/0x/十进制数进行进制转换（例如“=>0x33ccff”）。",
-    "输入sj/rq/xq/xz获得时间/日期/星期/现在（例如“xz”）。",
+    "输入jfuj/jjad/jtad/gmdh获得时间/日期/星期/现在（例如“gmdh”）。",
     "输入@加省份字的五笔编码，再按'加车牌字母（忽略大小写）获得车牌和所在地（例如“@iynt'c”可以匹配到“沪C”/“上海市”/“上海”）。",
     "输入#加姓名的五笔编码、每个字之间用'隔开获得取名结果（仅限汉族名字，例如“#xtay'wfnh”可以匹配到“张伟”）。选中姓氏后它会留在组句里，接着输入名字。",
     "",
@@ -280,9 +280,16 @@ mod tests {
         let (_, shape, _) = help_content(HelpMode::VMode, true);
         assert!(pinyin.iter().any(|line| line.contains("@sua")));
         assert!(pinyin.iter().any(|line| line.contains("#zhangwei")));
+        assert!(pinyin.iter().any(|line| line.contains("sj/rq/xq/xz")));
         assert!(shape.iter().any(|line| line.contains("@iynt'c")));
         assert!(shape.iter().any(|line| line.contains("#xtay'wfnh")));
+        assert!(
+            shape
+                .iter()
+                .any(|line| line.contains("jfuj/jjad/jtad/gmdh"))
+        );
         assert!(!shape.iter().any(|line| line.contains("@sua")));
+        assert!(!shape.iter().any(|line| line.contains("sj/rq/xq/xz")));
 
         let (title, _, footer) = help_content(HelpMode::Calculator, true);
         assert_eq!(title, CALC_TITLE);

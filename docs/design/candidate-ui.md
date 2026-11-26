@@ -217,7 +217,8 @@ Core `shortcut` 模块，不查词库、由输入直接算出，`CandidateKind::
 - `[input] v_mode_time_seconds` 开启时，`vsj` / `vxz` 的每条时间都带秒（`14时08分36秒`、`14:08:36`）。
 - 拼音串只有一个 `v` 时，候选窗口的资产里弹一个 V 模式说明窗口（标签「V模式」用候选项颜色，
   正文用额外内容颜色）；正文也列出 `@` 车牌与 `#` 取名这两类后续能力，并且**跟着输入方案换文案**：
-  拼音方案写 `@sua` / `#zhangwei`，形码方案写 `@iynt'c` / `#xtay'wfnh` 和「每字用 `'` 分隔」。
+  拼音方案写 `@sua` / `#zhangwei` / `sj/rq/xq/xz`，形码方案写 `@iynt'c` / `#xtay'wfnh` / `jfuj/jjad/jtad/gmdh`
+  和「每字用 `'` 分隔」。
 
 表达式键 `v`（`EXPRESSION_PREFIX`，固定）开头进**表达式模式**：不解析拼音，preedit 原样显示。
 `v1+2` 出 `3` 与 `1+2=3`（支持 `+ - * / ^`、括号、小数、函数），
