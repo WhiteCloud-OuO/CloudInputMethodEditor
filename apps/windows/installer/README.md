@@ -92,6 +92,10 @@ Server 与设置程序按 **exe 相对**定位随包资源（`cloudime_platform:
 安装向导**总是显示选择目录那一页**（`DisableDirPage=no`）让用户能改：Inno 的缺省 `auto` 会在重装 / 升级同一个 AppId 时
 自动跳过它，用户想换目录就没机会。
 
+安装向导第一页是 `InfoBeforeFile` 的欢迎 / 安装说明页，正文在 `apps\windows\installer\welcome.txt`（UTF-8 纯文本），
+标题与上下提示语在 `[Messages]` 的 `WizardInfoBefore` / `InfoBeforeLabel` / `InfoBeforeClickLabel`；页面在目录页之前，
+静默安装（`/SILENT` / `/VERYSILENT`）自动跳过。改欢迎文案只动这个 TXT 与三条消息，不用改 `build.ps1`。
+
 代价：Windows 的 uiAccess 只对装在 `%ProgramFiles%` 下的程序生效，改到别的目录或别的盘后，候选窗口在开始菜单、
 任务栏搜索、「设置」这类系统界面里会被盖住（输入与上屏不受影响）。目录页上写了这条提示（`[Messages]` 的 `SelectDirLabel3`）。
 

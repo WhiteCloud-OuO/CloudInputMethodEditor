@@ -8,7 +8,8 @@ description: Windows 的安装步骤：系统要求、安装包、首次打开�
 
 **系统要求**：64 位 Windows 10（1809 或更新）或 Windows 11。安装包自带设置界面所需的运行时，不必另装组件。
 
-1. 下载 `cloudime-<版本>-windows-x86_64-setup.exe`，双击安装，需要管理员权限。默认装到系统盘的 `Program Files\CloudIME`（一般是 `C:\Program Files\CloudIME`），安装向导里可以改；
+1. 下载 `cloudime-<版本>-windows-x86_64-setup.exe`，双击安装，需要管理员权限。第一页是欢迎 / 安装说明，读完点「下一步」继续；
+   默认装到系统盘的 `Program Files\CloudIME`（一般是 `C:\Program Files\CloudIME`），安装向导里可以改；
    但请尽量保持默认位置：候选窗口要盖过开始菜单、任务栏搜索这类系统界面，靠的是 Windows 的 uiAccess 机制，
    系统只对装在 `%ProgramFiles%` 里的程序启用它，装到别的目录或别的盘会静默失效（输入与上屏不受影响）。
 2. 正式签名版还会多问一步**安装方式**：**推荐安装**（缺省）只写入 `Program Files`，日常使用选它即可；**完整安装**另外把输入法模块

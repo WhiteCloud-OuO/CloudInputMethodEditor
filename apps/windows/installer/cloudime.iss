@@ -61,6 +61,8 @@ DefaultDirName={sd}\Program Files\CloudIME
 ; 注意 uiAccess 只对装在 %ProgramFiles% 下的程序生效：改到别的目录或别的盘后，候选窗在开始菜单、
 ; 任务栏搜索这类系统界面里会被盖住（输入与上屏不受影响），所以目录页上给了提示（见 [Messages]）。
 DisableDirPage=no
+; 第一页的欢迎 / 安装说明：InfoBeforeFile 的纯文本页（UTF-8），在目录页之前显示；静默安装自动跳过。
+InfoBeforeFile={#Repo}\apps\windows\installer\welcome.txt
 ; 开始菜单里建一个 CloudIME 目录（不跟显示名「云朵输入法」走）。
 DefaultGroupName=CloudIME
 DisableProgramGroupPage=yes
@@ -87,6 +89,10 @@ WizardStyle=modern
 Name: "chs"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Messages]
+; 欢迎 / 安装说明页（InfoBeforeFile）：标题与上下提示语；正文在 welcome.txt。
+WizardInfoBefore=欢迎使用云朵输入法
+InfoBeforeLabel=请先阅读下面的安装说明，然后点击“下一步”继续。
+InfoBeforeClickLabel=准备好后，点击“下一步”继续安装。
 ; 目录页的说明：改目录会让 uiAccess 失效（候选窗盖不住系统界面），在选目录这一步就讲清楚。
 SelectDirLabel3=云朵输入法 将被安装到下面指定的文件夹中。
 ; 安装方式页（只有签名版才有「完整安装」）。
