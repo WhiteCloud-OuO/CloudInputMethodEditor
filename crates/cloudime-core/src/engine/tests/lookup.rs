@@ -434,7 +434,13 @@ fn shape_v_mode_time_codes_use_wubi_words() {
         )
         .0,
     ));
-    for (input, count) in [("jfuj", 8), ("jjad", 12), ("jtad", 3), ("gmdh", 14)] {
+    for (input, count) in [
+        ("jfuj", 8),
+        ("jfuz", 8),
+        ("jjad", 12),
+        ("jtad", 3),
+        ("gmdh", 14),
+    ] {
         type_v(&mut engine, input);
         let query = engine.query().unwrap();
         assert_eq!(query.candidates.items.len(), count, "{input}");
@@ -476,6 +482,22 @@ fn shape_v_mode_plate_uses_wubi_code_and_separator() {
     // Ctrl+Alt+V 进 v 模式，后面 `'` 前是「沪」的五笔编码、`'` 后是车牌字母
     engine.start_expression();
     for character in "@iynt'c".chars() {
+        engine.push(character);
+    }
+    let texts: Vec<String> = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect();
+    assert_eq!(texts, ["沪C", "上海市", "上海"]);
+
+    // 不在开头的 z 按五笔通配一位：iyzt 也能命中 iynt（沪）
+    engine.clear();
+    engine.start_expression();
+    for character in "@iyzt'c".chars() {
         engine.push(character);
     }
     let texts: Vec<String> = engine

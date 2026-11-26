@@ -30,8 +30,9 @@ const HELP_PINYIN: [&str; 7] = [
 ];
 
 /// 形码（五笔）：`@` / `#` 吃五笔编码，一个字一段、用 `'` 隔开。
-const HELP_SHAPE: [&str; 8] = [
+const HELP_SHAPE: [&str; 9] = [
     "五笔方案里按 Ctrl+Alt+V 进入 V 模式；下面的 @ / # 都按五笔编码输入，每个字之间用 ' 分隔。",
+    "z 在开头（vz / v#z / v@z）会被忽略；不在开头时按五笔通配一位（例如 v#xtaz 可以匹配到 张）。",
     "输入数学表达式进行计算，支持数学函数（例如“sin(30)+lg(100)”）。只输入 v 时按Tab进入/退出高级数学计算界面。",
     "输入数字进行转换（例如“12.12”）。",
     "输入=>加0b/0o/0x/十进制数进行进制转换（例如“=>0x33ccff”）。",
@@ -288,6 +289,7 @@ mod tests {
                 .iter()
                 .any(|line| line.contains("jfuj/jjad/jtad/gmdh"))
         );
+        assert!(shape.iter().any(|line| line.contains("v#xtaz")));
         assert!(!shape.iter().any(|line| line.contains("@sua")));
         assert!(!shape.iter().any(|line| line.contains("sj/rq/xq/xz")));
 

@@ -258,8 +258,11 @@ impl Engine {
         if code.is_empty() {
             return Vec::new();
         }
+        let Some(pattern) = super::shape_v_pattern(code) else {
+            return Vec::new();
+        };
         table
-            .candidates(code, 200)
+            .candidates(&pattern, 200)
             .into_iter()
             .filter(|entry| entry.text.chars().count() == 1)
             .map(|entry| entry.text.as_ref())

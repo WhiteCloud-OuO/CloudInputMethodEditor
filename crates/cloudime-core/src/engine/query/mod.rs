@@ -123,16 +123,48 @@ fn name_query(scope: &str) -> Option<&str> {
 }
 
 /// 形码方案里时间类快捷候选：用「时间 / 日期 / 星期 / 现在」在码表里的全码映射，
-/// 不再认拼音的 `rq` / `sj` / `xq` / `xz`。
+/// 不再认拼音的 `rq` / `sj` / `xq` / `xz`。body 里的 `z` 当通配一位；开头是 z 直接吞键（这里不匹配）。
 fn shape_time_kind(table: &crate::shape::Table, body: &str) -> Option<shortcut::TimeShortcut> {
-    [
+    if body.is_empty() || body.starts_with('z') {
+        return None;
+    }
+    let mut hit = None;
+    for (word, kind) in [
         ("时间", shortcut::TimeShortcut::Time),
         ("日期", shortcut::TimeShortcut::Date),
         ("星期", shortcut::TimeShortcut::Weekday),
         ("现在", shortcut::TimeShortcut::Now),
-    ]
-    .into_iter()
-    .find_map(|(word, kind)| (table.code_of(word) == Some(body)).then_some(kind))
+    ] {
+        let Some(code) = table.code_of(word) else {
+            continue;
+        };
+        if !shape_code_matches(body, code) {
+            continue;
+        }
+        // 一个通配模式同时命中多个词时不猜，交给运算 / 中文数字分支。
+        if hit.is_some() {
+            return None;
+        }
+        hit = Some(kind);
+    }
+    hit
+}
+
+/// 五笔 V 模式里的编码：开头不能是 z（吞键），中间 / 末尾的 z 当通配一位（`*`）。
+fn shape_v_pattern(code: &str) -> Option<String> {
+    if code.is_empty() || code.starts_with('z') {
+        return None;
+    }
+    Some(code.replace('z', "*"))
+}
+
+/// 五笔通配：`z`（或内部转成的 `*`）对任意一位字母。
+fn shape_code_matches(pattern: &str, code: &str) -> bool {
+    pattern.len() == code.len()
+        && pattern
+            .bytes()
+            .zip(code.bytes())
+            .all(|(pattern, code)| pattern == b'z' || pattern == b'*' || pattern == code)
 }
 
 impl Engine {
@@ -224,8 +256,11 @@ impl Engine {
             Some((code, rest)) => (code, rest.chars().find(char::is_ascii_alphanumeric)),
             None => (query, None),
         };
+        let Some(pattern) = shape_v_pattern(code) else {
+            return Vec::new();
+        };
         let provinces: Vec<char> = table
-            .candidates(code, 200)
+            .candidates(&pattern, 200)
             .into_iter()
             .filter(|entry| entry.text.chars().count() == 1)
             .filter_map(|entry| entry.text.chars().next())

@@ -195,6 +195,10 @@ impl Engine {
 
     pub fn push(&mut self, c: char) {
         self.last_key = Instant::now();
+        // 五笔 V 模式里 `z` 在 v / v# / v@ 后面（body 开头）不当通配也不进组句：吞掉这个键。
+        if c == 'z' && self.v_mode_leading_z() {
+            return;
+        }
         if self.composition.is_empty() {
             // 新一段组句：从这一键起算耗时、翻页与重打；英文候选大小写回到原样
             self.forced_expression = false;
@@ -344,6 +348,17 @@ impl Engine {
         (self.shuangpin.is_none() && self.shape.is_none() || self.forced_expression)
             && !self.has_custom_phrase()
             && self.composition.text().starts_with(EXPRESSION_PREFIX)
+    }
+
+    /// 五笔 V 模式里 `z` 正落在 `v` / `v#` / `v@` 的 body 开头：这个键要吞掉，不进缓冲区。
+    /// 取名（`v#`）里每段编码以 `'` 分隔，`'` 后面的第一个 z 也算新一段的开头；
+    /// `v@` 的 `'` 后面是车牌字母，不吞（z 可能是合法字母）。
+    fn v_mode_leading_z(&self) -> bool {
+        if self.shape.is_none() || !self.expression_mode() {
+            return false;
+        }
+        let text = self.composition.text();
+        matches!(text, "v" | "v#" | "v@") || (text.starts_with("v#") && text.ends_with('\''))
     }
 
     /// V 模式里当前是日期 / 时间 / 星期 / 现在 / 车牌这类快捷候选（不是数学表达式或数字转换）。

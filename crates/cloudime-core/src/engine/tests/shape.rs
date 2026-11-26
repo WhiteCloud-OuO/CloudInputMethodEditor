@@ -228,6 +228,43 @@ fn z_mode_uses_correction_readings() {
 }
 
 #[test]
+fn v_mode_swallows_leading_z() {
+    let mut engine = shape_engine();
+    engine.start_expression();
+    engine.push('z');
+    assert_eq!(engine.composition().text(), "v", "vz 的 z 要吞掉");
+    engine.push('#');
+    engine.push('z');
+    assert_eq!(engine.composition().text(), "v#", "v#z 的 z 要吞掉");
+    engine.push('x');
+    engine.push('z');
+    assert_eq!(
+        engine.composition().text(),
+        "v#xz",
+        "z 不在开头时进缓冲区，按通配处理"
+    );
+    engine.push('\'');
+    engine.push('z');
+    assert_eq!(
+        engine.composition().text(),
+        "v#xz'",
+        "取名里 `'` 后新一段开头的 z 也吞掉"
+    );
+    engine.start_expression();
+    engine.push('@');
+    engine.push('z');
+    assert_eq!(engine.composition().text(), "v@", "v@z 的 z 要吞掉");
+    engine.push('i');
+    engine.push('\'');
+    engine.push('z');
+    assert_eq!(
+        engine.composition().text(),
+        "v@i'z",
+        "v@ 的 `'` 后是车牌字母，z 不吞"
+    );
+}
+
+#[test]
 fn v_mode_is_not_counted_as_a_shape_code() {
     let mut engine = shape_engine();
     engine.start_expression();

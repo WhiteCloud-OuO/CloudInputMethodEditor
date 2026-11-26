@@ -113,6 +113,16 @@ fn shape_name_uses_wubi_codes_separated_by_apostrophes() {
 }
 
 #[test]
+fn shape_name_codes_allow_z_wildcards() {
+    let mut engine = shape_name_engine();
+    // 每段的 z 当通配一位：xtaz 命中 xtay（张），wfnz 命中 wfnh（伟）
+    set_v_input(&mut engine, "#xtaz'wfnz");
+    assert_eq!(texts(&engine), ["张"]);
+    assert!(engine.select_name_part("张"));
+    assert_eq!(texts(&engine), ["张伟"]);
+}
+
+#[test]
 fn shape_name_requires_the_apostrophe_between_codes() {
     let mut engine = shape_name_engine();
     // 两个编码没加 `'`：整串不是一段合法五笔码，不出任何候选
