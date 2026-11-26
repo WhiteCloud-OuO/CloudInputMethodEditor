@@ -38,3 +38,6 @@ clear-products.ps1
 __pycache__/
 *.pyc
 /.venv*/
+
+# 安装欢迎页文案（本地副本不跟踪）
+/apps/windows/installer/welcome.txt
