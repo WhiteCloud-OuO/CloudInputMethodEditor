@@ -112,8 +112,7 @@ impl ChoiceScorer {
         }
         let mut typed = Vec::with_capacity(syllables.len());
         for (text, complete) in syllables {
-            let name = format!("{}:{text}", if *complete { 'f' } else { 'p' });
-            let Some(&unit) = self.units.get(&name) else {
+            let Some(&unit) = self.units.get(&unit_name(text, *complete)) else {
                 return Ok(None);
             };
             typed.push(unit);
@@ -143,6 +142,33 @@ fn log_softmax(logits: &[f32]) -> Vec<f32> {
     logits.iter().map(|&l| l - max - log_sum).collect()
 }
 
+/// 拼音单元名：解析器 / 词库用 `v` 写 ü（`jve`），模型词表用标准写法（`jue`）；
+/// 没打完的前缀还要把 `v` 换回 `u`（`p:jv` 在模型里不存在）。与 `align` 的映射保持一致。
+fn unit_name(text: &str, complete: bool) -> String {
+    if complete {
+        format!("f:{}", cloudime_core::dictionary::standard_syllable(text))
+    } else {
+        format!("p:{}", cloudime_core::dictionary::standard_prefix(text))
+    }
+}
+
+#[cfg(test)]
+mod unit_name_tests {
+    use super::unit_name;
+
+    #[test]
+    fn canonical_v_maps_to_the_model_standard_units() {
+        assert_eq!(unit_name("jve", true), "f:jue");
+        assert_eq!(unit_name("jv", true), "f:ju");
+        assert_eq!(unit_name("yvn", true), "f:yun");
+        assert_eq!(unit_name("lve", true), "f:lve");
+        assert_eq!(unit_name("jv", false), "p:ju");
+        assert_eq!(unit_name("j", false), "p:j");
+        assert_eq!(unit_name("ni", true), "f:ni");
+        assert_eq!(unit_name("zh", false), "p:zh");
+    }
+}
+
 #[cfg(all(test, feature = "zhiyi"))]
 mod tests {
     use super::*;
@@ -166,6 +192,12 @@ mod tests {
             .compose("今天", &[("ni", true), ("hao", true)])
             .unwrap()
             .expect("模型带 composition 头");
+        assert_eq!(rows.len(), 2);
+        // 解析器用 v 写 ü，模型单元表是标准写法：jve 要能查到 f:jue，否则整段输入都没有字分布
+        let rows = scorer
+            .compose("今天", &[("jve", true), ("ding", true)])
+            .unwrap()
+            .expect("ü 音节也要能出字");
         assert_eq!(rows.len(), 2);
     }
 }

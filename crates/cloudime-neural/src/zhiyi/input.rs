@@ -84,13 +84,10 @@ impl ChoiceScorer {
                 && cloudime_core::dictionary::canonical_syllable(&rest[..take]) == target
             {
                 rest = &rest[take..];
-                format!(
-                    "f:{}",
-                    cloudime_core::dictionary::standard_syllable(syllable)
-                )
+                super::unit_name(syllable, true)
             } else {
                 // 没打完：把 j/q/x/y 后面的 u 按目标的 ü 位置映射成 v 再比前缀；
-                // 模型词表用标准写法，发给模型前再映射回 u。
+                // 模型词表用标准写法，`unit_name` 再映射回 u。
                 let mapped: String = rest
                     .chars()
                     .enumerate()
@@ -112,7 +109,7 @@ impl ChoiceScorer {
                 }
                 let prefix = &mapped[..common];
                 rest = &rest[common..];
-                format!("p:{}", cloudime_core::dictionary::standard_prefix(prefix))
+                super::unit_name(prefix, false)
             };
             out.push(*self.units.get(&name)?);
         }

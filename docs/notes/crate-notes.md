@@ -452,7 +452,9 @@ DML 与 CPU 的 logits / `char_logits` 差超过 5e-3，或 DML 比 CPU 慢 2 �
 当前 int8 模型被探测拒绝，实际仍走 CPU。后续优化方向（含章 float ONNX / 知意 float 或静态量化 / 固定桶）
 见 `docs/notes/performance.md`「GPU 可行性」，这一轮先不再改。
 输入序列 `<bos> 前文 <eos> <mask>×拼音单元 <eos> <mask>候选… <eos>`，
-`f:zhong` / `p:g` 对音节完整 / 前缀；`score` 给每条候选一个 logit，`compose` 用 composition 头给每个音节一行字表 log 概率。
+`f:zhong` / `p:g` 对音节完整 / 前缀；解析器与词库用 `v` 写 ü（`jve`），发给模型前经 `unit_name` 映射回模型的标准单元（`f:jue`、`p:ju`，未打完的前缀把 `v` 换回 `u`），
+`score` 给每条候选一个 logit，`compose` 用 composition 头给每个音节一行字表 log 概率。
+模型字表与词库 / 语言模型相互独立：换成万象词库后，含章与知意字表按词频加权的覆盖率仍分别在 99.97% / 99.91%，不需要重训。
 `zhiyi::choice_model` 把它接到 Core 的 `ChoiceModel`。模型权重 Apache-2.0，随安装包放在 `Models\laya-zhen-long-l12-int8g\`
 （用户目录 `%APPDATA%\CloudIME\models\zhiyi-onnx\` 可作为替换）；运行库装到 Server exe 旁边
 （`apps/windows/scripts/fetch-onnxruntime.ps1` 取 ONNX Runtime 1.24.4）。
