@@ -13,6 +13,27 @@ fn name_engine() -> Engine {
     engine
 }
 
+/// 形码取名：姓名表 + 最小五笔码表，`v#` / Ctrl+Alt+V 后按编码取字。
+fn shape_name_engine() -> Engine {
+    let mut engine = name_engine();
+    engine.set_shape(Some(
+        crate::shape::Table::parse(
+            "xtay\t张\t10\nwfnh\t伟\t10\nwfnh\t倒霉蛋\t1000\niynt\t沪\t10\n",
+            4,
+        )
+        .0,
+    ));
+    engine
+}
+
+/// 形码里从空组句进 v 模式，再敲 `#` 后面的内容（`set_input` 会把 v 模式清掉）。
+fn set_v_input(engine: &mut Engine, input: &str) {
+    engine.start_expression();
+    for character in input.chars() {
+        engine.push(character);
+    }
+}
+
 fn texts(engine: &Engine) -> Vec<String> {
     engine
         .query()
@@ -75,6 +96,34 @@ fn compound_surname_wins_over_its_first_character() {
     let mut engine = name_engine();
     engine.set_input("v#ouyangna");
     assert_eq!(texts(&engine), ["欧阳"]);
+}
+
+#[test]
+fn shape_name_uses_wubi_codes_separated_by_apostrophes() {
+    let mut engine = shape_name_engine();
+    set_v_input(&mut engine, "#xtay'wfnh");
+    assert_eq!(texts(&engine), ["张"], "还没选姓时只出姓氏编码对应的字");
+
+    assert!(engine.select_name_part("张"));
+    assert_eq!(engine.composition().text(), "v#张'wfnh");
+    assert_eq!(texts(&engine), ["张伟"], "多字词不参与取名");
+
+    let candidate = engine.query().unwrap().candidates.items[0].clone();
+    assert_eq!(engine.commit(&candidate), Some("张伟".to_owned()));
+}
+
+#[test]
+fn shape_name_requires_the_apostrophe_between_codes() {
+    let mut engine = shape_name_engine();
+    // 两个编码没加 `'`：整串不是一段合法五笔码，不出任何候选
+    set_v_input(&mut engine, "#xtaywfnh");
+    assert!(texts(&engine).is_empty());
+    assert!(!engine.select_name_part("张"));
+
+    // 补上分隔符后正常取名
+    set_v_input(&mut engine, "#xtay'wfnh");
+    assert!(engine.select_name_part("张"));
+    assert_eq!(texts(&engine), ["张伟"]);
 }
 
 #[test]

@@ -52,6 +52,12 @@ impl Engine {
         let Some(body) = self.name_body() else {
             return false;
         };
+        if self.shape.is_some() {
+            return self
+                .shape_name_candidates(body)
+                .iter()
+                .any(|candidate| candidate.text == text);
+        }
         if !body.is_ascii() {
             return false;
         }
@@ -66,6 +72,9 @@ impl Engine {
     /// - 名字字：`v#李xiuqin` 选 `李秀` → `v#李秀qin`；最后一段吃完（没有剩余拼音）就上屏。
     pub fn name_part_after(&self, text: &str) -> Option<String> {
         let body = self.name_body()?;
+        if self.shape.is_some() {
+            return self.shape_name_part_after(body, text);
+        }
         // 还没选姓：只认姓氏，吃掉它的拼音，后面没打完的留着。
         if body.is_ascii() {
             let body = normalize(body);
@@ -116,6 +125,10 @@ impl Engine {
         match self.name_part_after(text) {
             Some(next) => {
                 self.set_input(&format!("{NAME_PREFIX}{next}"));
+                // 形码里 `set_input` 从空组句起新一段会清掉 v 模式标志；取名要接着按 v 模式解析。
+                if self.shape.is_some() {
+                    self.forced_expression = true;
+                }
                 true
             }
             None => false,
@@ -124,12 +137,15 @@ impl Engine {
 
     /// `v#` 后面的输入 → 取名候选。
     pub(super) fn name_candidates(&self, body: &str) -> Vec<Candidate> {
+        if body.is_empty() || self.names.is_none() {
+            return Vec::new();
+        }
+        if self.shape.is_some() {
+            return self.shape_name_candidates(body);
+        }
         let Some(tables) = &self.names else {
             return Vec::new();
         };
-        if body.is_empty() {
-            return Vec::new();
-        }
         if body.starts_with(|c: char| !c.is_ascii()) {
             return self.literal_name_candidates(tables, body);
         }
@@ -147,6 +163,126 @@ impl Engine {
             }
         }
         items
+    }
+
+    /// 形码取名：`v#xtay'wfnh`，每段是**一个字的五笔编码**，用 `'` 隔开。
+    ///
+    /// 还没选姓时只出第一段编码里的姓氏（表里的姓按排名，表里没有就退回这段编码的所有单字）；
+    /// 选了姓之后（组句里是 `v#张'wfnh`）只出下一段编码对应的名字字，最后一段选中即整名上屏。
+    fn shape_name_candidates(&self, body: &str) -> Vec<Candidate> {
+        let (literal, rest) = split_literal_and_rest(body);
+        if literal.is_empty() {
+            let (code, _) = shape_segment(rest);
+            let chars = self.shape_single_chars(code);
+            if chars.is_empty() {
+                return Vec::new();
+            }
+            let mut ranked: Vec<(u32, &str)> = chars
+                .iter()
+                .filter_map(|&text| self.surname_rank(text).map(|rank| (rank, text)))
+                .collect();
+            if ranked.is_empty() {
+                // 姓氏表里没有这个字：退回码表里这一段的所有单字（罕见姓）
+                ranked = chars
+                    .iter()
+                    .enumerate()
+                    .map(|(index, &text)| (index as u32, text))
+                    .collect();
+            }
+            ranked.sort_by_key(|(rank, _)| *rank);
+            ranked.truncate(NAME_CANDIDATE_LIMIT);
+            return ranked
+                .into_iter()
+                .map(|(_, text)| name_candidate(text.to_owned()))
+                .collect();
+        }
+        // 已经选了姓：后面必须用 `'` 隔开，再来一段编码。
+        if rest.is_empty() {
+            return vec![name_candidate(literal.to_owned())];
+        }
+        let Some(codes) = rest.strip_prefix('\'') else {
+            return Vec::new();
+        };
+        let (code, _) = shape_segment(codes);
+        let mut ordered: Vec<(usize, usize, &str)> = self
+            .shape_single_chars(code)
+            .into_iter()
+            .enumerate()
+            .map(|(index, text)| {
+                (
+                    self.name_table_order(text).unwrap_or(usize::MAX),
+                    index,
+                    text,
+                )
+            })
+            .collect();
+        ordered.sort_by_key(|(order, index, _)| (*order, *index));
+        ordered
+            .into_iter()
+            .take(NAME_CANDIDATE_LIMIT)
+            .map(|(_, _, text)| name_candidate(format!("{literal}{text}")))
+            .collect()
+    }
+
+    /// 形码取名的「选中这一项之后」：姓氏留下后一段编码，名字字留下更后面的编码；
+    /// 最后一段吃完返回 `None`（整名上屏）。
+    fn shape_name_part_after(&self, body: &str, text: &str) -> Option<String> {
+        let (literal, rest) = split_literal_and_rest(body);
+        if literal.is_empty() {
+            let (code, remaining) = shape_segment(rest);
+            if !self.shape_single_chars(code).contains(&text) {
+                return None;
+            }
+            return Some(format!("{text}{remaining}"));
+        }
+        let codes = rest.strip_prefix('\'')?;
+        if codes.is_empty() {
+            return None;
+        }
+        let (code, remaining) = shape_segment(codes);
+        let given = text.strip_prefix(literal)?;
+        if given.chars().count() != 1 || !self.shape_single_chars(code).contains(&given) {
+            return None;
+        }
+        if remaining.is_empty() {
+            return None;
+        }
+        Some(format!("{text}{remaining}"))
+    }
+
+    /// 形码码表里 `code` 前缀命中的单字（多字词不要）。
+    fn shape_single_chars(&self, code: &str) -> Vec<&str> {
+        let Some(table) = &self.shape else {
+            return Vec::new();
+        };
+        if code.is_empty() {
+            return Vec::new();
+        }
+        table
+            .candidates(code, 200)
+            .into_iter()
+            .filter(|entry| entry.text.chars().count() == 1)
+            .map(|entry| entry.text.as_ref())
+            .collect()
+    }
+
+    /// 姓氏表里的排名；不是表里的姓为 `None`。
+    fn surname_rank(&self, text: &str) -> Option<u32> {
+        self.names
+            .as_ref()?
+            .surnames()
+            .iter()
+            .find(|entry| entry.text == text)
+            .map(|entry| entry.rank)
+    }
+
+    /// 名字表里的行序；不在表里为 `None`。
+    fn name_table_order(&self, text: &str) -> Option<usize> {
+        self.names
+            .as_ref()?
+            .names()
+            .iter()
+            .position(|entry| entry.text == text)
     }
 
     /// 已经选中汉字姓氏（`v#李`）：只出名的**第一段**的字；名字取完（没拼音了）就只剩整名那一条。
@@ -392,6 +528,25 @@ fn split_literal_given(body: &str) -> (&str, &str) {
         .map(|(index, _)| index)
         .unwrap_or(body.len());
     (&body[..end], &body[end..])
+}
+
+/// 形码取名：已经选好的汉字（姓 + 已经取好的名）与后面 `'` 开头的剩余编码。
+/// `张'wfnh` → (`张`, `'wfnh`)；`xtay'wfnh` → (``, `xtay'wfnh`)。
+fn split_literal_and_rest(body: &str) -> (&str, &str) {
+    let end = body
+        .char_indices()
+        .find(|(_, character)| character.is_ascii())
+        .map(|(index, _)| index)
+        .unwrap_or(body.len());
+    (&body[..end], &body[end..])
+}
+
+/// 形码取名 / 车牌的当前编码段：`'` 之前的一段，与从 `'` 起的剩余输入。
+fn shape_segment(text: &str) -> (&str, &str) {
+    match text.find('\'') {
+        Some(index) => (&text[..index], &text[index..]),
+        None => (text, ""),
+    }
 }
 
 /// 拼音的第一段（一个完整音节；还没打完就是这个残缺音节）与后面剩下的拼音。

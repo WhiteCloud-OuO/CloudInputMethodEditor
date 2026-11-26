@@ -418,6 +418,43 @@ fn v_mode_offers_plate_shortcuts() {
 }
 
 #[test]
+fn shape_v_mode_plate_uses_wubi_code_and_separator() {
+    let dir = std::env::temp_dir().join("cloudime-core-shape-plate-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("plates-{}.qj", std::process::id()));
+    cloudime_plate::write_qj(
+        &path,
+        [cloudime_plate::PlateRow {
+            key: "huc".into(),
+            plate: "沪C".into(),
+            full: "上海市".into(),
+            short: "上海".into(),
+        }],
+        cloudime_format::Metadata::default(),
+    )
+    .unwrap();
+
+    let mut engine = Engine::new(Dictionary::parse(SAMPLE).unwrap());
+    engine.set_shape(Some(crate::shape::Table::parse("iynt\t沪\t10\n", 4).0));
+    engine.set_plates(cloudime_plate::PlateTable::open(&path).unwrap());
+    // Ctrl+Alt+V 进 v 模式，后面 `'` 前是「沪」的五笔编码、`'` 后是车牌字母
+    engine.start_expression();
+    for character in "@iynt'c".chars() {
+        engine.push(character);
+    }
+    let texts: Vec<String> = engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect();
+    assert_eq!(texts, ["沪C", "上海市", "上海"]);
+    let _ = std::fs::remove_file(path);
+}
+
+#[test]
 fn v_mode_offers_calendar_shortcuts() {
     for (input, count) in [("vrq", 12), ("vsj", 8), ("vxq", 3), ("vxz", 14)] {
         let mut engine = engine();

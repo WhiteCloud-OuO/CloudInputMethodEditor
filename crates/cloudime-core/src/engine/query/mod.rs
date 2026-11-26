@@ -164,6 +164,9 @@ impl Engine {
     /// `v@...` 的车牌候选：`@sua` → `苏A` / `江苏省南京市` / `江苏南京`。
     /// 只按 key 前缀匹配；同一 key 有多个省份时全都列出。
     fn plate_candidates(&self, query: &str) -> Vec<Candidate> {
+        if self.shape.is_some() {
+            return self.shape_plate_candidates(query);
+        }
         let Some(plates) = &self.plates else {
             return Vec::new();
         };
@@ -193,6 +196,69 @@ impl Engine {
                         auxiliary_typed: None,
                     });
                 }
+            }
+        }
+        items
+    }
+
+    /// 形码 `v@`：`iynt'c` → 沪C。`'` 前是省份字的五笔编码，`'` 后是车牌字母；
+    /// 还没敲 `'` 时把整段当地址编码，列出这些省份字对应的全部车牌。
+    fn shape_plate_candidates(&self, query: &str) -> Vec<Candidate> {
+        let (Some(plates), Some(table)) = (&self.plates, &self.shape) else {
+            return Vec::new();
+        };
+        let (code, letter) = match query.split_once('\'') {
+            Some((code, rest)) => (code, rest.chars().find(char::is_ascii_alphanumeric)),
+            None => (query, None),
+        };
+        let provinces: Vec<char> = table
+            .candidates(code, 200)
+            .into_iter()
+            .filter(|entry| entry.text.chars().count() == 1)
+            .filter_map(|entry| entry.text.chars().next())
+            .collect();
+        if provinces.is_empty() {
+            return Vec::new();
+        }
+        let mut seen = HashSet::new();
+        let mut items = Vec::new();
+        let mut matched = 0;
+        for index in 0..plates.len() {
+            let Some(entry) = plates.get(index) else {
+                continue;
+            };
+            let mut chars = entry.plate.chars();
+            let Some(province) = chars.next() else {
+                continue;
+            };
+            if !provinces.contains(&province) {
+                continue;
+            }
+            if let Some(letter) = letter {
+                let Some(plate_letter) = chars.next() else {
+                    continue;
+                };
+                if !plate_letter.eq_ignore_ascii_case(&letter) {
+                    continue;
+                }
+            }
+            matched += 1;
+            for text in [entry.plate, entry.full, entry.short] {
+                if text.is_empty() || !seen.insert(text.to_owned()) {
+                    continue;
+                }
+                items.push(Candidate {
+                    text: text.to_owned(),
+                    display: None,
+                    kind: CandidateKind::Shortcut,
+                    syllables: Vec::new(),
+                    reading: None,
+                    auxiliary: None,
+                    auxiliary_typed: None,
+                });
+            }
+            if matched >= 12 {
+                break;
             }
         }
         items
