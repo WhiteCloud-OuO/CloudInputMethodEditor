@@ -471,9 +471,13 @@ Core 侧 `engine/choice/`：`ChoiceTier`（省电 5 条 / 32 字、均衡 9 / 64
 ## crates/cloudime-lm
 
 `BigramModel`，Core `sentence::LanguageModel` trait 的实现，从 `data/generated/lm.qj`（或 `lm-unigram.tsv` / `lm-bigram.tsv`）加载
-（没有这两个文件就退化为一元词频整句）。数据由 `tools/corpus/parquet_to_text.py`（uv 脚本，HF parquet → 简体纯文本）加
-`cargo run --release -p cloudime-dict-convert -- bigram --phrases assets/lexicon/phrases.tsv --phrases assets/lexicon/domain_words.tsv --brand assets/lexicon/brand.tsv --brand assets/lexicon/mixed_words.tsv data/corpus/*.txt` 生成；语料在 `data/corpus/`（gitignore）。
-短语层不当 token 统计（分词时摘掉、统计完按成分合成一元 / 二元，短语得分等于原来两个词的路径，见 `bigram.rs` 模块注释），品牌词按给定次数写进一元与句首二元。
+（没有这两个文件就退化为一元词频整句）。数据由 `tools/corpus/parquet_to_text.py`（HF parquet → 简体纯文本）加
+`cargo run --release -p cloudime-dict-convert -- bigram --dict data/generated/dict.tsv --brand assets/lexicon/brand.tsv --brand assets/lexicon/mixed_words.tsv --max-bigrams 6000000 data/corpus/wiki/*.txt data/corpus/lccc.txt` 生成；
+语料在 `data/corpus/`（gitignore）：中文维基 `wikimedia/wikipedia` 的 `20231101.zh` 六个分片 + LCCC `thu-coai/lccc` 的 base/train，共约 4,750 万行。
+再 `pack lm` 打包成 `.qj`；2026-11-26 用万象词库重建后是 140 万词 / 600 万条二元，文件约 100 MB（旧模型 13.9 万词 / 486 万条 / 44 MB）。
+换万象词库后不再需要旧短语层 `assets/lexicon/phrases.tsv`（万象本身收 我的 / 不知道），`--phrases` 仍留给人工挑的领域词；
+短语层不当 token 统计（分词时摘掉、统计完按成分合成一元 / 二元，见 `bigram.rs` 模块注释）。品牌词按给定次数写进一元与句首二元，
+词表里没有的品牌词 / 中英混杂词（云朵输入法 / C盘）会自动补进模型。
 
 ## crates/cloudime-platform
 

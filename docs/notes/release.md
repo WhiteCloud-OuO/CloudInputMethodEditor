@@ -84,7 +84,7 @@ cargo 命令全 `--locked`（含 `build.ps1`）。普通 CI 只有 `contents: re
 
 ## 产品数据从哪来
 
-词库、语言模型（`WordBank/*.db`、`data/generated/lm.qj`、英文词表）不在 git 里，体积约 90 MB 且由本机数据管道生成。
+词库、语言模型（`WordBank/*.db`、`data/generated/lm.qj`、英文词表）不在 git 里，体积约 200 MB 且由本机数据管道生成。
 它们发在仓库里一个个**不可变**的预发布 Release 上：`data-v1`、`data-v2`……每次数据重生成发一个新号、从不覆盖
 （预发布不会成为 GitHub 的 latest，官网取 latest 时不会拿到它）。仓库里 `tools/release/data.lock` 钉住当前要用的标签与两个资产的 SHA-256，
 跟用到新数据的代码同一个提交进去：checkout 哪个提交就拿到它对应的那版数据，离线自编译的人不会因为我们改了数据而编出坏包。

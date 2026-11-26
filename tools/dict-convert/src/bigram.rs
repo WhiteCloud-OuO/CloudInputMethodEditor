@@ -123,6 +123,16 @@ impl Vocabulary {
         })
     }
 
+    /// 追加语料里没有的词（品牌词 / 中英混杂词）。分词已经结束，log 概率不再参与切分，
+    /// 这里只把数组补等长，避免按编号取词时越界。
+    pub(crate) fn add(&mut self, text: &str) -> u32 {
+        let id = self.words.len() as u32;
+        self.ids.insert(text.to_owned(), id);
+        self.words.push(text.to_owned());
+        self.log_frequency.push(0.0);
+        id
+    }
+
     /// 一段连续汉字按最大概率切成词编号；词库里没有的字用 `None` 占位。
     pub(crate) fn segment(&self, run: &str, output: &mut Vec<Option<u32>>) {
         output.clear();
@@ -468,9 +478,21 @@ pub fn convert(
             }
             let mut fields = line.split('\t');
             if let (Some(text), Some(count)) = (fields.next(), fields.next())
-                && let Some(&id) = vocabulary.ids.get(text.trim())
                 && let Ok(count) = count.trim().parse::<u32>()
             {
+                let text = text.trim();
+                if text.is_empty() {
+                    continue;
+                }
+                // 换词库后品牌词 / 中英混杂词可能不在词表里：补进去，否则 --brand 静默写 0 条
+                let id = match vocabulary.ids.get(text) {
+                    Some(&id) => id,
+                    None => {
+                        let id = vocabulary.add(text);
+                        unigram.push(0);
+                        id
+                    }
+                };
                 unigram[id as usize] = u64::from(count);
                 bigram.insert(u64::from(id), (count / BRAND_START_SHARE).max(1));
                 added += 1;
@@ -697,6 +719,40 @@ mod tests {
             .filter_map(|p| p.file_name().and_then(|n| n.to_str()).map(str::to_owned))
             .collect();
         assert_eq!(names, ["dict.tsv", "law.tsv"]);
+        let _ = std::fs::remove_dir_all(&dir);
+    }
+
+    /// 词库里没有的品牌词也要进模型：换词库后「云朵输入法 / C盘」不在 dict.tsv 里，
+    /// `--brand` 以前会静默跳过，等于品牌词从语言模型里消失。
+    #[test]
+    fn brand_words_missing_from_the_dictionary_enter_the_model() {
+        let dir = std::env::temp_dir().join(format!(
+            "cloudime-dict-convert-brand-{}",
+            std::process::id()
+        ));
+        let _ = std::fs::remove_dir_all(&dir);
+        std::fs::create_dir_all(&dir).unwrap();
+        let dict = dir.join("dict.tsv");
+        std::fs::write(&dict, "我\two\t10\n是\tshi\t10\n").unwrap();
+        let corpus = dir.join("corpus.txt");
+        std::fs::write(&corpus, "我是\n").unwrap();
+        let brand = dir.join("brand.tsv");
+        std::fs::write(&brand, "云朵输入法\t210\tyun duo shu ru fa\n").unwrap();
+        let out = dir.join("out");
+        std::fs::create_dir_all(&out).unwrap();
+
+        convert(&[corpus], &dict, &[], &[brand], 1, 100, &out).unwrap();
+
+        let unigram = std::fs::read_to_string(out.join("lm-unigram.tsv")).unwrap();
+        assert!(
+            unigram.lines().any(|line| line == "云朵输入法\t210"),
+            "{unigram}"
+        );
+        let bigram = std::fs::read_to_string(out.join("lm-bigram.tsv")).unwrap();
+        assert!(
+            bigram.lines().any(|line| line == "<s>\t云朵输入法\t26"),
+            "{bigram}"
+        );
         let _ = std::fs::remove_dir_all(&dir);
     }
 }
