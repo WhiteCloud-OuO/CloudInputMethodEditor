@@ -4,16 +4,27 @@ use super::*;
 use crate::custom_phrase;
 
 impl Engine {
-    /// 精确匹配自定义输入码时，数字键应选择候选。
-    pub(super) fn has_custom_phrase(&self) -> bool {
-        !self.english_mode
-            && self
-                .custom_phrases
-                .iter()
-                .any(|p| p.code == self.composition.scope())
+    /// 形码（五笔）里输入码超过 4 个字母的短语可以只敲「前 3 + 最后一个字母」；
+    /// z 模式是临时拼音，v / u / i 面板也不走码表，仍按完整输入码匹配。
+    fn abbreviates_phrase_code(&self) -> bool {
+        self.shape.is_some() && !self.shape_z_mode() && !self.forced_expression && !self.panel_mode
     }
 
-    /// 精确匹配输入码的短语插到你指定的候选位置：`1` 第一位、`2` 第二位……；
+    /// 当前输入是否命中这条短语的输入码（拼音只认完整码，五笔可走长码缩写）。
+    pub(super) fn phrase_matches(&self, phrase: &crate::CustomPhrase) -> bool {
+        custom_phrase::code_matches(
+            &phrase.code,
+            self.composition.scope(),
+            self.abbreviates_phrase_code(),
+        )
+    }
+
+    /// 当前输入命中了自定义短语（或五笔里的长码缩写）时，数字键应选择候选。
+    pub(super) fn has_custom_phrase(&self) -> bool {
+        !self.english_mode && self.custom_phrases.iter().any(|p| self.phrase_matches(p))
+    }
+
+    /// 命中输入码的短语插到你指定的候选位置：`1` 第一位、`2` 第二位……；
     /// 同码多条按位置升序占位，位置相同的按保存顺序依次往后排，越界的排到最后。
     /// `title` 非空时把它作为候选的显示内容，上屏仍是短语文本。
     pub(super) fn insert_custom_phrases(&self, items: &mut Vec<Candidate>) {
@@ -23,7 +34,7 @@ impl Engine {
         let mut phrases: Vec<_> = self
             .custom_phrases
             .iter()
-            .filter(|p| p.code == self.composition.scope())
+            .filter(|p| self.phrase_matches(p))
             .collect();
         if phrases.is_empty() {
             return;

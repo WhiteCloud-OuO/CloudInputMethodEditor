@@ -323,3 +323,54 @@ fn z_mode_uses_the_sentence_model() {
     engine.set_input("zzaijian");
     assert_eq!(candidates(&engine)[0], "在剑");
 }
+
+fn phrase(code: &str, position: u32, text: &str) -> crate::CustomPhrase {
+    crate::CustomPhrase {
+        code: code.into(),
+        text: text.into(),
+        title: None,
+        position,
+    }
+}
+
+/// 五笔模式也出短语：短码敲全即可，码表里没有的输入码也能靠短语出候选。
+#[test]
+fn custom_phrases_are_available_in_shape_mode() {
+    let mut engine = shape_engine();
+    engine
+        .set_custom_phrases(vec![phrase("wqvb", 5, "短语")])
+        .unwrap();
+    engine.set_input("wqvb");
+    assert_eq!(candidates(&engine), ["你好", "您好", "短语"]);
+
+    engine
+        .set_custom_phrases(vec![phrase("ee", 1, "，")])
+        .unwrap();
+    engine.set_input("ee");
+    let query = engine.query().unwrap();
+    assert_eq!(query.candidates.items[0].text, "，");
+    let candidate = query.candidates.items[0].clone();
+    assert_eq!(engine.commit(&candidate).as_deref(), Some("，"));
+}
+
+/// 超过 4 个字母的输入码：五笔里只敲前 3 个 + 最后一个字母；4 个字母以内不做缩写。
+#[test]
+fn long_phrase_codes_use_first_three_plus_last_in_shape_mode() {
+    let mut engine = shape_engine();
+    engine
+        .set_custom_phrases(vec![
+            phrase("wujiaoxing", 5, "☆"),
+            phrase("wujiaoxing", 6, "★"),
+        ])
+        .unwrap();
+    // 五笔码表最多 4 键，长码用前 3 个字母 + 最后一个字母
+    engine.set_input("wujg");
+    assert_eq!(candidates(&engine), ["☆", "★"]);
+
+    // 4 个字母的输入码不缩写：wubi 不能被 wubx 命中
+    engine
+        .set_custom_phrases(vec![phrase("wubi", 1, "不该出")])
+        .unwrap();
+    engine.set_input("wubx");
+    assert!(engine.query().is_err());
+}

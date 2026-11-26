@@ -252,7 +252,9 @@ Server 的 `shape_unique_commit` / `shape_fifth_key`（`dispatch/key/input.rs`�
   英文权重 = 英文词频 × (1+选过次数)，没有词频按 1.0。句末英文词并入整句（`EnglishTail`）不受影响。
 - `custom_phrase`（`CustomPhrase` = 输入码 + 上屏文本 + 可选候选显示内容 `title` + 固定候选位置）：`validate_phrases` 保存与加载共用
   （输入码 1–32 个小写字母、文本非空、位置 1–9、同码同文本不重复；`normalize_phrases` 把 `title` 去首尾空白、空串归一成 `None`）；
-  `insert_custom_phrases` 把敲全的输入码对应的短语插到指定位置（1 第一位、2 第二位……），同码多条按位置升序占位、位置相同的按保存顺序往后排、越界的排到最后；
+  `code_matches` 判断是否命中输入码：拼音模式要求敲全；五笔（纯形码，不含 z 模式与 v/u/i 面板）里输入码超过 4 个字母时，
+  还可以只敲前 3 个字母 + 最后一个字母（`wujiaoxing` → `wujg`），码表里没有的输入码也靠这条出候选。
+  `insert_custom_phrases` 把命中的短语插到指定位置（1 第一位、2 第二位……），同码多条按位置升序占位、位置相同的按保存顺序往后排、越界的排到最后；
   候选的 `display` 取 `title`（为空时渲染侧回退到 `text`，上屏始终是 `text`）。`merge_replacements` 仍把外部给的「输入码 → 短语」表并进来（新条目用缺省位置 2），Core 不管数据从哪来。
   短语不再进配置文件，存在安装目录的 SQLite（`cloudime_platform::phrase::PhraseStore`，固定 `Phrases\Phrase.db`，两张表 `user` / `cloudime_default`）；
   内置那份随升级更新的做法是**同步源**：安装包把同一份文件另存为 `{安装根}\data\phrase-default.db`（每次升级都覆盖），

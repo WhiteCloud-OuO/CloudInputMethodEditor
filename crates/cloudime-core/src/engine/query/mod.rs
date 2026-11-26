@@ -208,19 +208,12 @@ impl Engine {
         let mut query = match self.query_inner() {
             Ok(query) => query,
             Err(error) => {
-                // 纯五笔只认方案目录的码表：用户短语不进候选，切不出来就是切不出来。
-                // u / i 面板与 v 表达式是例外：它们本来就不走码表，按普通失败处理。
-                if self.shape.is_some()
-                    && !self.shape_z_mode()
-                    && !self.forced_expression
-                    && !self.panel_mode
-                {
-                    return Err(error);
-                }
+                // 切不出来的串：只有正好命中某条短语的输入码时才保留（五笔里还包括长码缩写），
+                // 让短语候选照常出来；否则按解析失败把原样输入交回壳。
                 if !self
                     .custom_phrases
                     .iter()
-                    .any(|p| p.code == self.composition.scope())
+                    .any(|phrase| self.phrase_matches(phrase))
                 {
                     return Err(error);
                 }
@@ -234,11 +227,8 @@ impl Engine {
         };
         // 已选文本显示在未选拼音之前；候选与光标只对未选拼音算。
         query.selected = self.composition.selected_text();
-        // 纯五笔不加用户短语（会把一级简码挤掉）；z 模式是临时拼音，照旧能用短语。
-        if self.shape.is_none() || self.shape_z_mode() || self.forced_expression || self.panel_mode
-        {
-            self.insert_custom_phrases(&mut query.candidates.items);
-        }
+        // 五笔也出短语：完整输入码直接命中，超过 4 个字母的长码还可以只敲「前 3 + 最后一个字母」。
+        self.insert_custom_phrases(&mut query.candidates.items);
         // 特殊输入模式：只留当前（第一个）音节的单字候选，选完一个字后剩余的拼音留给下一次查询。
         if self.special_input {
             let first = query

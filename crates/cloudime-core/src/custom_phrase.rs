@@ -76,6 +76,22 @@ fn valid_code(code: &str) -> bool {
     !code.is_empty() && code.len() <= 32 && code.bytes().all(|c| c.is_ascii_lowercase())
 }
 
+/// 敲的字母是否命中这条短语的输入码。
+///
+/// 拼音模式只认完整的输入码；形码（五笔）模式里，输入码超过 4 个字母时还可以只敲
+/// **前 3 个字母 + 最后一个字母**（`wujiaoxing` → `wujg`），因为五笔码表最多 4 键。
+pub fn code_matches(code: &str, typed: &str, abbreviate: bool) -> bool {
+    if code == typed {
+        return true;
+    }
+    if !abbreviate || !code.is_ascii() || code.len() <= 4 || !typed.is_ascii() || typed.len() != 4 {
+        return false;
+    }
+    let code = code.as_bytes();
+    let typed = typed.as_bytes();
+    typed[..3] == code[..3] && typed[3] == code[code.len() - 1]
+}
+
 /// 把系统的文本替换（Windows 设置里的「文本替换」这类「输入码 → 短语」表）并进自定义短语：
 /// 输入码不是小写字母、短语为空、或已有同码同文本的规则时跳过，新条目用缺省位置。
 /// 结果保证通过 [`validate_phrases`]（前提是 `base` 本身合法）。
@@ -132,8 +148,8 @@ impl CustomPhrase {
 #[cfg(test)]
 mod tests {
     use super::{
-        CustomPhrase, DEFAULT_POSITION, MAX_POSITION, merge_replacements, normalize_phrases,
-        validate_phrases,
+        CustomPhrase, DEFAULT_POSITION, MAX_POSITION, code_matches, merge_replacements,
+        normalize_phrases, validate_phrases,
     };
 
     fn phrase(code: &str, text: &str, position: u32) -> CustomPhrase {
@@ -205,5 +221,22 @@ mod tests {
         normalize_phrases(&mut phrases);
         assert_eq!(phrases[0].title.as_deref(), Some("候选"));
         assert_eq!(phrases[1].title, None);
+    }
+
+    #[test]
+    fn long_codes_abbreviate_to_first_three_plus_last() {
+        assert!(code_matches("wujiaoxing", "wujg", true));
+        assert!(code_matches("abcde", "abce", true));
+        assert!(code_matches("wujiaoxing", "wujiaoxing", true));
+        // 缩写只在形码模式开；拼音模式必须敲全
+        assert!(!code_matches("wujiaoxing", "wujg", false));
+        // 4 个字母以内不做缩写
+        assert!(code_matches("wubi", "wubi", true));
+        assert!(!code_matches("wubi", "wubx", true));
+        // 前三位或最后一位不对都不算
+        assert!(!code_matches("wujiaoxing", "wujx", true));
+        assert!(!code_matches("abcde", "abcd", true));
+        // 非小写 ASCII 的码不会越界
+        assert!(!code_matches("拼音", "piny", true));
     }
 }
