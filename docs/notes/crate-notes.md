@@ -191,7 +191,8 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
 `Engine::set_shape_mixture_input` 开着时 `query_shape` 在
 五笔候选后追加英文词（`WordList::complete_entries` 二分取补全 + 精确词，不纠错、不进五笔排序，通配码不掺英文）；
 Server 的 `shape_unique_commit` / `shape_fifth_key`（`dispatch/key/input.rs`）在敲满 `MaxCodeLength` 后
-按 `RouterConfig` 的两个开关自动上屏 / 顶字，英文混输开着时第五码不顶。
+按 `RouterConfig` 的两个开关自动上屏 / 顶字，英文混输开着时第五码不顶；`Engine::shape_code_len` 在 z 模式、
+v 模式（`Ctrl+Alt+V` 的 `forced_expression`）与 u / i 面板下返回 `None`，这两项都不会触发。
 
 `Engine` 是对外唯一门面，`Learner` trait 在 `engine` 模块；词库是「用户词 + 主词库 + 稀有词库（`with_rare` / `set_rare_enabled`，缺省关闭）+ 附加词库（`set_extra_dictionaries`，按添加顺序）」的列表，**按优先级从高到低**；同一个词在靠前词库里命中后，后面的词库不再重复产出（跨词库去重、靠前优先：词级在 `Engine::lookup_across_dictionaries`，整句词图在 `sentence::span_candidates`，都按 `text` 挡重），**同一本词库内部的重复不去重**，留给 `ranking::rank` / `dedup_by` 按名次保留最高的一条。繁体输出（`traditional` 开关与 `traditional_map` 映射）依赖 `ferrous-opencc`（`s2tw`）在出候选与上屏边界转换，内部保持简体。候选在 `Engine::simplify_candidates` 里先用 `t2s` 统一成简体并按文本去重（保留排名靠前的一条、合并 `weights`），所以词库里混入的「冊 / 侧」等繁体异体不会出现在简体候选里；繁体模式再在这份简体候选上走 `s2tw` 转回去，也不会出现简繁两条重复。
 - 候选排序分两级：先按**结构键**，同一结构下再按**权重**降序、`hit.text` 升序。结构键（`ranking::Scored`）依序：

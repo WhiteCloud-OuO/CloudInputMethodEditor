@@ -186,6 +186,18 @@ fn z_mode_runs_pinyin_and_annotates_the_wubi_code() {
 }
 
 #[test]
+fn v_mode_is_not_counted_as_a_shape_code() {
+    let mut engine = shape_engine();
+    engine.start_expression();
+    assert!(engine.expression_mode());
+    assert_eq!(
+        engine.shape_code_len(),
+        None,
+        "v 模式不算纯五笔，不做四码唯一 / 第五码顶字"
+    );
+}
+
+#[test]
 fn english_mixed_input_appends_english_candidates_after_chinese() {
     let mut engine = shape_engine();
     engine = engine.with_english(

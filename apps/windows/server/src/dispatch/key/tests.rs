@@ -3100,6 +3100,29 @@ fn shape_fifth_key_tops_the_previous_code() {
 }
 
 #[test]
+fn shape_v_mode_ignores_unique_and_fifth_commit() {
+    let hotkey = KeyModifiers {
+        ctrl: true,
+        alt: true,
+        ..KeyModifiers::default()
+    };
+    let normal = KeyModifiers::default();
+    let mut r = shape_router(true, true, false);
+    key(&mut r, 0x56, Some('\u{16}'), hotkey);
+    assert!(r.engine.expression_mode(), "五笔也能 Ctrl+Alt+V 进 v 模式");
+
+    // v 模式下 v + abcd = 5 个字母：既不因四码唯一自动上屏，也不在第五码顶字
+    for (key_code, c) in [(0x41, 'a'), (0x42, 'b'), (0x43, 'c'), (0x44, 'd')] {
+        let (_, commit, _) = key(&mut r, key_code, Some(c), normal);
+        assert_eq!(commit, None, "v 模式不自动上屏：{c}");
+    }
+    assert_eq!(r.engine.composition().text(), "vabcd");
+    let (_, commit, _) = key(&mut r, 0x45, Some('e'), normal);
+    assert_eq!(commit, None, "v 模式不顶字");
+    assert_eq!(r.engine.composition().text(), "vabcde");
+}
+
+#[test]
 fn shape_fifth_key_is_skipped_with_english_mixed_input() {
     let mut r = shape_router(true, true, true);
     let normal = KeyModifiers::default();

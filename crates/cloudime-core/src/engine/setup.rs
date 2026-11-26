@@ -87,11 +87,13 @@ impl Engine {
             && (self.z_session.get() || self.composition.scope().starts_with('z'))
     }
 
-    /// 纯五笔已经敲了几位编码（不含 z 模式）；不是纯五笔就是 `None`。
+    /// 纯五笔已经敲了几位编码（不含 z 模式与 v 模式）；不是纯五笔就是 `None`。
     ///
-    /// 壳用它判断四码是否敲满（四码唯一自动上屏 / 第五码顶字上屏）。光标停在中间时只看光标前。
+    /// 壳用它判断四码是否敲满（四码唯一自动上屏 / 第五码顶字上屏）；`Ctrl+Alt+V` 的 v 模式也返回 `None`，
+    /// 否则 `v` 加三个字母就会被当成四码敲满，把表达式面板里的输入顶掉。
     pub fn shape_code_len(&self) -> Option<usize> {
-        if self.shape.is_none() || self.shape_z_mode() || self.panel_mode {
+        if self.shape.is_none() || self.shape_z_mode() || self.panel_mode || self.forced_expression
+        {
             return None;
         }
         Some(
