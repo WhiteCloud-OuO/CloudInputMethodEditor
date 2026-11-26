@@ -14,6 +14,8 @@ use cloud_ui::auxiliary_window_template::AuxiliaryWindowTemplate;
 use cloud_ui::painter::SharedPainter;
 use cloudime_render::{Document, Element, FontSlot};
 
+use crate::dispatch::VModeScheme;
+
 const PADDING: f32 = 16.0;
 const GAP: f32 = 8.0;
 const MAX_TEXT_WIDTH: f32 = 520.0;
@@ -26,6 +28,18 @@ const HELP_PINYIN: [&str; 7] = [
     "输入sj/rq/xq/xz获得时间/日期/星期/现在（例如“xz”）。",
     "输入@加省份简称加英文字母（忽略大小写）获得车牌和所在地（例如“@sua”可以匹配到“苏A”/“江苏省南京市”/“江苏南京”）。",
     "输入#加姓名拼音字母获得取名结果（仅限汉族名字，例如“#zhangwei”可以匹配到“张伟”）。选中姓氏后它会留在组句里，接着输入名字。",
+    "",
+];
+
+/// 双拼：`@` / `#` 后面按当前双拼方案敲音节，不用手动加 `'`。
+const HELP_DOUBLE: [&str; 8] = [
+    "双拼方案里按 Ctrl+Alt+V 进入 V 模式；@ / # 后面按当前双拼方案敲音节，不用手动加 '。",
+    "输入数学表达式进行计算，支持数学函数（例如“sin(30)+lg(100)”）。只输入 v 时按Tab进入/退出高级数学计算界面。",
+    "输入数字进行转换（例如“12.12”）。",
+    "输入=>加0b/0o/0x/十进制数进行进制转换（例如“=>0x33ccff”）。",
+    "输入sj/rq/xq/xz获得时间/日期/星期/现在（例如“xz”）。",
+    "输入@加省份简称的双拼按键，再直接跟字母获得车牌和所在地（不用加 '）。",
+    "输入#加姓名的双拼按键获得取名结果（仅限汉族名字，不用加 '）。选中姓氏后它会留在组句里，接着输入名字。",
     "",
 ];
 
@@ -65,10 +79,10 @@ pub(crate) struct VModeHelpWindow {
     template: Rc<AuxiliaryWindowTemplate>,
     painter: SharedPainter,
     v_mode: Rc<Cell<bool>>,
-    /// 当前输入方案是不是形码（五笔）：说明里的车牌 / 取名示例要换成五笔编码。
-    shape: Rc<Cell<bool>>,
+    /// 当前输入方案：说明里的时间 / 车牌 / 取名示例跟着换。
+    scheme: Rc<Cell<VModeScheme>>,
     calculator: Rc<Cell<bool>>,
-    built: Cell<Option<(u64, HelpMode, bool)>>,
+    built: Cell<Option<(u64, HelpMode, VModeScheme)>>,
 }
 
 impl VModeHelpWindow {
@@ -76,7 +90,7 @@ impl VModeHelpWindow {
         painter: SharedPainter,
         owner: HWND,
         v_mode: Rc<Cell<bool>>,
-        shape: Rc<Cell<bool>>,
+        scheme: Rc<Cell<VModeScheme>>,
         calculator: Rc<Cell<bool>>,
     ) -> Result<Self> {
         let template = Rc::new(AuxiliaryWindowTemplate::new(
@@ -90,7 +104,7 @@ impl VModeHelpWindow {
             template,
             painter,
             v_mode,
-            shape,
+            scheme,
             calculator,
             built: Cell::new(None),
         })
@@ -119,7 +133,7 @@ impl Asset for VModeHelpWindow {
             self.hide();
             return;
         };
-        let shape = self.shape.get();
+        let scheme = self.scheme.get();
         let built = {
             let mut guard = self.painter.borrow_mut();
             let Some(painter) = guard.as_mut() else {
@@ -127,12 +141,12 @@ impl Asset for VModeHelpWindow {
                 return;
             };
             let generation = painter.generation();
-            (self.built.get() != Some((generation, mode, shape)))
-                .then(|| (generation, build_document(painter, mode, shape)))
+            (self.built.get() != Some((generation, mode, scheme)))
+                .then(|| (generation, build_document(painter, mode, scheme)))
         };
         if let Some((generation, document)) = built {
             self.template.set_document(document);
-            self.built.set(Some((generation, mode, shape)));
+            self.built.set(Some((generation, mode, scheme)));
         }
         self.template.show(rect, host.layout);
     }
@@ -146,14 +160,15 @@ impl Asset for VModeHelpWindow {
     }
 }
 
-/// 说明窗口的标题 / 正文 / 退出提示：V 模式按输入方案选文案，高级计算界面两套方案共用。
+/// 说明窗口的标题 / 正文 / 退出提示：V 模式按输入方案选文案，高级计算界面各方案共用。
 fn help_content(
     mode: HelpMode,
-    shape: bool,
+    scheme: VModeScheme,
 ) -> (&'static str, &'static [&'static str], Option<&'static str>) {
-    match (mode, shape) {
-        (HelpMode::VMode, true) => (TITLE, &HELP_SHAPE, None),
-        (HelpMode::VMode, false) => (TITLE, &HELP_PINYIN, None),
+    match (mode, scheme) {
+        (HelpMode::VMode, VModeScheme::Pinyin) => (TITLE, &HELP_PINYIN, None),
+        (HelpMode::VMode, VModeScheme::DoublePinyin) => (TITLE, &HELP_DOUBLE, None),
+        (HelpMode::VMode, VModeScheme::Shape) => (TITLE, &HELP_SHAPE, None),
         (HelpMode::Calculator, _) => (CALC_TITLE, &CALC_HELP, Some(CALC_FOOTER)),
     }
 }
@@ -162,10 +177,10 @@ fn help_content(
 fn build_document(
     painter: &mut cloud_ui::painter::Painter,
     mode: HelpMode,
-    shape: bool,
+    scheme: VModeScheme,
 ) -> Document {
     let palette = painter.palette();
-    let (title, paragraphs, footer) = help_content(mode, shape);
+    let (title, paragraphs, footer) = help_content(mode, scheme);
     let (_, title_size) = painter.text_font(FontSlot::Candidate);
     let (_, body_size) = painter.text_font(FontSlot::Translate);
     let title_width = painter
@@ -274,14 +289,19 @@ fn wrap(text: &str, max_width: f32, mut measure: impl FnMut(&str) -> f32) -> Vec
 #[cfg(test)]
 mod tests {
     use super::{CALC_FOOTER, CALC_TITLE, HelpMode, help_content};
+    use crate::dispatch::VModeScheme;
 
     #[test]
     fn v_mode_help_follows_the_input_scheme() {
-        let (_, pinyin, _) = help_content(HelpMode::VMode, false);
-        let (_, shape, _) = help_content(HelpMode::VMode, true);
+        let (_, pinyin, _) = help_content(HelpMode::VMode, VModeScheme::Pinyin);
+        let (_, double, _) = help_content(HelpMode::VMode, VModeScheme::DoublePinyin);
+        let (_, shape, _) = help_content(HelpMode::VMode, VModeScheme::Shape);
         assert!(pinyin.iter().any(|line| line.contains("@sua")));
         assert!(pinyin.iter().any(|line| line.contains("#zhangwei")));
         assert!(pinyin.iter().any(|line| line.contains("sj/rq/xq/xz")));
+        assert!(double.iter().any(|line| line.contains("双拼")));
+        assert!(double.iter().any(|line| line.contains("不用手动加")));
+        assert!(!double.iter().any(|line| line.contains("@sua")));
         assert!(shape.iter().any(|line| line.contains("@iynt'c")));
         assert!(shape.iter().any(|line| line.contains("#xtay'wfnh")));
         assert!(
@@ -293,7 +313,7 @@ mod tests {
         assert!(!shape.iter().any(|line| line.contains("@sua")));
         assert!(!shape.iter().any(|line| line.contains("sj/rq/xq/xz")));
 
-        let (title, _, footer) = help_content(HelpMode::Calculator, true);
+        let (title, _, footer) = help_content(HelpMode::Calculator, VModeScheme::Pinyin);
         assert_eq!(title, CALC_TITLE);
         assert_eq!(footer, Some(CALC_FOOTER));
     }

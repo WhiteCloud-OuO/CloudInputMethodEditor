@@ -209,6 +209,9 @@ impl Engine {
     /// `v@...` 的车牌候选：`@sua` → `苏A` / `江苏省南京市` / `江苏南京`。
     /// 只按 key 前缀匹配；同一 key 有多个省份时全都列出。
     fn plate_candidates(&self, query: &str) -> Vec<Candidate> {
+        if let Some(table) = &self.shuangpin {
+            return self.shuangpin_plate_candidates(table, query);
+        }
         if self.shape.is_some() {
             return self.shape_plate_candidates(query);
         }
@@ -304,6 +307,61 @@ impl Engine {
                     auxiliary: None,
                     auxiliary_typed: None,
                 });
+            }
+            if matched >= 12 {
+                break;
+            }
+        }
+        items
+    }
+
+    /// 双拼 `v@`：`huc` → 沪C。按键按当前双拼方案解成省份拼音，最后剩下的一位按键当车牌字母；
+    /// 中间不用手动加 `'`。
+    fn shuangpin_plate_candidates(
+        &self,
+        table: &crate::shuangpin::Table,
+        query: &str,
+    ) -> Vec<Candidate> {
+        let Some(plates) = &self.plates else {
+            return Vec::new();
+        };
+        let mut seen = HashSet::new();
+        let mut items = Vec::new();
+        let mut matched = 0;
+        for expansion in table.expand(query) {
+            let mut pinyin = String::new();
+            for syllable in &expansion.syllables {
+                pinyin.push_str(&syllable.pinyin);
+            }
+            if pinyin.is_empty() {
+                continue;
+            }
+            let trailing: Vec<char> = expansion.trailing.chars().collect();
+            let key = match trailing.as_slice() {
+                [letter] if letter.is_ascii_alphabetic() => {
+                    format!("{pinyin}{}", letter.to_ascii_lowercase())
+                }
+                _ => pinyin,
+            };
+            for entry in plates.prefix(&key, 12) {
+                matched += 1;
+                for text in [entry.plate, entry.full, entry.short] {
+                    if text.is_empty() || !seen.insert(text.to_owned()) {
+                        continue;
+                    }
+                    items.push(Candidate {
+                        text: text.to_owned(),
+                        display: None,
+                        kind: CandidateKind::Shortcut,
+                        syllables: Vec::new(),
+                        reading: None,
+                        auxiliary: None,
+                        auxiliary_typed: None,
+                    });
+                }
+                if matched >= 12 {
+                    break;
+                }
             }
             if matched >= 12 {
                 break;

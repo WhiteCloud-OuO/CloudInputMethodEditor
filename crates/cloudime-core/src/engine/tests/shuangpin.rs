@@ -2,6 +2,7 @@
 
 use super::*;
 use crate::auxiliary::AuxiliaryMode;
+use crate::name::NameTables;
 use crate::shuangpin;
 
 /// 一份只够测试用的自然码片段：`l` = ai、`a` = a、`t` = ve/ue、`x` = ie；
@@ -29,6 +30,39 @@ fn table() -> shuangpin::Table {
         remapping,
         exchange: Vec::new(),
         auxiliary: false,
+    }
+}
+
+/// 只够 V 模式取名 / 车牌的最小双拼表：zh 在 v、ang 在 h、w + ei、s/h + u。
+fn double_table() -> shuangpin::Table {
+    let mut remapping = std::collections::BTreeMap::new();
+    let mut put = |key: char, initials: &[&str], finals: &[&str]| {
+        remapping.insert(
+            key,
+            shuangpin::KeyMapping {
+                initials: initials.iter().map(|text| (*text).to_owned()).collect(),
+                finals: finals.iter().map(|text| (*text).to_owned()).collect(),
+            },
+        );
+    };
+    put('v', &["zh"], &[]);
+    put('h', &["h"], &["ang"]);
+    put('w', &["w"], &[]);
+    put('e', &[], &["ei"]);
+    put('s', &["s"], &[]);
+    put('u', &[], &["u"]);
+    shuangpin::Table {
+        zero_initials: std::collections::BTreeMap::new(),
+        remapping,
+        exchange: Vec::new(),
+        auxiliary: false,
+    }
+}
+
+fn set_v_input(engine: &mut Engine, input: &str) {
+    engine.start_expression();
+    for character in input.chars() {
+        engine.push(character);
     }
 }
 
@@ -772,4 +806,58 @@ fn english_words_are_matched_by_the_raw_keys_under_shuangpin() {
         has_english(with_aux.query().ok()),
         "第一个键大写压成小写，英文照掺"
     );
+}
+
+fn query_texts(engine: &Engine) -> Vec<String> {
+    engine
+        .query()
+        .unwrap()
+        .candidates
+        .items
+        .into_iter()
+        .map(|candidate| candidate.text)
+        .collect()
+}
+
+/// 双拼 V 模式取名：`v#` 后面按双拼敲音节，不用手动补 `'`；选姓后剩下的按键继续解。
+#[test]
+fn v_mode_name_uses_double_pinyin_keys_without_apostrophes() {
+    let mut engine = Engine::new(Dictionary::parse("张\tzhang\t9000\n伟\twei\t9000\n").unwrap());
+    engine.set_shuangpin(Some(double_table()));
+    engine.set_name_tables(NameTables::from_tsv("张\tzhang\t1\n", "伟\twei\n").unwrap());
+    set_v_input(&mut engine, "#vhwe");
+    assert_eq!(query_texts(&engine), ["张"]);
+
+    assert!(engine.select_name_part("张"));
+    assert_eq!(engine.composition().text(), "v#张we");
+    assert_eq!(query_texts(&engine), ["张伟"]);
+
+    let candidate = engine.query().unwrap().candidates.items[0].clone();
+    assert_eq!(engine.commit(&candidate).as_deref(), Some("张伟"));
+}
+
+/// 双拼 V 模式车牌：`@huc` 的 `hu` 是「沪」的双拼按键，最后一个键是车牌字母。
+#[test]
+fn v_mode_plate_uses_double_pinyin_keys_without_apostrophes() {
+    let dir = std::env::temp_dir().join("cloudime-core-shuangpin-plate-tests");
+    std::fs::create_dir_all(&dir).unwrap();
+    let path = dir.join(format!("plates-{}.qj", std::process::id()));
+    cloudime_plate::write_qj(
+        &path,
+        [cloudime_plate::PlateRow {
+            key: "huc".into(),
+            plate: "沪C".into(),
+            full: "上海市".into(),
+            short: "上海".into(),
+        }],
+        cloudime_format::Metadata::default(),
+    )
+    .unwrap();
+
+    let mut engine = Engine::new(Dictionary::parse(SAMPLE).unwrap());
+    engine.set_shuangpin(Some(double_table()));
+    engine.set_plates(cloudime_plate::PlateTable::open(&path).unwrap());
+    set_v_input(&mut engine, "@huc");
+    assert_eq!(query_texts(&engine), ["沪C", "上海市", "上海"]);
+    let _ = std::fs::remove_file(path);
 }

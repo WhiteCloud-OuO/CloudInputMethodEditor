@@ -5,6 +5,15 @@ use cloudime_platform::protocol::{Frame, ScreenRect};
 
 pub use cloud_ui::RenderSettings;
 
+/// V 模式说明窗口按哪种输入方案写文案。
+#[derive(Clone, Copy, PartialEq, Eq, Default)]
+pub enum VModeScheme {
+    #[default]
+    Pinyin,
+    DoublePinyin,
+    Shape,
+}
+
 /// Router 只产出帧，画交给它；Windows 上由 UI 线程实现。
 pub trait CandidateSink: Send {
     /// 把候选窗口摆到 `rect`（组句范围的屏幕矩形）下方并按 `frame` 重绘。
@@ -29,9 +38,9 @@ pub trait CandidateSink: Send {
         false
     }
 
-    /// V 模式说明窗口的开关（拼音串只有一个 `v` 时为真）；`shape` 决定文案按拼音还是形码写。
+    /// V 模式说明窗口的开关（拼音串只有一个 `v` 时为真）；`scheme` 决定文案按哪种输入方案写。
     /// 不画的实现默认什么都不做。
-    fn set_v_mode_help(&self, _on: bool, _shape: bool) {}
+    fn set_v_mode_help(&self, _on: bool, _scheme: VModeScheme) {}
 
     /// 打开特殊字符输入器（u 模式里按 Tab）。不画的实现默认什么都不做。
     fn open_special_symbols(&self) {}

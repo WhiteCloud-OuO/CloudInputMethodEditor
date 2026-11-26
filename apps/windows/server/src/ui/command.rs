@@ -4,7 +4,7 @@ use cloudime_platform::protocol::{Frame, ScreenRect};
 
 use std::time::Instant;
 
-use crate::dispatch::{RenderSettings, StatusItems, StatusView};
+use crate::dispatch::{RenderSettings, StatusItems, StatusView, VModeScheme};
 
 /// 交给 UI 线程执行的命令。`Frame` 较大，装箱免得枚举过胖。
 pub(super) enum UiCommand {
@@ -15,8 +15,8 @@ pub(super) enum UiCommand {
     /// 收起候选窗口。
     Hide,
 
-    /// V 模式说明窗口开关（拼音串只有一个 `v`）；`shape` 决定文案用拼音还是形码。
-    VModeHelp { on: bool, shape: bool },
+    /// V 模式说明窗口开关（拼音串只有一个 `v`）；`scheme` 决定文案用哪种输入方案。
+    VModeHelp { on: bool, scheme: VModeScheme },
 
     /// 高级数学计算界面的说明窗口开关。
     CalculatorHelp(bool),

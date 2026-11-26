@@ -39,7 +39,7 @@ pub(crate) use self::render_data::RenderData;
 use super::key_map::KeyMapWindow;
 use super::v_mode::VModeHelpWindow;
 use super::{CandidateEvents, Viewport};
-use crate::dispatch::{CandidateEvent, RenderSettings};
+use crate::dispatch::{CandidateEvent, RenderSettings, VModeScheme};
 use cloud_ui::auxiliary::{Bridge, DesignatedAssetToGetFocus, Host};
 use cloud_ui::independent_window_template::IndependentWindowTemplate;
 use cloud_ui::layered;
@@ -260,8 +260,8 @@ pub(crate) struct CandidateWindow {
     /// V 模式说明窗口是否该显示（拼音串只有一个 `v` 时）。
     v_mode_help: Rc<Cell<bool>>,
 
-    /// V 模式说明窗口按哪种输入方案写文案（形码 / 拼音）。
-    v_mode_shape: Rc<Cell<bool>>,
+    /// V 模式说明窗口按哪种输入方案写文案（拼音 / 双拼 / 形码）。
+    v_mode_scheme: Rc<Cell<VModeScheme>>,
 
     /// 高级数学计算界面的说明窗口是否该显示。
     calculator_help: Rc<Cell<bool>>,
@@ -314,13 +314,13 @@ impl CandidateWindow {
             Err(error) => tracing::error!(%error, "建键位映射参考窗口失败，将不显示它"),
         }
         let v_mode_help = Rc::new(Cell::new(false));
-        let v_mode_shape = Rc::new(Cell::new(false));
+        let v_mode_scheme = Rc::new(Cell::new(VModeScheme::Pinyin));
         let calculator_help = Rc::new(Cell::new(false));
         match VModeHelpWindow::new(
             painter.clone(),
             template.hwnd(),
             v_mode_help.clone(),
-            v_mode_shape.clone(),
+            v_mode_scheme.clone(),
             calculator_help.clone(),
         ) {
             Ok(asset) => template.assets_mut().add(Box::new(asset)),
@@ -353,7 +353,7 @@ impl CandidateWindow {
             viewport,
             reversed,
             v_mode_help,
-            v_mode_shape,
+            v_mode_scheme,
             calculator_help,
             content_rect: Cell::new(None),
             suppressed: Cell::new(false),
@@ -534,10 +534,10 @@ impl CandidateWindow {
         self.sync_assets();
     }
 
-    /// V 模式说明窗口：拼音串只有一个 `v` 时打开，其他时候收起；`shape` 决定文案用拼音还是形码示例。
-    pub(crate) fn set_v_mode_help(&self, on: bool, shape: bool) {
+    /// V 模式说明窗口：拼音串只有一个 `v` 时打开，其他时候收起；`scheme` 决定文案按哪种方案写。
+    pub(crate) fn set_v_mode_help(&self, on: bool, scheme: VModeScheme) {
         self.v_mode_help.set(on);
-        self.v_mode_shape.set(shape);
+        self.v_mode_scheme.set(scheme);
         self.sync_assets();
     }
 

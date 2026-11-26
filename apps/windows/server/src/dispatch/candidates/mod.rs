@@ -8,7 +8,7 @@ use cloudime_platform::MouseWordSelection;
 use cloudime_platform::protocol::{CANDIDATE_CLICK_SINCE, Frame, ScreenRect, SessionId};
 
 pub use self::event::CandidateEvent;
-pub use self::sink::{CandidateSink, NoopSink, RenderSettings};
+pub use self::sink::{CandidateSink, NoopSink, RenderSettings, VModeScheme};
 use super::Router;
 use super::translate::TranslateAction;
 
@@ -155,8 +155,14 @@ impl Router {
             let badges = self.candidate_badges(frame);
             let v_mode_help =
                 self.engine.expression_mode() && self.engine.composition().text() == "v";
-            let shape_scheme = self.engine.shape_max_code_length().is_some();
-            self.candidates.set_v_mode_help(v_mode_help, shape_scheme);
+            let scheme = if self.engine.shape_max_code_length().is_some() {
+                VModeScheme::Shape
+            } else if self.engine.shuangpin().is_some() {
+                VModeScheme::DoublePinyin
+            } else {
+                VModeScheme::Pinyin
+            };
+            self.candidates.set_v_mode_help(v_mode_help, scheme);
             self.candidates
                 .set_calculator_help(self.engine.calculator());
             let unchanged = matches!(

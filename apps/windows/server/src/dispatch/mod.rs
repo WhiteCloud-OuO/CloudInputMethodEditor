@@ -38,7 +38,7 @@ use crate::ui::SharedMeasurer;
 use document::Document;
 use key::smart_symbol::Pending as SmartSpacePending;
 
-pub use self::candidates::{CandidateEvent, CandidateSink, NoopSink, RenderSettings};
+pub use self::candidates::{CandidateEvent, CandidateSink, NoopSink, RenderSettings, VModeScheme};
 use self::composed::Composed;
 pub use self::config::RouterConfig;
 use self::reload::ConfigReload;

@@ -58,6 +58,12 @@ impl Engine {
                 .iter()
                 .any(|candidate| candidate.text == text);
         }
+        if self.shuangpin.is_some() {
+            return self
+                .shuangpin_name_candidates(body)
+                .iter()
+                .any(|candidate| candidate.text == text);
+        }
         if !body.is_ascii() {
             return false;
         }
@@ -74,6 +80,9 @@ impl Engine {
         let body = self.name_body()?;
         if self.shape.is_some() {
             return self.shape_name_part_after(body, text);
+        }
+        if self.shuangpin.is_some() {
+            return self.shuangpin_name_part_after(body, text);
         }
         // 还没选姓：只认姓氏，吃掉它的拼音，后面没打完的留着。
         if body.is_ascii() {
@@ -125,8 +134,8 @@ impl Engine {
         match self.name_part_after(text) {
             Some(next) => {
                 self.set_input(&format!("{NAME_PREFIX}{next}"));
-                // 形码里 `set_input` 从空组句起新一段会清掉 v 模式标志；取名要接着按 v 模式解析。
-                if self.shape.is_some() {
+                // 形码 / 双拼里 `set_input` 从空组句起新一段会清掉 v 模式标志；取名要接着按 v 模式解析。
+                if self.shape.is_some() || self.shuangpin.is_some() {
                     self.forced_expression = true;
                 }
                 true
@@ -142,6 +151,9 @@ impl Engine {
         }
         if self.shape.is_some() {
             return self.shape_name_candidates(body);
+        }
+        if self.shuangpin.is_some() {
+            return self.shuangpin_name_candidates(body);
         }
         let Some(tables) = &self.names else {
             return Vec::new();
@@ -248,6 +260,105 @@ impl Engine {
             return None;
         }
         Some(format!("{text}{remaining}"))
+    }
+
+    /// 双拼取名：`v#vhwe`（按当前双拼方案敲音节，不用补 `'`）。
+    /// 查询时把按键解成完整拼音再走姓氏 / 名字表；选中后只吃掉对应的按键，剩下的按键原样留着。
+    fn shuangpin_name_candidates(&self, body: &str) -> Vec<Candidate> {
+        let Some(table) = &self.shuangpin else {
+            return Vec::new();
+        };
+        let (literal, rest) = split_literal_and_rest(body);
+        if literal.is_empty() {
+            let mut items = Vec::new();
+            let mut seen = HashSet::new();
+            for expansion in table.expand(rest) {
+                let pinyin = normalize(&expansion.to_pinyin());
+                if pinyin.is_empty() {
+                    continue;
+                }
+                for hit in self.surname_hits(&pinyin) {
+                    push_name_candidate(&mut items, &mut seen, hit.text);
+                    if items.len() >= NAME_CANDIDATE_LIMIT {
+                        return items;
+                    }
+                }
+            }
+            return items;
+        }
+        if rest.is_empty() {
+            return vec![name_candidate(literal.to_owned())];
+        }
+        let mut items = Vec::new();
+        let mut seen = HashSet::new();
+        for expansion in table.expand(rest) {
+            let pinyin = expansion.to_pinyin();
+            let (first, _) = first_segment(&pinyin);
+            let first = normalize(first);
+            if first.is_empty() {
+                continue;
+            }
+            for given in self.single_given_candidates(&first) {
+                let text = format!("{literal}{given}");
+                if seen.insert(text.clone()) {
+                    items.push(name_candidate(text));
+                }
+                if items.len() >= NAME_CANDIDATE_LIMIT {
+                    return items;
+                }
+            }
+        }
+        items
+    }
+
+    /// 双拼取名的「选中这一项之后」：只吃候选对应的按键，剩下的按键原样留在组句里。
+    fn shuangpin_name_part_after(&self, body: &str, text: &str) -> Option<String> {
+        let table = self.shuangpin.as_ref()?;
+        let (literal, rest) = split_literal_and_rest(body);
+        if literal.is_empty() {
+            for expansion in table.expand(rest) {
+                let pinyin = normalize(&expansion.to_pinyin());
+                let Some(hit) = self
+                    .surname_hits(&pinyin)
+                    .into_iter()
+                    .find(|hit| hit.text == text)
+                else {
+                    continue;
+                };
+                let syllables = covered_syllables(&expansion, hit.pinyin_len);
+                let span = table.typed_covered(rest, syllables);
+                return Some(format!("{text}{}", &rest[span..]));
+            }
+            return None;
+        }
+        if rest.is_empty() {
+            return None;
+        }
+        let given = text.strip_prefix(literal)?;
+        if given.chars().count() != 1 {
+            return None;
+        }
+        for expansion in table.expand(rest) {
+            let pinyin = expansion.to_pinyin();
+            let (first, _) = first_segment(&pinyin);
+            let first = normalize(first);
+            if first.is_empty()
+                || !self
+                    .single_given_candidates(&first)
+                    .iter()
+                    .any(|character| character == given)
+            {
+                continue;
+            }
+            let span = table.typed_covered(rest, 1);
+            let remaining = &rest[span..];
+            return if remaining.is_empty() {
+                None
+            } else {
+                Some(format!("{text}{remaining}"))
+            };
+        }
+        None
     }
 
     /// 形码码表里 `code` 前缀命中的单字（多字词不要）。
@@ -563,6 +674,19 @@ fn first_segment(pinyin: &str) -> (&str, &str) {
         .find(|&end| parser::is_syllable(&pinyin[..end]))
         .unwrap_or(pinyin.len());
     (&pinyin[..end], &pinyin[end..])
+}
+
+/// 双拼解出来的拼音里，前 `pinyin_len` 个字节（姓氏表给的长度）覆盖了几个音节。
+/// 落到没解完的尾巴上时把尾巴也算一个（选中姓氏要连那半个音节的按键一起吃掉）。
+fn covered_syllables(expansion: &crate::shuangpin::Expansion, pinyin_len: usize) -> usize {
+    let mut bytes = 0;
+    for (index, syllable) in expansion.syllables.iter().enumerate() {
+        bytes += syllable.pinyin.len();
+        if bytes >= pinyin_len {
+            return index + 1;
+        }
+    }
+    expansion.syllables.len() + usize::from(!expansion.trailing.is_empty())
 }
 
 fn push_name_candidate(items: &mut Vec<Candidate>, seen: &mut HashSet<String>, text: String) {

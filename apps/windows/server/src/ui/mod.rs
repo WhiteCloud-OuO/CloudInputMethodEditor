@@ -82,7 +82,7 @@ use self::status::StatusBar;
 use self::status_tip::StatusTip;
 use crate::dispatch::{
     CandidateEvent, CandidateSink, RenderSettings, ScriptWindowSink, StatusEvent, StatusItems,
-    StatusSink, StatusView,
+    StatusSink, StatusView, VModeScheme,
 };
 use cloud_ui::painter::{Painter, SharedPainter};
 use cloud_ui::script_window::{ScriptWindowEvents, ScriptWindows};
@@ -193,8 +193,8 @@ impl CandidateSink for UiHandle {
         self.reversed.load(Ordering::Relaxed)
     }
 
-    fn set_v_mode_help(&self, on: bool, shape: bool) {
-        self.post(UiCommand::VModeHelp { on, shape });
+    fn set_v_mode_help(&self, on: bool, scheme: VModeScheme) {
+        self.post(UiCommand::VModeHelp { on, scheme });
     }
 
     fn set_calculator_help(&self, on: bool) {
@@ -483,7 +483,7 @@ fn apply(
             caps_lock::set_active(false);
             window.hide();
         }
-        UiCommand::VModeHelp { on, shape } => window.set_v_mode_help(on, shape),
+        UiCommand::VModeHelp { on, scheme } => window.set_v_mode_help(on, scheme),
         UiCommand::CalculatorHelp(on) => window.set_calculator_help(on),
         UiCommand::CapsLockBackspace(on) => caps_lock::set_enabled(on),
         UiCommand::AuxiliaryToggle => {
