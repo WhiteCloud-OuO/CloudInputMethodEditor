@@ -25,5 +25,8 @@ mod word_list;
 pub use dictionary::{DictDb, Dictionary, WORD_BANK_FILE};
 pub use error::DictionaryError;
 pub use matching::Match;
-pub use pattern::{SyllablePattern, canonical_syllable};
+pub use pattern::{
+    SyllablePattern, canonical_syllable, matches_syllable, standard_prefix, standard_syllable,
+    syllables_match,
+};
 pub use word_list::WordList;

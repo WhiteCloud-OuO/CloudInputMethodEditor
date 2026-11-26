@@ -29,7 +29,8 @@
 `cargo run --release -p cloudime-dict-convert -- wanxiang --source <dicts 目录>`：
 
 - 去调：`āáǎà` 等 → 无调元音，`ǖǘǚǜü` → `v`；
-- **`j/q/x/y` 后的 `u` 是 ü 的书写形式，保持 `u` 不改**（`jū → ju`、`què → que`、`xué → xue`、`yǔ → yu`）；
+- **`j/q/x/y` 后的 `u` 实际是 ü，统一写成 `v`**（`jū → jv`、`jué → jve`、`juān → jvan`、`jūn → jvn`，`q/x/y` 同理）；
+  解析器同时接受标准写法 `ju` 与 `v` 写法 `jv`，查询都归一成 `jv`；`you` / `ya` 这类不是 ü 的音节不受影响。
 - 叹词：`ń/ň/ǹ → en`，`ńg/ňg/ǹg → ng`，`ḿ/m̀ → me`；
 - 生僻音节：`tei` / `fiao` / `biang` / `cei` / `ng` / `hng` / `hm` 已加入解析器；
 - 权重取前导数字（`76N → 76`），缺省 1，0 抬到 1；

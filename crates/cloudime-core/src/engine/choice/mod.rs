@@ -163,7 +163,7 @@ impl Engine {
                 .find(|(index, candidate)| {
                     candidate.kind == CandidateKind::Chinese
                         && fallback_length(candidate.syllables.len())
-                        && candidate.syllables.concat() == keys
+                        && cloudime_dictionary::syllables_match(&keys, &candidate.syllables)
                         && !whole.iter().any(|(seen, _)| seen == index)
                 })
                 .and_then(|(index, candidate)| {
@@ -236,7 +236,7 @@ impl Engine {
                     .iter()
                     .find(|candidate| {
                         candidate.kind == CandidateKind::Chinese
-                            && candidate.syllables.concat() == keys
+                            && cloudime_dictionary::syllables_match(&keys, &candidate.syllables)
                     })
                     .map(|candidate| candidate.text.clone())
             })
@@ -361,11 +361,7 @@ pub(in crate::engine) fn char_emission(
             let slot = start + offset;
             let as_typed = match (patterns.get(slot), syllables.get(offset)) {
                 (Some(typed), Some(reading)) => {
-                    if typed.complete {
-                        reading == typed.text
-                    } else {
-                        reading.starts_with(typed.text)
-                    }
+                    cloudime_dictionary::matches_syllable(typed.text, reading, typed.complete)
                 }
                 _ => false,
             };

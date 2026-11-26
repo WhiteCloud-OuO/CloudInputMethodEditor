@@ -4,7 +4,8 @@
 //! 后四个的“编码”不是拼音，不能进中文词库。
 //!
 //! 规则：
-//! - 带调拼音去调：`ü/ǖǘǚǜ` → `v`；`j/q/x/y` 后的 `u` 是 ü 的书写形式，保持 `u` 不改；
+//! - 带调拼音去调：`ü/ǖǘǚǜ` → `v`；`j/q/x/y` 后的 `u` 实际是 ü，也统一写成 `v`
+//!   （`ju → jv`、`jue → jve`、`juan → jvan`、`jun → jvn`，`q/x/y` 同理）；
 //! - `ń/ň/ǹ` → `en`，`ńg/ňg/ǹg` → `ng`（万象的 `嗯` 读 `en/ng`）；`ḿ/m̀` → `me`；
 //! - 权重取前导数字（`76N` → 76），缺省 1，0 抬到 1；
 //! - 同一 `(文字, 拼音)` 取最大权重合并；
@@ -136,7 +137,7 @@ pub fn convert(source: &Path, out: &Path, core: bool) -> Result<(), ConvertError
     )?;
     writeln!(
         writer,
-        "# 修改：去除声调（ü→v，j/q/x/y 后的 u 保持 u）、n/ng→en/ng、m→me、合并词表、权重取前导数字并抬到 ≥1"
+        "# 修改：去除声调（ü→v；j/q/x/y 后的 u 也写作 v）、n/ng→en/ng、m→me、合并词表、权重取前导数字并抬到 ≥1"
     )?;
     writeln!(writer, "# 列：文字<TAB>拼音<TAB>权重")?;
     for ((text, pinyin), weight) in &pairs {
@@ -210,10 +211,10 @@ mod tests {
     use super::*;
 
     #[test]
-    fn keeps_u_after_j_q_x_y_and_converts_umlaut() {
+    fn converts_u_after_j_q_x_y_to_v() {
         assert_eq!(
             normalize_pinyin("jū qún xué yǔ yuán jūn").as_deref(),
-            Some("ju qun xue yu yuan jun")
+            Some("jv qvn xve yv yvan jvn")
         );
         assert_eq!(
             normalize_pinyin("lǜ nǚ lüè nüè").as_deref(),

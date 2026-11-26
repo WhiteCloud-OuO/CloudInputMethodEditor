@@ -78,21 +78,41 @@ impl ChoiceScorer {
             if rest.is_empty() {
                 return None;
             }
-            let name = if rest.starts_with(syllable.as_str()) {
-                rest = &rest[syllable.len()..];
-                format!("f:{syllable}")
+            let target = cloudime_core::dictionary::canonical_syllable(syllable);
+            let take = syllable.len();
+            let name = if rest.len() >= take
+                && cloudime_core::dictionary::canonical_syllable(&rest[..take]) == target
+            {
+                rest = &rest[take..];
+                format!(
+                    "f:{}",
+                    cloudime_core::dictionary::standard_syllable(syllable)
+                )
             } else {
-                let common = rest
+                // 没打完：把 j/q/x/y 后面的 u 按目标的 ü 位置映射成 v 再比前缀；
+                // 模型词表用标准写法，发给模型前再映射回 u。
+                let mapped: String = rest
+                    .chars()
+                    .enumerate()
+                    .map(|(index, character)| {
+                        if target.chars().nth(index) == Some('v') && character == 'u' {
+                            'v'
+                        } else {
+                            character
+                        }
+                    })
+                    .collect();
+                let common = mapped
                     .bytes()
-                    .zip(syllable.bytes())
+                    .zip(target.bytes())
                     .take_while(|(a, b)| a == b)
                     .count();
                 if common == 0 {
                     return None;
                 }
-                let prefix = &rest[..common];
+                let prefix = &mapped[..common];
                 rest = &rest[common..];
-                format!("p:{prefix}")
+                format!("p:{}", cloudime_core::dictionary::standard_prefix(prefix))
             };
             out.push(*self.units.get(&name)?);
         }

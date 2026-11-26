@@ -34,7 +34,8 @@ CLAUDE.md 只保留目录地图与规则，每个 crate / app / tool 的实现�
 `Dictionary::from_path` 按文件头认格式：SQLite → `db::open`（按语言与稀有度分流），老的 `.qj`（mmap）→ `open_qj`，其余当 TSV 解析（样例词库与测试里的内联词库）；
 `write_db` / `DictDb::write` 按已排好的顺序整段落盘 + `VACUUM`；`tools/dict-convert word-bank` 用 `DictDb::write`。
 设置页「导入词库」的 `import::import` 只收现成的 `.db`：读一遍校验后原样复制进目录（不重写，保住英文行与元数据）。
-词库键以 `v` 表示 ü，TSV 解析、查询与生成工具把 `lue` / `nue` 统一成 `lve` / `nve`。
+词库键以 `v` 表示 ü，TSV 解析、查询与生成工具把 `lue` / `nue` 统一成 `lve` / `nve`，
+`j/q/x/y` 后的 `u` 也统一成 `v`（`ju → jv`、`jue → jve`、`juan → jvan`、`jun → jvn`，`q/x/y` 同理）；输入 `ju` 与 `jv` 都接受。
 旧 `.qj` 含这些键时，加载器建立规范化的内存词库。
 
 ## crates/cloudime-core
@@ -79,7 +80,8 @@ V 模式里 `=` 仍是翻页键，所以 `=>` 只能在面板里输入。普通�
 读法由 `segmentations` 从 `trailing` 凑；别的位置出现大写、落单的大写都切不出来；最多 4 位）；同键多义两端都匹配（封顶 9 种解法）、
 零声母**完全按 `zero_initials` 表查**（`(两键) → 韵母`，没有内置引导、也没有通则兜底）；
 `syllable()` 拼出来的组合只留 `parser::is_syllable` 认的**合法音节**（`sh` + `iang` 直接丢，否则它会先被挑走、挡住同键另一义的 `shuang`）；
-拼接走 `spelled()`：`j` / `q` / `x` / `y` 后面的 `v`（ü）归一成 `u`（方案写 `b = "ve"` 时 `j` + `b` = `jve` → `jue`，「觉」才出得来；`l` / `n` 后面的 `lve` / `nve` 本来就是标准写法，不动）；
+拼接走 `spelled()`：`j` / `q` / `x` / `y` 后的 `ü` 统一写 `v`（`j` + `ve` = `jve`），与词库一致；标准写法 `jue` 由 `canonical_syllable` 归一；
+`l` / `n` 后面的 `lve` / `nve` 本来就是词库写法，不动；
 **手动分词时能用简拼**：`'` 分段后一段**一个键**也够 —— 那个键按它的**声母**算（`Syllable::partial`，`y'd` 匹配「云朵」），
 跟在它后面的辅助码照旧（`yH'd`）；不分词时仍按两键一个音节，末尾那半个音节走 `trailing` 那支。
 `typed_marked` 也按 `'` 分组（一段最多两键、遇到 `'` 就收）。
@@ -2243,7 +2245,8 @@ DLL 不读文件、不查 mtime。`SessionOpened` 只回过协议版本对得上
 > `data/generated/dict.tsv`；旧 `lexicon` / `mine` / `phrases` 链路没有输入可跑，只留作历史；`english`、`bigram` 的英文 / 品牌 / 混杂部分仍有效。
 
 - `wanxiang`：读 `rime-wanxiang-data` 的 `dicts/`（14 个中文词库）→ `data/generated/dict.tsv`。去调规则见
-  `assets/lexicon/WANXIANG.md`：`ü/ǖǘǚǜ→v`，`j/q/x/y` 后的 `u` 保持 `u`，`ń/ň/ǹ→en`、`ńg/ňg/ǹg→ng`、`ḿ/m̀→me`；
+  `assets/lexicon/WANXIANG.md`：`ü/ǖǘǚǜ→v`，`j/q/x/y` 后的 `u` 也是 ü、统一写 `v`（`ju→jv`、`jue→jve`、`juan→jvan`、`jun→jvn`，`q/x/y` 同理），
+  `ń/ň/ǹ→en`、`ńg/ňg/ǹg→ng`、`ḿ/m̀→me`；
   权重取前导数字（`76N`→76）并抬到 ≥1；同一 `(文字, 拼音)` 取最大权重合并；补一条 `哼 hng`（上游只有 `heng`）。
   词表过滤掉 `beta` 这类非拼音音节（当前只有 `西妥昔单抗β` 一条）。
 - `lexicon`（旧链路，停用）：从 `assets/lexicon/`（自建词库源：规范字 + 常用词 + THUOCL 领域词）加 Unihan 读音（`data/unihan/Unihan_Readings.txt`）、多音字词标注（`--pinyin` 读 JSONL）、语料词频（`lm-unigram.tsv`）建基础词库 `dict.tsv`（8.7 万条），并把 THUOCL 领域词按语料次数 < 50 拆成

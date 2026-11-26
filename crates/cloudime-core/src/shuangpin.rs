@@ -462,16 +462,10 @@ impl Table {
     }
 }
 
-/// 声母 + 韵母 → 音节，按普通话音节表的**标准写法**归一化：`j` / `q` / `x` / `y` 后面的 `v`（ü）一律写 `u`。
-///
-/// 方案里把 ü 那一类韵母写成 `ve` / `v` 时（首道 `b = "ve"`），`j` + `b` 拼出来的是 `jve` ——
-/// 那是同一个音（觉 = jüe），但音节表与词库里只有标准写法 `jue`，不归一化就会被「只留合法音节」筛掉，
-/// 表现为「这个键按下去什么也没有」。`l` / `n` 后面的 `v` 不用动（`lve` / `nve` 本身就是标准写法）。
+/// 声母 + 韵母 → 音节。`j` / `q` / `x` / `y` 后的 `ü` 现在统一写 `v`（`j` + `ve` = `jve`），与词库一致；
+/// 标准写法 `jue` 由 `canonical_syllable` 归一，不会再被「只留合法音节」筛掉。`l` / `n` 后的 `v` 本来就是写法。
 fn spelled(initial: &str, final_: &str) -> String {
-    match initial {
-        "j" | "q" | "x" | "y" => format!("{initial}{}", final_.replace('v', "u")),
-        _ => format!("{initial}{final_}"),
-    }
+    format!("{initial}{final_}")
 }
 
 /// 辅助码表：Core 不读文件，表由 platform 读出来后注入（与重打分那套「注入 trait」一个路子）。
@@ -724,10 +718,10 @@ mod tests {
         assert!(join(&table, "a").is_empty(), "{:?}", join(&table, "a"));
     }
 
-    /// `j` / `q` / `x` / `y` 后面的 `v`（ü）按标准写法归一成 `u`：方案里的 `ve` 键（首道 `b = "ve"`）
-    /// 按下去也能出「觉」（`jve` → `jue`），不然它会被「只留合法音节」筛掉、什么也没有。
+    /// `j` / `q` / `x` / `y` 后面的 `ü` 统一写 `v`：方案里的 `ve` 键（首道 `b = "ve"`）
+    /// 按下去出「觉」（`jve`），标准 `jue` 也由 `canonical_syllable` 归一。
     #[test]
-    fn u_umlaut_is_written_as_u_after_jqxy() {
+    fn u_umlaut_is_written_as_v_after_jqxy() {
         let mut table = natural();
         table.remapping.insert(
             'b',
@@ -749,24 +743,24 @@ mod tests {
             "{:?}",
             pinyin("lb")
         );
-        // `jb` = j + ve → jue（归一化）
+        // `jb` = j + ve → jve（ü 统一写 v）
         assert!(
-            pinyin("jb").contains(&"jue".to_owned()),
+            pinyin("jb").contains(&"jve".to_owned()),
             "{:?}",
             pinyin("jb")
         );
         assert!(
-            pinyin("qb").contains(&"que".to_owned()),
+            pinyin("qb").contains(&"qve".to_owned()),
             "{:?}",
             pinyin("qb")
         );
         assert!(
-            pinyin("xb").contains(&"xue".to_owned()),
+            pinyin("xb").contains(&"xve".to_owned()),
             "{:?}",
             pinyin("xb")
         );
         assert!(
-            pinyin("yb").contains(&"yue".to_owned()),
+            pinyin("yb").contains(&"yve".to_owned()),
             "{:?}",
             pinyin("yb")
         );

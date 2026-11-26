@@ -676,6 +676,39 @@ fn word_adjustments_boost_and_demote_within_the_tier() {
     assert_eq!(texts_of(&engine), plain);
 }
 
+/// `j/q/x/y + u` 的 u 是 ü：词库键写 v，标准写法与 v 写法都能打到。
+#[test]
+fn u_after_j_q_x_y_is_typed_as_v_or_u() {
+    let mut engine = Engine::new(
+        Dictionary::parse(
+            "居\tjv\t100\n局\tjv\t90\n军\tjvn\t100\n月\tyve\t100\n云\tyvn\t100\n学\txve\t100\n去\tqv\t100\n有\tyou\t100\n",
+        )
+        .unwrap(),
+    );
+    for (input, text) in [
+        ("ju", "居"),
+        ("jv", "居"),
+        ("jun", "军"),
+        ("jvn", "军"),
+        ("yue", "月"),
+        ("yve", "月"),
+        ("yun", "云"),
+        ("yvn", "云"),
+        ("xue", "学"),
+        ("xve", "学"),
+        ("qu", "去"),
+        ("qv", "去"),
+        ("you", "有"),
+    ] {
+        engine.set_input(input);
+        let query = engine.query().unwrap();
+        assert!(
+            query.candidates.items.iter().any(|c| c.text == text),
+            "{input} 应能打到 {text}"
+        );
+    }
+}
+
 /// 万象词库的生僻 / 叹词音节要能直接打到对应的字。
 #[test]
 fn rare_syllables_reach_dictionary_entries() {

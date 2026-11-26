@@ -1342,9 +1342,10 @@ impl Engine {
         // 不按原样读的路径（模糊音）不许压过「敲的拼音本身就是一个词」
         if first.altered() {
             let letters = best.joined("");
-            let spelled_exactly = pool
-                .iter()
-                .any(|(c, _)| c.kind == CandidateKind::Chinese && c.syllables.concat() == letters);
+            let spelled_exactly = pool.iter().any(|(c, _)| {
+                c.kind == CandidateKind::Chinese
+                    && cloudime_dictionary::syllables_match(&letters, &c.syllables)
+            });
             if spelled_exactly {
                 return Vec::new();
             }
@@ -1819,11 +1820,7 @@ fn keep_single_characters(items: &mut Vec<Candidate>, first: Option<(&str, bool)
             && candidate.text.chars().count() == 1
             && candidate.syllables.len() == 1
             && candidate.syllables.first().is_some_and(|syllable| {
-                if complete {
-                    syllable == first_text
-                } else {
-                    syllable.starts_with(first_text)
-                }
+                cloudime_dictionary::matches_syllable(first_text, syllable, complete)
             })
     };
     if !items.iter().any(&matches_first) {

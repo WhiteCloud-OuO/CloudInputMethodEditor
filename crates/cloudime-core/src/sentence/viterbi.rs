@@ -661,7 +661,7 @@ mod tests {
         // 全简拼：每个格子按前缀取词，末尾单字母也是一个音节
         let conversion = unigram(&dictionary, &abbreviated(&["w", "x", "q"])).unwrap();
         assert_eq!(conversion.text, "我想去");
-        assert_eq!(conversion.syllables, ["wo", "xiang", "qu"]);
+        assert_eq!(conversion.syllables, ["wo", "xiang", "qv"]);
         assert_eq!(conversion.words[0].text, "我想");
         // 简拼与全拼混用
         let patterns = [

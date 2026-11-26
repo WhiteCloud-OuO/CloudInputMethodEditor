@@ -642,7 +642,9 @@ impl Engine {
             };
             let frequency = dictionaries
                 .iter()
-                .flat_map(|dictionary| dictionary.lookup(&[syllable.as_str()], false))
+                .flat_map(|dictionary| {
+                    dictionary.lookup(&[cloudime_dictionary::canonical_syllable(syllable)], false)
+                })
                 .filter(|hit| hit.exact && hit.text.chars().eq(std::iter::once(ch)))
                 .map(|hit| hit.frequency)
                 .max();

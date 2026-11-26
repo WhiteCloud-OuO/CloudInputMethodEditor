@@ -1,15 +1,17 @@
 //! 普通话音节表。查找逻辑在 [`super::trie`]。
 
-/// 无声调的普通话合法音节表（含 ü 写作 v / ue 两种写法）。
+/// 无声调的普通话合法音节表（ü 写作 v；`lue/nue` 与 j/q/x/y 后的 `u` 另由
+/// `canonical_syllable` 归一成 `v` 形式）。
 ///
 /// 除普通话独立成字的音节外，还收万象词库用到的叹词 / 方言写法：`ng` / `hng` / `hm`
-/// 与 `tei` / `fiao` / `biang` / `cei`。j/q/x/y 后的 `u` 是 ü 的书写形式，**不**改成 v。
-/// 按声母分组便于人工核对。
+/// 与 `tei` / `fiao` / `biang` / `cei`。标准写法 `ju/jue/...` 与 `v` 写法都收，
+/// 查询时由 `canonical_syllable` 统一。按声母分组便于人工核对。
 #[rustfmt::skip]
 pub const SYLLABLES: &[&str] = &[
     // 零声母
     "a", "ai", "an", "ang", "ao", "e", "ei", "en", "eng", "er", "o", "ou",
     "yi", "ya", "yao", "ye", "you", "yan", "yin", "yang", "ying", "yong", "yu", "yue", "yuan", "yun", "yo",
+    "yv", "yve", "yvan", "yvn",
     "wu", "wa", "wo", "wai", "wei", "wan", "wen", "wang", "weng",
     // b p m f
     "ba", "bo", "bai", "bei", "bao", "ban", "ben", "bang", "beng", "bi", "bie", "biao", "bian", "bin", "bing", "bu",
@@ -27,8 +29,11 @@ pub const SYLLABLES: &[&str] = &[
     "ha", "he", "hai", "hei", "hao", "hou", "han", "hen", "hang", "heng", "hong", "hu", "hua", "huo", "huai", "hui", "huan", "hun", "huang",
     // j q x
     "ji", "jia", "jie", "jiao", "jiu", "jian", "jin", "jiang", "jing", "jiong", "ju", "jue", "juan", "jun",
+    "jv", "jve", "jvan", "jvn",
     "qi", "qia", "qie", "qiao", "qiu", "qian", "qin", "qiang", "qing", "qiong", "qu", "que", "quan", "qun",
+    "qv", "qve", "qvan", "qvn",
     "xi", "xia", "xie", "xiao", "xiu", "xian", "xin", "xiang", "xing", "xiong", "xu", "xue", "xuan", "xun",
+    "xv", "xve", "xvan", "xvn",
     // zh ch sh r
     "zha", "zhe", "zhi", "zhai", "zhei", "zhao", "zhou", "zhan", "zhen", "zhang", "zheng", "zhong", "zhu", "zhua", "zhuo", "zhuai", "zhui", "zhuan", "zhun", "zhuang",
     "cha", "che", "chi", "chai", "chao", "chou", "chan", "chen", "chang", "cheng", "chong", "chu", "chua", "chuo", "chuai", "chui", "chuan", "chun", "chuang",
@@ -77,13 +82,17 @@ mod tests {
         );
     }
 
-    /// 万象词库用到的生僻 / 叹词音节，以及 `j/q/x/y + u` 的常规写法。
+    /// 万象词库用到的生僻 / 叹词音节，以及 j/q/x/y + u 的 v 写法。
     #[test]
     fn keeps_rare_syllables_and_u_after_j_q_x_y() {
         for syllable in ["tei", "fiao", "biang", "cei", "ng", "hng", "hm"] {
             assert!(SYLLABLES.contains(&syllable), "{syllable}");
         }
-        for syllable in ["ju", "qu", "xu", "yu", "jue", "que", "xue", "yue"] {
+        for syllable in [
+            "ju", "jv", "jue", "jve", "juan", "jvan", "jun", "jvn", "qu", "qv", "que", "qve",
+            "quan", "qvan", "qun", "qvn", "xu", "xv", "xue", "xve", "xuan", "xvan", "xun", "xvn",
+            "yu", "yv", "yue", "yve", "yuan", "yvan", "yun", "yvn",
+        ] {
             assert!(SYLLABLES.contains(&syllable), "{syllable}");
         }
     }
